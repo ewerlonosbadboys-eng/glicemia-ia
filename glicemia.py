@@ -17,24 +17,27 @@ if foto:
         img = PIL.Image.open(foto)
         st.info("Buscando número principal...")
         
-        # O SEGREDO: Instrução para ignorar o brilho e focar no MAIOR número
+        # O SEGREDO: Instrução para descrever a imagem e extrair o MAIOR valor
         prompt = (
-            "Esta é uma tela de um medidor Match II. "
-            "Ignore todos os reflexos brancos de luz. "
-            "Localize o número MAIOR e MAIS GROSSO no centro da tela. "
-            "Responda apenas com esse número, sem palavras."
+            "Analise esta imagem de um medidor Match II. "
+            "Existem vários números na tela (hora, data), mas eu quero apenas o valor da glicemia. "
+            "O valor da glicemia é o número MAIOR e mais centralizado. "
+            "Ignore brilhos ou reflexos brancos. "
+            "Retorne apenas os dígitos do número maior."
         )
         
         response = model.generate_content([prompt, img])
         
-        # Filtra apenas os dígitos do que a IA respondeu
-        resultado = "".join(re.findall(r'\d+', response.text))
+        # Filtra apenas os números da resposta da IA
+        numeros_encontrados = re.findall(r'\d+', response.text)
         
-        if resultado and len(resultado) <= 3:
+        if numeros_encontrados:
+            # Pega o maior número da lista (que será a glicemia)
+            resultado = max(numeros_encontrados, key=len)
             st.markdown(f"<h1 style='text-align: center; color: #00ff00; font-size: 100px;'>{resultado}</h1>", unsafe_allow_html=True)
-            st.success("Valor identificado com sucesso!")
+            st.success("Valor identificado!")
         else:
-            st.warning("IA não teve certeza. Tente inclinar o celular para o lado para tirar o brilho do número.")
+            st.warning("IA não conseguiu ler. Tente tirar a foto um pouco mais de longe ou de lado.")
             
     except Exception as e:
         st.error("Erro na leitura. Tente novamente.")
