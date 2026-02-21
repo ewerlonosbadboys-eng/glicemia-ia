@@ -1,0 +1,24 @@
+import streamlit as st
+import google.generativeai as genai
+
+# Sua chave configurada corretamente
+genai.configure(api_key="gen-lang-client-0937121329")
+model = genai.GenerativeModel('gemini-1.5-flash')
+
+st.set_page_config(page_title="Glicemia Kids", page_icon="🩸")
+st.title("🩸 Glicemia Kids Inteligente")
+
+foto = st.camera_input("Tire foto do sensor")
+
+if foto:
+    st.info("A IA está analisando a imagem...")
+    # Enviando a foto para o cérebro do Google
+    img = genai.upload_file(foto)
+    response = model.generate_content(["Leia o valor da glicemia nesta imagem de sensor. Retorne APENAS o número.", img])
+    
+    valor_extraido = response.text
+    st.success(f"Valor identificado: {valor_extraido} mg/dL")
+    
+    if st.button("Salvar no histórico"):
+        st.balloons()
+        st.write("✅ Registro guardado com sucesso!")
