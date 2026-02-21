@@ -20,10 +20,11 @@ if foto:
         
         # Solicita a leitura para a IA
         response = model.generate_content([
-            "Leia o valor da glicemia nesta imagem de sensor de glicose. Retorne APENAS o número que você vê no visor.", 
+            "Você é um especialista em leitura de sensores de glicose. Identifique o valor numérico grande central nesta imagem. Ignore reflexos e retorne apenas o número.", 
             img
         ])
         
         st.success(f"Valor identificado: {response.text}")
     except Exception as e:
         st.error("Erro ao ler a imagem. Tente tirar a foto novamente com mais luz.")
+
