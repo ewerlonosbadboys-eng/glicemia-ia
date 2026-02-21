@@ -7,28 +7,33 @@ import re
 genai.configure(api_key="gen-lang-client-0937121329")
 model = genai.GenerativeModel('gemini-1.5-flash')
 
-st.set_page_config(page_title="Glicemia Kids", page_icon="🩸")
-st.title("🩸 Leitura de Glicemia")
+st.set_page_config(page_title="Glicemia", page_icon="🩸")
+st.title("🩸 Leitor de Glicemia")
 
-foto = st.camera_input("Tire foto do visor")
+foto = st.camera_input("Tire a foto do visor")
 
 if foto:
     try:
         img = PIL.Image.open(foto)
+        st.info("Lendo visor...")
         
-        # Comando curto e grosso para a IA não se distrair
-        prompt = "Identifique o maior número central nesta tela de medidor. Responda APENAS o número, sem letras."
+        # Comando simplificado: pede para a IA listar todos os números que vê
+        prompt = "Liste todos os números que aparecem nesta tela de medidor de saúde, especialmente o maior deles."
         
         response = model.generate_content([prompt, img])
+        texto_ia = response.text
         
-        # Este comando abaixo remove qualquer letra ou símbolo que a IA tente escrever
-        so_numeros = re.sub(r'\D', '', response.text)
+        # Procura por todos os números no texto da IA e pega o maior
+        numeros = re.findall(r'\d+', texto_ia)
         
-        if so_numeros:
-            st.markdown(f"<h1 style='text-align: center; color: #00ff00; font-size: 70px;'>{so_numeros}</h1>", unsafe_allow_html=True)
-            st.balloons()
+        if numeros:
+            # Converte para número e pega o maior valor (que é a glicemia)
+            valor_glicemia = max([int(n) for n in numeros if len(n) <= 3])
+            
+            st.markdown(f"<h1 style='text-align: center; color: #00ff00; font-size: 80px;'>{valor_glicemia}</h1>", unsafe_allow_html=True)
+            st.success("Leitura concluída!")
         else:
-            st.error("Número não encontrado. Tente focar melhor no visor.")
+            st.warning("Não consegui isolar o número. Tente tirar a foto sem o brilho da luz em cima do visor.")
             
     except Exception as e:
-        st.error("Erro na análise. Verifique a iluminação.")
+        st.error("Erro ao processar. Tente novamente.")
