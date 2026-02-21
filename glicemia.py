@@ -1,25 +1,28 @@
 import streamlit as st
 import google.generativeai as genai
+import os
 
-# Configurando a sua IA com a chave que você pegou
-genai.configure(api_key="SUA_CHAVE_AQUI")
+# Sua chave configurada
+genai.configure(api_key="gen-lang-client-0937121329")
 model = genai.GenerativeModel('gemini-1.5-flash')
 
 st.set_page_config(page_title="Glicemia Kids", page_icon="🩸")
 st.title("🩸 Glicemia Kids Inteligente")
 
-# Interface do App
 foto = st.camera_input("Tire foto do sensor")
 
 if foto:
-    st.info("A IA está lendo o valor...")
-    # Processando a imagem com IA
-    img = genai.upload_file(foto)
-    response = model.generate_content(["Qual o valor de glicemia nesta imagem? Responda apenas o número.", img])
+    st.info("A IA está analisando a imagem...")
     
-    valor = response.text
-    st.success(f"Valor identificado: {valor} mg/dL")
+    # SALVA A FOTO TEMPORARIAMENTE (Isso resolve o erro!)
+    with open("temp_foto.jpg", "wb") as f:
+        f.write(foto.getbuffer())
     
-    if st.button("Salvar Registro"):
-        st.write("Salvo com sucesso!")
-        st.balloons()
+    # Envia o arquivo salvo para a IA
+    img = genai.upload_file("temp_foto.jpg")
+    response = model.generate_content(["Leia o valor da glicemia nesta imagem de sensor. Retorne APENAS o número.", img])
+    
+    st.success(f"Valor identificado: {response.text}")
+    
+    # Limpa o arquivo temporário
+    os.remove("temp_foto.jpg")
