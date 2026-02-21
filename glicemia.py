@@ -1,40 +1,34 @@
 import streamlit as st
 import google.generativeai as genai
 import PIL.Image
+import re
 
-# Configuração da API do Google Gemini
+# Configuração da IA
 genai.configure(api_key="gen-lang-client-0937121329")
 model = genai.GenerativeModel('gemini-1.5-flash')
 
-# Configuração visual do App
 st.set_page_config(page_title="Glicemia Kids", page_icon="🩸")
-st.title("🩸 Glicemia Kids Inteligente")
-st.markdown("---")
-st.write("Tire uma foto bem nítida do sensor para que a IA realize a leitura.")
+st.title("🩸 Leitura de Glicemia")
 
-# Interface de Captura de Imagem
-foto = st.camera_input("Tire foto do sensor")
+foto = st.camera_input("Tire foto do visor")
 
 if foto:
-    st.info("A IA está analisando a imagem... Por favor, aguarde.")
     try:
-        # Abre a imagem de forma otimizada
         img = PIL.Image.open(foto)
         
-        # Comando detalhado para a IA ignorar reflexos
-        instrucao = (
-            "Você é um especialista em leitura de sensores de glicose. "
-            "Identifique o valor numérico central e grande nesta imagem. "
-            "IMPORTANTE: Ignore reflexos de luz, sombras e pontos brilhantes sobre os números. "
-            "Ignore também horários e unidades. Retorne APENAS o número identificado."
-        )
+        # Comando curto e grosso para a IA não se distrair
+        prompt = "Identifique o maior número central nesta tela de medidor. Responda APENAS o número, sem letras."
         
-        # Processamento da imagem pela IA
-        response = model.generate_content([instrucao, img])
+        response = model.generate_content([prompt, img])
         
-        # Exibe o resultado final de forma clara
-        st.success(f"## Valor identificado: {response.text}")
-        st.balloons() # Comemoração visual quando funciona!
+        # Este comando abaixo remove qualquer letra ou símbolo que a IA tente escrever
+        so_numeros = re.sub(r'\D', '', response.text)
         
+        if so_numeros:
+            st.markdown(f"<h1 style='text-align: center; color: #00ff00; font-size: 70px;'>{so_numeros}</h1>", unsafe_allow_html=True)
+            st.balloons()
+        else:
+            st.error("Número não encontrado. Tente focar melhor no visor.")
+            
     except Exception as e:
-        st.error("Ops! A IA teve dificuldade com esta foto. Tente inclinar levemente o sensor para tirar o reflexo de cima do número.")
+        st.error("Erro na análise. Verifique a iluminação.")
