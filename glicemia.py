@@ -2,45 +2,46 @@ import streamlit as st
 import google.generativeai as genai
 import PIL.Image
 import re
+import pandas as pd
+from datetime import datetime
+import os
 
 # Configuração da IA
 genai.configure(api_key="gen-lang-client-0937121329")
 model = genai.GenerativeModel('gemini-1.5-flash')
 
-st.set_page_config(page_title="Leitor de Glicemia", page_icon="🩸")
-st.title("🩸 Glicemia Kids Inteligente")
+st.set_page_config(page_title="Diário Glicemia Kids", page_icon="🩸")
+st.title("🩸 Diário Glicemia Categorizado")
 
-# Opção de entrada manual sempre visível para emergências
-valor_manual = st.number_input("Se a IA falhar, digite o valor aqui:", min_value=0, max_value=600, step=1)
-if valor_manual > 0:
-    st.markdown(f"<h1 style='text-align: center; color: #00ff00; font-size: 80px;'>{valor_manual} mg/dL</h1>", unsafe_allow_html=True)
+# --- FUNÇÃO PARA SALVAR DADOS ---
+def salvar_leitura(valor, categoria):
+    agora = datetime.now()
+    data = agora.strftime("%d/%m/%Y")
+    hora = agora.strftime("%H:%M:%S")
+    mes_ano = agora.strftime("%m/%Y")
+    
+    nova_linha = pd.DataFrame([[data, hora, valor, categoria, mes_ano]], 
+                             columns=["Data", "Hora", "Valor (mg/dL)", "Categoria", "Mês/Ano"])
+    
+    arquivo = "historico_glicemia.csv"
+    if not os.path.isfile(arquivo):
+        nova_linha.to_csv(arquivo, index=False)
+    else:
+        nova_linha.to_csv(arquivo, mode='a', header=False, index=False)
+    st.success(f"✅ Salvo: {valor} mg/dL em '{categoria}'")
 
-st.markdown("---")
+# --- ENTRADA DE DADOS ---
+valor_final = 0
+col1, col2 = st.columns([1, 1])
 
-# Interface da Câmera
-foto = st.camera_input("Ou tente tirar a foto do visor")
+with col1:
+    valor_manual = st.number_input("Digite o valor:", min_value=0, max_value=600, step=1)
+    if valor_manual > 0:
+        valor_final = valor_manual
 
-if foto:
-    try:
-        img = PIL.Image.open(foto)
-        st.info("A IA está tentando ler o número...")
-        
-        prompt = (
-            "Esta é uma tela de medidor Match II. Ignore reflexos. "
-            "Localize o maior número central. Responda APENAS o número."
-        )
-        
-        response = model.generate_content([prompt, img])
-        
-        # Filtra apenas os números
-        resultado = "".join(re.findall(r'\d+', response.text))
-        
-        if resultado and 20 <= int(resultado) <= 600:
-            st.markdown(f"<h1 style='text-align: center; color: #00ff00; font-size: 100px;'>{resultado}</h1>", unsafe_allow_html=True)
-            st.success("Identificado pela IA!")
-            st.balloons()
-        else:
-            st.warning("IA não conseguiu ler com clareza. Por favor, use o campo de digitação manual acima.")
-            
-    except Exception as e:
-        st.error("Erro na leitura automática. Use a digitação manual acima.")
+with col2:
+    categorias = [
+        "Medida antes do café", "Medida após o café",
+        "Medida antes do almoço", "Medida após o almoço",
+        "Medida antes da merenda", "Medida antes da janta",
+        "Medida após a janta", "Medida madrugada", "Medida Extra"
