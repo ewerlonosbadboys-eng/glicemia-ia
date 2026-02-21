@@ -2,38 +2,39 @@ import streamlit as st
 import google.generativeai as genai
 import PIL.Image
 
-# Configuração da API do Google (Sua chave já está aqui)
+# Configuração da API do Google Gemini
 genai.configure(api_key="gen-lang-client-0937121329")
 model = genai.GenerativeModel('gemini-1.5-flash')
 
-# Configuração da página do Aplicativo
+# Configuração visual do App
 st.set_page_config(page_title="Glicemia Kids", page_icon="🩸")
 st.title("🩸 Glicemia Kids Inteligente")
-st.write("Tire uma foto nítida do sensor para realizar a leitura.")
+st.markdown("---")
+st.write("Tire uma foto bem nítida do sensor para que a IA realize a leitura.")
 
-# Interface da Câmera
+# Interface de Captura de Imagem
 foto = st.camera_input("Tire foto do sensor")
 
 if foto:
     st.info("A IA está analisando a imagem... Por favor, aguarde.")
     try:
-        # Abre a foto tirada pelo celular
+        # Abre a imagem de forma otimizada
         img = PIL.Image.open(foto)
         
-        # Comando aprimorado para a IA ser mais precisa
+        # Comando detalhado para a IA ignorar reflexos
         instrucao = (
             "Você é um especialista em leitura de sensores de glicose. "
-            "Identifique o valor numérico grande central nesta imagem. "
-            "Ignore reflexos de luz, sombras ou outros números menores (como horários). "
-            "Retorne APENAS o número principal que você vê no visor."
+            "Identifique o valor numérico central e grande nesta imagem. "
+            "IMPORTANTE: Ignore reflexos de luz, sombras e pontos brilhantes sobre os números. "
+            "Ignore também horários e unidades. Retorne APENAS o número identificado."
         )
         
-        # Solicita a análise ao Google Gemini
+        # Processamento da imagem pela IA
         response = model.generate_content([instrucao, img])
         
-        # Exibe o resultado com destaque
-        st.success(f"### Valor identificado: {response.text}")
+        # Exibe o resultado final de forma clara
+        st.success(f"## Valor identificado: {response.text}")
+        st.balloons() # Comemoração visual quando funciona!
         
     except Exception as e:
-        st.error("Ops! A IA não conseguiu ler esta foto. Tente novamente com menos reflexo ou mais luz.")
-        # Opcional: st.write(e) # Use esta linha apenas se precisar ver o erro técnico
+        st.error("Ops! A IA teve dificuldade com esta foto. Tente inclinar levemente o sensor para tirar o reflexo de cima do número.")
