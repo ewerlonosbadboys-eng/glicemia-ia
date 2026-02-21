@@ -8,36 +8,39 @@ genai.configure(api_key="gen-lang-client-0937121329")
 model = genai.GenerativeModel('gemini-1.5-flash')
 
 st.set_page_config(page_title="Leitor de Glicemia", page_icon="🩸")
-st.title("🩸 Leitor de Glicemia")
+st.title("🩸 Glicemia Kids Inteligente")
 
-foto = st.camera_input("Tire a foto do visor")
+# Opção de entrada manual sempre visível para emergências
+valor_manual = st.number_input("Se a IA falhar, digite o valor aqui:", min_value=0, max_value=600, step=1)
+if valor_manual > 0:
+    st.markdown(f"<h1 style='text-align: center; color: #00ff00; font-size: 80px;'>{valor_manual} mg/dL</h1>", unsafe_allow_html=True)
+
+st.markdown("---")
+
+# Interface da Câmera
+foto = st.camera_input("Ou tente tirar a foto do visor")
 
 if foto:
     try:
         img = PIL.Image.open(foto)
-        st.info("Buscando número principal...")
+        st.info("A IA está tentando ler o número...")
         
-        # O SEGREDO: Instrução para descrever a imagem e extrair o MAIOR valor
         prompt = (
-            "Analise esta imagem de um medidor Match II. "
-            "Existem vários números na tela (hora, data), mas eu quero apenas o valor da glicemia. "
-            "O valor da glicemia é o número MAIOR e mais centralizado. "
-            "Ignore brilhos ou reflexos brancos. "
-            "Retorne apenas os dígitos do número maior."
+            "Esta é uma tela de medidor Match II. Ignore reflexos. "
+            "Localize o maior número central. Responda APENAS o número."
         )
         
         response = model.generate_content([prompt, img])
         
-        # Filtra apenas os números da resposta da IA
-        numeros_encontrados = re.findall(r'\d+', response.text)
+        # Filtra apenas os números
+        resultado = "".join(re.findall(r'\d+', response.text))
         
-        if numeros_encontrados:
-            # Pega o maior número da lista (que será a glicemia)
-            resultado = max(numeros_encontrados, key=len)
+        if resultado and 20 <= int(resultado) <= 600:
             st.markdown(f"<h1 style='text-align: center; color: #00ff00; font-size: 100px;'>{resultado}</h1>", unsafe_allow_html=True)
-            st.success("Valor identificado!")
+            st.success("Identificado pela IA!")
+            st.balloons()
         else:
-            st.warning("IA não conseguiu ler. Tente tirar a foto um pouco mais de longe ou de lado.")
+            st.warning("IA não conseguiu ler com clareza. Por favor, use o campo de digitação manual acima.")
             
     except Exception as e:
-        st.error("Erro na leitura. Tente novamente.")
+        st.error("Erro na leitura automática. Use a digitação manual acima.")
