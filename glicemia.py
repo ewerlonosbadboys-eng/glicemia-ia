@@ -9,13 +9,12 @@ from openpyxl.styles import PatternFill
 
 # ================= CONFIGURAÇÕES INICIAIS =================
 fuso_br = pytz.timezone('America/Sao_Paulo')
-# Atualizado para Versão 0.1 Original
-st.set_page_config(page_title="Saúde Kids - v0.1 Original", page_icon="🩺", layout="wide")
+st.set_page_config(page_title="Saúde Kids BETA - v17", page_icon="🧪", layout="wide")
 
 # ARQUIVOS DE BANCO DE DADOS
-ARQ_G = "dados_glicemia.csv"
-ARQ_N = "dados_nutricao.csv"
-ARQ_R = "config_receita.csv"
+ARQ_G = "dados_glicemia_BETA.csv"
+ARQ_N = "dados_nutricao_BETA.csv"
+ARQ_R = "config_receita_BETA.csv"
 
 # ================= ESTILO VISUAL =================
 st.markdown("""
@@ -25,6 +24,22 @@ st.markdown("""
 .dose-alerta { background-color: #f0fdf4; padding: 20px; border-radius: 12px; border: 2px solid #16a34a; text-align: center; margin-top: 10px; }
 </style>
 """, unsafe_allow_html=True)
+
+# ================= CORES COM PRIORIDADE =================
+def cor_glicemia(v):
+    if v == "-" or pd.isna(v): return ""
+    try:
+        n = int(str(v).split(" ")[0])
+        if n < 70:
+            return 'background-color: #FFFFE0; color: black'
+        elif n > 180:
+            return 'background-color: #FFB6C1; color: black'
+        elif n > 140:
+            return 'background-color: #FFFFE0; color: black'
+        else:
+            return 'background-color: #90EE90; color: black'
+    except:
+        return ""
 
 # ================= FUNÇÕES DE APOIO =================
 def carregar(arq):
@@ -122,10 +137,10 @@ with t2:
             st.plotly_chart(fig2, use_container_width=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-# --- ABA 3: RECEITA ---
+# --- ABA 3: RECEITA (Antiga Configuração) ---
 with t3:
     st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.subheader("📋 Configuração da Receita Médica")
+    st.subheader("⚙️ Configurar Doses do Médico (Receita)")
     
     df_r = carregar(ARQ_R)
     v_at = df_r.iloc[0] if not df_r.empty else {'manha_f1':0, 'manha_f2':0, 'manha_f3':0, 'noite_f1':0, 'noite_f2':0, 'noite_f3':0}
@@ -142,9 +157,9 @@ with t3:
         nf2 = st.number_input("Dose 201-400:", value=int(v_at['noite_f2']), key="nf2")
         nf3 = st.number_input("Dose > 400:", value=int(v_at['noite_f3']), key="nf3")
         
-    if st.button("💾 Atualizar Receita Original"):
+    if st.button("💾 Salvar Receita"):
         pd.DataFrame([{'manha_f1':mf1, 'manha_f2':mf2, 'manha_f3':mf3, 'noite_f1':nf1, 'noite_f2':nf2, 'noite_f3':nf3}]).to_csv(ARQ_R, index=False)
-        st.success("Receita da Versão 0.1 salva!")
+        st.success("Receita atualizada!")
         st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -179,9 +194,9 @@ def gerar_excel_colorido(df_glic, df_nutri):
     return output.getvalue()
 
 st.markdown("---")
-if st.button("📥 BAIXAR RELATÓRIO EXCEL v0.1"):
+if st.button("📥 BAIXAR RELATÓRIO EXCEL"):
     dfg = carregar(ARQ_G)
     dfn = carregar(ARQ_N)
     if not dfg.empty:
         excel_data = gerar_excel_colorido(dfg, dfn)
-        st.download_button("Clique para Baixar", excel_data, file_name="Relatorio_Saude_Kids_v01.xlsx")
+        st.download_button("Clique para Baixar", excel_data, file_name="Relatorio_Medico.xlsx")
