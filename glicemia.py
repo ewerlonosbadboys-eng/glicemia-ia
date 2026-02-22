@@ -10,10 +10,11 @@ from openpyxl.styles import PatternFill
 
 # 1. Configurações
 fuso_br = pytz.timezone('America/Sao_Paulo')
-st.set_page_config(page_title="Monitoramento Kids - v12", page_icon="🩸", layout="wide")
+st.set_page_config(page_title="Monitoramento Kids - v13", page_icon="🩸", layout="wide")
 
-ARQ_G = "dados_glicemia_v12.csv"
-ARQ_N = "dados_nutricao_v12.csv"
+# Usando V13 para atualizar as regras de cores
+ARQ_G = "dados_glicemia_v13.csv"
+ARQ_N = "dados_nutricao_v13.csv"
 
 ALIMENTOS = {
     "Pão Francês": [28, 4, 1], "Leite (200ml)": [10, 6, 6],
@@ -25,18 +26,18 @@ ALIMENTOS = {
 def carregar(arq):
     return pd.read_csv(arq) if os.path.exists(arq) else pd.DataFrame()
 
-# Função de Cores para o App (Ajustada: <69 é Amarelo)
+# Função de Cores para o Aplicativo
 def cor_glicemia(v):
     if v == "-" or pd.isna(v): return ""
     try:
         n = int(str(v).split(" ")[0])
-        if n <= 69: return 'background-color: #FFFFE0; color: black' # Amarelo (Baixo)
-        elif n <= 140: return 'background-color: #90EE90; color: black' # Verde (Normal)
-        elif n <= 180: return 'background-color: #FFFFE0; color: black' # Amarelo (Atenção)
-        else: return 'background-color: #FFB6C1; color: black' # Vermelho (Alto)
+        if n <= 69: return 'background-color: #FFFFE0; color: black' # Amarelo (Hipoglicemia)
+        elif n <= 140: return 'background-color: #90EE90; color: black' # Verde
+        elif n <= 180: return 'background-color: #FFFFE0; color: black' # Amarelo
+        else: return 'background-color: #FFB6C1; color: black' # Vermelho
     except: return ""
 
-st.title("🩸 Sistema Completo - Regra de Cores Atualizada")
+st.title("🩸 Sistema Saúde Kids - Relatório Colorido v13")
 
 t1, t2, t3 = st.tabs(["📊 Glicemia", "🍽️ Alimentação", "📸 Câmera"])
 
@@ -56,7 +57,7 @@ with t1:
         if not dfg.empty:
             st.plotly_chart(px.line(dfg.tail(10), x='Hora', y='Valor', title="Gráfico de Picos", markers=True))
 
-    st.subheader("📋 Relatório Médico (Abaixo de 69 = Amarelo)")
+    st.subheader("📋 Relatório Médico Diário")
     if not dfg.empty:
         dfg['Exibe'] = dfg['Valor'].astype(str) + " (" + dfg['Hora'] + ")"
         tab_pivot = dfg.pivot_table(index='Data', columns='Momento', values='Exibe', aggfunc='last').fillna("-")
@@ -83,7 +84,7 @@ with t2:
 with t3:
     st.camera_input("📸 Tirar Foto")
 
-# --- FUNÇÃO EXCEL COM COR < 69 ---
+# --- FUNÇÃO EXCEL COM COR CORRIGIDA ---
 def gerar_excel_colorido(df_glic, df_nutri):
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -102,10 +103,11 @@ def gerar_excel_colorido(df_glic, df_nutri):
                     if cell.value and cell.value != "-":
                         try:
                             val = int(str(cell.value).split(" ")[0])
-                            if val <= 69: cell.fill = a_fill     # NOVA REGRA: Amarelo
-                            elif val <= 140: cell.fill = v_fill   # Verde
-                            elif val <= 180: cell.fill = a_fill   # Amarelo
-                            else: cell.fill = r_fill              # Vermelho
+                            # Lógica corrigida para o médico
+                            if val <= 69: cell.fill = a_fill     # ABAIXO DE 69 = AMARELO
+                            elif val <= 140: cell.fill = v_fill   # VERDE
+                            elif val <= 180: cell.fill = a_fill   # AMARELO
+                            else: cell.fill = r_fill              # VERMELHO
                         except: pass
         if not df_nutri.empty:
             df_nutri.to_excel(writer, index=False, sheet_name='Alimentacao')
@@ -116,4 +118,4 @@ if st.button("📥 BAIXAR RELATÓRIO MÉDICO COLORIDO"):
     dfg = carregar(ARQ_G); dfn = carregar(ARQ_N)
     if not dfg.empty:
         excel_data = gerar_excel_colorido(dfg, dfn)
-        st.download_button("Baixar Excel", excel_data, file_name="Relatorio_Saude.xlsx")
+        st.download_button("Clique para Baixar Excel", excel_data, file_name="Relatorio_Medico.xlsx")
