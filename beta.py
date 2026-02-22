@@ -27,6 +27,73 @@ st.markdown("""
 
 def carregar(arq):
     return pd.read_csv(arq) if os.path.exists(arq) else pd.DataFrame()
+# ================= BANCO DE ALIMENTOS =================
+ALIMENTOS = {
+    "Pão Francês": [28, 4, 1], "Leite (200ml)": [10, 6, 6],
+    "Arroz": [15, 1, 0], "Feijão": [14, 5, 0],
+    "Frango": [0, 23, 5], "Ovo": [1, 6, 5],
+    "Banana": [22, 1, 0], "Maçã": [15, 0, 0]
+}
+
+def carregar(arq):
+    return pd.read_csv(arq) if os.path.exists(arq) else pd.DataFrame()
+
+# =====================================================
+# ALIMENTAÇÃO
+# =====================================================
+with t2:
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+
+    st.subheader("🍽️ Controle de Nutrientes")
+
+    ca1, ca2 = st.columns(2)
+
+    with ca1:
+        escolha = st.multiselect("Alimentos:", list(ALIMENTOS.keys()))
+        carb = sum([ALIMENTOS[i][0] for i in escolha])
+        prot = sum([ALIMENTOS[i][1] for i in escolha])
+        gord = sum([ALIMENTOS[i][2] for i in escolha])
+
+        st.info(f"Totais: Carboidratos: {carb}g | Proteínas: {prot}g | Gorduras: {gord}g")
+
+        if st.button("💾 Salvar Alimentação"):
+            agora = datetime.now(fuso_br)
+            txt = f"{', '.join(escolha)} (C:{carb} P:{prot} G:{gord})"
+            novo_n = pd.DataFrame([[agora.strftime("%d/%m/%Y"),
+                                    txt, carb, prot, gord]],
+                                  columns=["Data", "Info", "C", "P", "G"])
+            pd.concat([carregar(ARQ_N), novo_n], ignore_index=True)\
+              .to_csv(ARQ_N, index=False)
+            st.rerun()
+
+    with ca2:
+        dfn = carregar(ARQ_N)
+        if not dfn.empty:
+            fig2 = px.pie(
+                values=[dfn['C'].sum(), dfn['P'].sum(), dfn['G'].sum()],
+                names=['Carbo', 'Prot', 'Gord'],
+                title="Distribuição Nutricional"
+            )
+            fig2.update_layout(template="simple_white")
+            st.plotly_chart(fig2, use_container_width=True)
+
+    st.markdown('</div>', unsafe_allow_html=True)
+    
+# ================= CORES COM PRIORIDADE =================
+def cor_glicemia(v):
+    if v == "-" or pd.isna(v): return ""
+    try:
+        n = int(str(v).split(" ")[0])
+        if n < 70:
+            return 'background-color: #FFFFE0; color: black'
+        elif n > 180:
+            return 'background-color: #FFB6C1; color: black'
+        elif n > 140:
+            return 'background-color: #FFFFE0; color: black'
+        else:
+            return 'background-color: #90EE90; color: black'
+    except:
+        return ""
 
 # ================= LÓGICA DE INSULINA =================
 def calcular_insulina_automatica(valor, momento):
