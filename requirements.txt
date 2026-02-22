@@ -1,6 +1,5 @@
-google-generativeai
 streamlit
 pandas
 openpyxl
-plotly
 pytz
+matplotlib
