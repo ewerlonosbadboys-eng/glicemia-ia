@@ -6,35 +6,43 @@ from io import BytesIO
 import plotly.express as px
 import pytz
 
-# 1. Configuração de Fuso Horário e Página
+# 1. Configuração
 fuso_br = pytz.timezone('America/Sao_Paulo')
 st.set_page_config(page_title="Monitoramento Integrado", page_icon="🩸", layout="wide")
 
-# 2. Novos Arquivos (v5) para evitar erros antigos
 ARQUIVO_GLIC = "dados_glicemia_v5.csv"
 ARQUIVO_NUTRI = "dados_nutricao_v5.csv"
 
-# 3. Banco de Dados de Alimentos
 ALIMENTOS = {
     "Pão Francês (1 un)": [28, 4.5, 1],
     "Leite Inteiro (200ml)": [10, 6, 6],
     "Arroz (3 colheres)": [15, 1.5, 0],
     "Feijão (1 concha)": [14, 5, 0.5],
     "Frango Grelhado": [0, 23, 5],
-    "Banana (1 un)": [22, 1, 0],
-    "Maçã (1 un)": [15, 0, 0],
-    "Ovo Cozido": [1, 6, 5]
+    "Ovo Cozido": [1, 6, 5],
+    "Banana (1 un)": [22, 1, 0]
 }
 
 def carregar_dados(arq):
     return pd.read_csv(arq) if os.path.exists(arq) else pd.DataFrame()
 
-st.title("🩸 Sistema Integrado: Glicemia + Alimentação + Câmera")
+# --- FUNÇÃO PARA CORES NA TABELA ---
+def aplicar_cores(val):
+    if val == "-": return ""
+    try:
+        # Extrai apenas o número antes do parêntese
+        num = int(val.split(" ")[0])
+        if num <= 140: return 'background-color: #90EE90; color: black' # Verde
+        elif num <= 180: return 'background-color: #FFFFE0; color: black' # Amarelo
+        else: return 'background-color: #FFB6C1; color: black' # Vermelho (Alerta)
+    except:
+        return ""
 
-# --- CRIAÇÃO DAS ABAS NO APP ---
+st.title("🩸 Monitoramento com Alertas de Cores")
+
 tab1, tab2, tab3 = st.tabs(["📊 Glicemia", "🍽️ Alimentação", "📸 Câmera"])
 
-# --- ABA 1: GLICEMIA (Com Tabela de Horários) ---
+# --- ABA 1: GLICEMIA ---
 with tab1:
     col1, col2 = st.columns(2)
     with col1:
@@ -56,13 +64,15 @@ with tab1:
             if not df_h.empty:
                 st.plotly_chart(px.line(df_h, x='Hora', y='Valor', title="Evolução de Hoje", markers=True))
     
-    st.subheader("📋 Relatório Diário (Horários)")
+    st.subheader("📋 Relatório com Alertas Visuais")
     if not df_g.empty:
         df_g['Exibe'] = df_g['Valor'].astype(str) + " (" + df_g['Hora'] + ")"
         tabela_horarios = df_g.pivot_table(index='Data', columns='Categoria', values='Exibe', aggfunc='last').fillna("-")
-        st.dataframe(tabela_horarios, use_container_width=True)
+        
+        # Aplica as cores na tabela
+        st.dataframe(tabela_horarios.style.applymap(aplicar_cores), use_container_width=True)
 
-# --- ABA 2: ALIMENTAÇÃO (Com Gráfico de Pizza) ---
+# --- ABA 2: ALIMENTAÇÃO ---
 with tab2:
     st.subheader("Contagem de Carboidratos e Nutrientes")
     col_a1, col_a2 = st.columns(2)
@@ -86,30 +96,4 @@ with tab2:
         df_n = carregar_dados(ARQUIVO_NUTRI)
         if not df_n.empty:
             fig_pie = px.pie(values=[df_n['C'].sum(), df_n['P'].sum(), df_n['G'].sum()], 
-                             names=['Carboidratos', 'Proteínas', 'Gorduras'], 
-                             title="O que ela mais consumiu (Total)")
-            st.plotly_chart(fig_pie, use_container_width=True)
-
-# --- ABA 3: CÂMERA ---
-with tab3:
-    st.subheader("📸 Registro por Foto")
-    foto = st.camera_input("Tirar foto do prato ou sensor")
-    if foto:
-        st.image(foto, caption="Foto capturada com sucesso!")
-        st.warning("Nota: A foto é para visualização imediata. Para salvar permanentemente no relatório médico, use os campos de texto das abas anteriores.")
-
-# --- BOTÃO DE DOWNLOAD EXCEL (DUAS ABAS) ---
-st.markdown("---")
-if st.button("📥 Baixar Relatório Médico Completo"):
-    df_g = carregar_dados(ARQUIVO_GLIC)
-    df_n = carregar_dados(ARQUIVO_NUTRI)
-    if not df_g.empty:
-        df_g['Exibe'] = df_g['Valor'].astype(str) + " (" + df_g['Hora'] + ")"
-        rel_g = df_g.pivot_table(index='Data', columns='Categoria', values='Exibe', aggfunc='last').reset_index()
-        rel_n = df_n.pivot_table(index='Data', columns='Ref', values='Conteudo', aggfunc='last').reset_index() if not df_n.empty else pd.DataFrame()
-        
-        output = BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            rel_g.to_excel(writer, index=False, sheet_name='Glicemia')
-            if not rel_n.empty: rel_n.to_excel(writer, index=False, sheet_name='Alimentacao')
-        st.download_button("Clique aqui para baixar", output.getvalue(), file_name="Relatorio_Medico_Integrado.xlsx")
+                             names=['Carboidratos
