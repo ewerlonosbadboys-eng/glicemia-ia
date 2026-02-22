@@ -8,14 +8,14 @@ import pytz
 from openpyxl import Workbook
 from openpyxl.styles import PatternFill
 
-# 1. Configurações
+# 1. Configurações Iniciais
 fuso_br = pytz.timezone('America/Sao_Paulo')
-st.set_page_config(page_title="Saúde Kids v22", page_icon="🩸", layout="wide")
+st.set_page_config(page_title="Saúde Kids v23", page_icon="🩸", layout="wide")
 
-ARQ_G = "dados_glicemia_v22.csv"
-ARQ_N = "dados_nutricao_v22.csv"
+ARQ_G = "dados_glicemia_v23.csv"
+ARQ_N = "dados_nutricao_v23.csv"
 
-# Banco de Alimentos: [Carbo, Prot, Gord, CALORIAS]
+# Banco de Alimentos Completo
 ALIMENTOS = {
     "Pão Francês": [28, 4, 1, 135], "Leite (200ml)": [10, 6, 6, 120],
     "Arroz (colher)": [5, 1, 0, 25], "Feijão (colher)": [5, 2, 0, 30],
@@ -31,6 +31,10 @@ def cor_glicemia(v):
     if v == "-" or pd.isna(v): return ""
     try:
         n = int(str(v).split(" ")[0])
-        if n < 70: return 'background-color: #FFFF00; color: black'
-        elif n > 180: return 'background-color: #FF0000; color: white'
-        elif n > 140: return 'background-color: #FFFF00; color
+        if n < 70: return 'background-color: #FFFF00; color: black'   # AMARELO (10, 20...)
+        elif n > 180: return 'background-color: #FF0000; color: white' # VERMELHO
+        elif n > 140: return 'background-color: #FFFF00; color: black' # AMARELO
+        else: return 'background-color: #00FF00; color: black'         # VERDE
+    except: return ""
+
+st.title("🩸 Sistema Saúde Kids
