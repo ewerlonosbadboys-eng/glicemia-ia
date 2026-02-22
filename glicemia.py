@@ -7,12 +7,12 @@ import pytz
 
 # 1. Configuracoes Iniciais
 fuso_br = pytz.timezone('America/Sao_Paulo')
-st.set_page_config(page_title="Saude Kids v34", layout="wide")
+st.set_page_config(page_title="Saude Kids v35", layout="wide")
 
-ARQ_G = "dados_glicemia_v34.csv"
-ARQ_N = "dados_nutricao_v34.csv"
+ARQ_G = "dados_glicemia_v35.csv"
+ARQ_N = "dados_nutricao_v35.csv"
 
-# BANCO DE DADOS COM OS VALORES QUE VOCE PEDIU: [Carbo, Prot, Gord, Kcal]
+# BANCO DE DADOS FIXO [Carbo, Prot, Gord, Kcal]
 ALIMENTOS = {
     "Pao Frances": [28, 4, 1, 135], 
     "Leite (200ml)": [10, 6, 6, 120], 
@@ -35,4 +35,4 @@ def cor_glicemia(v):
         n = int(str(v).split(" ")[0])
         if n < 70: return 'background-color: #FFFF00; color: black'
         if n > 180: return 'background-color: #FF0000; color: white'
-        if n > 140: return 'background
+        if n > 140: return 'background-
