@@ -37,4 +37,11 @@ def salvar_leitura(valor, categoria):
     df.to_csv(ARQUIVO, index=False)
     st.success(f"✅ Salvo às {hora}: {valor} mg/dL")
 
-# ... (restante do código de carregamento e interface
+# ... (restante do código de carregamento e interface) ...
+
+if valor_final > 0:
+    cor = "yellow" if valor_final <= 69 else "green" if valor_final <= 200 else "red"
+    st.markdown(f"<h1 style='color:{cor}; text-align:center;'>{valor_final} mg/dL</h1>", unsafe_allow_html=True)
+    if st.button("💾 SALVAR MEDIDA"):
+        salvar_leitura(valor_final, cat_sel)
+        st.rerun()
