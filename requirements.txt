@@ -3,3 +3,7 @@ pandas
 openpyxl
 pytz
 matplotlib
+streamlit
+pandas
+openpyxl
+pytz
