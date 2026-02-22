@@ -35,15 +35,16 @@ def salvar_leitura(valor, categoria):
 st.subheader("📝 Nova Medição")
 col_e1, col_e2 = st.columns(2)
 
+categorias_ordem = [
+    "Medida antes do café", "Medida após o café",
+    "Medida antes do almoço", "Medida após o almoço",
+    "Medida antes da merenda", "Medida antes da janta",
+    "Medida após a janta", "Medida madrugada", "Medida Extra"
+]
+
 with col_e1:
     valor_manual = st.number_input("Valor:", min_value=0, max_value=600, step=1)
-    categorias = [
-        "Medida antes do café", "Medida após o café",
-        "Medida antes do almoço", "Medida após o almoço",
-        "Medida antes da merenda", "Medida antes da janta",
-        "Medida após a janta", "Medida madrugada", "Medida Extra"
-    ]
-    cat_sel = st.selectbox("Momento:", categorias)
+    cat_sel = st.selectbox("Momento:", categorias_ordem)
 
 with col_e2:
     foto = st.camera_input("Foto do Visor")
@@ -52,7 +53,7 @@ valor_final = valor_manual
 if foto and valor_manual == 0:
     try:
         img = PIL.Image.open(foto)
-        response = model.generate_content(["Retorne apenas o maior número central nesta imagem.", img])
+        response = model.generate_content(["Retorne apenas o número central da glicemia.", img])
         res = "".join(re.findall(r'\d+', response.text))
         if res:
             valor_final = int(res)
@@ -67,39 +68,45 @@ if valor_final > 0:
 
 st.markdown("---")
 
-# --- GERAÇÃO DO RELATÓRIO FORMATADO ---
+# --- GERAÇÃO DO RELATÓRIO ---
 st.subheader("📊 Relatório Formato Médico")
 
 if os.path.isfile("historico_glicemia.csv"):
     df = pd.read_csv("historico_glicemia.csv")
     
-    # Criar a tabela dinâmica (Dias nas linhas, Categorias nas colunas)
-    # Usamos 'first' caso haja mais de uma medida extra no mesmo dia
-    relatorio = df.pivot_table(
-        index='Data', 
-        columns='Categoria', 
-        values='Valor', 
-        aggfunc='first'
-    ).reset_index()
+    # CONSERTO PARA O ERRO KEYERROR: Renomeia colunas antigas se existirem
+    df.columns = [c.replace('Data/Hora', 'Data') for c in df.columns]
+    if 'Data' not in df.columns and 'Data/Hora' not in df.columns:
+         st.warning("O histórico antigo é incompatível. Salve uma nova medida para iniciar o novo formato.")
+    else:
+        try:
+            # Organiza a tabela para o formato de colunas por refeição
+            relatorio = df.pivot_table(
+                index='Data', 
+                columns='Categoria', 
+                values='Valor', 
+                aggfunc='first'
+            ).reset_index()
 
-    # Reordenar as colunas para a ordem lógica do dia
-    ordem_colunas = ['Data'] + [c for c in categorias if c in relatorio.columns]
-    relatorio = relatorio.reindex(columns=ordem_colunas)
+            # Garante que as colunas apareçam na ordem certa do dia
+            colunas_existentes = [c for c in categorias_ordem if c in relatorio.columns]
+            relatorio = relatorio.reindex(columns=['Data'] + colunas_existentes)
 
-    st.write("Prévia do Relatório Mensal:")
-    st.dataframe(relatorio, use_container_width=True)
+            st.write("Prévia (Cada linha é um dia):")
+            st.dataframe(relatorio, use_container_width=True)
 
-    # Exportar para EXCEL formatado
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        relatorio.to_excel(writer, index=False, sheet_name='Relatório Glicemia')
-    
-    excel_data = output.getvalue()
-    st.download_button(
-        label="📥 Baixar Relatório para Imprimir (Excel)",
-        data=excel_data,
-        file_name=f"Relatorio_Glicemia_{datetime.now().strftime('%m_%Y')}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
-else:
-    st.write("Ainda não há dados para gerar o relatório.")
+            # Exportar para EXCEL
+            output = BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                relatorio.to_excel(writer, index=False, sheet_name='Glicemia')
+            
+            excel_data = output.getvalue()
+            st.download_button(
+                label="📥 Baixar Relatório para Imprimir (Excel)",
+                data=excel_data,
+                file_name=f"Glicemia_Medico_{datetime.now().strftime('%m_%Y')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        except Exception as e:
+            st.error(f"Erro ao organizar tabela: {e}")
+            st.write("Tente salvar uma nova medida hoje para corrigir o histórico.")
