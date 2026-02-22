@@ -6,15 +6,15 @@ from io import BytesIO
 import plotly.express as px
 import pytz
 
-# 1. Configuração de Fuso Horário e Página
+# 1. Configuração Inicial
 fuso_br = pytz.timezone('America/Sao_Paulo')
-st.set_page_config(page_title="Saúde Kids - Monitoramento Completo", page_icon="🩸", layout="wide")
+st.set_page_config(page_title="Saúde Kids - Sistema Completo", page_icon="🩸", layout="wide")
 
-# Usando caderno V7 para unificar tudo sem erros
-ARQUIVO_GLIC = "dados_glicemia_v7.csv"
-ARQUIVO_NUTRI = "dados_nutricao_v7.csv"
+# Usando caderno V8 para evitar conflitos das fotos anteriores
+ARQUIVO_GLIC = "dados_glicemia_v8.csv"
+ARQUIVO_NUTRI = "dados_nutricao_v8.csv"
 
-# Banco de Alimentos Atualizado
+# Banco de Alimentos
 ALIMENTOS = {
     "Pão Francês (1 un)": [28, 4.5, 1],
     "Leite Inteiro (200ml)": [10, 6, 6],
@@ -29,7 +29,6 @@ ALIMENTOS = {
 def carregar_dados(arq):
     return pd.read_csv(arq) if os.path.exists(arq) else pd.DataFrame()
 
-# --- FUNÇÃO DE CORES (VERDE, AMARELO, VERMELHO) ---
 def aplicar_cores(val):
     if val == "-" or pd.isna(val): return ""
     try:
@@ -40,15 +39,21 @@ def aplicar_cores(val):
     except:
         return ""
 
-st.title("🩸 Sistema Unificado: Tudo em Um")
+st.title("🩸 Monitoramento Integrado (Glicemia + Nutrição)")
 
-# --- ABAS DO APLICATIVO ---
+# --- CRIAÇÃO DAS ABAS ---
 tab1, tab2, tab3 = st.tabs(["📊 Glicemia", "🍽️ Alimentação", "📸 Câmera"])
 
-# --- ABA 1: GLICEMIA (Com Gráfico, Tabela e Cores) ---
+# --- ABA 1: GLICEMIA ---
 with tab1:
     col1, col2 = st.columns(2)
     with col1:
         v_glic = st.number_input("Valor da Glicemia:", min_value=0)
         momento = st.selectbox("Momento:", ["Antes Café", "Após Café", "Antes Almoço", "Após Almoço", "Antes Merenda", "Antes Janta", "Após Janta", "Madrugada"])
         if st.button("💾 Salvar Glicemia"):
+            agora = datetime.now(fuso_br)
+            novo = pd.DataFrame([[agora.strftime("%d/%m/%Y"), agora.strftime("%H:%M"), v_glic, momento]], columns=["Data", "Hora", "Valor", "Categoria"])
+            pd.concat([carregar_dados(ARQUIVO_GLIC), novo], ignore_index=True).to_csv(ARQUIVO_GLIC, index=False)
+            st.success("Salvo!")
+            st.rerun()
+    with
