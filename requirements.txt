@@ -2,3 +2,4 @@ google-generativeai
 streamlit
 pandas
 openpyxl
+plotly
