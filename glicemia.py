@@ -7,129 +7,118 @@ from datetime import datetime
 import os
 from io import BytesIO
 from openpyxl.styles import PatternFill
+import plotly.express as px # Nova biblioteca para o gráfico
 
 # Configuração da IA
 genai.configure(api_key="gen-lang-client-0937121329")
 model = genai.GenerativeModel('gemini-1.5-flash')
 
 st.set_page_config(page_title="Glicemia Kids", page_icon="🩸", layout="wide")
-st.title("🩸 Diário de Glicemia (Com Edição)")
+st.title("🩸 Diário com Gráfico de Picos")
 
-# --- ARQUIVO DE DADOS ---
 ARQUIVO = "historico_glicemia.csv"
 
 def carregar_dados():
     if os.path.isfile(ARQUIVO):
         df = pd.read_csv(ARQUIVO)
-        # Padronização de colunas
+        # Padroniza colunas e garante que Hora existe (usando agora se faltar)
+        if 'Hora' not in df.columns: df['Hora'] = datetime.now().strftime("%H:%M")
         df.columns = [c.replace('Valor (mg/dL)', 'Valor').replace('Data/Hora', 'Data') for c in df.columns]
         return df
-    return pd.DataFrame(columns=["Data", "Valor", "Categoria", "Mes_Ano"])
+    return pd.DataFrame(columns=["Data", "Hora", "Valor", "Categoria", "Mes_Ano"])
 
 def salvar_csv(df):
     df.to_csv(ARQUIVO, index=False)
 
-# --- INTERFACE DE ENTRADA ---
-categorias_ordem = [
-    "Medida antes do café", "Medida após o café",
-    "Medida antes do almoço", "Medida após o almoço",
-    "Medida antes da merenda", "Medida antes da janta",
-    "Medida após a janta", "Medida madrugada", "Medida Extra"
-]
+# --- ENTRADA DE DADOS ---
+categorias_ordem = ["Medida antes do café", "Medida após o café", "Medida antes do almoço", "Medida após o almoço", "Medida antes da merenda", "Medida antes da janta", "Medida após a janta", "Medida madrugada", "Medida Extra"]
 
 st.subheader("📝 Nova Medição")
 col1, col2 = st.columns(2)
 with col1:
-    valor_manual = st.number_input("Digite o Valor:", min_value=0, max_value=600, step=1)
-    cat_sel = st.selectbox("Momento da Medida:", categorias_ordem)
+    valor_manual = st.number_input("Valor:", min_value=0, max_value=600, step=1)
+    cat_sel = st.selectbox("Momento:", categorias_ordem)
 with col2:
-    foto = st.camera_input("Tirar Foto do Sensor")
+    foto = st.camera_input("Foto")
 
 valor_final = valor_manual
 if foto and valor_manual == 0:
     try:
-        img = PIL.Image.open(foto)
-        response = model.generate_content(["Retorne apenas o número da glicemia.", img])
-        res = "".join(re.findall(r'\d+', response.text))
+        img = PIL.Image.open(foto); res = "".join(re.findall(r'\d+', model.generate_content(["Número glicemia", img]).text))
         if res: valor_final = int(res)
-    except: st.error("Erro na foto.")
+    except: st.error("Erro foto")
 
 if valor_final > 0:
-    cor_txt = "yellow" if valor_final <= 69 else "green" if valor_final <= 200 else "red"
-    st.markdown(f"<h1 style='color:{cor_txt}; text-align:center;'>{valor_final} mg/dL</h1>", unsafe_allow_html=True)
-    if st.button("💾 SALVAR NO RELATÓRIO"):
+    cor = "yellow" if valor_final <= 69 else "green" if valor_final <= 200 else "red"
+    st.markdown(f"<h1 style='color:{cor}; text-align:center;'>{valor_final} mg/dL</h1>", unsafe_allow_html=True)
+    if st.button("💾 SALVAR"):
         agora = datetime.now()
         df = carregar_dados()
-        nova_linha = pd.DataFrame([[agora.strftime("%d/%m/%Y"), valor_final, cat_sel, agora.strftime("%m/%Y")]], 
-                                 columns=["Data", "Valor", "Categoria", "Mes_Ano"])
-        df = pd.concat([df, nova_linha], ignore_index=True)
-        salvar_csv(df)
-        st.success("✅ Salvo!")
-        st.rerun()
+        nova = pd.DataFrame([[agora.strftime("%d/%m/%Y"), agora.strftime("%H:%M"), valor_final, cat_sel, agora.strftime("%m/%Y")]], columns=["Data", "Hora", "Valor", "Categoria", "Mes_Ano"])
+        df = pd.concat([df, nova], ignore_index=True)
+        salvar_csv(df); st.rerun()
 
 st.markdown("---")
 
-# --- SEÇÃO DE EDIÇÃO ---
+# --- GRÁFICO DE PICOS (24 HORAS) ---
 df = carregar_dados()
 if not df.empty:
-    st.subheader("⚙️ Editar ou Excluir Medidas")
-    st.write("Se salvou algo errado, corrija abaixo:")
+    st.subheader("📈 Análise de Picos (Hoje)")
+    hoje = datetime.now().strftime("%d/%m/%Y")
+    df_hoje = df[df['Data'] == hoje].copy()
     
-    # Criamos uma lista de textos para o usuário escolher qual linha editar
-    df_lista = df.copy()
-    df_lista['Seleção'] = df_lista['Data'] + " - " + df_lista['Categoria'] + " (" + df_lista['Valor'].astype(str) + ")"
-    
-    linha_para_editar = st.selectbox("Escolha a medida para alterar:", df_lista['Seleção'].tolist(), index=len(df_lista)-1)
-    idx = df_lista[df_lista['Seleção'] == linha_para_editar].index[0]
-    
-    col_ed1, col_ed2, col_ed3 = st.columns([2, 2, 1])
-    with col_ed1:
-        novo_valor = st.number_input("Corrigir Valor:", value=int(df.at[idx, 'Valor']))
-    with col_ed2:
-        nova_cat = st.selectbox("Corrigir Momento:", categorias_ordem, index=categorias_ordem.index(df.at[idx, 'Categoria']))
-    with col_ed3:
-        st.write("Ação")
-        if st.button("🆙 ATUALIZAR"):
-            df.at[idx, 'Valor'] = novo_valor
-            df.at[idx, 'Categoria'] = nova_cat
-            salvar_csv(df)
-            st.success("Alterado!")
-            st.rerun()
-        if st.button("🗑️ EXCLUIR"):
-            df = df.drop(idx)
-            salvar_csv(df)
-            st.warning("Excluído!")
-            st.rerun()
+    if not df_hoje.empty:
+        # Ordena por hora para o gráfico fazer sentido
+        df_hoje = df_hoje.sort_values(by='Hora')
+        
+        fig = px.line(df_hoje, x='Hora', y='Valor', title=f"Glicemia em {hoje}",
+                      markers=True, line_shape="spline",
+                      color_discrete_sequence=["#00FF00"])
+        
+        # Adiciona faixas de referência no gráfico
+        fig.add_hline(y=70, line_dash="dot", line_color="yellow", annotation_text="Limite Baixo")
+        fig.add_hline(y=200, line_dash="dot", line_color="red", annotation_text="Limite Alto")
+        
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("Ainda não há medidas salvas hoje para gerar o gráfico.")
 
 st.markdown("---")
 
-# --- RELATÓRIO EXCEL (O mesmo que o médico gosta) ---
+# --- EDIÇÃO E EXCEL ---
 if not df.empty:
+    with st.expander("⚙️ Editar/Excluir Medidas"):
+        df_l = df.copy(); df_l['Sel'] = df_l['Data'] + " " + df_l['Hora'] + " - " + df_l['Categoria']
+        escolha = st.selectbox("Selecione:", df_l['Sel'].tolist(), index=len(df_l)-1)
+        idx = df_l[df_l['Sel'] == escolha].index[0]
+        c1, c2, c3 = st.columns(3)
+        nv = c1.number_input("Novo Valor:", value=int(df.at[idx, 'Valor']))
+        nc = c2.selectbox("Nova Categoria:", categorias_ordem, index=categorias_ordem.index(df.at[idx, 'Categoria']))
+        if c3.button("🆙 Atualizar"):
+            df.at[idx, 'Valor'] = nv; df.at[idx, 'Categoria'] = nc; salvar_csv(df); st.rerun()
+        if c3.button("🗑️ Excluir"):
+            df = df.drop(idx); salvar_csv(df); st.rerun()
+
+    # Relatório Médico
     try:
-        relatorio = df.pivot_table(index='Data', columns='Categoria', values='Valor', aggfunc='last').reset_index()
-        col_f = ['Data'] + [c for c in categorias_ordem if c in relatorio.columns]
-        relatorio = relatorio.reindex(columns=col_f)
-
-        st.subheader("📊 Relatório para Impressão")
-        st.dataframe(relatorio, use_container_width=True)
-
-        output = BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            relatorio.to_excel(writer, index=False, sheet_name='Glicemia')
-            ws = writer.sheets['Glicemia']
-            fill_am = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
-            fill_vd = PatternFill(start_color="92D050", end_color="92D050", fill_type="solid")
-            fill_vm = PatternFill(start_color="FF0000", end_color="FF0000", fill_type="solid")
-
+        rel = df.pivot_table(index='Data', columns='Categoria', values='Valor', aggfunc='last').reset_index()
+        col_f = ['Data'] + [c for c in categorias_ordem if c in rel.columns]
+        rel = rel.reindex(columns=col_f)
+        st.subheader("📊 Relatório para o Médico")
+        st.dataframe(rel, use_container_width=True)
+        
+        out = BytesIO()
+        with pd.ExcelWriter(out, engine='openpyxl') as wr:
+            rel.to_excel(wr, index=False, sheet_name='Glicemia')
+            ws = wr.sheets['Glicemia']
+            f_am, f_vd, f_vm = PatternFill("solid", start_color="FFFF00"), PatternFill("solid", start_color="92D050"), PatternFill("solid", start_color="FF0000")
             for r in range(2, ws.max_row + 1):
                 for c in range(2, ws.max_column + 1):
-                    celula = ws.cell(row=r, column=c)
-                    if celula.value:
-                        v = float(celula.value)
-                        if v <= 69: celula.fill = fill_am
-                        elif v <= 200: celula.fill = fill_vd
-                        else: celula.fill = fill_vm
-
-        st.download_button("📥 Baixar Excel Colorido", output.getvalue(), file_name="Glicemia_Kids.xlsx")
-    except:
-        st.info("Organizando dados...")
+                    cel = ws.cell(row=r, column=c)
+                    if cel.value:
+                        v = float(cel.value)
+                        if v <= 69: cel.fill = f_am
+                        elif v <= 200: cel.fill = f_vd
+                        else: cel.fill = f_vm
+        st.download_button("📥 Baixar Excel Colorido", out.getvalue(), file_name="Glicemia_Kids.xlsx")
+    except: pass
