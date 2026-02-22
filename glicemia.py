@@ -4,97 +4,198 @@ from datetime import datetime
 import os
 from io import BytesIO
 import pytz
+import matplotlib.pyplot as plt
+import shutil
 
-# Configurações de Fuso e Arquivos
+# ================= CONFIG =================
 fuso_br = pytz.timezone('America/Sao_Paulo')
-st.set_page_config(page_title="Saude Kids v32", layout="wide")
+st.set_page_config(page_title="Saude Kids v34 PRO", layout="wide")
 
-ARQ_G = "dados_glicemia_v32.csv"
-ARQ_N = "dados_nutricao_v32.csv"
+ARQ_G = "dados_glicemia_v34.csv"
+PASTA_BACKUP = "backup"
 
-# Banco de Alimentos: [Carbo, Prot, Gord, Kcal]
-ALIMENTOS = {
-    "Pao Frances": [28, 4, 1, 135], 
-    "Leite (200ml)": [10, 6, 6, 120], 
-    "Arroz (colher)": [5, 1, 0, 25], 
-    "Feijao (colher)": [5, 2, 0, 30], 
-    "Frango (file)": [0, 23, 5, 160], 
-    "Ovo": [1, 6, 5, 80],
-    "Banana": [22, 1, 0, 90], 
-    "Maca": [15, 0, 0, 60], 
-    "Iogurte": [15, 5, 3, 110], 
-    "Bolacha (un)": [8, 1, 2, 50]
+if not os.path.exists(PASTA_BACKUP):
+    os.makedirs(PASTA_BACKUP)
+
+# ================= VISUAL INFANTIL =================
+st.markdown("""
+<style>
+.card {
+    padding:25px;
+    border-radius:20px;
+    text-align:center;
+    font-size:28px;
+    font-weight:bold;
 }
+.green {background-color:#C8F7C5;}
+.yellow {background-color:#FFF3B0;}
+.red {background-color:#F8C8C8;}
+</style>
+""", unsafe_allow_html=True)
 
-def carregar(arq):
-    return pd.read_csv(arq) if os.path.exists(arq) else pd.DataFrame()
+# ================= FUNÇÕES =================
 
-def cor_glicemia(v):
-    if v == "-" or pd.isna(v): return ""
-    try:
-        n = int(str(v).split(" ")[0])
-        if n < 70: return 'background-color: #FFFF00; color: black'
-        if n > 180: return 'background-color: #FF0000; color: white'
-        if n > 140: return 'background-color: #FFFF00; color: black'
-        return 'background-color: #00FF00; color: black'
-    except: return ""
+def carregar():
+    return pd.read_csv(ARQ_G) if os.path.exists(ARQ_G) else pd.DataFrame()
 
-st.title("Monitoramento Saude Kids v32")
+def salvar_backup():
+    if os.path.exists(ARQ_G):
+        hoje = datetime.now(fuso_br).strftime("%Y%m%d_%H%M%S")
+        shutil.copy(ARQ_G, f"{PASTA_BACKUP}/backup_{hoje}.csv")
 
-# --- SEÇÃO 1: GLICEMIA ---
-st.header("1. Registro de Glicemia")
-col1, col2 = st.columns(2)
-with col1:
-    v_g = st.number_input("Valor da Glicemia:", min_value=0, key="glic")
-    m_g = st.selectbox("Momento:", ["Antes Cafe", "Apos Cafe", "Antes Almoco", "Apos Almoco", "Antes Merenda", "Antes Janta", "Apos Janta", "Madrugada"], key="mom")
-    if st.button("Salvar Glicemia"):
+def classificar(valor):
+    if valor < 70:
+        return "HIPO"
+    elif valor > 180:
+        return "HIPER"
+    elif valor > 140:
+        return "ATENÇÃO"
+    else:
+        return "NORMAL"
+
+def sugestao_ia(media):
+    if media > 180:
+        return "Reduzir carboidratos simples e revisar jantar."
+    elif media < 70:
+        return "Adicionar lanche antes de dormir."
+    elif media > 140:
+        return "Monitorar arroz, pão e bolachas."
+    else:
+        return "Controle alimentar adequado."
+
+def alerta_sonoro():
+    st.audio("https://www.soundjay.com/buttons/sounds/beep-07.mp3")
+
+# ================= TÍTULO =================
+st.title("📱 Saúde Kids v34 PRO")
+
+tab1, tab2, tab3, tab4 = st.tabs([
+    "📊 Dashboard",
+    "🩸 Registro",
+    "📈 Gráfico Profissional",
+    "📥 Relatório Médico"
+])
+
+# =========================================================
+# DASHBOARD
+# =========================================================
+with tab1:
+    df = carregar()
+
+    if not df.empty:
+        df['DataHora'] = pd.to_datetime(df['Data'] + " " + df['Hora'], dayfirst=True)
+        df = df.sort_values("DataHora")
+
+        hoje = datetime.now(fuso_br).strftime("%d/%m/%Y")
+        df_hoje = df[df['Data'] == hoje]
+
+        if not df_hoje.empty:
+            media = round(df_hoje['Valor'].mean(),1)
+            maior = df_hoje['Valor'].max()
+            menor = df_hoje['Valor'].min()
+
+            col1,col2,col3 = st.columns(3)
+            col1.metric("Média do Dia", f"{media} mg/dL")
+            col2.metric("Maior", maior)
+            col3.metric("Menor", menor)
+
+            ultimo = df_hoje.iloc[-1]['Valor']
+
+            if ultimo < 70:
+                cor="red"; emoji="😟"
+            elif ultimo > 180:
+                cor="red"; emoji="⚠"
+            elif ultimo > 140:
+                cor="yellow"; emoji="🙂"
+            else:
+                cor="green"; emoji="😃"
+
+            st.markdown(f"<div class='card {cor}'>{emoji} {ultimo} mg/dL</div>", unsafe_allow_html=True)
+
+            if ultimo < 70 or ultimo > 180:
+                alerta_sonoro()
+                st.warning("⚠ Glicemia fora da meta!")
+
+            st.subheader("🧠 Sugestão Inteligente")
+            st.info(sugestao_ia(media))
+
+        # Comparação semanal automática
+        df['Semana'] = df['DataHora'].dt.isocalendar().week
+        media_semana = df.groupby("Semana")['Valor'].mean()
+        st.subheader("📊 Média Semanal")
+        st.line_chart(media_semana)
+
+# =========================================================
+# REGISTRO
+# =========================================================
+with tab2:
+    valor = st.number_input("Valor da Glicemia", min_value=0)
+    momento = st.selectbox("Momento", [
+        "Antes Cafe","Apos Cafe",
+        "Antes Almoco","Apos Almoco",
+        "Antes Janta","Apos Janta",
+        "Madrugada"
+    ])
+
+    if st.button("Salvar"):
         agora = datetime.now(fuso_br)
-        novo = pd.DataFrame([[agora.strftime("%d/%m/%Y"), agora.strftime("%H:%M"), v_g, m_g]], columns=["Data", "Hora", "Valor", "Momento"])
-        pd.concat([carregar(ARQ_G), novo], ignore_index=True).to_csv(ARQ_G, index=False)
+        novo = pd.DataFrame([[agora.strftime("%d/%m/%Y"),
+                              agora.strftime("%H:%M"),
+                              valor,
+                              momento]],
+                            columns=["Data","Hora","Valor","Momento"])
+        df = pd.concat([carregar(),novo],ignore_index=True)
+        df.to_csv(ARQ_G,index=False)
+        salvar_backup()
+        st.success("Salvo com sucesso!")
         st.rerun()
 
-dfg = carregar(ARQ_G)
-if not dfg.empty:
-    dfg['Exibe'] = dfg['Valor'].astype(str) + " (" + dfg['Hora'] + ")"
-    pivot = dfg.pivot_table(index='Data', columns='Momento', values='Exibe', aggfunc='last').fillna("-")
-    st.dataframe(pivot.style.applymap(cor_glicemia), use_container_width=True)
+    df = carregar()
+    if not df.empty:
+        df['DataHora'] = pd.to_datetime(df['Data'] + " " + df['Hora'], dayfirst=True)
+        df = df.sort_values("DataHora")
+        st.dataframe(df[['Data','Hora','Valor','Momento']], use_container_width=True)
+        st.write("Meta ideal: 70–180 mg/dL")
 
-st.markdown("---")
+# =========================================================
+# GRÁFICO PROFISSIONAL
+# =========================================================
+with tab3:
+    df = carregar()
 
-# --- SEÇÃO 2: ALIMENTAÇÃO ---
-st.header("2. O que ela comeu hoje?")
-c_a, c_b = st.columns([1, 2])
-with c_a:
-    ref = st.selectbox("Refeicao:", ["Cafe da Manha", "Lanche Manha", "Almoco", "Merenda", "Janta", "Lanche Noite"], key="ref_box")
-    escolha = st.multiselect("Itens:", list(ALIMENTOS.keys()), key="itens_sel")
-    
-    c_t = sum([ALIMENTOS[i][0] for i in escolha])
-    p_t = sum([ALIMENTOS[i][1] for i in escolha])
-    g_t = sum([ALIMENTOS[i][2] for i in escolha])
-    
-    if st.button("Salvar Alimentacao"):
-        if escolha:
-            agora = datetime.now(fuso_br)
-            itens_txt = ", ".join(escolha)
-            novo_n = pd.DataFrame([[agora.strftime("%d/%m/%Y"), ref, itens_txt, c_t, p_t, g_t]], columns=["Data", "Refeicao", "Itens", "Carbo", "Prot", "Gord"])
-            pd.concat([carregar(ARQ_N), novo_n], ignore_index=True).to_csv(ARQ_N, index=False)
-            st.rerun()
+    if not df.empty:
+        df['DataHora'] = pd.to_datetime(df['Data'] + " " + df['Hora'], dayfirst=True)
+        df = df.sort_values("DataHora")
 
-dfn = carregar(ARQ_N)
-if not dfn.empty:
-    st.write("📋 **Resumo: Alimentos e Nutrientes (C, P, G)**")
-    df_exibir = dfn.copy()
-    # Formatação que você pediu: Alimentos em cima e Macros embaixo
-    df_exibir["Detalhes"] = df_exibir["Itens"] + " | Carbo:" + df_exibir["Carbo"].astype(str) + "g Prot:" + df_exibir["Prot"].astype(str) + "g Gord:" + df_exibir["Gord"].astype(str) + "g"
-    resumo = df_exibir.pivot_table(index='Data', columns='Refeicao', values='Detalhes', aggfunc='last').fillna("-")
-    st.dataframe(resumo, use_container_width=True)
+        fig, ax = plt.subplots(figsize=(10,5))
+        ax.plot(df['DataHora'], df['Valor'], marker='o')
 
-# --- SEÇÃO 3: RELATÓRIO ---
-st.markdown("---")
-if st.button("📥 BAIXAR EXCEL PARA O MÉDICO"):
-    dg = carregar(ARQ_G); dn = carregar(ARQ_N)
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        if not dg.empty: dg.to_excel(writer, sheet_name='Glicemia', index=False)
-        if not dn.empty: dn.to_excel(writer, sheet_name='Nutricao', index=False)
-    st.download_button("Clique para baixar o Relatorio.xlsx", output.getvalue(), file_name="Relatorio_Saude_Kids.xlsx")
+        ax.axhline(70)
+        ax.axhline(180)
+
+        ax.set_ylim(0,600)
+        ax.set_yticks(range(0,601,100))
+
+        ax.set_title("Evolução da Glicemia")
+        ax.set_ylabel("mg/dL")
+
+        st.pyplot(fig)
+        st.write("Linha inferior: 70 mg/dL")
+        st.write("Linha superior: 180 mg/dL")
+        st.write(f"Média Geral: {round(df['Valor'].mean(),1)} mg/dL")
+
+# =========================================================
+# RELATÓRIO MÉDICO
+# =========================================================
+with tab4:
+    if st.button("📥 Gerar Excel Médico"):
+        df = carregar()
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df.to_excel(writer, sheet_name='Glicemia', index=False)
+
+        st.download_button(
+            "Clique para baixar",
+            output.getvalue(),
+            file_name="Relatorio_Saude_Kids_v34.xlsx"
+        )
