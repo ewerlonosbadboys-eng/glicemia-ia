@@ -1,142 +1,53 @@
-import streamlit as st
-import google.generativeai as genai
-import PIL.Image
-import re
-import pandas as pd
-from datetime import datetime
-import os
-from io import BytesIO
-from openpyxl.styles import PatternFill
-import plotly.express as px
-import pytz
+# --- BANCO DE DADOS DE ALIMENTOS (Exemplo de Valores Médios) ---
+# Valores por porção (g): [Carboidratos, Proteínas, Gorduras]
+ALIMENTOS = {
+    "Pão Francês (1 un)": [28, 4.5, 1],
+    "Pão de Forma (1 fatia)": [12, 2, 1],
+    "Café com Açúcar (copo)": [10, 0, 0],
+    "Café com Adoçante": [0, 0, 0],
+    "Leite Inteiro (200ml)": [10, 6, 6],
+    "Arroz Branco (colher)": [5, 0.5, 0],
+    "Feijão (concha)": [14, 5, 0.5],
+    "Frango Grelhado (filé)": [0, 23, 5],
+    "Maçã (un)": [15, 0, 0],
+    "Bolacha Salgada (un)": [4, 0.5, 1],
+}
 
-# --- CONFIGURAÇÃO DE FUSO HORÁRIO BRASIL ---
-fuso_br = pytz.timezone('America/Sao_Paulo')
-
-# Configuração da IA
-genai.configure(api_key="gen-lang-client-0937121329")
-model = genai.GenerativeModel('gemini-1.5-flash')
-
-st.set_page_config(page_title="Glicemia Kids", page_icon="🩸", layout="wide")
-st.title("🩸 Monitoramento Glicêmico (Brasília)")
-
-ARQUIVO = "historico_glicemia.csv"
-
-def carregar_dados():
-    if os.path.isfile(ARQUIVO):
-        df = pd.read_csv(ARQUIVO)
-        # Padroniza colunas de versões antigas
-        df.columns = [c.replace('Valor (mg/dL)', 'Valor').replace('Data/Hora', 'Data') for c in df.columns]
-        if 'Hora' not in df.columns: df['Hora'] = "00:00"
-        return df
-    return pd.DataFrame(columns=["Data", "Hora", "Valor", "Categoria", "Mes_Ano"])
-
-def salvar_csv(df):
-    df.to_csv(ARQUIVO, index=False)
-
-# --- ENTRADA DE DADOS ---
-categorias_ordem = [
-    "Medida antes do café", "Medida após o café",
-    "Medida antes do almoço", "Medida após o almoço",
-    "Medida antes da merenda", "Medida antes da janta",
-    "Medida após a janta", "Medida madrugada", "Medida Extra"
-]
-
-st.subheader("📝 Novo Registro")
-col1, col2 = st.columns(2)
-with col1:
-    valor_manual = st.number_input("Digite o Valor:", min_value=0, max_value=600, step=1)
-    cat_sel = st.selectbox("Momento da Medida:", categorias_ordem)
-with col2:
-    foto = st.camera_input("Foto do Sensor")
-
-# Lógica da IA para ler o valor
-valor_final = valor_manual
-if foto and valor_manual == 0:
-    try:
-        img = PIL.Image.open(foto)
-        response = model.generate_content(["Identifique apenas o número da glicemia.", img])
-        res = "".join(re.findall(r'\d+', response.text))
-        if res: valor_final = int(res)
-    except: st.error("Erro ao ler foto. Tente manual.")
-
-if valor_final > 0:
-    cor = "yellow" if valor_final <= 69 else "green" if valor_final <= 200 else "red"
-    st.markdown(f"<h1 style='color:{cor}; text-align:center;'>{valor_final} mg/dL</h1>", unsafe_allow_html=True)
-    
-    if st.button("💾 SALVAR AGORA"):
-        agora_br = datetime.now(fuso_br)
-        df = carregar_dados()
-        nova = pd.DataFrame([[
-            agora_br.strftime("%d/%m/%Y"), 
-            agora_br.strftime("%H:%M"), 
-            valor_final, 
-            cat_sel, 
-            agora_br.strftime("%m/%Y")
-        ]], columns=["Data", "Hora", "Valor", "Categoria", "Mes_Ano"])
-        df = pd.concat([df, nova], ignore_index=True)
-        salvar_csv(df)
-        st.success(f"✅ Salvo às {agora_br.strftime('%H:%M')}!")
-        st.rerun()
-
+# --- INTERFACE DE NUTRIÇÃO ---
 st.markdown("---")
+st.subheader("🍽️ Diário Alimentar e Contagem")
 
-# --- GRÁFICO E RELATÓRIO ---
-df = carregar_dados()
-if not df.empty:
-    # Gráfico de Picos (Hoje)
-    st.subheader("📈 Análise de Picos (Hoje)")
-    hoje = datetime.now(fuso_br).strftime("%d/%m/%Y")
-    df_hoje = df[df['Data'] == hoje].sort_values('Hora')
+col_n1, col_n2 = st.columns(2)
+
+with col_n1:
+    refeicao_tipo = st.selectbox("Refeição:", [
+        "Café da Manhã", "Lanche da Manhã", "Almoço", 
+        "Merenda", "Jantar", "Lanche da Noite"
+    ])
+    itens_consumidos = st.multiselect("O que foi consumido?", list(ALIMENTOS.keys()))
+
+# Cálculos Automáticos
+total_carb = sum([ALIMENTOS[item][0] for item in itens_consumidos])
+total_prot = sum([ALIMENTOS[item][1] for item in itens_consumidos])
+total_gord = sum([ALIMENTOS[item][2] for item in itens_consumidos])
+
+with col_n2:
+    st.write("**Resumo Nutricional:**")
+    st.info(f"🍞 Carboidratos: {total_carb}g | 🥩 Proteína: {total_prot}g | 🥑 Gordura: {total_gord}g")
     
-    if not df_hoje.empty:
-        fig = px.line(df_hoje, x='Hora', y='Valor', markers=True, 
-                      title=f"Evolução em {hoje}", color_discrete_sequence=["#00FF00"])
-        st.plotly_chart(fig, use_container_width=True)
-    
-    # Seção de Edição
-    with st.expander("⚙️ Editar/Excluir Medida"):
-        df_edit = df.copy()
-        df_edit['Selecione'] = df_edit['Data'] + " " + df_edit['Hora'] + " - " + df_edit['Categoria']
-        escolha = st.selectbox("Medida para alterar:", df_edit['Selecione'].tolist(), index=len(df_edit)-1)
-        idx = df_edit[df_edit['Selecione'] == escolha].index[0]
-        nv = st.number_input("Corrigir Valor:", value=int(df.at[idx, 'Valor']))
-        if st.button("🆙 Atualizar"):
-            df.at[idx, 'Valor'] = nv
-            salvar_csv(df); st.rerun()
-
-    # Relatório Formato Médico
-    try:
-        # Cria a exibição com valor e hora: 184 (07:15)
-        df['Exibicao'] = df['Valor'].astype(str) + " (" + df['Hora'].astype(str) + ")"
-        rel = df.pivot_table(index='Data', columns='Categoria', values='Exibicao', aggfunc='last').reset_index()
-        rel = rel.reindex(columns=['Data'] + [c for c in categorias_ordem if c in rel.columns])
+    if st.button("💾 SALVAR ALIMENTAÇÃO"):
+        agora_br = datetime.now(fuso_br)
+        dados_alimento = pd.DataFrame([[
+            agora_br.strftime("%d/%m/%Y"), 
+            refeicao_tipo, 
+            ", ".join(itens_consumidos), 
+            total_carb, total_prot, total_gord
+        ]], columns=["Data", "Refeição", "Alimentos", "Carbos", "Proteína", "Gordura"])
         
-        st.subheader("📊 Relatório para o Médico")
-        st.dataframe(rel, use_container_width=True)
-
-        # Download do Excel Colorido
-        output = BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            rel.to_excel(writer, index=False, sheet_name='Glicemia')
-            ws = writer.sheets['Glicemia']
-            f_am, f_vd, f_vm = PatternFill("solid", "FFFF00"), PatternFill("solid", "92D050"), PatternFill("solid", "FF0000")
-            for r in range(2, ws.max_row + 1):
-                for c in range(2, ws.max_column + 1):
-                    cel = ws.cell(row=r, column=c)
-                    if cel.value:
-                        try:
-                            v = float(cel.value.split(" ")[0])
-                            if v <= 69: cel.fill = f_am
-                            elif v <= 200: cel.fill = f_vd
-                            else: cel.fill = f_vm
-                        except: pass
-        
-        st.download_button("📥 Baixar Excel Colorido", output.getvalue(), file_name="Relatorio_Glicemia.xlsx")
-    except Exception as e:
-        st.info("Adicione medidas para ver o relatório.")
-
-# Botão de emergência se o arquivo corromper
-if st.sidebar.button("🗑️ Resetar Tudo (Limpar Erros)"):
-    if os.path.exists(ARQUIVO): os.remove(ARQUIVO)
-    st.rerun()
+        # Salva em um arquivo separado
+        arq_nutri = "historico_nutricao.csv"
+        if not os.path.isfile(arq_nutri):
+            dados_alimento.to_csv(arq_nutri, index=False)
+        else:
+            dados_alimento.to_csv(arq_nutri, mode='a', header=False, index=False)
+        st.success("Refeição registrada!")
