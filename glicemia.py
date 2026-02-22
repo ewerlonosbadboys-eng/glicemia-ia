@@ -1,65 +1,73 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime
-import os, pytz, shutil
-import matplotlib.pyplot as plt
+import os, pytz
 from io import BytesIO
 
 # Configuração e Fuso
 fuso = pytz.timezone('America/Sao_Paulo')
-st.set_page_config(page_title="Saude Kids v34 PRO", layout="wide")
-ARQ = "glic_v34.csv"
-if not os.path.exists("backup"): os.makedirs("backup")
+st.set_page_config(page_title="Saude Kids v47", layout="wide")
 
-# Estilo
-st.markdown("<style>.card{padding:20px;border-radius:15px;text-align:center;font-size:25px;font-weight:bold;}.verde{background:#C8F7C5;}.amarelo{background:#FFF3B0;}.vermelho{background:#F8C8C8;}</style>", unsafe_allow_html=True)
+# Ficheiros e Colunas Oficiais do Relatório
+ARQ = "dados_saude_v47.csv"
+COL_RELATORIO = ["Data", "Antes Café", "Após Café", "Antes Almoço", "Após Almoço", "Antes Merenda", "Antes Janta", "Após Janta", "Madrugada"]
 
-def carregar(): return pd.read_csv(ARQ) if os.path.exists(ARQ) else pd.DataFrame(columns=["Data","Hora","Valor","Momento"])
-def backup(): 
-    if os.path.exists(ARQ): shutil.copy(ARQ, f"backup/bkp_{datetime.now(fuso).strftime('%Y%m%d_%H%M%S')}.csv")
+def load_data():
+    if os.path.exists(ARQ):
+        return pd.read_csv(ARQ)
+    return pd.DataFrame(columns=["Data", "Hora", "Valor", "Momento"])
 
-st.title("📱 Saúde Kids v34 PRO")
-t1, t2, t3, t4 = st.tabs(["📊 Dashboard", "🩸 Registro", "📈 Gráfico", "📥 Relatório"])
+def style_excel(v):
+    if v == "-" or pd.isna(v): return ""
+    try:
+        val = int(str(v).split(" ")[0])
+        if val < 70: return 'background-color: #FFFF99' # Amarelo (Hipo)
+        if val > 180: return 'background-color: #FFCCCC' # Vermelho (Hiper)
+        return 'background-color: #CCFFCC' # Verde (Normal)
+    except: return ""
+
+st.title("🩸 Monitorização Saude Kids v47")
+t1, t2 = st.tabs(["Registos", "Relatório Excel"])
 
 with t1:
-    df = carregar()
+    v_g = st.number_input("Valor da Glicemia:", min_value=0)
+    m_g = st.selectbox("Momento:", COL_RELATORIO[1:]) # Ignora a coluna 'Data'
+    if st.button("Salvar Glicemia"):
+        agora = datetime.now(fuso)
+        novo = pd.DataFrame([[agora.strftime("%d/%m/%Y"), agora.strftime("%H:%M"), v_g, m_g]], 
+                            columns=["Data", "Hora", "Valor", "Momento"])
+        pd.concat([load_data(), novo], ignore_index=True).to_csv(ARQ, index=False)
+        st.success("Guardado!")
+        st.rerun()
+    
+    df = load_data()
     if not df.empty:
-        df['dt'] = pd.to_datetime(df['Data'] + " " + df['Hora'], dayfirst=True)
-        hj = datetime.now(fuso).strftime("%d/%m/%Y")
-        dfh = df[df['Data'] == hj]
-        if not dfh.empty:
-            c1, c2, c3 = st.columns(3)
-            med = round(dfh['Valor'].mean(), 1)
-            c1.metric("Média Hoje", f"{med} mg/dL")
-            c2.metric("Máxima", dfh['Valor'].max())
-            c3.metric("Mínima", dfh['Valor'].min())
-            ult = dfh.iloc[-1]['Valor']
-            cor = "verde" if 70 <= ult <= 140 else "amarelo" if 140 < ult <= 180 else "vermelho"
-            st.markdown(f"<div class='card {cor}'>Última: {ult} mg/dL</div>", unsafe_allow_html=True)
-            if ult < 70 or ult > 180: st.warning("⚠️ Atenção: Glicemia fora da meta!")
+        # Cria a tabela visual igual à imagem do Excel enviada
+        df['Exibe'] = df['Valor'].astype(str) + " (" + df['Hora'] + ")"
+        tabela_medica = df.pivot_table(index='Data', columns='Momento', values='Exibe', aggfunc='last')
+        # Garante que todas as colunas do relatório apareçam, mesmo vazias
+        for c in COL_RELATORIO[1:]:
+            if c not in tabela_medica.columns: tabela_medica[c] = "-"
+        
+        st.subheader("Pré-visualização do Relatório")
+        st.dataframe(tabela_medica[COL_RELATORIO[1:]].fillna("-").style.applymap(style_excel), use_container_width=True)
 
 with t2:
-    v = st.number_input("Valor:", min_value=0)
-    m = st.selectbox("Momento:", ["Antes Cafe", "Apos Cafe", "Antes Almoco", "Apos Almoco", "Antes Janta", "Apos Janta", "Madrugada"])
-    if st.button("Salvar Registro"):
-        ag = datetime.now(fuso)
-        nv = pd.DataFrame([[ag.strftime("%d/%m/%Y"), ag.strftime("%H:%M"), v, m]], columns=["Data","Hora","Valor","Momento"])
-        pd.concat([carregar(), nv], ignore_index=True).to_csv(ARQ, index=False)
-        backup(); st.success("Registrado!"); st.rerun()
-    st.dataframe(carregar().tail(10), use_container_width=True)
-
-with t3:
-    df = carregar()
-    if not df.empty:
-        fig, ax = plt.subplots()
-        ax.plot(df.index, df['Valor'], marker='o', color='blue')
-        ax.axhline(70, color='red', linestyle='--')
-        ax.axhline(180, color='red', linestyle='--')
-        ax.set_title("Evolução Glicêmica")
-        st.pyplot(fig)
-
-with t4:
-    if st.button("Gerar Excel"):
-        out = BytesIO()
-        with pd.ExcelWriter(out, engine='openpyxl') as wr: carregar().to_excel(wr, index=False)
-        st.download_button("Download Relatório", out.getvalue(), "Saude_Kids.xlsx")
+    st.write("Gere aqui o ficheiro para enviar ao médico.")
+    if st.button("📥 Exportar Relatório Formato Excel"):
+        df = load_data()
+        if not df.empty:
+            df['Exibe'] = df['Valor'].astype(str) + " (" + df['Hora'] + ")"
+            # Organiza os dados no formato exato da sua imagem
+            final_df = df.pivot_table(index='Data', columns='Momento', values='Exibe', aggfunc='last').fillna("-")
+            # Ordena as colunas conforme solicitado
+            colunas_existentes = [c for c in COL_RELATORIO[1:] if c in final_df.columns]
+            final_df = final_df[colunas_existentes]
+            
+            output = BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                final_df.to_excel(writer, sheet_name='Relatorio_Glicemia')
+            
+            st.download_button("Clique para Baixar Excel", output.getvalue(), file_name="Relatorio_Glicemia_Kids.xlsx")
+        else:
+            st.warning("Sem dados para exportar.")
