@@ -7,46 +7,29 @@ import plotly.express as px
 import pytz
 from openpyxl.styles import PatternFill
 
-# ================= CONFIGURAÇÕES =================
+# ================= CONFIGURAÇÕES INICIAIS =================
 fuso_br = pytz.timezone('America/Sao_Paulo')
-st.set_page_config(page_title="Saúde Kids - v16", page_icon="🩸", layout="wide")
+# Atualizado para Versão 0.1 Original
+st.set_page_config(page_title="Saúde Kids - v0.1 Original", page_icon="🩺", layout="wide")
 
-ARQ_G = "dados_glicemia_v16.csv"
-ARQ_N = "dados_nutricao_v16.csv"
+# ARQUIVOS DE BANCO DE DADOS
+ARQ_G = "dados_glicemia.csv"
+ARQ_N = "dados_nutricao.csv"
+ARQ_R = "config_receita.csv"
 
 # ================= ESTILO VISUAL =================
 st.markdown("""
 <style>
 .main {background-color: #f8fafc;}
-
-h1 {font-size: 38px !important; font-weight: 700;}
-h2, h3 {color: #1e293b; font-weight: 600;}
-
-.card {
-    background-color: white;
-    padding: 25px;
-    border-radius: 16px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.05);
-    margin-bottom: 25px;
-}
-
-.stButton>button {
-    border-radius: 12px;
-    font-weight: 600;
-    padding: 10px 18px;
-}
-
-.stNumberInput, .stSelectbox, .stMultiselect {
-    background-color: white;
-    border-radius: 12px;
-}
+.card { background-color: white; padding: 25px; border-radius: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); margin-bottom: 25px; }
+.dose-alerta { background-color: #f0fdf4; padding: 20px; border-radius: 12px; border: 2px solid #16a34a; text-align: center; margin-top: 10px; }
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown("<h1>🩸 Monitoramento Saúde Kids</h1>", unsafe_allow_html=True)
-st.markdown("<p style='color:#64748b;'>Sistema de acompanhamento glicêmico infantil</p>", unsafe_allow_html=True)
+# ================= FUNÇÕES DE APOIO =================
+def carregar(arq):
+    return pd.read_csv(arq) if os.path.exists(arq) else pd.DataFrame()
 
-# ================= BANCO DE ALIMENTOS =================
 ALIMENTOS = {
     "Pão Francês": [28, 4, 1], "Leite (200ml)": [10, 6, 6],
     "Arroz": [15, 1, 0], "Feijão": [14, 5, 0],
@@ -54,50 +37,46 @@ ALIMENTOS = {
     "Banana": [22, 1, 0], "Maçã": [15, 0, 0]
 }
 
-def carregar(arq):
-    return pd.read_csv(arq) if os.path.exists(arq) else pd.DataFrame()
+def calcular_insulina_automatica(valor, momento):
+    df_r = carregar(ARQ_R)
+    if df_r.empty:
+        return "Configurar Receita", "⚠️ Vá na aba 'Receita'"
+    
+    r = df_r.iloc[0]
+    prefixo = "manha" if momento in ["Antes Café", "Após Café", "Antes Almoço", "Após Almoço", "Antes Merenda"] else "noite"
+    
+    if valor < 70: return "0 UI", "⚠️ Hipoglicemia! Tratar agora."
+    elif 70 <= valor <= 200: dose = r[f'{prefixo}_f1']
+    elif 201 <= valor <= 400: dose = r[f'{prefixo}_f2']
+    else: dose = r[f'{prefixo}_f3']
+    
+    return f"{int(dose)} UI", f"Tabela {prefixo.capitalize()}"
 
-# ================= CORES COM PRIORIDADE =================
-def cor_glicemia(v):
-    if v == "-" or pd.isna(v): return ""
-    try:
-        n = int(str(v).split(" ")[0])
-        if n < 70:
-            return 'background-color: #FFFFE0; color: black'
-        elif n > 180:
-            return 'background-color: #FFB6C1; color: black'
-        elif n > 140:
-            return 'background-color: #FFFFE0; color: black'
-        else:
-            return 'background-color: #90EE90; color: black'
-    except:
-        return ""
+# ================= DEFINIÇÃO DAS ABAS (CÂMERA REMOVIDA) =================
+t1, t2, t3 = st.tabs(["📊 Glicemia", "🍽️ Alimentação", "⚙️ Receita"])
 
-# ================= ABAS =================
-t1, t2, t3 = st.tabs(["📊 Glicemia", "🍽️ Alimentação", "📸 Câmera"])
-
-# =====================================================
-# GLICEMIA
-# =====================================================
+# --- ABA 1: GLICEMIA ---
 with t1:
     st.markdown('<div class="card">', unsafe_allow_html=True)
-
     c1, c2 = st.columns(2)
-
     dfg = carregar(ARQ_G)
 
     with c1:
-        v = st.number_input("Valor da Glicemia (mg/dL):", min_value=0)
-        m = st.selectbox("Momento:", [
-            "Antes Café", "Após Café", "Antes Almoço", "Após Almoço",
-            "Antes Merenda", "Antes Janta", "Após Janta", "Madrugada"
-        ])
-        if st.button("💾 Salvar Glicemia"):
+        st.subheader("📝 Novo Registro")
+        v = st.number_input("Valor da Glicemia (mg/dL):", min_value=0, value=100)
+        m = st.selectbox("Momento:", ["Antes Café", "Após Café", "Antes Almoço", "Após Almoço", "Antes Merenda", "Antes Janta", "Após Janta", "Madrugada"])
+        
+        dose_sug, ref_tab = calcular_insulina_automatica(v, m)
+        st.markdown(f"""<div class="dose-alerta">
+            <p style="margin:0; color:#166534;">Dose Sugerida:</p>
+            <h1 style="margin:0; color:#15803d;">{dose_sug}</h1>
+            <small>{ref_tab}</small>
+        </div>""", unsafe_allow_html=True)
+
+        if st.button("💾 Salvar Registro"):
             agora = datetime.now(fuso_br)
-            novo = pd.DataFrame([[agora.strftime("%d/%m/%Y"),
-                                  agora.strftime("%H:%M"),
-                                  v, m]],
-                                columns=["Data", "Hora", "Valor", "Momento"])
+            novo = pd.DataFrame([[agora.strftime("%d/%m/%Y"), agora.strftime("%H:%M"), v, m, dose_sug]],
+                                columns=["Data", "Hora", "Valor", "Momento", "Dose"])
             pd.concat([dfg, novo], ignore_index=True).to_csv(ARQ_G, index=False)
             st.success("Salvo com sucesso!")
             st.rerun()
@@ -105,43 +84,18 @@ with t1:
     with c2:
         if not dfg.empty:
             dfg['DataHora'] = pd.to_datetime(dfg['Data'] + " " + dfg['Hora'], dayfirst=True)
-            dfg = dfg.sort_values("DataHora")
-
-            fig = px.line(
-                dfg.tail(10),
-                x='DataHora',
-                y='Valor',
-                markers=True
-            )
-
-            fig.update_layout(
-                template="simple_white",
-                title="Gráfico de Evolução",
-                xaxis_title="Data e Hora",
-                yaxis_title="mg/dL",
-                title_font_size=20
-            )
-
+            fig = px.line(dfg.tail(10), x='DataHora', y='Valor', markers=True, title="Evolução Recente")
             st.plotly_chart(fig, use_container_width=True)
 
     if not dfg.empty:
-        st.subheader("📋 Relatório Médico Diário")
-        dfg['Exibe'] = dfg['Valor'].astype(str) + " (" + dfg['Hora'] + ")"
-        tab_pivot = dfg.pivot_table(index='Data', columns='Momento',
-                                    values='Exibe', aggfunc='last').fillna("-")
-        st.dataframe(tab_pivot.style.applymap(cor_glicemia),
-                     use_container_width=True)
-
+        st.subheader("📋 Histórico")
+        st.dataframe(dfg.tail(10), use_container_width=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-# =====================================================
-# ALIMENTAÇÃO
-# =====================================================
+# --- ABA 2: ALIMENTAÇÃO ---
 with t2:
     st.markdown('<div class="card">', unsafe_allow_html=True)
-
     st.subheader("🍽️ Controle de Nutrientes")
-
     ca1, ca2 = st.columns(2)
 
     with ca1:
@@ -155,47 +109,53 @@ with t2:
         if st.button("💾 Salvar Alimentação"):
             agora = datetime.now(fuso_br)
             txt = f"{', '.join(escolha)} (C:{carb} P:{prot} G:{gord})"
-            novo_n = pd.DataFrame([[agora.strftime("%d/%m/%Y"),
-                                    txt, carb, prot, gord]],
-                                  columns=["Data", "Info", "C", "P", "G"])
-            pd.concat([carregar(ARQ_N), novo_n], ignore_index=True)\
-              .to_csv(ARQ_N, index=False)
+            novo_n = pd.DataFrame([[agora.strftime("%d/%m/%Y"), txt, carb, prot, gord]],
+                                 columns=["Data", "Info", "C", "P", "G"])
+            pd.concat([carregar(ARQ_N), novo_n], ignore_index=True).to_csv(ARQ_N, index=False)
             st.rerun()
 
     with ca2:
         dfn = carregar(ARQ_N)
         if not dfn.empty:
-            fig2 = px.pie(
-                values=[dfn['C'].sum(), dfn['P'].sum(), dfn['G'].sum()],
-                names=['Carbo', 'Prot', 'Gord'],
-                title="Distribuição Nutricional"
-            )
-            fig2.update_layout(template="simple_white")
+            fig2 = px.pie(values=[dfn['C'].sum(), dfn['P'].sum(), dfn['G'].sum()],
+                         names=['Carbo', 'Prot', 'Gord'], title="Distribuição Nutricional Total")
             st.plotly_chart(fig2, use_container_width=True)
-
     st.markdown('</div>', unsafe_allow_html=True)
 
-# =====================================================
-# CÂMERA
-# =====================================================
+# --- ABA 3: RECEITA ---
 with t3:
     st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.camera_input("📸 Registrar Prato ou Sensor")
+    st.subheader("📋 Configuração da Receita Médica")
+    
+    df_r = carregar(ARQ_R)
+    v_at = df_r.iloc[0] if not df_r.empty else {'manha_f1':0, 'manha_f2':0, 'manha_f3':0, 'noite_f1':0, 'noite_f2':0, 'noite_f3':0}
+    
+    col_m, col_n = st.columns(2)
+    with col_m:
+        st.info("**☀️ Café / Almoço / Merenda**")
+        mf1 = st.number_input("Dose 70-200:", value=int(v_at['manha_f1']), key="mf1")
+        mf2 = st.number_input("Dose 201-400:", value=int(v_at['manha_f2']), key="mf2")
+        mf3 = st.number_input("Dose > 400:", value=int(v_at['manha_f3']), key="mf3")
+    with col_n:
+        st.info("**🌙 Jantar / Madrugada**")
+        nf1 = st.number_input("Dose 70-200:", value=int(v_at['noite_f1']), key="nf1")
+        nf2 = st.number_input("Dose 201-400:", value=int(v_at['noite_f2']), key="nf2")
+        nf3 = st.number_input("Dose > 400:", value=int(v_at['noite_f3']), key="nf3")
+        
+    if st.button("💾 Atualizar Receita Original"):
+        pd.DataFrame([{'manha_f1':mf1, 'manha_f2':mf2, 'manha_f3':mf3, 'noite_f1':nf1, 'noite_f2':nf2, 'noite_f3':nf3}]).to_csv(ARQ_R, index=False)
+        st.success("Receita da Versão 0.1 salva!")
+        st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
 
-# =====================================================
-# EXCEL COLORIDO
-# =====================================================
+# ================= EXCEL COLORIDO =================
 def gerar_excel_colorido(df_glic, df_nutri):
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         if not df_glic.empty:
             df_glic = df_glic.copy()
             df_glic['Exibe'] = df_glic['Valor'].astype(str) + " (" + df_glic['Hora'] + ")"
-            pivot = df_glic.pivot_table(index='Data',
-                                        columns='Momento',
-                                        values='Exibe',
-                                        aggfunc='last').fillna("-")
+            pivot = df_glic.pivot_table(index='Data', columns='Momento', values='Exibe', aggfunc='last').fillna("-")
             pivot.to_excel(writer, sheet_name='Glicemia')
             ws = writer.sheets['Glicemia']
 
@@ -208,29 +168,20 @@ def gerar_excel_colorido(df_glic, df_nutri):
                     if cell.value and cell.value != "-":
                         try:
                             val = int(str(cell.value).split(" ")[0])
-                            if val < 70:
-                                cell.fill = a_fill
-                            elif val > 180:
-                                cell.fill = r_fill
-                            elif val > 140:
-                                cell.fill = a_fill
-                            else:
-                                cell.fill = v_fill
-                        except:
-                            pass
+                            if val < 70: cell.fill = a_fill
+                            elif val > 180: cell.fill = r_fill
+                            elif val > 140: cell.fill = a_fill
+                            else: cell.fill = v_fill
+                        except: pass
 
         if not df_nutri.empty:
             df_nutri.to_excel(writer, index=False, sheet_name='Alimentacao')
-
     return output.getvalue()
 
 st.markdown("---")
-
-if st.button("📥 BAIXAR RELATÓRIO EXCEL (Regra Corrigida)"):
+if st.button("📥 BAIXAR RELATÓRIO EXCEL v0.1"):
     dfg = carregar(ARQ_G)
     dfn = carregar(ARQ_N)
     if not dfg.empty:
         excel_data = gerar_excel_colorido(dfg, dfn)
-        st.download_button("Clique para Baixar",
-                           excel_data,
-                           file_name="Relatorio_Medico_Final.xlsx")
+        st.download_button("Clique para Baixar", excel_data, file_name="Relatorio_Saude_Kids_v01.xlsx")
