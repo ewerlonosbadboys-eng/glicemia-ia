@@ -6,38 +6,35 @@ from io import BytesIO
 import plotly.express as px
 import pytz
 
-# Fuso Horário Brasil
+# 1. Configuração de Fuso Horário e Página
 fuso_br = pytz.timezone('America/Sao_Paulo')
+st.set_page_config(page_title="Monitoramento Integrado", page_icon="🩸", layout="wide")
 
-st.set_page_config(page_title="Monitoramento Saúde Kids", page_icon="🩸", layout="wide")
+# 2. Novos Arquivos (v5) para evitar erros antigos
+ARQUIVO_GLIC = "dados_glicemia_v5.csv"
+ARQUIVO_NUTRI = "dados_nutricao_v5.csv"
 
-# MUDAMOS OS NOMES AQUI PARA FORÇAR O RESET E LIMPAR O ERRO
-ARQUIVO_GLIC = "historico_glicemia_novo_v4.csv"
-ARQUIVO_NUTRI = "historico_nutricao_novo_v4.csv"
-
-# Banco de Dados de Alimentos
+# 3. Banco de Dados de Alimentos
 ALIMENTOS = {
     "Pão Francês (1 un)": [28, 4.5, 1],
-    "Pão de Forma (1 fatia)": [12, 2, 1],
     "Leite Inteiro (200ml)": [10, 6, 6],
     "Arroz (3 colheres)": [15, 1.5, 0],
     "Feijão (1 concha)": [14, 5, 0.5],
     "Frango Grelhado": [0, 23, 5],
-    "Ovo Cozido": [1, 6, 5],
     "Banana (1 un)": [22, 1, 0],
-    "Maçã (1 un)": [15, 0, 0]
+    "Maçã (1 un)": [15, 0, 0],
+    "Ovo Cozido": [1, 6, 5]
 }
 
 def carregar_dados(arq):
-    if os.path.exists(arq):
-        return pd.read_csv(arq)
-    return pd.DataFrame()
+    return pd.read_csv(arq) if os.path.exists(arq) else pd.DataFrame()
 
-st.title("🩸 Painel de Controle: Glicemia + Alimentação")
+st.title("🩸 Sistema Integrado: Glicemia + Alimentação + Câmera")
 
-tab1, tab2 = st.tabs(["📊 Glicemia", "🍽️ Alimentação"])
+# --- CRIAÇÃO DAS ABAS NO APP ---
+tab1, tab2, tab3 = st.tabs(["📊 Glicemia", "🍽️ Alimentação", "📸 Câmera"])
 
-# --- ABA 1: GLICEMIA ---
+# --- ABA 1: GLICEMIA (Com Tabela de Horários) ---
 with tab1:
     col1, col2 = st.columns(2)
     with col1:
@@ -47,10 +44,10 @@ with tab1:
             agora = datetime.now(fuso_br)
             novo = pd.DataFrame([[agora.strftime("%d/%m/%Y"), agora.strftime("%H:%M"), v_glic, momento]], 
                                 columns=["Data", "Hora", "Valor", "Categoria"])
-            df_atual = carregar_dados(ARQUIVO_GLIC)
-            pd.concat([df_atual, novo], ignore_index=True).to_csv(ARQUIVO_GLIC, index=False)
-            st.success("Glicemia registrada!")
+            pd.concat([carregar_dados(ARQUIVO_GLIC), novo], ignore_index=True).to_csv(ARQUIVO_GLIC, index=False)
+            st.success("Glicemia salva!")
             st.rerun()
+    
     with col2:
         df_g = carregar_dados(ARQUIVO_GLIC)
         if not df_g.empty:
@@ -58,59 +55,61 @@ with tab1:
             df_h = df_g[df_g['Data'] == hoje].sort_values('Hora')
             if not df_h.empty:
                 st.plotly_chart(px.line(df_h, x='Hora', y='Valor', title="Evolução de Hoje", markers=True))
+    
+    st.subheader("📋 Relatório Diário (Horários)")
+    if not df_g.empty:
+        df_g['Exibe'] = df_g['Valor'].astype(str) + " (" + df_g['Hora'] + ")"
+        tabela_horarios = df_g.pivot_table(index='Data', columns='Categoria', values='Exibe', aggfunc='last').fillna("-")
+        st.dataframe(tabela_horarios, use_container_width=True)
 
-# --- ABA 2: ALIMENTAÇÃO ---
+# --- ABA 2: ALIMENTAÇÃO (Com Gráfico de Pizza) ---
 with tab2:
-    st.subheader("Diário Nutricional")
+    st.subheader("Contagem de Carboidratos e Nutrientes")
     col_a1, col_a2 = st.columns(2)
     with col_a1:
-        refeicao = st.selectbox("Refeição:", ["Café", "Lanche", "Almoço", "Merenda", "Janta", "Ceia"])
-        escolhidos = st.multiselect("O que foi consumido?", list(ALIMENTOS.keys()))
-        
-        # Cálculos
+        ref = st.selectbox("Refeição:", ["Café", "Lanche", "Almoço", "Merenda", "Jantar", "Ceia"])
+        escolhidos = st.multiselect("Alimentos:", list(ALIMENTOS.keys()))
         c = sum([ALIMENTOS[i][0] for i in escolhidos])
         p = sum([ALIMENTOS[i][1] for i in escolhidos])
         g = sum([ALIMENTOS[i][2] for i in escolhidos])
-        
         st.info(f"Totais: Carbo {c}g | Prot {p}g | Gord {g}g")
-        
         if st.button("💾 Salvar Refeição"):
             agora = datetime.now(fuso_br)
-            texto_medico = f"{', '.join(escolhidos)} (C:{c}g P:{p}g G:{g}g)"
-            novo_n = pd.DataFrame([[agora.strftime("%d/%m/%Y"), refeicao, texto_medico, c, p, g]], 
+            detalhes = f"{', '.join(escolhidos)} (C:{c}g P:{p}g G:{g}g)"
+            novo_n = pd.DataFrame([[agora.strftime("%d/%m/%Y"), ref, detalhes, c, p, g]], 
                                   columns=["Data", "Ref", "Conteudo", "C", "P", "G"])
-            df_n_atual = carregar_dados(ARQUIVO_NUTRI)
-            pd.concat([df_n_atual, novo_n], ignore_index=True).to_csv(ARQUIVO_NUTRI, index=False)
-            st.success("Refeição salva!")
+            pd.concat([carregar_dados(ARQUIVO_NUTRI), novo_n], ignore_index=True).to_csv(ARQUIVO_NUTRI, index=False)
+            st.success("Alimentação salva!")
             st.rerun()
-            
+
     with col_a2:
         df_n = carregar_dados(ARQUIVO_NUTRI)
         if not df_n.empty:
-            # Gráfico de Pizza Nutricional
-            fig_pizza = px.pie(values=[df_n['C'].sum(), df_n['P'].sum(), df_n['G'].sum()], 
-                               names=['Carboidratos', 'Proteínas', 'Gorduras'], 
-                               title="Equilíbrio Nutricional Geral")
-            st.plotly_chart(fig_pizza, use_container_width=True)
+            fig_pie = px.pie(values=[df_n['C'].sum(), df_n['P'].sum(), df_n['G'].sum()], 
+                             names=['Carboidratos', 'Proteínas', 'Gorduras'], 
+                             title="O que ela mais consumiu (Total)")
+            st.plotly_chart(fig_pie, use_container_width=True)
+
+# --- ABA 3: CÂMERA ---
+with tab3:
+    st.subheader("📸 Registro por Foto")
+    foto = st.camera_input("Tirar foto do prato ou sensor")
+    if foto:
+        st.image(foto, caption="Foto capturada com sucesso!")
+        st.warning("Nota: A foto é para visualização imediata. Para salvar permanentemente no relatório médico, use os campos de texto das abas anteriores.")
 
 # --- BOTÃO DE DOWNLOAD EXCEL (DUAS ABAS) ---
 st.markdown("---")
 if st.button("📥 Baixar Relatório Médico Completo"):
     df_g = carregar_dados(ARQUIVO_GLIC)
     df_n = carregar_dados(ARQUIVO_NUTRI)
-    
     if not df_g.empty:
-        # Organiza aba Glicemia
         df_g['Exibe'] = df_g['Valor'].astype(str) + " (" + df_g['Hora'] + ")"
         rel_g = df_g.pivot_table(index='Data', columns='Categoria', values='Exibe', aggfunc='last').reset_index()
-        
-        # Organiza aba Alimentação
         rel_n = df_n.pivot_table(index='Data', columns='Ref', values='Conteudo', aggfunc='last').reset_index() if not df_n.empty else pd.DataFrame()
         
         output = BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             rel_g.to_excel(writer, index=False, sheet_name='Glicemia')
-            if not rel_n.empty:
-                rel_n.to_excel(writer, index=False, sheet_name='Alimentacao')
-        
-        st.download_button("Clique para baixar o Excel", output.getvalue(), file_name="Relatorio_Medico_Completo.xlsx")
+            if not rel_n.empty: rel_n.to_excel(writer, index=False, sheet_name='Alimentacao')
+        st.download_button("Clique aqui para baixar", output.getvalue(), file_name="Relatorio_Medico_Integrado.xlsx")
