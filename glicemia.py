@@ -4,41 +4,48 @@ from datetime import datetime
 import os, pytz
 from io import BytesIO
 
-# 1. Configurações Iniciais e Fuso Horário
+# Configurações e Categorias do seu Relatório
 fuso = pytz.timezone('America/Sao_Paulo')
-st.set_page_config(page_title="Saude Kids v48 PRO", layout="wide")
-
-# Nome do arquivo e Categorias do Relatório (Ordem das Colunas no Excel)
-ARQ = "glicemia_v48.csv"
-COL_MOMENTOS = ["Antes Café", "Após Café", "Antes Almoço", "Após Almoço", "Antes Merenda", "Antes Janta", "Após Janta", "Madrugada"]
+st.set_page_config(page_title="Saude Kids v49 PRO", layout="wide")
+ARQ = "glic_v49.csv"
+CATS = ["Antes Café", "Após Café", "Antes Almoço", "Após Almoço", "Antes Merenda", "Antes Janta", "Após Janta", "Madrugada"]
 
 def carregar():
-    if os.path.exists(ARQ): 
-        return pd.read_csv(ARQ)
-    return pd.DataFrame(columns=["Data", "Hora", "Valor", "Momento"])
+    return pd.read_csv(ARQ) if os.path.exists(ARQ) else pd.DataFrame(columns=["Data","Hora","Valor","Momento"])
 
-def cor_estilo(v):
+def estilo(v):
     if v == "-" or pd.isna(v): return ""
     try:
         n = int(str(v).split(" ")[0])
-        if n < 70: return 'background-color: #FFFF99; color: black' # Amarelo (Hipo)
-        if n > 180: return 'background-color: #FFCCCC; color: black' # Vermelho (Hiper)
-        return 'background-color: #CCFFCC; color: black' # Verde (Normal)
+        if n < 70: return 'background-color: #FFFF99' # Amarelo
+        if n > 180: return 'background-color: #FFCCCC' # Vermelho
+        return 'background-color: #CCFFCC' # Verde
     except: return ""
 
-st.title("🩸 Monitoramento Saude Kids v48 PRO")
+st.title("🩸 Monitoramento Saude Kids v49")
+t1, t2 = st.tabs(["📝 Registro", "📥 Relatório Excel"])
 
-t1, t2 = st.tabs(["📝 Novo Registro", "📥 Relatório Médico (Excel)"])
-
-# ABA 1: REGISTRO DE DADOS
 with t1:
-    col1, col2 = st.columns([1, 2])
-    with col1:
-        st.subheader("Registrar Glicemia")
-        v = st.number_input("Valor (mg/dL):", min_value=0, value=100)
-        m = st.selectbox("Momento:", COL_MOMENTOS)
-        if st.button("💾 Salvar Registro"):
+    c1, c2 = st.columns([1, 2])
+    with c1:
+        v = st.number_input("Valor:", min_value=0, value=100)
+        m = st.selectbox("Momento:", CATS)
+        if st.button("Salvar"):
             ag = datetime.now(fuso)
-            nv = pd.DataFrame([[ag.strftime("%d/%m/%Y"), ag.strftime("%H:%M"), v, m]], 
-                                columns=["Data", "Hora", "Valor", "Momento"])
-            pd.concat([carregar(), nv], ignore
+            nv = pd.DataFrame([[ag.strftime("%d/%m/%Y"), ag.strftime("%H:%M"), v, m]], columns=["Data","Hora","Valor","Momento"])
+            pd.concat([carregar(), nv], ignore_index=True).to_csv(ARQ, index=False)
+            st.rerun()
+    with c2:
+        df = carregar()
+        if not df.empty: st.dataframe(df.tail(8), use_container_width=True)
+
+with t2:
+    df = carregar()
+    if not df.empty:
+        # Organiza os dados: Data na esquerda e Momentos no topo
+        df['X'] = df['Valor'].astype(str) + " (" + df['Hora'] + ")"
+        rel = df.pivot_table(index='Data', columns='Momento', values='X', aggfunc='last')
+        
+        # Garante a ordem correta das colunas conforme seu modelo
+        cols = [c for c in CATS if c in rel.columns]
+        rel_f = rel.reindex(columns=cols).fillna("-")
