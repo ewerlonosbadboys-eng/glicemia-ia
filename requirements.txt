@@ -7,3 +7,4 @@ streamlit
 pandas
 openpyxl
 pytz
+plotly
