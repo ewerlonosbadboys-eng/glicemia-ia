@@ -2,8 +2,10 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 import os
+from io import BytesIO  # <--- ESSA LINHA RESOLVE O SEU ERRO
 import plotly.express as px
 import pytz
+from openpyxl.styles import PatternFill
 
 # ================= CONFIGURAÇÕES INICIAIS =================
 fuso_br = pytz.timezone('America/Sao_Paulo')
