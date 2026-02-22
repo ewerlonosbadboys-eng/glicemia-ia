@@ -10,14 +10,14 @@ from openpyxl.styles import PatternFill
 import plotly.express as px
 import pytz
 
-# Fuso Horário Brasil
+# Configuração de Fuso Horário (Brasília)
 fuso_br = pytz.timezone('America/Sao_Paulo')
 
-# IA Config
+# Configuração da IA
 genai.configure(api_key="gen-lang-client-0937121329")
 model = genai.GenerativeModel('gemini-1.5-flash')
 
-st.set_page_config(page_title="Saúde Integrada", page_icon="🩸", layout="wide")
+st.set_page_config(page_title="Monitoramento Glicemia & Nutrição", page_icon="🩸", layout="wide")
 
 ARQUIVO_GLIC = "historico_glicemia.csv"
 ARQUIVO_NUTRI = "historico_nutricao.csv"
@@ -40,53 +40,60 @@ ALIMENTOS = {
 def carregar_dados(arq):
     return pd.read_csv(arq) if os.path.exists(arq) else pd.DataFrame()
 
-st.title("🩸 Monitoramento Glicêmico e Alimentar")
+st.title("🩸 Monitoramento Integrado para Médico")
+
 tab1, tab2 = st.tabs(["📊 Glicemia", "🍽️ Alimentação"])
 
 # --- ABA 1: GLICEMIA ---
 with tab1:
     col1, col2 = st.columns(2)
     with col1:
-        v_man = st.number_input("Valor da Glicemia:", min_value=0)
-        cat_g = st.selectbox("Momento:", ["Antes Café", "Após Café", "Antes Almoço", "Após Almoço", "Antes Merenda", "Antes Janta", "Após Janta", "Madrugada"])
+        v_glic = st.number_input("Valor da Glicemia:", min_value=0)
+        momento = st.selectbox("Momento:", ["Antes Café", "Após Café", "Antes Almoço", "Após Almoço", "Antes Merenda", "Antes Janta", "Após Janta", "Madrugada"])
         if st.button("💾 Salvar Glicemia"):
             agora = datetime.now(fuso_br)
-            novo = pd.DataFrame([[agora.strftime("%d/%m/%Y"), agora.strftime("%H:%M"), v_man, cat_g]], columns=["Data", "Hora", "Valor", "Categoria"])
+            novo = pd.DataFrame([[agora.strftime("%d/%m/%Y"), agora.strftime("%H:%M"), v_glic, momento]], columns=["Data", "Hora", "Valor", "Categoria"])
             pd.concat([carregar_dados(ARQUIVO_GLIC), novo], ignore_index=True).to_csv(ARQUIVO_GLIC, index=False)
+            st.success("Glicemia Salva!")
             st.rerun()
     with col2:
         df_g = carregar_dados(ARQUIVO_GLIC)
         if not df_g.empty:
-            df_hoje = df_g[df_g['Data'] == datetime.now(fuso_br).strftime("%d/%m/%Y")].sort_values('Hora')
-            if not df_hoje.empty:
-                st.plotly_chart(px.line(df_hoje, x='Hora', y='Valor', title="Picos de Glicemia Hoje", markers=True))
+            hoje = datetime.now(fuso_br).strftime("%d/%m/%Y")
+            df_h = df_g[df_g['Data'] == hoje].sort_values('Hora')
+            if not df_h.empty:
+                st.plotly_chart(px.line(df_h, x='Hora', y='Valor', title="Picos de Glicemia Hoje", markers=True))
 
-# --- ABA 2: ALIMENTAÇÃO ---
+# --- ABA 2: ALIMENTAÇÃO (Relatórios e Gráficos) ---
 with tab2:
-    st.subheader("Diário e Gráficos de Nutrientes")
+    st.subheader("Diário Alimentar e Relatório de Nutrientes")
     col_a1, col_a2 = st.columns(2)
     with col_a1:
-        refeicao = st.selectbox("Refeição:", ["Café", "Lanche Manhã", "Almoço", "Merenda", "Janta", "Ceia"])
-        escolhidos = st.multiselect("Alimentos:", list(ALIMENTOS.keys()))
-        tc = sum([ALIMENTOS[i][0] for i in escolhidos])
-        tp = sum([ALIMENTOS[i][1] for i in escolhidos])
-        tg = sum([ALIMENTOS[i][2] for i in escolhidos])
-        st.info(f"Totais - Carbo: {tc}g | Prot: {tp}g | Gord: {tg}g")
-        if st.button("💾 Salvar Refeição"):
+        ref = st.selectbox("Refeição:", ["Café", "Lanche", "Almoço", "Merenda", "Jantar", "Ceia"])
+        itens = st.multiselect("Alimentos consumidos:", list(ALIMENTOS.keys()))
+        c = sum([ALIMENTOS[i][0] for i in itens])
+        p = sum([ALIMENTOS[i][1] for i in itens])
+        g = sum([ALIMENTOS[i][2] for i in itens])
+        st.info(f"Totais: Carboidratos: {c}g | Proteína: {p}g | Gordura: {g}g")
+        if st.button("💾 Salvar Alimentação"):
             agora = datetime.now(fuso_br)
-            txt = f"{', '.join(escolhidos)} [C:{tc}g P:{tp}g G:{tg}g]"
-            novo_n = pd.DataFrame([[agora.strftime("%d/%m/%Y"), refeicao, txt, tc, tp, tg]], columns=["Data", "Ref", "Conteudo", "C", "P", "G"])
+            detalhes = f"{', '.join(itens)} [Carbo:{c}g Prot:{p}g Gord:{g}g]"
+            novo_n = pd.DataFrame([[agora.strftime("%d/%m/%Y"), ref, detalhes, c, p, g]], columns=["Data", "Ref", "Conteudo", "C", "P", "G"])
             pd.concat([carregar_dados(ARQUIVO_NUTRI), novo_n], ignore_index=True).to_csv(ARQUIVO_NUTRI, index=False)
+            st.success("Alimentos Salvos!")
             st.rerun()
     with col_a2:
         df_n = carregar_dados(ARQUIVO_NUTRI)
         if not df_n.empty:
-            fig_pie = px.pie(values=[df_n['C'].sum(), df_n['P'].sum(), df_n['G'].sum()], names=['Carbos', 'Proteína', 'Gordura'], title="O que ela mais consumiu (Total)")
-            st.plotly_chart(fig_pie, use_container_width=True)
+            # Gráfico de Pizza Nutricional
+            fig_nutri = px.pie(values=[df_n['C'].sum(), df_n['P'].sum(), df_n['G'].sum()], 
+                               names=['Carboidratos', 'Proteínas', 'Gorduras'], 
+                               title="O que ela mais consumiu (Total)")
+            st.plotly_chart(fig_nutri, use_container_width=True)
 
 # --- BOTÃO DOWNLOAD EXCEL (2 ABAS) ---
 st.markdown("---")
-if st.button("📥 Gerar Relatório Médico Completo"):
+if st.button("📥 Baixar Relatório Médico Completo (Excel)"):
     df_g = carregar_dados(ARQUIVO_GLIC)
     df_n = carregar_dados(ARQUIVO_NUTRI)
     if not df_g.empty:
@@ -97,10 +104,12 @@ if st.button("📥 Gerar Relatório Médico Completo"):
         output = BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             rel_g.to_excel(writer, index=False, sheet_name='Glicemia')
-            if not rel_n.empty: rel_n.to_excel(writer, index=False, sheet_name='Alimentacao')
-        st.download_button("Clique aqui para baixar", output.getvalue(), file_name="Relatorio_Medico.xlsx")
+            if not rel_n.empty:
+                rel_n.to_excel(writer, index=False, sheet_name='Alimentacao')
+        st.download_button("Clique aqui para baixar", output.getvalue(), file_name="Relatorio_Medico_Glicemia_Alimentacao.xlsx")
 
-if st.sidebar.button("🗑️ Resetar Tudo (Limpar Erros)"):
+# --- BOTÃO DE RESET (IMPORTANTE PARA LIMPAR ERROS) ---
+if st.sidebar.button("🗑️ Limpar Tudo (Corrigir Erros Vermelhos)"):
     if os.path.exists(ARQUIVO_GLIC): os.remove(ARQUIVO_GLIC)
     if os.path.exists(ARQUIVO_NUTRI): os.remove(ARQUIVO_NUTRI)
     st.rerun()
