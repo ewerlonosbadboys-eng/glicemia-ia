@@ -7,12 +7,12 @@ import pytz
 
 # 1. Configuracoes Iniciais
 fuso_br = pytz.timezone('America/Sao_Paulo')
-st.set_page_config(page_title="Saude Kids v28", layout="wide")
+st.set_page_config(page_title="Saude Kids v29", layout="wide")
 
-ARQ_G = "dados_glicemia_v28.csv"
-ARQ_N = "dados_nutricao_v28.csv"
+ARQ_G = "dados_glicemia_v29.csv"
+ARQ_N = "dados_nutricao_v29.csv"
 
-# Banco de Alimentos Completo: [Carbo, Prot, Gord, Calorias]
+# Banco de Alimentos: [Carbo, Prot, Gord, Calorias]
 ALIMENTOS = {
     "Pao Frances": [28, 4, 1, 135], 
     "Leite (200ml)": [10, 6, 6, 120], 
@@ -39,4 +39,22 @@ def cor_glicemia(v):
         return 'background-color: #00FF00; color: black'
     except: return ""
 
-st.title("Monitoramento
+st.title("Monitoramento Saude Kids v29")
+
+aba1, aba2 = st.tabs(["Glicemia", "Alimentacao Detalhada"])
+
+with aba1:
+    c1, c2 = st.columns(2)
+    with c1:
+        v_g = st.number_input("Valor da Glicemia:", min_value=0)
+        m_g = st.selectbox("Momento:", ["Antes Cafe", "Apos Cafe", "Antes Almoco", "Apos Almoco", "Antes Merenda", "Antes Janta", "Apos Janta", "Madrugada"])
+        if st.button("Salvar Glicemia"):
+            agora = datetime.now(fuso_br)
+            novo = pd.DataFrame([[agora.strftime("%d/%m/%Y"), agora.strftime("%H:%M"), v_g, m_g]], columns=["Data", "Hora", "Valor", "Momento"])
+            pd.concat([carregar(ARQ_G), novo], ignore_index=True).to_csv(ARQ_G, index=False)
+            st.rerun()
+    
+    dfg = carregar(ARQ_G)
+    if not dfg.empty:
+        dfg['Exibe'] = dfg['Valor'].astype(str) + " (" + dfg['Hora'] + ")"
+        pivot =
