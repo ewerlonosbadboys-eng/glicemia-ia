@@ -2,16 +2,14 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 import os
-from io import BytesIO
 import plotly.express as px
 import pytz
-from openpyxl.styles import PatternFill
 
-# ================= CONFIGURAÇÕES =================
+# ================= CONFIGURAÇÕES INICIAIS =================
 fuso_br = pytz.timezone('America/Sao_Paulo')
 st.set_page_config(page_title="Saúde Kids BETA - v17", page_icon="🧪", layout="wide")
 
-# ARQUIVOS BETA PARA TESTES
+# ARQUIVOS DE BANCO DE DADOS
 ARQ_G = "dados_glicemia_BETA.csv"
 ARQ_N = "dados_nutricao_BETA.csv"
 ARQ_R = "config_receita_BETA.csv"
@@ -25,9 +23,10 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# ================= FUNÇÕES DE APOIO =================
 def carregar(arq):
     return pd.read_csv(arq) if os.path.exists(arq) else pd.DataFrame()
-# ================= BANCO DE ALIMENTOS =================
+
 ALIMENTOS = {
     "Pão Francês": [28, 4, 1], "Leite (200ml)": [10, 6, 6],
     "Arroz": [15, 1, 0], "Feijão": [14, 5, 0],
@@ -35,17 +34,66 @@ ALIMENTOS = {
     "Banana": [22, 1, 0], "Maçã": [15, 0, 0]
 }
 
-def carregar(arq):
-    return pd.read_csv(arq) if os.path.exists(arq) else pd.DataFrame()
+def calcular_insulina_automatica(valor, momento):
+    df_r = carregar(ARQ_R)
+    if df_r.empty:
+        return "Configurar Receita", "⚠️ Vá na aba 'Configuração'"
+    
+    r = df_r.iloc[0]
+    # Define se usa tabela Manhã ou Noite
+    prefixo = "manha" if momento in ["Antes Café", "Após Café", "Antes Almoço", "Após Almoço", "Antes Merenda"] else "noite"
+    
+    if valor < 70: return "0 UI", "⚠️ Hipoglicemia! Tratar agora."
+    elif 70 <= valor <= 200: dose = r[f'{prefixo}_f1']
+    elif 201 <= valor <= 400: dose = r[f'{prefixo}_f2']
+    else: dose = r[f'{prefixo}_f3']
+    
+    return f"{int(dose)} UI", f"Tabela {prefixo.capitalize()}"
 
-# =====================================================
-# ALIMENTAÇÃO
-# =====================================================
+# ================= DEFINIÇÃO DAS ABAS (CRUCIAL PARA EVITAR NAMEERROR) =================
+t1, t2, t3, t4 = st.tabs(["📊 Glicemia", "🍽️ Alimentação", "📸 Câmera", "⚙️ Configuração"])
+
+# --- ABA 1: GLICEMIA ---
+with t1:
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    c1, c2 = st.columns(2)
+    dfg = carregar(ARQ_G)
+
+    with c1:
+        st.subheader("📝 Novo Registro")
+        v = st.number_input("Valor da Glicemia (mg/dL):", min_value=0, value=100)
+        m = st.selectbox("Momento:", ["Antes Café", "Após Café", "Antes Almoço", "Após Almoço", "Antes Merenda", "Antes Janta", "Após Janta", "Madrugada"])
+        
+        dose_sug, ref_tab = calcular_insulina_automatica(v, m)
+        st.markdown(f"""<div class="dose-alerta">
+            <p style="margin:0; color:#166534;">Dose Sugerida:</p>
+            <h1 style="margin:0; color:#15803d;">{dose_sug}</h1>
+            <small>{ref_tab}</small>
+        </div>""", unsafe_allow_html=True)
+
+        if st.button("💾 Salvar Registro"):
+            agora = datetime.now(fuso_br)
+            novo = pd.DataFrame([[agora.strftime("%d/%m/%Y"), agora.strftime("%H:%M"), v, m, dose_sug]],
+                                columns=["Data", "Hora", "Valor", "Momento", "Dose"])
+            pd.concat([dfg, novo], ignore_index=True).to_csv(ARQ_G, index=False)
+            st.success("Salvo com sucesso!")
+            st.rerun()
+
+    with c2:
+        if not dfg.empty:
+            dfg['DataHora'] = pd.to_datetime(dfg['Data'] + " " + dfg['Hora'], dayfirst=True)
+            fig = px.line(dfg.tail(10), x='DataHora', y='Valor', markers=True, title="Evolução Recente")
+            st.plotly_chart(fig, use_container_width=True)
+
+    if not dfg.empty:
+        st.subheader("📋 Histórico")
+        st.dataframe(dfg.tail(10), use_container_width=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# --- ABA 2: ALIMENTAÇÃO ---
 with t2:
     st.markdown('<div class="card">', unsafe_allow_html=True)
-
     st.subheader("🍽️ Controle de Nutrientes")
-
     ca1, ca2 = st.columns(2)
 
     with ca1:
@@ -59,108 +107,35 @@ with t2:
         if st.button("💾 Salvar Alimentação"):
             agora = datetime.now(fuso_br)
             txt = f"{', '.join(escolha)} (C:{carb} P:{prot} G:{gord})"
-            novo_n = pd.DataFrame([[agora.strftime("%d/%m/%Y"),
-                                    txt, carb, prot, gord]],
-                                  columns=["Data", "Info", "C", "P", "G"])
-            pd.concat([carregar(ARQ_N), novo_n], ignore_index=True)\
-              .to_csv(ARQ_N, index=False)
+            novo_n = pd.DataFrame([[agora.strftime("%d/%m/%Y"), txt, carb, prot, gord]],
+                                 columns=["Data", "Info", "C", "P", "G"])
+            pd.concat([carregar(ARQ_N), novo_n], ignore_index=True).to_csv(ARQ_N, index=False)
             st.rerun()
 
     with ca2:
         dfn = carregar(ARQ_N)
         if not dfn.empty:
-            fig2 = px.pie(
-                values=[dfn['C'].sum(), dfn['P'].sum(), dfn['G'].sum()],
-                names=['Carbo', 'Prot', 'Gord'],
-                title="Distribuição Nutricional"
-            )
-            fig2.update_layout(template="simple_white")
+            fig2 = px.pie(values=[dfn['C'].sum(), dfn['P'].sum(), dfn['G'].sum()],
+                         names=['Carbo', 'Prot', 'Gord'], title="Distribuição Nutricional Total")
             st.plotly_chart(fig2, use_container_width=True)
-
     st.markdown('</div>', unsafe_allow_html=True)
-    
-# ================= CORES COM PRIORIDADE =================
-def cor_glicemia(v):
-    if v == "-" or pd.isna(v): return ""
-    try:
-        n = int(str(v).split(" ")[0])
-        if n < 70:
-            return 'background-color: #FFFFE0; color: black'
-        elif n > 180:
-            return 'background-color: #FFB6C1; color: black'
-        elif n > 140:
-            return 'background-color: #FFFFE0; color: black'
-        else:
-            return 'background-color: #90EE90; color: black'
-    except:
-        return ""
 
-# ================= LÓGICA DE INSULINA =================
-def calcular_insulina_automatica(valor, momento):
-    df_r = carregar(ARQ_R)
-    if df_r.empty:
-        return "Configurar Receita", "⚠️ Vá na aba 'Configuração'"
-    
-    r = df_r.iloc[0]
-    # Decide qual tabela usar (Manhã/Almoço ou Jantar)
-    prefixo = "manha" if momento in ["Antes Café", "Após Café", "Antes Almoço", "Após Almoço", "Antes Merenda"] else "noite"
-    
-    if valor < 70: return "0 UI", "⚠️ Hipoglicemia! Tratar agora."
-    elif 70 <= valor <= 200: dose = r[f'{prefixo}_f1']
-    elif 201 <= valor <= 400: dose = r[f'{prefixo}_f2']
-    else: dose = r[f'{prefixo}_f3']
-    
-    return f"{int(dose)} UI", f"Tabela {prefixo.capitalize()}"
-
-# ================= ABAS =================
-t1, t2, t3, t4 = st.tabs(["📊 Glicemia", "🍽️ Alimentação", "📸 Câmera", "⚙️ Configurar Receita"])
-
-# --- ABA 1: GLICEMIA ---
-with t1:
+# --- ABA 3: CÂMERA ---
+with t3:
     st.markdown('<div class="card">', unsafe_allow_html=True)
-    c1, c2 = st.columns(2)
-    dfg = carregar(ARQ_G)
-
-    with c1:
-        st.subheader("📝 Novo Registro")
-        v = st.number_input("Valor da Glicemia (mg/dL):", min_value=0, value=100)
-        m = st.selectbox("Momento:", ["Antes Café", "Após Café", "Antes Almoço", "Após Almoço", "Antes Merenda", "Antes Janta", "Após Janta", "Madrugada"])
-        
-        # CÁLCULO AUTOMÁTICO NA TELA
-        dose_sug, ref_tab = calcular_insulina_automatica(v, m)
-        st.markdown(f"""<div class="dose-alerta">
-            <p style="margin:0; color:#166534;">Dose Sugerida:</p>
-            <h1 style="margin:0; color:#15803d;">{dose_sug}</h1>
-            <small>{ref_tab}</small>
-        </div>""", unsafe_allow_html=True)
-
-        if st.button("💾 Salvar no Beta"):
-            agora = datetime.now(fuso_br)
-            novo = pd.DataFrame([[agora.strftime("%d/%m/%Y"), agora.strftime("%H:%M"), v, m, dose_sug]],
-                                columns=["Data", "Hora", "Valor", "Momento", "Dose"])
-            pd.concat([dfg, novo], ignore_index=True).to_csv(ARQ_G, index=False)
-            st.success("Salvo com sucesso!")
-            st.rerun()
-
-    with c2:
-        if not dfg.empty:
-            dfg['DataHora'] = pd.to_datetime(dfg['Data'] + " " + dfg['Hora'], dayfirst=True)
-            fig = px.line(dfg.tail(10), x='DataHora', y='Valor', markers=True, title="Evolução (BETA)")
-            st.plotly_chart(fig, use_container_width=True)
-
-    if not dfg.empty:
-        st.subheader("📋 Histórico com Doses")
-        st.dataframe(dfg.tail(10), use_container_width=True)
+    st.subheader("📸 Reconhecimento por Foto")
+    st.warning("Funcionalidade em desenvolvimento para a v18.")
+    st.camera_input("Tirar foto do prato")
     st.markdown('</div>', unsafe_allow_html=True)
 
-# --- ABA 4: CONFIGURAÇÃO DA RECEITA ---
+# --- ABA 4: CONFIGURAÇÃO ---
 with t4:
     st.markdown('<div class="card">', unsafe_allow_html=True)
     st.subheader("⚙️ Configurar Doses do Médico")
-    st.write("Ajuste as doses conforme a orientação do doutor.")
     
     df_r = carregar(ARQ_R)
-    v_at = df_r.iloc[0] if not df_r.empty else {'manha_f1':3, 'manha_f2':4, 'manha_f3':5, 'noite_f1':1, 'noite_f2':2, 'noite_f3':3}
+    # Valores padrão caso o arquivo esteja vazio
+    v_at = df_r.iloc[0] if not df_r.empty else {'manha_f1':0, 'manha_f2':0, 'manha_f3':0, 'noite_f1':0, 'noite_f2':0, 'noite_f3':0}
     
     col_m, col_n = st.columns(2)
     with col_m:
@@ -176,7 +151,6 @@ with t4:
         
     if st.button("💾 Atualizar Receita"):
         pd.DataFrame([{'manha_f1':mf1, 'manha_f2':mf2, 'manha_f3':mf3, 'noite_f1':nf1, 'noite_f2':nf2, 'noite_f3':nf3}]).to_csv(ARQ_R, index=False)
-        st.success("Receita atualizada no sistema!")
+        st.success("Receita atualizada!")
+        st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
-
-# As outras abas (Alimentação e Câmera) continuam iguais ao seu v16...
