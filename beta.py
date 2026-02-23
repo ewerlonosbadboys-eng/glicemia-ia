@@ -7,10 +7,43 @@ import plotly.express as px
 import pytz
 from openpyxl.styles import PatternFill
 
-# --- CONTROLE DE ACESSO (ADICIONAR NO TOPO) ---
+# --- CONTROLE DE ACESSO COM CADASTRO (SUBSTITUIR NO TOPO) ---
 if 'logado' not in st.session_state:
     st.session_state.logado = False
 
+if not st.session_state.logado:
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    
+    # Criando abas para separar Login de Cadastro
+    aba_login, aba_criar = st.tabs(["🔐 Entrar", "📝 Criar Conta"])
+    
+    with aba_login:
+        u = st.text_input("E-mail", key="login_email")
+        s = st.text_input("Senha", type="password", key="login_senha")
+        if st.button("Entrar no Sistema"):
+            # Aqui você pode manter sua lógica de verificação
+            if u == "admin@saude.com" and s == "12345":
+                st.session_state.logado = True
+                st.rerun()
+            else:
+                st.error("E-mail ou senha incorretos.")
+                
+    with aba_criar:
+        novo_nome = st.text_input("Nome Completo")
+        novo_email = st.text_input("E-mail para Cadastro")
+        nova_senha = st.text_input("Crie uma Senha", type="password")
+        confirma_senha = st.text_input("Confirme a Senha", type="password")
+        
+        if st.button("Finalizar Cadastro"):
+            if nova_senha == confirma_senha and novo_email:
+                st.success("Conta criada com sucesso! Agora clique na aba 'Entrar'.")
+                # No futuro, aqui você adicionará o código para salvar no banco
+            else:
+                st.error("As senhas não conferem ou campos estão vazios.")
+                
+    st.markdown('</div>', unsafe_allow_html=True)
+    st.stop()
+    
 # Se não estiver logado, desenha a tela de login e para o código aqui
 if not st.session_state.logado:
     st.markdown('<div class="card">', unsafe_allow_html=True)
