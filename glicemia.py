@@ -189,7 +189,12 @@ ALIMENTOS = {
 }
 
 # ================= INTERFACE PRINCIPAL =================
-tab1, tab2, tab3 = st.tabs(["📊 Glicemia", "🍽️ Nutrição", "⚙️ Receita"])
+# Define as abas: se for admin, adiciona a aba de mensagens
+abas_titulos = ["📊 Glicemia", "🍽️ Nutrição", "⚙️ Receita"]
+if st.session_state.user_email == "admin":
+    abas_titulos.append("📩 Mensagens (Admin)")
+
+tabs = st.tabs(abas_titulos)
 
 with tab1:
     st.markdown('<div class="card">', unsafe_allow_html=True)
@@ -309,6 +314,7 @@ st.sidebar.download_button("Baixar Agora", output.getvalue(), file_name="Relator
 if st.sidebar.button("Sair"):
     st.session_state.logado = False
     st.rerun()
+
 
 
 
