@@ -249,30 +249,34 @@ if not st.session_state.logado:
                     conn.commit()
                     with abas_login[2]:
         st.subheader("Recuperar Acesso")
-        email_alvo = st.text_input("Digite o e-mail cadastrado", key="rec_em_direto")
+        email_alvo = st.text_input("Digite seu e-mail cadastrado", key="rec_em_direto")
         
         if st.button("Gerar e Enviar Nova Senha"):
             if email_alvo:
                 conn = sqlite3.connect('usuarios.db')
                 c = conn.cursor()
+                # Verifica se o e-mail existe no banco
                 c.execute("SELECT email FROM users WHERE email=?", (email_alvo,))
                 if c.fetchone():
-                    # 1. GERA A SENHA NOVA
+                    # 1. Gera a senha nova aleatória
                     senha_gerada = gerar_senha_temporaria()
                     
-                    # 2. ATUALIZA O BANCO DE DADOS
+                    # 2. Atualiza o banco (apaga a antiga e salva a nova)
                     c.execute("UPDATE users SET senha=? WHERE email=?", (senha_gerada, email_alvo))
                     conn.commit()
                     conn.close()
                     
-                    # 3. ENVIA O E-MAIL
+                    # 3. Envia o e-mail com a senha pronta (Sem Links!)
                     if enviar_senha_nova(email_alvo, senha_gerada):
                         st.success(f"✅ Nova senha enviada para {email_alvo}!")
+                        st.info("Copie a senha do seu e-mail e use na aba 'Entrar'.")
                     else:
-                        st.error("❌ Erro ao enviar e-mail.")
+                        st.error("Erro ao enviar e-mail.")
                 else:
-                    st.error("❌ E-mail não encontrado.")
+                    st.error("E-mail não encontrado no sistema.")
                     conn.close()
+            else:
+                st.warning("Por favor, digite um e-mail.")
             else:
                 st.warning("⚠️ Informe o e-mail.")
                     
