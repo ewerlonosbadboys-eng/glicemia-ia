@@ -296,23 +296,25 @@ if st.sidebar.button("📥 Gerar Excel Colorido"):
 
 st.sidebar.download_button("Baixar Agora", output.getvalue(), file_name="Relatorio_Completo.xlsx")
 
-    # --- COLE AQUI O NOVO CÓDIGO ---
-   if st.session_state.user_email == "admin":
-    with tabs[3]: # Esta é a aba de Mensagens
-        st.subheader("📬 Sugestões Recebidas")
+    # --- COLE ESTE BLOCO NO FINAL DO ARQUIVO (Lado de fora de qualquer if anterior) ---
+
+# Verifica se o usuário logado é o admin para mostrar a aba de mensagens
+if st.session_state.user_email == "admin":
+    with tabs[3]: # Esta aba só existe se for admin
+        st.subheader("📬 Sugestões e Melhorias Recebidas")
         if os.path.exists(ARQ_F):
             df_feed = pd.read_csv(ARQ_F)
             st.dataframe(df_feed.sort_index(ascending=False), use_container_width=True)
-            if st.button("Limpar todas as mensagens"):
+            if st.button("Limpar Histórico de Mensagens"):
                 os.remove(ARQ_F)
                 st.rerun()
         else:
-            st.info("Nenhuma mensagem nova.")
+            st.info("Nenhuma mensagem recebida ainda.")
 
+# Área da Barra Lateral (Sidebar)
 if st.sidebar.button("Sair"):
     st.session_state.logado = False
     st.rerun()
-
 
 
 
