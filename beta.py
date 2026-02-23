@@ -15,13 +15,12 @@ import sqlite3
 def gerenciar_usuarios():
     conn = sqlite3.connect('usuarios.db')
     c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS users 
+    # A linha abaixo garante que, se a tabela for a antiga, ela será atualizada
+    c.execute("DROP TABLE IF EXISTS users") 
+    c.execute('''CREATE TABLE users 
                  (nome TEXT, sobrenome TEXT, telefone TEXT, email TEXT PRIMARY KEY, senha TEXT)''')
     conn.commit()
     conn.close()
-
-gerenciar_usuarios()
-
 # Inicializa o estado de 'conta_criada' se não existir
 if 'logado' not in st.session_state:
     st.session_state.logado = False
