@@ -86,7 +86,7 @@ if not st.session_state.logado:
                 
                 # Ativa o gatilho para sumir com a aba
                 st.session_state.conta_criada = True
-                        st.rerun()
+                st.rerun()
                 except:
                 st.error("Este e-mail já está cadastrado.")
                 else:
