@@ -95,7 +95,16 @@ def enviar_link_recuperacao(email_destino):
         return True
     except:
         return False
-
+        
+with abas[2]: # Verifique se a sua aba de 'Esqueci Senha' é a 2
+    st.subheader("Enviar Link de Recuperação")
+    e_rec = st.text_input("E-mail da conta")
+    if st.button("Enviar E-mail"):
+        if enviar_link_recuperacao(e_rec):
+            st.success("Link enviado! Olhe sua caixa de entrada.")
+        else:
+            st.error("Erro ao enviar. Verifique sua 'Senha de App' no código.")
+            
 # SENSOR DE LINK (Coloque antes de mostrar as abas)
 query_params = st.query_params
 if "reset" in query_params and "email" in query_params:
