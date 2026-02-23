@@ -428,3 +428,14 @@ if not st.session_state.logado:
 # O seu código antigo que está acima deste bloco passará a ser 
 # exibido somente quando st.session_state.logado for True.
     st.download_button("Clique para Baixar", excel_data, file_name="Relatorio_Medico.xlsx")
+
+# =========================================================
+# BLOCO TEMPORÁRIO PARA LIMPAR USUÁRIOS (USE APENAS UMA VEZ)
+# =========================================================
+if st.button("🚨 APAGAR TODOS OS USUÁRIOS E RECOMEÇAR"):
+    conn = sqlite3.connect('usuarios.db')
+    c = conn.cursor()
+    c.execute("DELETE FROM users")
+    conn.commit()
+    conn.close()
+    st.success("Banco de dados limpo! Tente cadastrar agora.")
