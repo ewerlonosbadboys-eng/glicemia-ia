@@ -9,18 +9,94 @@ from openpyxl.styles import PatternFill
 
 import sqlite3
 
-# --- BANCO DE DADOS DE USUÁRIOS (ADICIONADO NO TOPO) ---
+import sqlite3
+
+# --- BANCO DE DADOS DE USUÁRIOS ---
 def gerenciar_usuarios():
     conn = sqlite3.connect('usuarios.db')
     c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS users (email TEXT PRIMARY KEY, senha TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS users 
+                 (nome TEXT, sobrenome TEXT, telefone TEXT, email TEXT PRIMARY KEY, senha TEXT)''')
     conn.commit()
     conn.close()
 
 gerenciar_usuarios()
 
+# Inicializa o estado de 'conta_criada' se não existir
 if 'logado' not in st.session_state:
     st.session_state.logado = False
+if 'conta_criada' not in st.session_state:
+    st.session_state.conta_criada = False
+
+# --- TELA DE ACESSO ---
+if not st.session_state.logado:
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    
+    # Define quais abas aparecem: se criou conta, esconde a aba "Criar Conta"
+    if not st.session_state.conta_criada:
+        abas = st.tabs(["🔐 Entrar", "📝 Criar Conta", "❓ Esqueci Senha"])
+    else:
+        abas = st.tabs(["🔐 Entrar", "❓ Esqueci Senha"])
+        st.success("Conta criada com sucesso! Agora você pode entrar.")
+
+    # Lógica da Aba Entrar
+    with abas[0]:
+        u = st.text_input("E-mail", key="l_email")
+        s = st.text_input("Senha", type="password", key="l_senha")
+        if st.button("Entrar"):
+            conn = sqlite3.connect('usuarios.db')
+            c = conn.cursor()
+            c.execute("SELECT * FROM users WHERE email=? AND senha=?", (u, s))
+            resultado = c.fetchone()
+            conn.close()
+            if resultado:
+                st.session_state.logado = True
+                st.rerun()
+            else:
+                st.error("E-mail ou senha incorretos.")
+
+    # Lógica da Aba Criar Conta (só aparece se conta_criada for False)
+    if not st.session_state.conta_criada:
+        with abas[1]:
+            c1, c2 = st.columns(2)
+            nome = c1.text_input("Nome")
+            sobrenome = c2.text_input("Sobrenome")
+            tel = st.text_input("Telefone/WhatsApp")
+            n_email = st.text_input("Seu E-mail", key="n_email")
+            n_senha = st.text_input("Crie uma Senha", type="password", key="n_senha")
+            
+            if st.button("Finalizar Cadastro"):
+                if n_email and n_senha:
+                    try:
+                        conn = sqlite3.connect('usuarios.db')
+                        c = conn.cursor()
+                        c.execute("INSERT INTO users VALUES (?,?,?,?,?)", (nome, sobrenome, tel, n_email, n_senha))
+                        conn.commit()
+                        conn.close()
+                        # Ativa o gatilho para sumir com a aba
+                        st.session_state.conta_criada = True
+                        st.rerun()
+                    except:
+                        st.error("Este e-mail já está cadastrado.")
+                else:
+                    st.warning("Preencha e-mail e senha.")
+
+        # Lógica da Aba Esqueci Senha (é a terceira quando tem criar conta)
+        with abas[2]:
+            e_email = st.text_input("E-mail cadastrado", key="e_email")
+            if st.button("Enviar Link"):
+                st.info(f"Link enviado para: {e_email}")
+                st.link_button("Redefinir Senha", "https://seusite.com/reset")
+    else:
+        # Se a conta já foi criada, a aba Esqueci Senha passa a ser a segunda (índice 1)
+        with abas[1]:
+            e_email = st.text_input("E-mail cadastrado", key="e_email")
+            if st.button("Enviar Link"):
+                st.info(f"Link enviado para: {e_email}")
+                st.link_button("Redefinir Senha", "https://seusite.com/reset")
+
+    st.markdown('</div>', unsafe_allow_html=True)
+    st.stop()
 
 # --- TELA DE ACESSO ---
 if not st.session_state.logado:
