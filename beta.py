@@ -160,7 +160,7 @@ with tab1:
             fig = px.line(dfg.tail(10), x='Hora', y='Valor', markers=True, title="Tendência")
             fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color="white")
             st.plotly_chart(fig, use_container_width=True)
-    if not dfg.empty:
+            
         # CORES NO HISTÓRICO VOLTARAM
         def cor_gl(v):
             try:
