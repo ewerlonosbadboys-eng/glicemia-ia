@@ -135,7 +135,47 @@ def calc_insulina(v, m):
     except: return "0 UI", "Erro na Receita"
 
 MOMENTOS_ORDEM = ["Antes Café", "Após Café", "Antes Almoço", "Após Almoço", "Antes Merenda", "Antes Janta", "Após Janta", "Madrugada"]
-ALIMENTOS = {"Pão Francês": [28, 4, 1], "Leite (200ml)": [10, 6, 6], "Arroz": [15, 1, 0], "Feijão": [14, 5, 0], "Frango": [0, 23, 5], "Ovo": [1, 6, 5], "Banana": [22, 1, 0]}
+# ================= DICIONÁRIO DE ALIMENTOS EXPANDIDO =================
+# Valores aproximados por porção média: [Carboidratos, Proteínas, Gorduras]
+ALIMENTOS = {
+    "Pão Francês (1un)": [28, 4, 1],
+    "Pão de Forma (2 fatias)": [24, 4, 2],
+    "Pão Integral (2 fatias)": [22, 5, 2],
+    "Tapioca (peneirada 50g)": [27, 0, 0],
+    "Arroz Branco (colher de servir)": [10, 2, 0],
+    "Arroz Integral (colher de servir)": [8, 2, 1],
+    "Feijão (concha média)": [14, 5, 1],
+    "Carne de Boi (Grelhada 100g)": [0, 26, 12],
+    "Frango (Filé 100g)": [0, 31, 4],
+    "Peixe (Grelhado 100g)": [0, 20, 5],
+    "Ovo Frito (1un)": [1, 6, 9],
+    "Ovo Cozido (1un)": [1, 6, 5],
+    "Macarrão (pegador cheio)": [30, 5, 1],
+    "Batata Doce (100g)": [20, 2, 0],
+    "Batata Inglesa (100g)": [17, 2, 0],
+    "Leite Inteiro (200ml)": [10, 6, 6],
+    "Leite Desnatado (200ml)": [10, 6, 0],
+    "Iogurte Natural": [9, 7, 6],
+    "Queijo Prato/Mussarela (fatia)": [0, 5, 7],
+    "Manteiga (ponta de faca)": [0, 0, 8],
+    "Banana (1un média)": [22, 1, 0],
+    "Maçã (1un média)": [15, 0, 0],
+    "Mirtilo (Blueberry 100g)": [14, 1, 0],
+    "Jaca (100g/aprox. 5 gomos)": [23, 2, 0],
+    "Morango (100g)": [8, 1, 0],
+    "Uva (100g)": [18, 1, 0],
+    "Mamão (fatia média)": [10, 1, 0],
+    "Laranja (1un média)": [12, 1, 0],
+    "Abacate (100g)": [8, 2, 15],
+    "Melancia (fatia média)": [8, 1, 0],
+    "Cenoura (100g)": [10, 1, 0],
+    "Brócolis (100g)": [7, 3, 0],
+    "Alface (folha grande)": [0, 0, 0],
+    "Tomate (1un médio)": [4, 1, 0],
+    "Suco de Laranja (copo 200ml)": [25, 2, 0],
+    "Bolacha Recheada (1un)": [10, 1, 3],
+    "Chocolate (quadradinho 10g)": [5, 1, 3]
+}
 
 # ================= INTERFACE PRINCIPAL =================
 tab1, tab2, tab3 = st.tabs(["📊 Glicemia", "🍽️ Nutrição", "⚙️ Receita"])
@@ -160,7 +200,7 @@ with tab1:
             fig = px.line(dfg.tail(10), x='Hora', y='Valor', markers=True, title="Tendência")
             fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color="white")
             st.plotly_chart(fig, use_container_width=True)
-    if not dfg.empty:
+            
         # CORES NO HISTÓRICO VOLTARAM
         def cor_gl(v):
             try:
