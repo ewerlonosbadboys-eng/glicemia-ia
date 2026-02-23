@@ -67,7 +67,7 @@ def calcular_insulina_automatica(valor, momento):
     
     return f"{int(dose)} UI", f"Tabela {prefixo.capitalize()}"
 
-# ================= DEFINIÇÃO DAS ABAS =================
+# ================= DEFINIÇÃO DAS ABAS (CÂMERA REMOVIDA) =================
 t1, t2, t3 = st.tabs(["📊 Glicemia", "🍽️ Alimentação", "⚙️ Receita"])
 
 # --- ABA 1: GLICEMIA ---
@@ -137,7 +137,7 @@ with t2:
             st.plotly_chart(fig2, use_container_width=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-# --- ABA 3: RECEITA ---
+# --- ABA 3: RECEITA (Antiga Configuração) ---
 with t3:
     st.markdown('<div class="card">', unsafe_allow_html=True)
     st.subheader("⚙️ Configurar Doses do Médico (Receita)")
@@ -156,3 +156,47 @@ with t3:
         nf1 = st.number_input("Dose 70-200:", value=int(v_at['noite_f1']), key="nf1")
         nf2 = st.number_input("Dose 201-400:", value=int(v_at['noite_f2']), key="nf2")
         nf3 = st.number_input("Dose > 400:", value=int(v_at['noite_f3']), key="nf3")
+        
+    if st.button("💾 Salvar Receita"):
+        pd.DataFrame([{'manha_f1':mf1, 'manha_f2':mf2, 'manha_f3':mf3, 'noite_f1':nf1, 'noite_f2':nf2, 'noite_f3':nf3}]).to_csv(ARQ_R, index=False)
+        st.success("Receita atualizada!")
+        st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# ================= EXCEL COLORIDO =================
+def gerar_excel_colorido(df_glic, df_nutri):
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        if not df_glic.empty:
+            df_glic = df_glic.copy()
+            df_glic['Exibe'] = df_glic['Valor'].astype(str) + " (" + df_glic['Hora'] + ")"
+            pivot = df_glic.pivot_table(index='Data', columns='Momento', values='Exibe', aggfunc='last').fillna("-")
+            pivot.to_excel(writer, sheet_name='Glicemia')
+            ws = writer.sheets['Glicemia']
+
+            v_fill = PatternFill(start_color="90EE90", end_color="90EE90", fill_type="solid")
+            a_fill = PatternFill(start_color="FFFFE0", end_color="FFFFE0", fill_type="solid")
+            r_fill = PatternFill(start_color="FFB6C1", end_color="FFB6C1", fill_type="solid")
+
+            for row in ws.iter_rows(min_row=2, min_col=2):
+                for cell in row:
+                    if cell.value and cell.value != "-":
+                        try:
+                            val = int(str(cell.value).split(" ")[0])
+                            if val < 70: cell.fill = a_fill
+                            elif val > 180: cell.fill = r_fill
+                            elif val > 140: cell.fill = a_fill
+                            else: cell.fill = v_fill
+                        except: pass
+
+        if not df_nutri.empty:
+            df_nutri.to_excel(writer, index=False, sheet_name='Alimentacao')
+    return output.getvalue()
+
+st.markdown("---")
+if st.button("📥 BAIXAR RELATÓRIO EXCEL"):
+    dfg = carregar(ARQ_G)
+    dfn = carregar(ARQ_N)
+    if not dfg.empty:
+        excel_data = gerar_excel_colorido(dfg, dfn)
+        st.download_button("Clique para Baixar", excel_data, file_name="Relatorio_Medico.xlsx")
