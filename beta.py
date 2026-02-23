@@ -22,7 +22,15 @@ ARQ_G = "dados_glicemia_BETA.csv"
 ARQ_N = "dados_nutricao_BETA.csv"
 ARQ_R = "config_receita_BETA.csv"
 
+# ================= FUNÇÕES DE SEGURANÇA =================
+
+def gerar_senha_temporaria(tamanho=6):
+    """Gera uma senha aleatória de letras e números"""
+    caracteres = string.ascii_letters + string.digits
+    return ''.join(random.choice(caracteres) for i in range(tamanho))
+
 def enviar_senha_nova(email_destino, senha_nova):
+    """Envia a senha gerada diretamente para o e-mail"""
     meu_email = "ewerlon.osbadboys@gmail.com" 
     minha_senha = "okiu qihp lglk trcc" 
     
@@ -45,9 +53,85 @@ def enviar_senha_nova(email_destino, senha_nova):
     except:
         return False
 
-def gerar_senha_temporaria(tamanho=6):
-    caracteres = string.ascii_letters + string.digits
-    return ''.join(random.choice(caracteres) for i in range(tamanho))
+def init_db():
+    conn = sqlite3.connect('usuarios.db')
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS users 
+                 (nome TEXT, sobrenome TEXT, telefone TEXT, email TEXT PRIMARY KEY, senha TEXT)''')
+    conn.commit()
+    conn.close()
+
+init_db()
+
+# ================= SISTEMA DE LOGIN =================
+
+if 'logado' not in st.session_state:
+    st.session_state.logado = False
+
+if not st.session_state.logado:
+    st.title("🧪 Saúde Kids - Acesso")
+    abas_login = st.tabs(["🔐 Entrar", "📝 Criar Conta", "❓ Esqueci Senha"])
+
+    with abas_login[0]:
+        u = st.text_input("E-mail", key="l_email")
+        s = st.text_input("Senha", type="password", key="l_pass")
+        if st.button("Acessar Aplicativo"):
+            conn = sqlite3.connect('usuarios.db')
+            c = conn.cursor()
+            c.execute("SELECT * FROM users WHERE email=? AND senha=?", (u, s))
+            if c.fetchone():
+                st.session_state.logado = True
+                st.rerun()
+            else:
+                st.error("E-mail ou senha incorretos.")
+            conn.close()
+
+    with abas_login[1]:
+        st.subheader("Cadastro")
+        n = st.text_input("Nome completo")
+        em = st.text_input("Seu melhor e-mail")
+        se = st.text_input("Crie uma senha", type="password")
+        if st.button("Cadastrar"):
+            try:
+                conn = sqlite3.connect('usuarios.db')
+                c = conn.cursor()
+                c.execute("INSERT INTO users (nome, email, senha) VALUES (?,?,?)", (n, em, se))
+                conn.commit()
+                conn.close()
+                st.success("Conta criada! Use a aba 'Entrar'.")
+            except:
+                st.error("Este e-mail já existe.")
+
+    with abas_login[2]:
+        st.subheader("Recuperar Acesso")
+        email_alvo = st.text_input("Digite o e-mail da conta", key="rec_em_direto")
+        
+        if st.button("Enviar Nova Senha"):
+            if email_alvo:
+                conn = sqlite3.connect('usuarios.db')
+                c = conn.cursor()
+                c.execute("SELECT email FROM users WHERE email=?", (email_alvo,))
+                if c.fetchone():
+                    # 1. Gera senha
+                    senha_gerada = gerar_senha_temporaria()
+                    # 2. Atualiza Banco
+                    c.execute("UPDATE users SET senha=? WHERE email=?", (senha_gerada, email_alvo))
+                    conn.commit()
+                    # 3. Envia E-mail
+                    if enviar_senha_nova(email_alvo, senha_gerada):
+                        st.success(f"✅ Senha enviada para {email_alvo}!")
+                    else:
+                        st.error("Erro ao enviar e-mail.")
+                else:
+                    st.error("E-mail não cadastrado.")
+                conn.close()
+            else:
+                st.warning("Informe o e-mail.")
+    st.stop()
+
+# ================= ÁREA LOGADA (GLICEMIA / ALIMENTAÇÃO) =================
+# O restante do seu código (t1, t2, t3) deve vir aqui abaixo...
+st.success("Você está logado!")
 
 # ================= SENSOR DE LINK DE RECUPERAÇÃO =================
 query_params = st.query_params
