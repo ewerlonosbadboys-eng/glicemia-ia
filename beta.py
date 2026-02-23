@@ -154,4 +154,5 @@ with t3:
     with col_n:
         st.info("**🌙 Jantar / Madrugada**")
         nf1 = st.number_input("Dose 70-200:", value=int(v_at['noite_f1']), key="nf1")
-        nf2 =
+        nf2 = st.number_input("Dose 201-400:", value=int(v_at['noite_f2']), key="nf2")
+        nf3 = st.number_input("Dose > 400:", value=int(v_at['noite_f3']), key="nf3")
