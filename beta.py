@@ -237,4 +237,4 @@ if not st.session_state.logado:
 
 # O seu código antigo que está acima deste bloco passará a ser 
 # exibido somente quando st.session_state.logado for True.
-        st.download_button("Clique para Baixar", excel_data, file_name="Relatorio_Medico.xlsx")
+    st.download_button("Clique para Baixar", excel_data, file_name="Relatorio_Medico.xlsx")
