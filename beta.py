@@ -19,7 +19,7 @@ st.set_page_config(page_title="Saúde Kids BETA", page_icon="🧪", layout="wide
 ARQ_G = "dados_glicemia_BETA.csv"
 ARQ_N = "dados_nutricao_BETA.csv"
 ARQ_R = "config_receita_BETA.csv"
-ARQ_F = "feedbacks_BETA.csv" # Adicionado para suporte ao Feedback/Admin
+ARQ_F = "feedbacks_BETA.csv"
 
 # DESIGN DARK MODE (PRESERVADO E REVISADO)
 st.markdown("""
@@ -35,7 +35,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ================= SEGURANÇA E LOGIN =================
+# ================= SEGURANÇA E LOGIN (TODAS AS ABAS RESTAURADAS) =================
 def gerar_senha_temporaria(tamanho=6):
     caracteres = string.ascii_letters + string.digits
     return ''.join(random.choice(caracteres) for i in range(tamanho))
@@ -55,17 +55,18 @@ def enviar_senha_nova(email_destino, senha_nova):
 def init_db():
     conn = sqlite3.connect('usuarios.db')
     conn.execute('''CREATE TABLE IF NOT EXISTS users (nome TEXT, email TEXT PRIMARY KEY, senha TEXT)''')
-    # Adicionando o Admin padrão caso não exista
     try:
-        conn.execute("INSERT OR IGNORE INTO users VALUES (?,?,?)", ("Administrador", "admin", "542820"))
+        conn.execute("INSERT INTO users VALUES (?,?,?)", ("Administrador", "admin", "542820"))
+        conn.commit()
     except: pass
-    conn.commit(); conn.close()
+    conn.close()
 
 init_db()
 if 'logado' not in st.session_state: st.session_state.logado = False
 
 if not st.session_state.logado:
     st.title("🧪 Saúde Kids - Acesso")
+    # CORREÇÃO: As abas precisam ser criadas antes de serem usadas
     abas_login = st.tabs(["🔐 Entrar", "📝 Criar Conta", "❓ Esqueci Senha", "🔄 Alterar Senha"])
     
     with abas_login[0]:
@@ -73,24 +74,38 @@ if not st.session_state.logado:
         s = st.text_input("Senha", type="password", key="l_pass")
         if st.button("Acessar Aplicativo"):
             conn = sqlite3.connect('usuarios.db')
-            if conn.execute("SELECT * FROM users WHERE email=? AND senha=?", (u, s)).fetchone():
-                st.session_state.logado = True
-                st.session_state.user_email = u
-                st.rerun()
-            else: st.error("E-mail ou senha incorretos.")
-            conn.close()
+            try:
+                cursor = conn.execute("SELECT * FROM users WHERE email=? AND senha=?", (u, s))
+                user_valido = cursor.fetchone()
+                if user_valido:
+                    st.session_state.logado = True
+                    st.session_state.user_email = u
+                    st.success("Bem-vindo!")
+                    st.rerun()
+                else:
+                    st.error("E-mail ou Senha incorretos.")
+            except Exception as e:
+                st.error(f"Erro ao acessar: {e}")
+            finally:
+                conn.close()
 
     with abas_login[1]:
-        n_cad = st.text_input("Nome Completo")
-        e_cad = st.text_input("E-mail para Cadastro")
-        s_cad = st.text_input("Senha para Cadastro", type="password")
-        if st.button("Realizar Cadastro"):
-            try:
+        new_nome = st.text_input("Nome Completo")
+        new_email = st.text_input("E-mail de Cadastro")
+        new_pass = st.text_input("Senha de Cadastro", type="password")
+        if st.button("Criar Conta"):
+            if new_nome and new_email and new_pass:
                 conn = sqlite3.connect('usuarios.db')
-                conn.execute("INSERT INTO users VALUES (?,?,?)", (n_cad, e_cad, s_cad))
-                conn.commit(); conn.close()
-                st.success("Conta criada com sucesso!")
-            except: st.error("Este e-mail já está cadastrado.")
+                try:
+                    conn.execute("INSERT INTO users VALUES (?,?,?)", (new_nome, new_email, new_pass))
+                    conn.commit()
+                    st.success("Conta criada! Pode fazer login.")
+                except:
+                    st.error("Este e-mail já está cadastrado.")
+                finally:
+                    conn.close()
+            else:
+                st.warning("Preencha todos os campos.")
 
     with abas_login[2]:
         email_alvo = st.text_input("Digite seu e-mail cadastrado")
@@ -123,7 +138,8 @@ if not st.session_state.logado:
 def carregar_dados_seguro(arq):
     if not os.path.exists(arq): return pd.DataFrame()
     df = pd.read_csv(arq)
-    if st.session_state.user_email == "admin": return df # Admin vê tudo
+    if st.session_state.user_email == "admin":
+        return df 
     return df[df['Usuario'] == st.session_state.user_email].copy()
 
 def calc_insulina(v, m):
@@ -148,18 +164,26 @@ ALIMENTOS = {
     "Peixe (Grelhado 100g)": [0, 20, 5], "Ovo Frito (1un)": [1, 6, 9], "Ovo Cozido (1un)": [1, 6, 5],
     "Macarrão (pegador cheio)": [30, 5, 1], "Batata Doce (100g)": [20, 2, 0], "Batata Inglesa (100g)": [17, 2, 0],
     "Leite Inteiro (200ml)": [10, 6, 6], "Leite Desnatado (200ml)": [10, 6, 0], "Iogurte Natural": [9, 7, 6],
-    "Banana (1un média)": [22, 1, 0], "Maçã (1un média)": [15, 0, 0], "Morango (100g)": [8, 1, 0], "Chocolate (10g)": [5, 1, 3]
+    "Queijo Prato/Mussarela (fatia)": [0, 5, 7], "Manteiga (ponta de faca)": [0, 0, 8], "Banana (1un média)": [22, 1, 0],
+    "Maçã (1un média)": [15, 0, 0], "Mirtilo (Blueberry 100g)": [14, 1, 0], "Jaca (100g/aprox. 5 gomos)": [23, 2, 0],
+    "Morango (100g)": [8, 1, 0], "Uva (100g)": [18, 1, 0], "Mamão (fatia média)": [10, 1, 0], "Laranja (1un média)": [12, 1, 0],
+    "Abacate (100g)": [8, 2, 15], "Melancia (fatia média)": [8, 1, 0], "Cenoura (100g)": [10, 1, 0], "Brócolis (100g)": [7, 3, 0],
+    "Alface (folha grande)": [0, 0, 0], "Tomate (1un médio)": [4, 1, 0], "Suco de Laranja (copo 200ml)": [25, 2, 0],
+    "Bolacha Recheada (1un)": [10, 1, 3], "Chocolate (quadradinho 10g)": [5, 1, 3]
 }
 
 # ================= INTERFACE PRINCIPAL =================
-# Adicionando aba extra caso seja Admin
 titulos_abas = ["📊 Glicemia", "🍽️ Nutrição", "⚙️ Receita"]
 if st.session_state.user_email == "admin":
-    titulos_abas.append("📬 Admin")
+    titulos_abas.append("📩 Mensagens (Admin)")
 
+# CORREÇÃO: Criando a lista de abas para serem usadas como tab1, tab2, tab3
 tabs = st.tabs(titulos_abas)
+tab1 = tabs[0]
+tab2 = tabs[1]
+tab3 = tabs[2]
 
-with tabs[0]:
+with tab1:
     st.markdown('<div class="card">', unsafe_allow_html=True)
     dfg = carregar_dados_seguro(ARQ_G)
     c1, c2 = st.columns([1, 2])
@@ -182,19 +206,20 @@ with tabs[0]:
             
         def cor_gl(v):
             try:
-                n = int(v); return 'background-color: #8B8000;' if n < 70 else 'background-color: #8B0000;' if n > 180 else 'background-color: #006400;'
+                n = int(v)
+                if n < 70: return 'background-color: #8B8000; color: white;' 
+                elif n > 180: return 'background-color: #8B0000; color: white;' 
+                else: return 'background-color: #006400; color: white;' 
             except: return ''
         st.dataframe(dfg.tail(15).style.applymap(cor_gl, subset=['Valor']), use_container_width=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-with tabs[1]:
+with tab2:
     st.markdown('<div class="card">', unsafe_allow_html=True)
     dfn = carregar_dados_seguro(ARQ_N)
     m_nutri = st.selectbox("Refeição", MOMENTOS_ORDEM, key="n_m")
     sel = st.multiselect("Alimentos", list(ALIMENTOS.keys()))
-    c_tot = sum([ALIMENTOS[x][0] for x in sel])
-    p_tot = sum([ALIMENTOS[x][1] for x in sel])
-    g_tot = sum([ALIMENTOS[x][2] for x in sel])
+    c_tot, p_tot, g_tot = sum([ALIMENTOS[x][0] for x in sel]), sum([ALIMENTOS[x][1] for x in sel]), sum([ALIMENTOS[x][2] for x in sel])
     c1, c2, c3 = st.columns(3)
     c1.metric("C", f"{c_tot}g"); c2.metric("P", f"{p_tot}g"); c3.metric("G", f"{g_tot}g")
     if st.button("💾 Salvar Refeição"):
@@ -206,7 +231,7 @@ with tabs[1]:
     st.dataframe(dfn.tail(10), use_container_width=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-with tabs[2]:
+with tab3:
     st.markdown('<div class="card">', unsafe_allow_html=True)
     st.subheader("⚙️ Configuração de Receita")
     df_r_all = pd.read_csv(ARQ_R) if os.path.exists(ARQ_R) else pd.DataFrame()
@@ -228,18 +253,7 @@ with tabs[2]:
         st.success("Receita Salva!")
     st.markdown('</div>', unsafe_allow_html=True)
 
-# ABA ADMIN (Adicionada conforme solicitado)
-if st.session_state.user_email == "admin":
-    with tabs[3]:
-        st.subheader("📬 Sugestões Recebidas")
-        if os.path.exists(ARQ_F):
-            df_feed = pd.read_csv(ARQ_F)
-            st.dataframe(df_feed.sort_index(ascending=False), use_container_width=True)
-            if st.button("Limpar Histórico"):
-                os.remove(ARQ_F); st.rerun()
-        else: st.info("Nenhuma mensagem recebida.")
-
-# ================= SIDEBAR =================
+# ================= EXCEL COLORIDO =================
 st.sidebar.markdown("---")
 if st.sidebar.button("📥 Gerar Excel Colorido"):
     df_e_g = carregar_dados_seguro(ARQ_G)
@@ -248,6 +262,8 @@ if st.sidebar.button("📥 Gerar Excel Colorido"):
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         if not df_e_g.empty:
             pivot = df_e_g.pivot_table(index='Data', columns='Momento', values='Valor', aggfunc='last')
+            cols = [c for c in MOMENTOS_ORDEM if c in pivot.columns]
+            pivot = pivot[cols]
             pivot.to_excel(writer, sheet_name='Glicemia')
             ws = writer.sheets['Glicemia']
             f_v, f_r, f_a = PatternFill("solid", fgColor="C8E6C9"), PatternFill("solid", fgColor="FFB6C1"), PatternFill("solid", fgColor="FFFFE0")
@@ -260,18 +276,36 @@ if st.sidebar.button("📥 Gerar Excel Colorido"):
                             elif val > 180: cell.fill = f_r
                             else: cell.fill = f_v
                         except: pass
-        if not df_e_n.empty: df_e_n.to_excel(writer, sheet_name='Alimentos', index=False)
-    st.sidebar.download_button("Baixar Agora", output.getvalue(), file_name="Relatorio.xlsx")
+        if not df_e_n.empty:
+            df_e_n.to_excel(writer, sheet_name='Alimentos', index=False)
+    st.sidebar.download_button("Baixar Agora", output.getvalue(), file_name="Relatorio_Completo.xlsx")
 
-# Campo de Feedback na lateral
-with st.sidebar.expander("🚀 Enviar Sugestão"):
-    txt_f = st.text_area("O que podemos melhorar?")
+# Aba de Mensagens exclusiva para o Admin
+if st.session_state.user_email == "admin":
+    with tabs[3]: 
+        st.subheader("📬 Sugestões e Melhorias Recebidas")
+        if os.path.exists(ARQ_F):
+            df_feed = pd.read_csv(ARQ_F)
+            st.dataframe(df_feed.sort_index(ascending=False), use_container_width=True)
+            if st.button("Limpar Histórico de Mensagens"):
+                os.remove(ARQ_F)
+                st.rerun()
+        else:
+            st.info("Nenhuma mensagem recebida ainda.")
+
+# Barra Lateral: Feedback e Botão Sair
+st.sidebar.markdown("---")
+with st.sidebar.expander("🚀 Enviar Sugestão ao Admin"):
+    txt_feed = st.text_area("O que podemos melhorar?", key="input_feedback")
     if st.button("Enviar"):
-        if txt_f:
-            n_f = pd.DataFrame([[st.session_state.user_email, datetime.now(fuso_br).strftime("%d/%m/%Y %H:%M"), txt_f]], columns=["Usuario","Data","Sugestão"])
+        if txt_feed:
+            agora = datetime.now(fuso_br).strftime("%d/%m/%Y %H:%M")
+            novo_f = pd.DataFrame([[st.session_state.user_email, agora, txt_feed]], columns=["Usuario", "Data", "Sugestão"])
             base_f = pd.read_csv(ARQ_F) if os.path.exists(ARQ_F) else pd.DataFrame()
-            pd.concat([base_f, n_f], ignore_index=True).to_csv(ARQ_F, index=False)
+            pd.concat([base_f, novo_f], ignore_index=True).to_csv(ARQ_F, index=False)
             st.success("Enviado!")
+        else:
+            st.error("Escreva algo.")
 
 if st.sidebar.button("Sair"):
     st.session_state.logado = False
