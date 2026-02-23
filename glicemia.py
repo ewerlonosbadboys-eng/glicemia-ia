@@ -127,7 +127,7 @@ if not st.session_state.logado:
 def carregar_dados_seguro(arq):
     if not os.path.exists(arq): return pd.DataFrame()
     df = pd.read_csv(arq)
-    # Se for o admin, retorna o arquivo inteiro (todos os usuários)
+    # NOVO: Se for o admin, ele vê os dados de toda a gente
     if st.session_state.user_email == "admin":
         return df
     return df[df['Usuario'] == st.session_state.user_email].copy()
@@ -297,23 +297,22 @@ if st.sidebar.button("📥 Gerar Excel Colorido"):
 st.sidebar.download_button("Baixar Agora", output.getvalue(), file_name="Relatorio_Completo.xlsx")
 
     # --- COLE AQUI O NOVO CÓDIGO ---
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("🚀 Sugerir Melhorias")
-    with st.sidebar.expander("Enviar Mensagem ao Admin"):
-        txt_feed = st.text_area("O que podemos melhorar?", key="input_feedback")
-        if st.button("Enviar Feedback"):
-            if txt_feed:
-                agora = datetime.now(fuso_br).strftime("%d/%m/%Y %H:%M")
-                novo_f = pd.DataFrame([[st.session_state.user_email, agora, txt_feed]], columns=["Usuario", "Data", "Sugestão"])
-                base_f = pd.read_csv(ARQ_F) if os.path.exists(ARQ_F) else pd.DataFrame()
-                pd.concat([base_f, novo_f], ignore_index=True).to_csv(ARQ_F, index=False)
-                st.success("Feedback enviado!")
-            else:
-                st.error("Escreva algo antes de enviar.")
+   if st.session_state.user_email == "admin":
+    with tabs[3]: # Esta é a aba de Mensagens
+        st.subheader("📬 Sugestões Recebidas")
+        if os.path.exists(ARQ_F):
+            df_feed = pd.read_csv(ARQ_F)
+            st.dataframe(df_feed.sort_index(ascending=False), use_container_width=True)
+            if st.button("Limpar todas as mensagens"):
+                os.remove(ARQ_F)
+                st.rerun()
+        else:
+            st.info("Nenhuma mensagem nova.")
 
 if st.sidebar.button("Sair"):
     st.session_state.logado = False
     st.rerun()
+
 
 
 
