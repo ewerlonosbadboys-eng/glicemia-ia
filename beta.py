@@ -11,6 +11,113 @@ import smtplib
 from email.mime.text import MIMEText
 import urllib.parse
 
+# ================= 1. CONFIGURAÇÕES E SENSOR DE LINK (PRIORIDADE MÁXIMA) =================
+st.set_page_config(page_title="Saúde Kids BETA", page_icon="🧪", layout="wide")
+
+# Lógica para capturar o link do e-mail ANTES de carregar o login
+query_params = st.query_params
+if "reset" in query_params and "email" in query_params:
+    st.session_state.reset_mode = True
+    st.session_state.email_reset = query_params["email"]
+
+# Se detectou o link, mostra APENAS esta tela e trava o resto
+if st.session_state.get("reset_mode"):
+    st.title("🔐 Defina sua Nova Senha")
+    st.warning(f"Redefinindo para: {st.session_state.email_reset}")
+    
+    nova_s = st.text_input("Nova Senha", type="password", key="pwd_reset_field")
+    confirma_s = st.text_input("Confirme a Senha", type="password", key="pwd_reset_confirm")
+    
+    if st.button("Salvar Nova Senha e Entrar"):
+        if nova_s == confirma_s and len(nova_s) >= 4:
+            conn = sqlite3.connect('usuarios.db')
+            c = conn.cursor()
+            c.execute("UPDATE users SET senha=? WHERE email=?", (nova_s, st.session_state.email_reset))
+            conn.commit()
+            conn.close()
+            
+            st.success("Senha alterada! Redirecionando para login...")
+            st.session_state.reset_mode = False
+            # Limpa o link da barra de endereço para não bugar no próximo acesso
+            st.query_params.clear() 
+            st.rerun()
+        else:
+            st.error("As senhas precisam ser iguais e ter no mínimo 4 caracteres.")
+    
+    if st.button("Cancelar"):
+        st.session_state.reset_mode = False
+        st.query_params.clear()
+        st.rerun()
+        
+    st.stop() # Mata a execução aqui para não carregar a tela de login embaixo
+
+# ================= 2. FUNÇÕES DE APOIO =================
+
+def enviar_link_recuperacao(email_destino):
+    meu_email = "ewerlon.osbadboys@gmail.com" 
+    minha_senha = "okiu qihp lglk trcc" 
+    
+    link_app = "https://glicemia-ia.streamlit.app" 
+    email_codificado = urllib.parse.quote(email_destino)
+    link_final = f"{link_app}/?reset=true&email={email_codificado}"
+    
+    corpo = f"<h3>Saúde Kids</h3><p>Clique aqui para mudar sua senha: <a href='{link_final}'>LINK DE ACESSO</a></p>"
+    msg = MIMEText(corpo, 'html')
+    msg['Subject'] = 'Redefinição de Senha'
+    msg['From'] = meu_email
+    msg['To'] = email_destino
+
+    try:
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
+            smtp.login(meu_email, minha_senha)
+            smtp.send_message(msg)
+        return True
+    except:
+        return False
+
+# ================= 3. CONTROLE DE LOGIN (SÓ APARECE SE NÃO ESTIVER EM RESET) =================
+
+if 'logado' not in st.session_state:
+    st.session_state.logado = False
+
+if not st.session_state.logado:
+    st.title("🧪 Bem-vindo ao Saúde Kids")
+    
+    # Criamos as abas de forma fixa para evitar o erro de IndexError
+    aba_login, aba_cad, aba_rec = st.tabs(["🔐 Entrar", "📝 Criar Conta", "❓ Esqueci Senha"])
+    
+    with aba_login:
+        u = st.text_input("E-mail", key="main_login_em")
+        s = st.text_input("Senha", type="password", key="main_login_pw")
+        if st.button("Acessar"):
+            conn = sqlite3.connect('usuarios.db')
+            c = conn.cursor()
+            c.execute("SELECT * FROM users WHERE email=? AND senha=?", (u, s))
+            if c.fetchone():
+                st.session_state.logado = True
+                st.rerun()
+            else:
+                st.error("Dados incorretos.")
+            conn.close()
+
+    with aba_cad:
+        # (Coloque aqui seus campos de Nome, Email, Senha de cadastro que já tinha)
+        st.info("Preencha os dados para se cadastrar.")
+
+    with aba_rec:
+        st.subheader("Recuperação por E-mail")
+        email_alvo = st.text_input("Digite o e-mail cadastrado", key="rec_input_final")
+        if st.button("Enviar Link Agora"):
+            if enviar_link_recuperacao(email_alvo):
+                st.success("E-mail enviado com sucesso!")
+            else:
+                st.error("Erro ao enviar. Verifique sua conexão ou dados.")
+    
+    st.stop() # Só passa daqui se estiver logado
+
+# ================= 4. RESTANTE DO SEU APP (GLICEMIA, ETC) =================
+# Seu código original de gráficos e tabelas continua aqui...
+
 # ================= CONFIGURAÇÕES INICIAIS =================
 fuso_br = pytz.timezone('America/Sao_Paulo')
 st.set_page_config(page_title="Saúde Kids BETA", page_icon="🧪", layout="wide")
