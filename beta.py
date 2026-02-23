@@ -17,7 +17,7 @@ import string
 fuso_br = pytz.timezone('America/Sao_Paulo')
 st.set_page_config(page_title="Saúde Kids BETA", page_icon="🧪", layout="wide")
 
-# ARQUIVOS DE DADOS (CSV)
+# ARQUIVOS DE DADOS
 ARQ_G = "dados_glicemia_BETA.csv"
 ARQ_N = "dados_nutricao_BETA.csv"
 ARQ_R = "config_receita_BETA.csv"
@@ -25,26 +25,17 @@ ARQ_R = "config_receita_BETA.csv"
 # ================= FUNÇÕES DE SEGURANÇA =================
 
 def gerar_senha_temporaria(tamanho=6):
-    """Gera uma senha aleatória de letras e números"""
     caracteres = string.ascii_letters + string.digits
     return ''.join(random.choice(caracteres) for i in range(tamanho))
 
 def enviar_senha_nova(email_destino, senha_nova):
-    """Envia a senha gerada diretamente para o e-mail"""
     meu_email = "ewerlon.osbadboys@gmail.com" 
     minha_senha = "okiu qihp lglk trcc" 
-    
-    corpo = f"""
-    <h3>Saúde Kids - Nova Senha Gerada</h3>
-    <p>Sua senha antiga foi resetada por segurança.</p>
-    <p>Sua nova senha de acesso é: <b style='font-size: 20px; color: blue;'>{senha_nova}</b></p>
-    <p>Use esta senha para entrar no aplicativo agora.</p>
-    """
+    corpo = f"<h3>Saúde Kids</h3><p>Sua nova senha de acesso é: <b>{senha_nova}</b></p>"
     msg = MIMEText(corpo, 'html')
     msg['Subject'] = 'Sua Nova Senha - Saúde Kids'
     msg['From'] = meu_email
     msg['To'] = email_destino
-
     try:
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
             smtp.login(meu_email, minha_senha)
@@ -57,7 +48,7 @@ def init_db():
     conn = sqlite3.connect('usuarios.db')
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS users 
-                 (nome TEXT, sobrenome TEXT, telefone TEXT, email TEXT PRIMARY KEY, senha TEXT)''')
+                 (nome TEXT, email TEXT PRIMARY KEY, senha TEXT)''')
     conn.commit()
     conn.close()
 
@@ -65,12 +56,14 @@ init_db()
 
 # ================= SISTEMA DE LOGIN =================
 
+# CORREÇÃO DO ERRO: Inicializar as variáveis de estado logo no início
 if 'logado' not in st.session_state:
     st.session_state.logado = False
+if 'user_email' not in st.session_state:
+    st.session_state.user_email = ""
 
 if not st.session_state.logado:
     st.title("🧪 Saúde Kids - Acesso")
-    # ADICIONADA A QUARTA ABA: ALTERAR SENHA
     abas_login = st.tabs(["🔐 Entrar", "📝 Criar Conta", "❓ Esqueci Senha", "🔄 Alterar Senha"])
 
     with abas_login[0]:
@@ -82,6 +75,7 @@ if not st.session_state.logado:
             c.execute("SELECT * FROM users WHERE email=? AND senha=?", (u, s))
             if c.fetchone():
                 st.session_state.logado = True
+                st.session_state.user_email = u # Salva o email para filtrar os dados
                 st.rerun()
             else:
                 st.error("E-mail ou senha incorretos.")
@@ -90,8 +84,8 @@ if not st.session_state.logado:
     with abas_login[1]:
         st.subheader("Cadastro")
         n = st.text_input("Nome completo")
-        em = st.text_input("Seu melhor e-mail")
-        se = st.text_input("Crie uma senha", type="password")
+        em = st.text_input("E-mail")
+        se = st.text_input("Senha", type="password")
         if st.button("Cadastrar"):
             try:
                 conn = sqlite3.connect('usuarios.db')
@@ -99,114 +93,115 @@ if not st.session_state.logado:
                 c.execute("INSERT INTO users (nome, email, senha) VALUES (?,?,?)", (n, em, se))
                 conn.commit()
                 conn.close()
-                st.success("Conta criada! Use a aba 'Entrar'.")
+                st.success("Conta criada!")
             except:
-                st.error("Este e-mail já existe.")
+                st.error("Erro ou e-mail já existe.")
 
     with abas_login[2]:
         st.subheader("Recuperar Acesso")
-        email_alvo = st.text_input("Digite o e-mail da conta", key="rec_em_direto")
-        
+        email_alvo = st.text_input("E-mail da conta", key="rec_em_direto")
         if st.button("Enviar Nova Senha"):
             if email_alvo:
                 conn = sqlite3.connect('usuarios.db')
                 c = conn.cursor()
                 c.execute("SELECT email FROM users WHERE email=?", (email_alvo,))
                 if c.fetchone():
-                    senha_gerada = gerar_senha_temporaria()
-                    c.execute("UPDATE users SET senha=? WHERE email=?", (senha_gerada, email_alvo))
+                    nova_pwd = gerar_senha_temporaria()
+                    c.execute("UPDATE users SET senha=? WHERE email=?", (nova_pwd, email_alvo))
                     conn.commit()
                     conn.close()
-                    if enviar_senha_nova(email_alvo, senha_gerada):
-                        st.success(f"✅ Senha enviada para {email_alvo}!")
+                    if enviar_senha_nova(email_alvo, nova_pwd):
+                        st.success(f"Nova senha enviada para {email_alvo}!")
                     else:
                         st.error("Erro ao enviar e-mail.")
                 else:
-                    st.error("E-mail não cadastrado.")
+                    st.error("E-mail não encontrado.")
                     conn.close()
-            else:
-                st.warning("Informe o e-mail.")
 
     with abas_login[3]:
-        st.subheader("Alterar Minha Senha")
+        st.subheader("Alterar Senha")
         alt_email = st.text_input("Confirme seu e-mail", key="alt_em")
         alt_antiga = st.text_input("Senha Atual", type="password", key="alt_ant")
         alt_nova1 = st.text_input("Nova Senha", type="password", key="alt_n1")
         alt_nova2 = st.text_input("Repita a Nova Senha", type="password", key="alt_n2")
-        
         if st.button("Confirmar Alteração"):
-            if alt_nova1 != alt_nova2:
-                st.error("As novas senhas não coincidem!")
-            elif not alt_email or not alt_antiga or not alt_nova1:
-                st.warning("Preencha todos os campos.")
-            else:
+            if alt_nova1 == alt_nova2 and alt_email:
                 conn = sqlite3.connect('usuarios.db')
                 c = conn.cursor()
                 c.execute("SELECT * FROM users WHERE email=? AND senha=?", (alt_email, alt_antiga))
                 if c.fetchone():
                     c.execute("UPDATE users SET senha=? WHERE email=?", (alt_nova1, alt_email))
                     conn.commit()
-                    st.success("✅ Senha alterada com sucesso! Volte na aba 'Entrar'.")
+                    st.success("Senha alterada!")
                 else:
-                    st.error("E-mail ou senha atual incorretos.")
+                    st.error("Dados incorretos.")
                 conn.close()
+            else:
+                st.error("Senhas não coincidem.")
     st.stop()
 
-# ================= ÁREA LOGADA (FILTRADA POR USUÁRIO) =================
+# ================= ÁREA LOGADA (FILTRO POR USUÁRIO) =================
 
 def carregar_dados_usuario(arq, colunas):
     if os.path.exists(arq):
         df = pd.read_csv(arq)
-        # Filtra apenas os dados do usuário logado
         if 'user_email' in df.columns:
+            # Retorna apenas as linhas do usuário logado
             return df[df['user_email'] == st.session_state.user_email]
     return pd.DataFrame(columns=colunas + ['user_email'])
 
-def salvar_dados_usuario(df, arq):
-    # Se o arquivo já existir, lê tudo, remove os dados antigos do usuário e salva os novos
+def salvar_dados_usuario(df_usuario_novo, arq):
     if os.path.exists(arq):
-        df_completo = pd.read_csv(arq)
-        df_completo = df_completo[df_completo['user_email'] != st.session_state.user_email]
-        df_final = pd.concat([df_completo, df], ignore_index=True)
+        df_geral = pd.read_csv(arq)
+        # Remove registros antigos desse usuário para não duplicar e junta com os novos
+        df_geral = df_geral[df_geral['user_email'] != st.session_state.user_email]
+        df_final = pd.concat([df_geral, df_usuario_novo], ignore_index=True)
     else:
-        df_final = df
+        df_final = df_usuario_novo
     df_final.to_csv(arq, index=False)
 
 st.sidebar.write(f"Logado como: **{st.session_state.user_email}**")
 if st.sidebar.button("Sair"):
     st.session_state.logado = False
+    st.session_state.user_email = ""
     st.rerun()
 
-t1, t2, t3 = st.tabs(["📊 Glicemia", "🍲 Alimentação", "⚙️ Configuração"])
+t1, t2, t3, t4 = st.tabs(["📊 Minha Glicemia", "🍲 Alimentação", "💉 Insulina", "📈 Relatórios"])
 
+# Aba 1: Glicemia (Exemplo de gravação com e-mail)
 with t1:
     st.header("Seu Perfil Glicêmico")
     df_g = carregar_dados_usuario(ARQ_G, ['Data', 'Hora', 'Valor', 'Momento'])
     
     with st.expander("Novo Registro"):
-        col1, col2, col3 = st.columns(3)
-        v = col1.number_input("Valor", 20, 600, 100)
-        m = col2.selectbox("Momento", ["Jejum", "Pós-Prandial", "Outro"])
-        if st.button("Salvar"):
-            novo = pd.DataFrame([[datetime.now().strftime('%d/%m/%Y'), datetime.now().strftime('%H:%M'), v, m, st.session_state.user_email]], 
-                               columns=['Data', 'Hora', 'Valor', 'Momento', 'user_email'])
-            df_g = pd.concat([df_g, novo], ignore_index=True)
+        c1, c2, c3 = st.columns(3)
+        val = c1.number_input("Valor (mg/dL)", 20, 600, 100)
+        mom = c2.selectbox("Momento", ["Jejum", "Pré-Refeição", "Pós-Refeição", "Madrugada"])
+        if st.button("Salvar Registro"):
+            novo_reg = pd.DataFrame([[
+                datetime.now(fuso_br).strftime('%d/%m/%Y'), 
+                datetime.now(fuso_br).strftime('%H:%M'), 
+                val, mom, st.session_state.user_email # GRAVA O EMAIL DO DONO
+            ]], columns=['Data', 'Hora', 'Valor', 'Momento', 'user_email'])
+            
+            df_g = pd.concat([df_g, novo_reg], ignore_index=True)
             salvar_dados_usuario(df_g, ARQ_G)
-            st.success("Registrado!")
+            st.success("Salvo com sucesso!")
             st.rerun()
 
     if not df_g.empty:
-        st.plotly_chart(px.line(df_g, x='Data', y='Valor', title="Minha Evolução"))
+        st.plotly_chart(px.line(df_g, x='Data', y='Valor', title="Minha Evolução"), use_container_width=True)
         st.dataframe(df_g, use_container_width=True)
 
-with t2:
-    st.header("Sua Alimentação")
-    df_n = carregar_dados_usuario(ARQ_N, ['Data', 'Refeição', 'Carbo(g)'])
-    # Lógica similar de cadastro aqui...
-
-with t3:
-    st.header("Configurações Pessoais")
-    # Fatores de sensibilidade específicos do usuário logado...
+# Aba 4: Relatório (Só exporta o que for do usuário)
+with t4:
+    st.header("Gerar Relatório Excel")
+    if st.button("📥 BAIXAR MEU RELATÓRIO"):
+        # Aqui o carregar_dados_usuario já garante que só venha o dele
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df_g.to_excel(writer, sheet_name='Minha Glicemia', index=False)
+        st.download_button("Clique para baixar", output.getvalue(), "meu_perfil.xlsx")
 
 # ================= ESTILO VISUAL =================
 st.markdown("""
