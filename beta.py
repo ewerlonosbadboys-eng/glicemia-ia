@@ -40,21 +40,22 @@ if not st.session_state.logado:
         abas = st.tabs(["🔐 Entrar", "❓ Esqueci Senha"])
         st.success("Conta criada com sucesso! Agora você pode entrar.")
 
-    # Lógica da Aba Entrar
+    # Lógica da Aba LOGIN (Atualizada para salvar senha)
     with abas[0]:
-        u = st.text_input("E-mail", key="l_email")
-        s = st.text_input("Senha", type="password", key="l_senha")
-        if st.button("Entrar"):
+        # O segredo está no 'autocomplete="username"' e 'autocomplete="current-password"'
+        u = st.text_input("E-mail", key="login_user", autocomplete="username")
+        s = st.text_input("Senha", type="password", key="login_pass", autocomplete="current-password")
+        
+        if st.button("Acessar Aplicativo"):
             conn = sqlite3.connect('usuarios.db')
             c = conn.cursor()
             c.execute("SELECT * FROM users WHERE email=? AND senha=?", (u, s))
-            resultado = c.fetchone()
-            conn.close()
-            if resultado:
+            if c.fetchone():
                 st.session_state.logado = True
                 st.rerun()
             else:
-                st.error("E-mail ou senha incorretos.")
+                st.error("Usuário ou senha não encontrados.")
+            conn.close()
 
     # ABA CRIAR CONTA (Lógica que limpa erro de e-mail cadastrado)
     if not st.session_state.conta_criada:
