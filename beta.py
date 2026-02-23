@@ -42,31 +42,22 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS receita 
                  (user_email TEXT PRIMARY KEY, manha_f1 REAL, manha_f2 REAL, manha_f3 REAL, noite_f1 REAL, noite_f2 REAL, noite_f3 REAL)''')
 
-    # 2. Migração de Emergência (Garante que as colunas existam)
-    def fix_table(tabela, colunas_necessarias):
-        c.execute(f"PRAGMA table_info({tabela})")
-        existentes = [col[1] for col in c.fetchall()]
-        for col, tipo in colunas_necessarias.items():
-            if col not in existentes:
-                c.execute(f"ALTER TABLE {tabela} ADD COLUMN {col} {tipo}")
+    # 2. Migração de Emergência (Garante que as colunas existam para evitar DatabaseError)
+    c.execute("PRAGMA table_info(nutricao)")
+    existentes = [col[1] for col in c.fetchall()]
+    if 'user_email' not in existentes:
+        c.execute("ALTER TABLE nutricao ADD COLUMN user_email TEXT")
+    if 'info' not in existentes:
+        c.execute("ALTER TABLE nutricao ADD COLUMN info TEXT")
+    if 'c' not in existentes:
+        c.execute("ALTER TABLE nutricao ADD COLUMN c REAL DEFAULT 0")
 
-    fix_table('nutricao', {'user_email': 'TEXT', 'info': 'TEXT', 'c': 'REAL'})
-    fix_table('glicemia', {'user_email': 'TEXT', 'dose': 'TEXT'})
-    
     conn.commit()
     conn.close()
 
 init_db()
 
-# ================= ESTILO E APOIO =================
-st.markdown("""
-<style>
-.main {background-color: #f8fafc;}
-.card { background-color: white; padding: 25px; border-radius: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); margin-bottom: 25px; }
-.dose-alerta { background-color: #f0fdf4; padding: 20px; border-radius: 12px; border: 2px solid #16a34a; text-align: center; }
-</style>
-""", unsafe_allow_html=True)
-
+# ================= APOIO =================
 ALIMENTOS = {
     "Pão Francês": [28, 4, 1], "Leite (200ml)": [10, 6, 6],
     "Arroz": [15, 1, 0], "Feijão": [14, 5, 0],
@@ -89,9 +80,8 @@ def calcular_insulina(valor, momento):
 
 # ================= LOGIN =================
 if not st.session_state.logado:
-    st.title("🧪 Saúde Kids - Acesso")
-    abas = st.tabs(["🔐 Entrar", "📝 Criar Conta", "❓ Esqueci", "🔄 Alterar"])
-    
+    st.title("🧪 Saúde Kids - Login")
+    abas = st.tabs(["🔐 Entrar", "📝 Criar Conta"])
     with abas[0]:
         u = st.text_input("E-mail", key="l_em")
         s = st.text_input("Senha", type="password", key="l_ps")
@@ -104,36 +94,6 @@ if not st.session_state.logado:
                 st.session_state.user_email = res[0]
                 st.rerun()
             else: st.error("Dados incorretos.")
-    
     with abas[1]:
         n = st.text_input("Nome")
-        e = st.text_input("E-mail Novo")
-        p = st.text_input("Senha Nova", type="password")
-        if st.button("Cadastrar"):
-            try:
-                conn = get_connection()
-                conn.execute("INSERT INTO users (nome, email, senha) VALUES (?,?,?)", (n, e, p))
-                conn.commit()
-                conn.close()
-                st.success("Conta criada!")
-            except: st.error("E-mail já existe.")
-    st.stop()
-
-# ================= APP PRINCIPAL =================
-st.sidebar.info(f"Usuário: {st.session_state.user_email}")
-if st.sidebar.button("Sair"):
-    st.session_state.logado = False
-    st.rerun()
-
-t1, t2, t3 = st.tabs(["📊 Glicemia", "🍽️ Alimentação", "⚙️ Receita"])
-
-with t1:
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    conn = get_connection()
-    dfg = pd.read_sql_query("SELECT data as Data, hora as Hora, valor as Valor, momento as Momento, dose as Dose FROM glicemia WHERE user_email=?", conn, params=(st.session_state.user_email,))
-    conn.close()
-    
-    c1, c2 = st.columns(2)
-    with c1:
-        v = st.number_input("Glicemia:", 0, 600, 100)
-        m =
+        e = st.text_input("
