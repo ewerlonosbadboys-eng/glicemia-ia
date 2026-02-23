@@ -126,12 +126,12 @@ if not st.session_state.logado:
 
 # ================= FUNÇÕES DE APOIO =================
 # Linhas 115 a 118
+# Linha 115
 def carregar_dados_seguro(arq):
     if not os.path.exists(arq): return pd.DataFrame()
     df = pd.read_csv(arq)
     if st.session_state.user_email == "admin":
-        return df  # <--- Aqui ele libera tudo
-    return df[df['Usuario'] == st.session_state.user_email].copy()
+        return df # <--- Aqui ele libera a visão total
 
 def calc_insulina(v, m):
     df_r = carregar_dados_seguro(ARQ_R)
@@ -191,11 +191,11 @@ ALIMENTOS = {
 
 # ================= INTERFACE PRINCIPAL =================
 # Define as abas: se for admin, adiciona a aba de mensagens
-abas_titulos = ["📊 Glicemia", "🍽️ Nutrição", "⚙️ Receita"]
+titulos_abas = ["📊 Glicemia", "🍽️ Nutrição", "⚙️ Receita"]
 if st.session_state.user_email == "admin":
-    abas_titulos.append("📩 Mensagens (Admin)")
+    titulos_abas.append("📩 Mensagens (Admin)")
 
-tabs = st.tabs(abas_titulos)
+tabs = st.tabs(titulos_abas)
 
 with tab1:
     st.markdown('<div class="card">', unsafe_allow_html=True)
@@ -303,9 +303,7 @@ st.sidebar.download_button("Baixar Agora", output.getvalue(), file_name="Relator
 if st.session_state.user_email == "admin":
     with tabs[3]: # Esta aba só existe se for admin
         st.subheader("📬 Sugestões e Melhorias Recebidas")
-        if os.path.exists(ARQ_F):
-            df_feed = pd.read_csv(ARQ_F)
-            st.dataframe(df_feed.sort_index(ascending=False), use_container_width=True)
+        # ... (restante do código de exibição)
             if st.button("Limpar Histórico de Mensagens"):
                 os.remove(ARQ_F)
                 st.rerun()
