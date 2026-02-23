@@ -11,8 +11,112 @@ import smtplib
 from email.mime.text import MIMEText
 import urllib.parse
 
-# ================= 1. CONFIGURAÇÕES E SENSOR DE LINK (PRIORIDADE MÁXIMA) =================
+# 1. CONFIGURAÇÕES INICIAIS
+fuso_br = pytz.timezone('America/Sao_Paulo')
 st.set_page_config(page_title="Saúde Kids BETA", page_icon="🧪", layout="wide")
+
+# 2. SENSOR DE LINK DE E-MAIL (Mover para o topo resolve o erro de Index)
+query_params = st.query_params
+if "reset" in query_params and "email" in query_params:
+    st.session_state.reset_mode = True
+    st.session_state.email_reset = query_params["email"]
+
+# TELA DE NOVA SENHA - Se estiver neste modo, o resto do app nem carrega
+if st.session_state.get("reset_mode"):
+    st.title("🔐 Criar Nova Senha")
+    st.info(f"Redefinindo para: {st.session_state.email_reset}")
+    
+    nova_s = st.text_input("Nova Senha", type="password", key="new_pass_key")
+    confirma_s = st.text_input("Confirme a Nova Senha", type="password", key="conf_pass_key")
+    
+    if st.button("Atualizar Senha e Voltar"):
+        if nova_s == confirma_s and len(nova_s) >= 4:
+            conn = sqlite3.connect('usuarios.db')
+            c = conn.cursor()
+            c.execute("UPDATE users SET senha=? WHERE email=?", (nova_s, st.session_state.email_reset))
+            conn.commit()
+            conn.close()
+            
+            st.success("Senha alterada! Agora você pode fazer login.")
+            # LIMPEZA TOTAL PARA VOLTAR AO LOGIN
+            st.session_state.reset_mode = False
+            st.query_params.clear()
+            st.rerun()
+        else:
+            st.error("As senhas não coincidem ou são muito curtas.")
+    
+    if st.button("Cancelar"):
+        st.session_state.reset_mode = False
+        st.query_params.clear()
+        st.rerun()
+    st.stop() # PARA TUDO AQUI
+
+# 3. FUNÇÃO DE E-MAIL
+def enviar_link_recuperacao(email_destino):
+    meu_email = "ewerlon.osbadboys@gmail.com" 
+    minha_senha = "okiu qihp lglk trcc" 
+    link_app = "https://glicemia-ia.streamlit.app" 
+    email_codificado = urllib.parse.quote(email_destino)
+    link_final = f"{link_app}/?reset=true&email={email_codificado}"
+    
+    corpo = f"<h3>Saúde Kids</h3><p>Clique para redefinir sua senha: <a href='{link_final}'>Redefinir Senha</a></p>"
+    msg = MIMEText(corpo, 'html')
+    msg['Subject'] = 'Redefinição de Senha'
+    msg['From'] = meu_email
+    msg['To'] = email_destino
+
+    try:
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
+            smtp.login(meu_email, minha_senha)
+            smtp.send_message(msg)
+        return True
+    except:
+        return False
+
+# 4. SISTEMA DE LOGIN (SÓ APARECE SE NÃO ESTIVER EM RESET)
+if 'logado' not in st.session_state:
+    st.session_state.logado = False
+
+if not st.session_state.logado:
+    # USAR LISTA FIXA DE ABAS EVITA O ERRO "INDEX OUT OF RANGE"
+    abas = st.tabs(["🔐 Entrar", "📝 Criar Conta", "❓ Esqueci Senha"])
+    
+    with abas[0]:
+        st.subheader("Login")
+        u = st.text_input("E-mail", key="login_email")
+        s = st.text_input("Senha", type="password", key="login_pass")
+        if st.button("Entrar"):
+            conn = sqlite3.connect('usuarios.db')
+            c = conn.cursor()
+            c.execute("SELECT * FROM users WHERE email=? AND senha=?", (u, s))
+            if c.fetchone():
+                st.session_state.logado = True
+                st.rerun()
+            else:
+                st.error("E-mail ou senha inválidos.")
+            conn.close()
+
+    with abas[1]:
+        st.subheader("Cadastro")
+        nome = st.text_input("Seu Nome")
+        email_c = st.text_input("Seu E-mail")
+        senha_c = st.text_input("Crie uma Senha", type="password")
+        if st.button("Cadastrar"):
+            # Coloque aqui sua lógica de INSERT no SQLite
+            st.success("Cadastro realizado!")
+
+    with abas[2]:
+        st.subheader("Recuperar Senha")
+        email_alvo = st.text_input("E-mail cadastrado", key="email_reset_input")
+        if st.button("Enviar Link de Recuperação"):
+            if enviar_link_recuperacao(email_alvo):
+                st.success("Link enviado! Verifique seu e-mail.")
+            else:
+                st.error("Erro ao enviar e-mail.")
+    st.stop()
+
+# 5. RESTANTE DO APP (GRÁFICOS, ETC)
+# (COLE AQUI O RESTANTE DO SEU CÓDIGO ORIGINAL QUE VOCÊ JÁ TEM)
 
 # Lógica para capturar o link do e-mail ANTES de carregar o login
 query_params = st.query_params
