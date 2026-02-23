@@ -6,21 +6,34 @@ from io import BytesIO
 import plotly.express as px
 import pytz
 from openpyxl.styles import PatternFill
-
-import sqlite3
-
 import sqlite3
 import smtplib
 from email.mime.text import MIMEText
 import urllib.parse
 
-import smtplib
-from email.mime.text import MIMEText
-import urllib.parse
-
+# FUNÇÃO ÚNICA PARA ENVIAR O LINK
 def enviar_link_recuperacao(email_destino):
-    meu_email = "ewerlon.osbadboys@gmail.com" # Coloque seu Gmail aqui
-    minha_senha = "lara542820" # Coloque a senha de 16 letras que o Google vai te dar
+    meu_email = "ewerlon.osbadboys@gmail.com" 
+    # ATENÇÃO: A senha abaixo precisa ser a de 16 letras do Google, não a sua pessoal!
+    minha_senha = "xxxx xxxx xxxx xxxx" 
+    
+    link_app = "https://glicemia-ia.streamlit.app" 
+    email_codificado = urllib.parse.quote(email_destino)
+    link_final = f"{link_app}/?reset=true&email={email_codificado}"
+    
+    corpo = f"<h3>Recuperação</h3><p>Clique para redefinir: <a href='{link_final}'>Link</a></p>"
+    msg = MIMEText(corpo, 'html')
+    msg['Subject'] = 'Redefinição de Senha'
+    msg['From'] = meu_email
+    msg['To'] = email_destino
+
+    try:
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
+            smtp.login(meu_email, minha_senha)
+            smtp.send_message(msg)
+        return True
+    except:
+        return False
     
     # Substitua pelo link real do seu app que aparece no navegador
     link_app = "https://glicemia-ia.streamlit.app" 
