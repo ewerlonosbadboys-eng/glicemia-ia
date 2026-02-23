@@ -20,7 +20,7 @@ ARQ_G = "dados_glicemia_BETA.csv"
 ARQ_N = "dados_nutricao_BETA.csv"
 ARQ_R = "config_receita_BETA.csv"
 
-# DESIGN DARK MODE (PRESERVANDO CORES DE STATUS)
+# DESIGN DARK MODE (PRESERVADO E REVISADO)
 st.markdown("""
 <style>
     .stApp { background-color: #0e1117; color: #ffffff; }
@@ -34,15 +34,23 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-def cor_glicemia_status(v):
-    try:
-        n = int(v)
-        if n < 70: return 'background-color: #8B8000; color: white;' 
-        elif n > 180: return 'background-color: #8B0000; color: white;' 
-        else: return 'background-color: #006400; color: white;' 
-    except: return ''
+# ================= SEGURANÇA E LOGIN (TODAS AS ABAS RESTAURADAS) =================
+def gerar_senha_temporaria(tamanho=6):
+    caracteres = string.ascii_letters + string.digits
+    return ''.join(random.choice(caracteres) for i in range(tamanho))
 
-# ================= SEGURANÇA E LOGIN =================
+def enviar_senha_nova(email_destino, senha_nova):
+    meu_email = "ewerlon.osbadboys@gmail.com" 
+    minha_senha = "okiu qihp lglk trcc" 
+    corpo = f"<h3>Saúde Kids</h3><p>Sua nova senha de acesso é: <b>{senha_nova}</b></p>"
+    msg = MIMEText(corpo, 'html'); msg['Subject'] = 'Sua Nova Senha - Saúde Kids'; msg['From'] = meu_email; msg['To'] = email_destino
+    try:
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
+            smtp.login(meu_email, minha_senha)
+            smtp.send_message(msg)
+        return True
+    except: return False
+
 def init_db():
     conn = sqlite3.connect('usuarios.db')
     conn.execute('''CREATE TABLE IF NOT EXISTS users (nome TEXT, email TEXT PRIMARY KEY, senha TEXT)''')
@@ -53,7 +61,9 @@ if 'logado' not in st.session_state: st.session_state.logado = False
 
 if not st.session_state.logado:
     st.title("🧪 Saúde Kids - Acesso")
-    abas_login = st.tabs(["🔐 Entrar", "📝 Criar Conta", "❓ Esqueci Senha"])
+    # VOLTEI AS 4 ABAS ORIGINAIS EXATAMENTE COMO NO SEU BETA 15
+    abas_login = st.tabs(["🔐 Entrar", "📝 Criar Conta", "❓ Esqueci Senha", "🔄 Alterar Senha"])
+    
     with abas_login[0]:
         u = st.text_input("E-mail", key="l_email")
         s = st.text_input("Senha", type="password", key="l_pass")
@@ -63,19 +73,46 @@ if not st.session_state.logado:
                 st.session_state.logado = True
                 st.session_state.user_email = u
                 st.rerun()
-            else: st.error("Incorreto.")
+            else: st.error("E-mail ou senha incorretos.")
             conn.close()
+
     with abas_login[1]:
-        n_cad = st.text_input("Nome")
-        e_cad = st.text_input("E-mail Cadastro")
-        s_cad = st.text_input("Senha Cadastro", type="password")
-        if st.button("Cadastrar"):
+        n_cad = st.text_input("Nome Completo")
+        e_cad = st.text_input("E-mail para Cadastro")
+        s_cad = st.text_input("Senha para Cadastro", type="password")
+        if st.button("Realizar Cadastro"):
             try:
                 conn = sqlite3.connect('usuarios.db')
                 conn.execute("INSERT INTO users VALUES (?,?,?)", (n_cad, e_cad, s_cad))
                 conn.commit(); conn.close()
-                st.success("Conta criada!")
-            except: st.error("Erro.")
+                st.success("Conta criada com sucesso!")
+            except: st.error("Este e-mail já está cadastrado.")
+
+    with abas_login[2]:
+        email_alvo = st.text_input("Digite seu e-mail cadastrado")
+        if st.button("Recuperar Acesso"):
+            conn = sqlite3.connect('usuarios.db'); c = conn.cursor()
+            user = c.execute("SELECT email FROM users WHERE email=?", (email_alvo,)).fetchone()
+            if user:
+                nova = gerar_senha_temporaria()
+                c.execute("UPDATE users SET senha=? WHERE email=?", (nova, email_alvo))
+                conn.commit()
+                if enviar_senha_nova(email_alvo, nova): st.success("Nova senha enviada para seu e-mail!")
+                else: st.error("Erro ao enviar e-mail.")
+            else: st.error("E-mail não encontrado.")
+            conn.close()
+
+    with abas_login[3]:
+        alt_em = st.text_input("Confirme seu E-mail", key="alt_em")
+        alt_at = st.text_input("Senha Atual", type="password", key="alt_at")
+        alt_n1 = st.text_input("Nova Senha", type="password", key="alt_n1")
+        if st.button("Confirmar Alteração"):
+            conn = sqlite3.connect('usuarios.db')
+            if conn.execute("SELECT * FROM users WHERE email=? AND senha=?", (alt_em, alt_at)).fetchone():
+                conn.execute("UPDATE users SET senha=? WHERE email=?", (alt_n1, alt_em))
+                conn.commit(); st.success("Senha alterada com sucesso!")
+            else: st.error("Dados atuais incorretos.")
+            conn.close()
     st.stop()
 
 # ================= FUNÇÕES DE APOIO =================
@@ -124,7 +161,15 @@ with tab1:
             fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color="white")
             st.plotly_chart(fig, use_container_width=True)
     if not dfg.empty:
-        st.dataframe(dfg.tail(15).style.applymap(cor_glicemia_status, subset=['Valor']), use_container_width=True)
+        # CORES NO HISTÓRICO VOLTARAM
+        def cor_gl(v):
+            try:
+                n = int(v)
+                if n < 70: return 'background-color: #8B8000; color: white;' 
+                elif n > 180: return 'background-color: #8B0000; color: white;' 
+                else: return 'background-color: #006400; color: white;' 
+            except: return ''
+        st.dataframe(dfg.tail(15).style.applymap(cor_gl, subset=['Valor']), use_container_width=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
 with tab2:
@@ -163,44 +208,35 @@ with tab3:
         nova_rec = pd.DataFrame([{'Usuario': st.session_state.user_email, 'manha_f1':m1, 'manha_f2':m2, 'manha_f3':m3, 'noite_f1':n1, 'noite_f2':n2, 'noite_f3':n3}])
         df_r_all = df_r_all[df_r_all['Usuario'] != st.session_state.user_email] if not df_r_all.empty else pd.DataFrame()
         pd.concat([df_r_all, nova_rec], ignore_index=True).to_csv(ARQ_R, index=False)
-        st.success("Salva!")
+        st.success("Receita Salva!")
     st.markdown('</div>', unsafe_allow_html=True)
 
-# ================= EXCEL COLORIDO (RESTAURADO IGUAL AO BETA 15) =================
+# ================= EXCEL COLORIDO (RESTAURADO COMPLETO) =================
 st.sidebar.markdown("---")
 if st.sidebar.button("📥 Gerar Excel Colorido"):
     df_e_g = carregar_dados_seguro(ARQ_G)
     df_e_n = carregar_dados_seguro(ARQ_N)
-    
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         if not df_e_g.empty:
             pivot = df_e_g.pivot_table(index='Data', columns='Momento', values='Valor', aggfunc='last')
-            # Garante a ordem das colunas
             cols = [c for c in MOMENTOS_ORDEM if c in pivot.columns]
             pivot = pivot[cols]
             pivot.to_excel(writer, sheet_name='Glicemia')
-            
             ws = writer.sheets['Glicemia']
-            f_v = PatternFill(start_color="C8E6C9", end_color="C8E6C9", fill_type="solid") # Verde
-            f_r = PatternFill(start_color="FFB6C1", end_color="FFB6C1", fill_type="solid") # Vermelho
-            f_a = PatternFill(start_color="FFFFE0", end_color="FFFFE0", fill_type="solid") # Amarelo
-            
+            f_v, f_r, f_a = PatternFill("solid", fgColor="C8E6C9"), PatternFill("solid", fgColor="FFB6C1"), PatternFill("solid", fgColor="FFFFE0")
             for row in ws.iter_rows(min_row=2, min_col=2):
                 for cell in row:
                     if cell.value:
                         try:
-                            val = int(cell.value)
-                            cell.alignment = Alignment(horizontal='center')
+                            val = int(cell.value); cell.alignment = Alignment(horizontal='center')
                             if val < 70: cell.fill = f_a
                             elif val > 180: cell.fill = f_r
                             else: cell.fill = f_v
                         except: pass
-        
         if not df_e_n.empty:
             df_e_n.to_excel(writer, sheet_name='Alimentos', index=False)
-
-    st.sidebar.download_button("Baixar Agora", output.getvalue(), file_name="Relatorio_Colorido.xlsx")
+    st.sidebar.download_button("Baixar Agora", output.getvalue(), file_name="Relatorio_Completo.xlsx")
 
 if st.sidebar.button("Sair"):
     st.session_state.logado = False
