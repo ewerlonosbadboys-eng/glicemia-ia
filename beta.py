@@ -15,8 +15,9 @@ import sqlite3
 def gerenciar_usuarios():
     conn = sqlite3.connect('usuarios.db')
     c = conn.cursor()
-    # A linha abaixo garante que, se a tabela for a antiga, ela será atualizada
+    # Esta linha abaixo apaga a tabela antiga que está dando erro de colunas
     c.execute("DROP TABLE IF EXISTS users") 
+    # Esta linha cria a tabela nova com os 5 campos certos
     c.execute('''CREATE TABLE users 
                  (nome TEXT, sobrenome TEXT, telefone TEXT, email TEXT PRIMARY KEY, senha TEXT)''')
     conn.commit()
