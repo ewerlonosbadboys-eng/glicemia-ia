@@ -453,3 +453,32 @@ if st.button("🚨 APAGAR TODOS OS USUÁRIOS E RECOMEÇAR"):
     conn.commit()
     conn.close()
     st.success("Banco de dados limpo! Tente cadastrar agora.")
+
+# =========================================================
+# BLOCO PARA VERIFICAR O BANCO DE DADOS (COLE NO FINAL)
+# =========================================================
+st.markdown("---")
+st.subheader("🔍 Inspetor de Banco de Dados")
+
+if st.checkbox("Mostrar usuários cadastrados"):
+    try:
+        conn = sqlite3.connect('usuarios.db')
+        # O comando abaixo lê a tabela de usuários
+        import pandas as pd
+        df_usuarios = pd.read_sql_query("SELECT nome, sobrenome, email, telefone FROM users", conn)
+        conn.close()
+        
+        if not df_usuarios.empty:
+            st.write("Estes são os dados que estão dentro do arquivo 'usuarios.db':")
+            st.dataframe(df_usuarios)
+        else:
+            st.warning("O arquivo existe, mas a tabela está vazia.")
+    except Exception as e:
+        st.error(f"Erro ao acessar o banco: {e}")
+
+if st.button("🗑️ Apagar arquivo do Banco para testar do zero"):
+    import os
+    if os.path.exists("usuarios.db"):
+        os.remove("usuarios.db")
+        st.success("Arquivo 'usuarios.db' removido! Recarregue a página para criar um novo.")
+        st.rerun()
