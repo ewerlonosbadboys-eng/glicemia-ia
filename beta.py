@@ -48,6 +48,41 @@ def init_db():
 
 init_db()
 
+# ================= ESTILO VISUAL =================
+st.markdown("""
+<style>
+.main {background-color: #f8fafc;}
+.card { background-color: white; padding: 25px; border-radius: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); margin-bottom: 25px; }
+.dose-alerta { background-color: #f0fdf4; padding: 20px; border-radius: 12px; border: 2px solid #16a34a; text-align: center; margin-top: 10px; }
+</style>
+""", unsafe_allow_html=True)
+
+# ================= FUNÇÕES DE APOIO =================
+def carregar(arq):
+    return pd.read_csv(arq) if os.path.exists(arq) else pd.DataFrame()
+
+ALIMENTOS = {
+    "Pão Francês": [28, 4, 1], "Leite (200ml)": [10, 6, 6],
+    "Arroz": [15, 1, 0], "Feijão": [14, 5, 0],
+    "Frango": [0, 23, 5], "Ovo": [1, 6, 5],
+    "Banana": [22, 1, 0], "Maçã": [15, 0, 0]
+}
+
+def calcular_insulina_automatica(valor, momento):
+    df_r = carregar(ARQ_R)
+    if df_r.empty:
+        return "Configurar Receita", "⚠️ Vá na aba 'Receita'"
+    
+    r = df_r.iloc[0]
+    prefixo = "manha" if momento in ["Antes Café", "Após Café", "Antes Almoço", "Após Almoço", "Antes Merenda"] else "noite"
+    
+    if valor < 70: return "0 UI", "⚠️ Hipoglicemia! Tratar agora."
+    elif 70 <= valor <= 200: dose = r[f'{prefixo}_f1']
+    elif 201 <= valor <= 400: dose = r[f'{prefixo}_f2']
+    else: dose = r[f'{prefixo}_f3']
+    
+    return f"{int(dose)} UI", f"Tabela {prefixo.capitalize()}"
+
 # ARQUIVOS DE DADOS (CSV)
 ARQ_G = "dados_glicemia_BETA.csv"
 ARQ_N = "dados_nutricao_BETA.csv"
@@ -183,96 +218,6 @@ if not st.session_state.logado:
                 conn.close()
     st.stop()
 
-# --- CARREGAR DADOS DO SQL ---
-conn = get_connection()
-df_glic = pd.read_sql_query("SELECT data as Data, hora as Hora, valor as Valor, momento as Momento FROM glicemia WHERE user_email=?", conn, params=(st.session_state.user_email,))
-df_nutri = pd.read_sql_query("SELECT data as Data, refeicao as Refeicao, descricao as Descricao, carbo as 'Carbo(g)' FROM nutricao WHERE user_email=?", conn, params=(st.session_state.user_email,))
-df_config = pd.read_sql_query("SELECT relacao, sensibilidade, meta FROM config_receita WHERE user_email=?", conn, params=(st.session_state.user_email,))
-conn.close()
-
-# Mantendo as abas como na versão que você gosta
-t1, t2, t3 = st.tabs(["📊 Glicemia", "🍲 Alimentação", "💉 Calculadora e Config"])
-
-# ABA 1: GLICEMIA (Sua versão velha/original, agora salvando no SQL)
-with t1:
-    st.header("Controle de Glicemia")
-    
-    with st.expander("Novo Registro"):
-        c1, c2, c3, c4 = st.columns(4)
-        data_n = c1.date_input("Data", datetime.now(fuso_br))
-        hora_n = c2.time_input("Hora", datetime.now(fuso_br))
-        valor_n = c3.number_input("Valor (mg/dL)", 20, 600, 100)
-        momento_n = c4.selectbox("Momento", ["Jejum", "Pré-Almoço", "Pós-Almoço", "Pré-Jantar", "Pós-Jantar", "Madrugada", "Outro"])
-        
-        if st.button("Salvar Glicemia"):
-            conn = get_connection()
-            c = conn.cursor()
-            c.execute("INSERT INTO glicemia (user_email, data, hora, valor, momento) VALUES (?,?,?,?,?)",
-                     (st.session_state.user_email, data_n.strftime('%d/%m/%Y'), hora_n.strftime('%H:%M'), valor_n, momento_n))
-            conn.commit()
-            conn.close()
-            st.success("Salvo no seu perfil!")
-            st.rerun()
-
-    if not df_glic.empty:
-        # Gráfico e Tabela originais
-        fig = px.line(df_glic, x='Data', y='Valor', color='Momento', title="Evolução Glicêmica", markers=True)
-        st.plotly_chart(fig, use_container_width=True)
-        st.dataframe(df_glic, use_container_width=True)
-
-# ABA 2: ALIMENTAÇÃO
-with t2:
-    st.header("Diário Alimentar")
-    with st.expander("Registrar Refeição"):
-        c1, c2, c3 = st.columns([1,2,1])
-        ref = c1.selectbox("Refeição", ["Café", "Lanche M", "Almoço", "Lanche T", "Jantar", "Ceia"])
-        desc = c2.text_input("O que comeu?")
-        carb = c3.number_input("Carbos (g)", 0, 300, 0)
-        if st.button("Salvar Refeição"):
-            conn = get_connection()
-            c = conn.cursor()
-            c.execute("INSERT INTO nutricao (user_email, data, refeicao, descricao, carbo) VALUES (?,?,?,?,?)",
-                     (st.session_state.user_email, datetime.now(fuso_br).strftime('%d/%m/%Y'), ref, desc, carb))
-            conn.commit()
-            conn.close()
-            st.rerun()
-    st.dataframe(df_nutri, use_container_width=True)
-
-# ABA 3: CONFIG E CÁLCULO
-with t3:
-    st.header("Configurações e Receita")
-    if df_config.empty:
-        st.warning("Defina seus fatores primeiro.")
-        r_ = st.number_input("Relação", 15.0)
-        s_ = st.number_input("Sensibilidade", 50.0)
-        m_ = st.number_input("Meta", 100.0)
-        if st.button("Salvar Fatores"):
-            conn = get_connection()
-            c = conn.cursor()
-            c.execute("INSERT INTO config_receita VALUES (?,?,?,?)", (st.session_state.user_email, r_, s_, m_))
-            conn.commit()
-            conn.close()
-            st.rerun()
-    else:
-        # Aqui você pode manter sua lógica de cálculo de dose de insulina original
-        st.info(f"Fatores: 1:{df_config['relacao'].iloc[0]}g | Sens: {df_config['sensibilidade'].iloc[0]} | Meta: {df_config['meta'].iloc[0]}")
-        if st.button("Resetar Fatores"):
-            conn = get_connection()
-            c = conn.cursor()
-            c.execute("DELETE FROM config_receita WHERE user_email=?", (st.session_state.user_email,))
-            conn.commit()
-            conn.close()
-            st.rerun()
-    
-# ================= ESTILO VISUAL =================
-st.markdown("""
-<style>
-.main {background-color: #f8fafc;}
-.card { background-color: white; padding: 25px; border-radius: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); margin-bottom: 25px; }
-.dose-alerta { background-color: #f0fdf4; padding: 20px; border-radius: 12px; border: 2px solid #16a34a; text-align: center; margin-top: 10px; }
-</style>
-""", unsafe_allow_html=True)
-
 # ================= CORES COM PRIORIDADE =================
 def cor_glicemia(v):
     if v == "-" or pd.isna(v): return ""
@@ -289,31 +234,7 @@ def cor_glicemia(v):
     except:
         return ""
 
-# ================= FUNÇÕES DE APOIO =================
-def carregar(arq):
-    return pd.read_csv(arq) if os.path.exists(arq) else pd.DataFrame()
 
-ALIMENTOS = {
-    "Pão Francês": [28, 4, 1], "Leite (200ml)": [10, 6, 6],
-    "Arroz": [15, 1, 0], "Feijão": [14, 5, 0],
-    "Frango": [0, 23, 5], "Ovo": [1, 6, 5],
-    "Banana": [22, 1, 0], "Maçã": [15, 0, 0]
-}
-
-def calcular_insulina_automatica(valor, momento):
-    df_r = carregar(ARQ_R)
-    if df_r.empty:
-        return "Configurar Receita", "⚠️ Vá na aba 'Receita'"
-    
-    r = df_r.iloc[0]
-    prefixo = "manha" if momento in ["Antes Café", "Após Café", "Antes Almoço", "Após Almoço", "Antes Merenda"] else "noite"
-    
-    if valor < 70: return "0 UI", "⚠️ Hipoglicemia! Tratar agora."
-    elif 70 <= valor <= 200: dose = r[f'{prefixo}_f1']
-    elif 201 <= valor <= 400: dose = r[f'{prefixo}_f2']
-    else: dose = r[f'{prefixo}_f3']
-    
-    return f"{int(dose)} UI", f"Tabela {prefixo.capitalize()}"
 
 # ================= DEFINIÇÃO DAS ABAS (CÂMERA REMOVIDA) =================
 t1, t2, t3 = st.tabs(["📊 Glicemia", "🍽️ Alimentação", "⚙️ Receita"])
