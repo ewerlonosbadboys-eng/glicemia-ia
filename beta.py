@@ -70,47 +70,41 @@ if 'logado' not in st.session_state: st.session_state.logado = False
 with abas_login[0]:
         u = st.text_input("E-mail", key="l_email")
         s = st.text_input("Senha", type="password", key="l_pass")
-        
         if st.button("Acessar Aplicativo"):
-            # 1. Abre a conexão
             conn = sqlite3.connect('usuarios.db')
             try:
-                # 2. Executa a busca
+                # Busca o usuário no banco
                 cursor = conn.execute("SELECT * FROM users WHERE email=? AND senha=?", (u, s))
                 user_valido = cursor.fetchone()
-                
                 if user_valido:
                     st.session_state.logado = True
                     st.session_state.user_email = u
-                    st.success(f"Bem-vindo!")
+                    st.success("Bem-vindo!")
                     st.rerun()
                 else:
                     st.error("E-mail ou Senha incorretos.")
             except Exception as e:
-                st.error(f"Erro no banco de dados: {e}")
+                st.error(f"Erro ao acessar: {e}")
             finally:
-                # 3. Fecha a conexão SEMPRE ao final
                 conn.close()
-                
-            # Esta linha abaixo é a que valida o admin ou qualquer usuário
-            if conn.execute("SELECT * FROM users WHERE email=? AND senha=?", (u, s)).fetchone():
-                st.session_state.logado = True
-                st.session_state.user_email = u
-                st.rerun()
-            else: st.error("Dados incorretos.")
-            conn.close()
 
     with abas_login[1]:
-        n_cad = st.text_input("Nome Completo")
-        e_cad = st.text_input("E-mail para Cadastro")
-        s_cad = st.text_input("Senha para Cadastro", type="password")
-        if st.button("Realizar Cadastro"):
-            try:
+        new_nome = st.text_input("Nome Completo")
+        new_email = st.text_input("E-mail de Cadastro")
+        new_pass = st.text_input("Senha de Cadastro", type="password")
+        if st.button("Criar Conta"):
+            if new_nome and new_email and new_pass:
                 conn = sqlite3.connect('usuarios.db')
-                conn.execute("INSERT INTO users VALUES (?,?,?)", (n_cad, e_cad, s_cad))
-                conn.commit(); conn.close()
-                st.success("Conta criada com sucesso!")
-            except: st.error("Este e-mail já está cadastrado.")
+                try:
+                    conn.execute("INSERT INTO users VALUES (?,?,?)", (new_nome, new_email, new_pass))
+                    conn.commit()
+                    st.success("Conta criada! Pode fazer login.")
+                except:
+                    st.error("Este e-mail já está cadastrado.")
+                finally:
+                    conn.close()
+            else:
+                st.warning("Preencha todos os campos.")
 
     with abas_login[2]:
         email_alvo = st.text_input("Digite seu e-mail cadastrado")
