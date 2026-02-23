@@ -67,30 +67,34 @@ if not st.session_state.logado:
             se = st.text_input("Senha", type="password", key="reg_se")
             
             if st.button("Finalizar Cadastro"):
-                conn = sqlite3.connect('usuarios.db')
-                c = conn.cursor()
                 try:
-                    # Tenta inserir normalmente
-                    c.execute("INSERT INTO users VALUES (?,?,?,?,?)", (n, sn, t, em, se))
+                    conn = sqlite3.connect('usuarios.db')
+                    c = conn.cursor()
+                    
+                    # Tenta salvar especificando os nomes das colunas para evitar o erro OperationalError
+                    c.execute("""
+                        INSERT OR REPLACE INTO users (nome, sobrenome, telefone, email, senha) 
+                        VALUES (?, ?, ?, ?, ?)
+                    """, (n, sn, t, em, se))
+                    
                     conn.commit()
-                except sqlite3.IntegrityError:
-                    # SE O EMAIL JÁ EXISTIR: Ele apaga o antigo e coloca o novo
-                    c.execute("DELETE FROM users WHERE email=?", (em,))
-                    c.execute("INSERT INTO users VALUES (?,?,?,?,?)", (n, sn, t, em, se))
+                    conn.close()
+                    
+                    # Marca que a conta foi criada para a aba sumir
+                    st.session_state.conta_criada = True
+                    st.success("Cadastro realizado com sucesso!")
+                    st.rerun()
+                    
+                except sqlite3.OperationalError:
+                    # Se der erro de coluna faltando, este comando força a criação da coluna Telefone e Sobrenome
+                    conn = sqlite3.connect('usuarios.db')
+                    c = conn.cursor()
+                    st.warning("Ajustando banco de dados... Por favor, clique em Finalizar Cadastro novamente.")
+                    # Reinicia a tabela do zero para aceitar os novos campos
+                    c.execute("DROP TABLE IF EXISTS users")
+                    c.execute("CREATE TABLE users (nome TEXT, sobrenome TEXT, telefone TEXT, email TEXT PRIMARY KEY, senha TEXT)")
                     conn.commit()
-                try:
-                    # Tenta inserir normalmente
-                    c.execute("INSERT INTO users VALUES (?,?,?,?,?)", (n, sn, t, em, se))
-                    conn.commit()
-                except:
-                    # Se der erro, ele apaga o antigo e coloca o novo por cima
-                    c.execute("DELETE FROM users WHERE email=?", (em,))
-                    c.execute("INSERT INTO users VALUES (?,?,?,?,?)", (n, sn, t, em, se))
-                    conn.commit()
-                
-                conn.close()
-                st.session_state.conta_criada = True
-                st.rerun()
+                    conn.close()
 
         # Lógica da Aba Esqueci Senha (é a terceira quando tem criar conta)
         with abas[2]:
