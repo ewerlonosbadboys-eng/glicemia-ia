@@ -7,6 +7,65 @@ import plotly.express as px
 import pytz
 from openpyxl.styles import PatternFill
 
+import sqlite3
+
+# --- BANCO DE DADOS DE USUÁRIOS (ADICIONADO NO TOPO) ---
+def gerenciar_usuarios():
+    conn = sqlite3.connect('usuarios.db')
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS users (email TEXT PRIMARY KEY, senha TEXT)''')
+    conn.commit()
+    conn.close()
+
+gerenciar_usuarios()
+
+if 'logado' not in st.session_state:
+    st.session_state.logado = False
+
+# --- TELA DE ACESSO ---
+if not st.session_state.logado:
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    aba_login, aba_criar, aba_esqueci = st.tabs(["🔐 Entrar", "📝 Criar Conta", "❓ Esqueci Senha"])
+    
+    with aba_login:
+        u = st.text_input("E-mail", key="l_email")
+        s = st.text_input("Senha", type="password", key="l_senha")
+        if st.button("Entrar"):
+            conn = sqlite3.connect('usuarios.db')
+            c = conn.cursor()
+            c.execute("SELECT * FROM users WHERE email=? AND senha=?", (u, s))
+            resultado = c.fetchone()
+            conn.close()
+            if resultado:
+                st.session_state.logado = True
+                st.rerun()
+            else:
+                st.error("E-mail ou senha incorretos.")
+                
+    with aba_criar:
+        n_email = st.text_input("Seu E-mail", key="n_email")
+        n_senha = st.text_input("Crie uma Senha", type="password", key="n_senha")
+        if st.button("Finalizar Cadastro"):
+            try:
+                conn = sqlite3.connect('usuarios.db')
+                c = conn.cursor()
+                c.execute("INSERT INTO users (email, senha) VALUES (?,?)", (n_email, n_senha))
+                conn.commit()
+                conn.close()
+                st.success("Conta criada! Agora vá em 'Entrar'.")
+            except:
+                st.error("Este e-mail já está cadastrado.")
+
+    with aba_esqueci:
+        e_email = st.text_input("E-mail cadastrado", key="e_email")
+        if st.button("Enviar Link de Recuperação"):
+            # Simulando o envio de link
+            st.info(f"Um link de redefinição foi enviado para: {e_email}")
+            st.link_button("Clique aqui para redefinir", "https://seusite.com/reset-password")
+
+    st.markdown('</div>', unsafe_allow_html=True)
+    st.stop()
+
 # --- CONTROLE DE ACESSO COM CADASTRO (SUBSTITUIR NO TOPO) ---
 if 'logado' not in st.session_state:
     st.session_state.logado = False
