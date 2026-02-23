@@ -23,6 +23,9 @@ ARQ_R = "config_receita_BETA.csv"
 import random
 import string
 
+import random
+import string
+
 # 1. FUNÇÃO PARA GERAR SENHA ALEATÓRIA
 def gerar_senha_temporaria(tamanho=6):
     caracteres = string.ascii_letters + string.digits
