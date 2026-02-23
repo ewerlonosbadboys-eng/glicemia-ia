@@ -32,7 +32,7 @@ def init_db():
     conn = sqlite3.connect('usuarios.db')
     conn.execute('''CREATE TABLE IF NOT EXISTS users (nome TEXT, email TEXT PRIMARY KEY, senha TEXT)''')
     try:
-        # Inserção do Admin padrão
+        # Inserção do Admin padrão - Aqui é onde a mágica acontece
         conn.execute("INSERT OR REPLACE INTO users VALUES (?,?,?)", ("Administrador", "admin", "542820"))
         conn.commit()
     except: pass
@@ -47,7 +47,7 @@ def carregar_dados_seguro(arq):
         return df
     return df[df['Usuario'] == st.session_state.get('user_email', '')].copy()
 
-# ================= SISTEMA DE ACESSO =================
+# ================= SISTEMA DE ACESSO (ENTRADA) =================
 if 'logado' not in st.session_state: st.session_state.logado = False
 
 if not st.session_state.logado:
@@ -102,7 +102,7 @@ if not st.session_state.logado:
 # ================= ÁREA DO USUÁRIO =================
 st.title("🧪 Painel Saúde Kids")
 
-# Definição Dinâmica de Abas
+# Abas Dinâmicas
 titulos = ["📊 Glicemia", "🍽️ Nutrição", "⚙️ Receita"]
 if st.session_state.user_email == "admin":
     titulos.append("📩 Mensagens (Admin)")
@@ -127,7 +127,7 @@ with tabs[0]:
 
     df_plot = carregar_dados_seguro(ARQ_G)
     if not df_plot.empty:
-        fig = px.line(df_plot, x='Data', y='Valor', color='Usuario' if st.session_state.user_email == 'admin' else None, markers=True, title="Histórico Glicêmico")
+        fig = px.line(df_plot, x='Data', y='Valor', color='Usuario' if st.session_state.user_email == 'admin' else None, markers=True, title="Histórico")
         st.plotly_chart(fig, use_container_width=True)
 
 # 2. ABA NUTRIÇÃO
@@ -146,7 +146,7 @@ with tabs[1]:
 # 3. ABA RECEITA
 with tabs[2]:
     st.subheader("Configurações da Receita")
-    st.info("Configurações de doses e proporções preservadas.")
+    st.info("Suas configurações de doses e proporções.")
 
 # 4. ABA ADMIN
 if st.session_state.user_email == "admin":
@@ -164,7 +164,7 @@ if st.session_state.user_email == "admin":
 # ================= MENU LATERAL (SIDEBAR) =================
 st.sidebar.title(f"👤 {st.session_state.user_email}")
 
-# Lógica de Exportação Excel
+# Lógica Excel
 df_ex_g = carregar_dados_seguro(ARQ_G)
 df_ex_n = carregar_dados_seguro(ARQ_N)
 out = BytesIO()
@@ -172,18 +172,18 @@ with pd.ExcelWriter(out, engine='openpyxl') as w:
     if not df_ex_g.empty: df_ex_g.to_excel(w, sheet_name='Glicemia', index=False)
     if not df_ex_n.empty: df_ex_n.to_excel(w, sheet_name='Nutricao', index=False)
 
-st.sidebar.download_button("📥 Exportar Relatório Excel", out.getvalue(), file_name="Relatorio_BETA.xlsx")
+st.sidebar.download_button("📥 Exportar Excel", out.getvalue(), file_name="Relatorio_BETA.xlsx")
 
 st.sidebar.markdown("---")
-with st.sidebar.expander("🚀 Enviar Sugestão ao Admin"):
+with st.sidebar.expander("🚀 Enviar Sugestão"):
     f_msg = st.text_area("O que podemos melhorar?")
     if st.button("Enviar"):
         if f_msg:
             novo_f = pd.DataFrame([[st.session_state.user_email, datetime.now(fuso_br).strftime('%d/%m/%Y'), f_msg]], 
-                                  columns=['Usuario', 'Data', 'Sugestão'])
+                               columns=['Usuario', 'Data', 'Sugestão'])
             base_f = pd.read_csv(ARQ_F) if os.path.exists(ARQ_F) else pd.DataFrame()
             pd.concat([base_f, novo_f], ignore_index=True).to_csv(ARQ_F, index=False)
-            st.success("Obrigado pelo feedback!")
+            st.success("Feedback enviado!")
 
 if st.sidebar.button("Sair"):
     st.session_state.logado = False
