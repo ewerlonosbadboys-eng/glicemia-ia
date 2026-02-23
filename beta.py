@@ -283,6 +283,36 @@ if not st.session_state.logado:
     st.markdown('</div>', unsafe_allow_html=True)
     st.stop()
 
+with abas_login[2]:
+        st.subheader("Recuperar Acesso")
+        email_alvo = st.text_input("Digite o e-mail cadastrado", key="rec_em_direto")
+        
+        if st.button("Gerar e Enviar Nova Senha"):
+            if email_alvo:
+                conn = sqlite3.connect('usuarios.db')
+                c = conn.cursor()
+                # Verifica se o usuário existe
+                c.execute("SELECT email FROM users WHERE email=?", (email_alvo,))
+                if c.fetchone():
+                    # 1. GERA A SENHA (AQUI ESTAVA O ERRO DE ESPAÇO)
+                    senha_gerada = gerar_senha_temporaria()
+                    
+                    # 2. ATUALIZA O BANCO DE DADOS
+                    c.execute("UPDATE users SET senha=? WHERE email=?", (senha_gerada, email_alvo))
+                    conn.commit()
+                    conn.close()
+                    
+                    # 3. ENVIA O E-MAIL COM A SENHA
+                    if enviar_senha_nova(email_alvo, senha_gerada):
+                        st.success(f"✅ Senha resetada! Verifique o e-mail {email_alvo}.")
+                    else:
+                        st.error("❌ Erro ao enviar o e-mail.")
+                else:
+                    st.error("❌ E-mail não encontrado no sistema.")
+                    conn.close()
+            else:
+                st.warning("⚠️ Informe o e-mail primeiro.")
+
 # ================= ESTILO VISUAL =================
 st.markdown("""
 <style>
