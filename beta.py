@@ -21,61 +21,41 @@ if 'logado' not in st.session_state:
 if 'user_email' not in st.session_state:
     st.session_state.user_email = ""
 
-# ================= MOTOR SQL (ESTÁVEL E SEM APAGAR DADOS) =================
 def get_connection():
     return sqlite3.connect('saude_kids_final.db')
 
 def init_db():
     conn = get_connection()
     c = conn.cursor()
-    # 1. Cria as tabelas se não existirem
-    c.execute('''CREATE TABLE IF NOT EXISTS users 
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT, email TEXT UNIQUE, senha TEXT)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS glicemia 
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, user_email TEXT, data TEXT, hora TEXT, valor INTEGER, momento TEXT, dose TEXT)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS nutricao 
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, user_email TEXT, data TEXT, info TEXT, c REAL)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS receita 
-                 (user_email TEXT PRIMARY KEY, manha_f1 REAL, manha_f2 REAL, manha_f3 REAL, noite_f1 REAL, noite_f2 REAL, noite_f3 REAL)''')
-
-    # 2. MIGRACAO: Adiciona colunas faltantes sem mexer no que já existe
-    def check_and_add(tabela, coluna, tipo):
-        c.execute(f"PRAGMA table_info({tabela})")
-        existentes = [col[1] for col in c.fetchall()]
-        if coluna not in existentes:
-            c.execute(f"ALTER TABLE {tabela} ADD COLUMN {coluna} {tipo}")
-
-    check_and_add('nutricao', 'user_email', 'TEXT')
-    check_and_add('nutricao', 'c', 'REAL DEFAULT 0')
-    check_and_add('glicemia', 'user_email', 'TEXT')
-    check_and_add('glicemia', 'dose', 'TEXT')
+    c.execute('''CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT, email TEXT UNIQUE, senha TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS glicemia (id INTEGER PRIMARY KEY AUTOINCREMENT, user_email TEXT, data TEXT, hora TEXT, valor INTEGER, momento TEXT, dose TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS nutricao (id INTEGER PRIMARY KEY AUTOINCREMENT, user_email TEXT, data TEXT, info TEXT, c REAL)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS receita (user_email TEXT PRIMARY KEY, manha_f1 REAL, manha_f2 REAL, manha_f3 REAL, noite_f1 REAL, noite_f2 REAL, noite_f3 REAL)''')
     
+    # Reparo automático de colunas para evitar o DatabaseError
+    c.execute("PRAGMA table_info(nutricao)")
+    existentes = [col[1] for col in c.fetchall()]
+    if 'user_email' not in existentes: c.execute("ALTER TABLE nutricao ADD COLUMN user_email TEXT")
+    if 'c' not in existentes: c.execute("ALTER TABLE nutricao ADD COLUMN c REAL DEFAULT 0")
     conn.commit()
     conn.close()
 
 init_db()
 
-# ================= FUNÇÕES DE SEGURANÇA =================
-def gerar_senha_temporaria(tamanho=6):
-    caracteres = string.ascii_letters + string.digits
-    return ''.join(random.choice(caracteres) for i in range(tamanho))
+# ================= ESTILO VISUAL =================
+st.markdown("""
+<style>
+    .main { background-color: #f8fafc; }
+    .stButton>button { width: 100%; border-radius: 10px; height: 3em; background-color: #2563eb; color: white; }
+    .card { background-color: white; padding: 20px; border-radius: 15px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); margin-bottom: 20px; }
+    .metric-box { text-align: center; padding: 15px; border-radius: 10px; background: #eff6ff; border: 1px solid #dbeafe; }
+</style>
+""", unsafe_allow_html=True)
 
-def enviar_senha_nova(email_destino, senha_nova):
-    meu_email = "ewerlon.osbadboys@gmail.com" 
-    minha_senha = "okiu qihp lglk trcc" 
-    msg = MIMEText(f"<h3>Saúde Kids</h3><p>Sua nova senha é: <b>{senha_nova}</b></p>", 'html')
-    msg['Subject'] = 'Acesso Saúde Kids'
-    msg['From'] = meu_email
-    msg['To'] = email_destino
-    try:
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
-            smtp.login(meu_email, minha_senha)
-            smtp.send_message(msg)
-        return True
-    except: return False
+# ================= FUNÇÕES DE APOIO =================
+ALIMENTOS = {"Pão Francês": [28, 4, 1], "Leite (200ml)": [10, 6, 6], "Arroz": [15, 1, 0], "Feijão": [14, 5, 0], "Frango": [0, 23, 5], "Ovo": [1, 6, 5], "Banana": [22, 1, 0], "Maçã": [15, 0, 0]}
 
-# ================= LÓGICA DE INSULINA =================
-def calcular_insulina_f(valor, momento):
+def calcular_insulina_automatica(valor, momento):
     conn = get_connection()
     df_r = pd.read_sql_query("SELECT * FROM receita WHERE user_email=?", conn, params=(st.session_state.user_email,))
     conn.close()
@@ -88,103 +68,112 @@ def calcular_insulina_f(valor, momento):
     else: dose = r[f'{prefixo}_f3']
     return f"{int(dose)} UI", f"Tabela {prefixo.capitalize()}"
 
-# ================= SISTEMA DE LOGIN (AS 4 ABAS) =================
+# ================= FUNÇÕES DE SEGURANÇA =================
+def gerar_senha_temporaria(tamanho=6):
+    return ''.join(random.choice(string.ascii_letters + string.digits) for i in range(tamanho))
+
+def enviar_email_recuperacao(email_destino, senha_nova):
+    meu_email = "ewerlon.osbadboys@gmail.com" 
+    minha_senha = "okiu qihp lglk trcc" 
+    msg = MIMEText(f"Sua nova senha Saúde Kids: {senha_nova}")
+    msg['Subject'] = 'Recuperação de Senha'
+    msg['From'] = meu_email
+    msg['To'] = email_destino
+    try:
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
+            smtp.login(meu_email, minha_senha)
+            smtp.send_message(msg)
+        return True
+    except: return False
+
+# ================= SISTEMA DE LOGIN =================
 if not st.session_state.logado:
     st.title("🧪 Saúde Kids - Login")
-    aba1, aba2, aba3, aba4 = st.tabs(["🔐 Entrar", "📝 Criar Conta", "❓ Esqueci Senha", "🔄 Alterar Senha"])
-    
+    aba1, aba2, aba3, aba4 = st.tabs(["🔐 Entrar", "📝 Criar Conta", "❓ Esqueci", "🔄 Alterar"])
     with aba1:
-        u_log = st.text_input("E-mail", key="l_em")
-        s_log = st.text_input("Senha", type="password", key="l_ps")
-        if st.button("Entrar"):
+        u = st.text_input("E-mail", key="l_e")
+        s = st.text_input("Senha", type="password", key="l_s")
+        if st.button("Acessar"):
             conn = get_connection()
-            res = conn.execute("SELECT email FROM users WHERE email=? AND senha=?", (u_log, s_log)).fetchone()
+            res = conn.execute("SELECT email FROM users WHERE email=? AND senha=?", (u, s)).fetchone()
             conn.close()
             if res:
                 st.session_state.logado = True
                 st.session_state.user_email = res[0]
                 st.rerun()
-            else: st.error("E-mail ou senha incorretos.")
-
+            else: st.error("Erro no login")
     with aba2:
-        n_cad = st.text_input("Nome", key="c_n")
-        e_cad = st.text_input("E-mail", key="c_e")
-        s_cad = st.text_input("Senha", type="password", key="c_s")
+        n_c = st.text_input("Nome", key="c_n")
+        e_c = st.text_input("E-mail Novo", key="c_e")
+        s_c = st.text_input("Senha Nova", type="password", key="c_s")
         if st.button("Cadastrar"):
             try:
                 conn = get_connection()
-                conn.execute("INSERT INTO users (nome, email, senha) VALUES (?,?,?)", (n_cad, e_cad, s_cad))
+                conn.execute("INSERT INTO users (nome, email, senha) VALUES (?,?,?)", (n_c, e_c, s_c))
                 conn.commit()
                 conn.close()
-                st.success("Cadastrado! Use a primeira aba para entrar.")
-            except: st.error("Erro: E-mail já cadastrado.")
-
+                st.success("Conta criada!")
+            except: st.error("E-mail em uso.")
     with aba3:
-        e_res = st.text_input("E-mail para recuperar", key="res_e")
-        if st.button("Enviar E-mail de Recuperação"):
+        e_r = st.text_input("E-mail para recuperar", key="r_e")
+        if st.button("Recuperar"):
             nova = gerar_senha_temporaria()
-            if enviar_senha_nova(e_res, nova):
+            if enviar_email_recuperacao(e_r, nova):
                 conn = get_connection()
-                conn.execute("UPDATE users SET senha=? WHERE email=?", (nova, e_res))
+                conn.execute("UPDATE users SET senha=? WHERE email=?", (nova, e_r))
                 conn.commit()
                 conn.close()
-                st.success("Senha enviada com sucesso!")
-            else: st.error("Erro ao enviar e-mail.")
-
+                st.success("Senha enviada!")
     with aba4:
-        u_alt = st.text_input("Confirme seu E-mail", key="alt_e")
-        s_ant = st.text_input("Senha Atual", type="password", key="alt_s_ant")
-        s_nov = st.text_input("Nova Senha", type="password", key="alt_s_nov")
-        if st.button("Mudar Minha Senha"):
+        u_a = st.text_input("E-mail atual", key="a_e")
+        s_a = st.text_input("Senha antiga", type="password", key="a_s")
+        s_n = st.text_input("Senha nova", type="password", key="a_n")
+        if st.button("Trocar"):
             conn = get_connection()
-            check = conn.execute("SELECT * FROM users WHERE email=? AND senha=?", (u_alt, s_ant)).fetchone()
-            if check:
-                conn.execute("UPDATE users SET senha=? WHERE email=?", (s_nov, u_alt))
+            if conn.execute("SELECT * FROM users WHERE email=? AND senha=?", (u_a, s_a)).fetchone():
+                conn.execute("UPDATE users SET senha=? WHERE email=?", (s_n, u_a))
                 conn.commit()
                 st.success("Senha alterada!")
-            else: st.error("Dados atuais não conferem.")
             conn.close()
     st.stop()
 
-# ================= APP PRINCIPAL =================
-st.sidebar.write(f"Conectado: {st.session_state.user_email}")
+# ================= CORES COM PRIORIDADE =================
+def cor_glicemia(valor):
+    if valor < 70: return 'background-color: #fee2e2' # Vermelho (Hipo)
+    if 70 <= valor <= 180: return 'background-color: #f0fdf4' # Verde (Alvo)
+    return 'background-color: #fefce8' # Amarelo (Hiper)
+
+# ================= DEFINIÇÃO DAS ABAS =================
+st.sidebar.info(f"Usuário: {st.session_state.user_email}")
 if st.sidebar.button("Sair"):
     st.session_state.logado = False
     st.rerun()
 
-ALIMENTOS = {"Pão Francês": [28, 4, 1], "Leite (200ml)": [10, 6, 6], "Arroz": [15, 1, 0], "Feijão": [14, 5, 0], "Frango": [0, 23, 5], "Ovo": [1, 6, 5], "Banana": [22, 1, 0], "Maçã": [15, 0, 0]}
+t1, t2, t3 = st.tabs(["📊 Glicemia", "🍽️ Alimentação", "⚙️ Receita"])
 
-tab1, tab2, tab3 = st.tabs(["📊 Glicemia", "🍽️ Alimentação", "⚙️ Receita"])
-
-with tab1:
+with t1:
     conn = get_connection()
     dfg = pd.read_sql_query("SELECT data as Data, hora as Hora, valor as Valor, momento as Momento, dose as Dose FROM glicemia WHERE user_email=?", conn, params=(st.session_state.user_email,))
     conn.close()
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        v_val = st.number_input("Valor:", 0, 600, 100)
-        m_mom = st.selectbox("Momento:", ["Antes Café", "Após Café", "Antes Almoço", "Após Almoço", "Antes Merenda", "Antes Janta", "Após Janta", "Madrugada"])
-        ds, msg = calcular_insulina_f(v_val, m_mom)
-        st.info(f"Recomendado: {ds} ({msg})")
-        if st.button("💾 Salvar Glicemia"):
-            conn = get_connection()
-            conn.execute("INSERT INTO glicemia (user_email, data, hora, valor, momento, dose) VALUES (?,?,?,?,?,?)", (st.session_state.user_email, datetime.now(fuso_br).strftime("%d/%m/%Y"), datetime.now(fuso_br).strftime("%H:%M"), v_val, m_mom, ds))
-            conn.commit()
-            conn.close()
-            st.rerun()
-    with col2:
-        if not dfg.empty:
-            st.plotly_chart(px.line(dfg.tail(10), x='Hora', y='Valor', markers=True), use_container_width=True)
-    st.dataframe(dfg.tail(10), use_container_width=True)
+    v = st.number_input("Valor:", 0, 600, 100)
+    m = st.selectbox("Momento:", ["Antes Café", "Após Café", "Antes Almoço", "Após Almoço", "Antes Merenda", "Antes Janta", "Após Janta", "Madrugada"])
+    ds, rt = calcular_insulina_automatica(v, m)
+    st.metric("Sugestão de Dose", ds, rt)
+    if st.button("💾 Salvar Registro"):
+        conn = get_connection()
+        conn.execute("INSERT INTO glicemia (user_email, data, hora, valor, momento, dose) VALUES (?,?,?,?,?,?)", (st.session_state.user_email, datetime.now(fuso_br).strftime("%d/%m/%Y"), datetime.now(fuso_br).strftime("%H:%M"), v, m, ds))
+        conn.commit()
+        conn.close()
+        st.rerun()
+    if not dfg.empty:
+        st.dataframe(dfg.style.applymap(lambda x: cor_glicemia(x) if isinstance(x, int) else '', subset=['Valor']), use_container_width=True)
 
-with tab2:
-    st.subheader("🍽️ Registro de Refeição")
-    escolha = st.multiselect("Itens consumidos:", list(ALIMENTOS.keys()))
-    c_soma = sum([ALIMENTOS[i][0] for i in escolha])
+with t2:
+    sel = st.multiselect("Alimentos:", list(ALIMENTOS.keys()))
+    carb = sum([ALIMENTOS[i][0] for i in sel])
     if st.button("💾 Salvar Refeição"):
         conn = get_connection()
-        conn.execute("INSERT INTO nutricao (user_email, data, info, c) VALUES (?,?,?,?)", (st.session_state.user_email, datetime.now(fuso_br).strftime("%d/%m/%Y"), ", ".join(escolha), c_soma))
+        conn.execute("INSERT INTO nutricao (user_email, data, info, c) VALUES (?,?,?,?)", (st.session_state.user_email, datetime.now(fuso_br).strftime("%d/%m/%Y"), ", ".join(sel), carb))
         conn.commit()
         conn.close()
         st.rerun()
@@ -193,28 +182,34 @@ with tab2:
     conn.close()
     st.dataframe(dfn, use_container_width=True)
 
-with tab3:
-    st.subheader("⚙️ Configurar Doses")
+with t3:
     conn = get_connection()
-    rec = conn.execute("SELECT * FROM receita WHERE user_email=?", (st.session_state.user_email,)).fetchone()
+    r = conn.execute("SELECT * FROM receita WHERE user_email=?", (st.session_state.user_email,)).fetchone()
     conn.close()
-    if not rec: rec = [st.session_state.user_email, 1, 2, 3, 1, 2, 3]
-    
-    ca, cb = st.columns(2)
-    with ca:
+    if not r: r = [st.session_state.user_email, 1, 2, 3, 1, 2, 3]
+    col1, col2 = st.columns(2)
+    with col1:
         st.write("MANHÃ")
-        m1 = st.number_input("Dose Glic. < 200", value=float(rec[1]), key="m1")
-        m2 = st.number_input("Dose Glic. 201-400", value=float(rec[2]), key="m2")
-        m3 = st.number_input("Dose Glic. > 400", value=float(rec[3]), key="m3")
-    with cb:
+        m1 = st.number_input("Até 200", value=float(r[1]), key="m1")
+        m2 = st.number_input("201-400", value=float(r[2]), key="m2")
+        m3 = st.number_input("Acima 400", value=float(r[3]), key="m3")
+    with col2:
         st.write("NOITE")
-        n1 = st.number_input("Dose Glic. < 200 ", value=float(rec[4]), key="n1")
-        n2 = st.number_input("Dose Glic. 201-400 ", value=float(rec[5]), key="n2")
-        n3 = st.number_input("Dose Glic. > 400 ", value=float(rec[6]), key="n3")
-    
-    if st.button("💾 Salvar Receita"):
+        n1 = st.number_input("Até 200 ", value=float(r[4]), key="n1")
+        n2 = st.number_input("201-400 ", value=float(r[5]), key="n2")
+        n3 = st.number_input("Acima 400 ", value=float(r[6]), key="n3")
+    if st.button("💾 Salvar Tabela"):
         conn = get_connection()
         conn.execute("INSERT OR REPLACE INTO receita VALUES (?,?,?,?,?,?,?)", (st.session_state.user_email, m1, m2, m3, n1, n2, n3))
         conn.commit()
         conn.close()
-        st.success("Receita salva!")
+
+# ================= EXCEL COLORIDO =================
+def exportar_excel(df):
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='Glicemia')
+    return output.getvalue()
+
+if st.button("📥 Baixar Relatório"):
+    st.download_button("Clique para baixar", exportar_excel(dfg), "Relatorio.xlsx")
