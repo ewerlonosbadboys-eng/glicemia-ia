@@ -142,7 +142,18 @@ def cor_glicemia_status(v):
     except: return ''
 
 MOMENTOS_ORDEM = ["Antes Café", "Após Café", "Antes Almoço", "Após Almoço", "Antes Merenda", "Antes Janta", "Após Janta", "Madrugada"]
-ALIMENTOS = {"Pão Francês": [28, 4, 1], "Leite (200ml)": [10, 6, 6], "Arroz": [15, 1, 0], "Feijão": [14, 5, 0], "Frango": [0, 23, 5], "Ovo": [1, 6, 5], "Banana": [22, 1, 0], "Maçã": [15, 0, 0]}
+
+# TABELA COM C, P, G
+ALIMENTOS = {
+    "Pão Francês": [28, 4, 1], 
+    "Leite (200ml)": [10, 6, 6], 
+    "Arroz": [15, 1, 0], 
+    "Feijão": [14, 5, 0], 
+    "Frango": [0, 23, 5], 
+    "Ovo": [1, 6, 5], 
+    "Banana": [22, 1, 0], 
+    "Maçã": [15, 0, 0]
+}
 
 def calc_insulina(v, m):
     df_r = carregar_dados_seguro(ARQ_R)
@@ -190,17 +201,25 @@ with tab2:
     st.markdown('<div class="card">', unsafe_allow_html=True)
     dfn = carregar_dados_seguro(ARQ_N)
     
-    # NOVAS ABAS DE MOMENTOS NA NUTRIÇÃO
     st.write("### Registrar Refeição por Momento")
     m_nutri = st.selectbox("Selecione o Momento da Refeição", MOMENTOS_ORDEM, key="m_nutri_sel")
     sel = st.multiselect("Alimentos", list(ALIMENTOS.keys()))
     
+    # CÁLCULOS TOTAIS C, P, G
+    c_tot = sum([ALIMENTOS[x][0] for x in sel])
+    p_tot = sum([ALIMENTOS[x][1] for x in sel])
+    g_tot = sum([ALIMENTOS[x][2] for x in sel])
+    
+    # EXIBIÇÃO DOS TOTAIS NA TELA
+    col_c, col_p, col_g = st.columns(3)
+    col_c.metric("C (Carbo)", f"{c_tot}g")
+    col_p.metric("P (Proteína)", f"{p_tot}g")
+    col_g.metric("G (Gordura)", f"{g_tot}g")
+    
     if st.button("💾 Salvar Alimentação"):
-        carb = sum([ALIMENTOS[x][0] for x in sel])
         agora = datetime.now(fuso_br)
-        # Agora salvamos também o MOMENTO na nutrição
-        novo_n = pd.DataFrame([[st.session_state.user_email, agora.strftime("%d/%m/%Y"), m_nutri, ", ".join(sel), carb]], 
-                             columns=["Usuario","Data","Momento","Info","C"])
+        novo_n = pd.DataFrame([[st.session_state.user_email, agora.strftime("%d/%m/%Y"), m_nutri, ", ".join(sel), c_tot, p_tot, g_tot]], 
+                             columns=["Usuario","Data","Momento","Info","C","P","G"])
         base = pd.read_csv(ARQ_N) if os.path.exists(ARQ_N) else pd.DataFrame()
         pd.concat([base, novo_n], ignore_index=True).to_csv(ARQ_N, index=False)
         st.rerun()
@@ -233,19 +252,22 @@ with tab3:
         st.success("Receita Salva!")
     st.markdown('</div>', unsafe_allow_html=True)
 
-# ================= GERAR EXCEL COLORIDO (PIVOT) =================
+# ================= GERAR EXCEL COM DUAS ABAS (CORRIGIDO) =================
 st.sidebar.markdown("---")
 if st.sidebar.button("📥 Gerar Excel Colorido"):
-    df_e = carregar_dados_seguro(ARQ_G)
-    if not df_e.empty:
-        df_e['Exibe'] = df_e['Valor'].astype(str)
-        pivot = df_e.pivot_table(index='Data', columns='Momento', values='Exibe', aggfunc='last')
-        colunas_existentes = [c for c in MOMENTOS_ORDEM if c in pivot.columns]
-        pivot = pivot[colunas_existentes]
-        
-        output = BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+    df_e_g = carregar_dados_seguro(ARQ_G)
+    df_e_n = carregar_dados_seguro(ARQ_N)
+    
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        # ABA 1: GLICEMIA (PIVOT E CORES)
+        if not df_e_g.empty:
+            df_e_g['Exibe'] = df_e_g['Valor'].astype(str)
+            pivot = df_e_g.pivot_table(index='Data', columns='Momento', values='Exibe', aggfunc='last')
+            colunas_existentes = [c for c in MOMENTOS_ORDEM if c in pivot.columns]
+            pivot = pivot[colunas_existentes]
             pivot.to_excel(writer, sheet_name='Glicemia')
+            
             ws = writer.sheets['Glicemia']
             f_v = PatternFill(start_color="C8E6C9", end_color="C8E6C9", fill_type="solid")
             f_r = PatternFill(start_color="FFB6C1", end_color="FFB6C1", fill_type="solid")
@@ -261,6 +283,12 @@ if st.sidebar.button("📥 Gerar Excel Colorido"):
                             elif val > 180: cell.fill = f_r
                             else: cell.fill = f_v
                         except: pass
+        
+        # ABA 2: ALIMENTOS (NUTRIÇÃO COMPLETA)
+        if not df_e_n.empty:
+            df_e_n.to_excel(writer, sheet_name='Alimentos', index=False)
+            
+    if not df_e_g.empty or not df_e_n.empty:
         st.sidebar.download_button("Baixar Agora", output.getvalue(), file_name=f"Relatorio_{st.session_state.user_email}.xlsx")
     else: st.sidebar.warning("Sem dados.")
 
