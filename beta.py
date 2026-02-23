@@ -248,10 +248,8 @@ if not st.session_state.logado:
                     c.execute("UPDATE users SET senha=? WHERE email=?", (nova_pwd, email_alvo))
                     conn.commit()
                     with abas_login[2]:
-        # ESTA LINHA ABAIXO PRECISA DE 8 ESPAÇOS (OU 2 TABS) ANTES DO TEXTO
-
-        
-                st.subheader("Recuperar Acesso")
+                # ESTE BLOCO PRECISA DE UM RECUO (TAB OU 4 ESPAÇOS) PARA A DIREITA
+        st.subheader("Recuperar Acesso")
         email_alvo = st.text_input("Digite seu e-mail cadastrado", key="rec_em_direto")
         
         if st.button("Gerar e Enviar Nova Senha"):
@@ -275,6 +273,11 @@ if not st.session_state.logado:
                         st.info("Copie a senha do seu e-mail e use na aba 'Entrar'.")
                     else:
                         st.error("❌ Erro ao enviar e-mail.")
+                else:
+                    st.error("❌ E-mail não encontrado no sistema.")
+                    conn.close()
+            else:
+                st.warning("⚠️ Por favor, digite um e-mail.")
                 else:
                     st.error("❌ E-mail não encontrado no sistema.")
                     conn.close()
