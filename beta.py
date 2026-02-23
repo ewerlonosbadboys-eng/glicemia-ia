@@ -173,4 +173,6 @@ else:
             m3 = st.number_input("Insulina (> 400):", value=int(v_r[3]), key="m3")
         with c_noite:
             st.info("🌙 Tabela da Noite")
-            n1 = st.number_input("Insulina (70-20
+            n1 = st.number_input("Insulina (70-200):", value=int(v_r[4]), key="n1")
+            n2 = st.number_input("Insulina (201-400):", value=int(v_r[5]), key="n2")
+            n3 = st.number_input("Insulina (> 400):", value=int(v_r[6]), key="n3")
