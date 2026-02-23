@@ -10,9 +10,60 @@ import sqlite3
 import smtplib
 from email.mime.text import MIMEText
 import urllib.parse
+import streamlit as st
+import sqlite3
+import urllib.parse
+# ... seus outros imports (pandas, datetime, etc)
 
 # 1. CONFIGURAÇÃO INICIAL
 st.set_page_config(page_title="Saúde Kids BETA", page_icon="🧪", layout="wide")
+
+# =========================================================
+# 2. O "X" DA QUESTÃO: CAPTURA DO LINK DE REDIRECIONAMENTO
+# =========================================================
+
+# Pegamos os parâmetros da URL
+parametros = st.query_params
+
+# Se o link tiver 'reset', o app trava aqui e não sai por nada!
+if "reset" in parametros:
+    # Captura o e-mail que veio no link
+    email_do_link = parametros.get("email")
+    
+    st.markdown("---")
+    st.title("🔐 Criar Nova Senha")
+    st.info(f"Redefinindo acesso para: **{email_alvo}**")
+    
+    nova_pwd = st.text_input("Nova Senha", type="password", key="reset_final_1")
+    conf_pwd = st.text_input("Confirme a Nova Senha", type="password", key="reset_final_2")
+    
+    if st.button("Salvar Nova Senha"):
+        if nova_pwd == conf_pwd and len(nova_pwd) >= 4:
+            conn = sqlite3.connect('usuarios.db')
+            c = conn.cursor()
+            c.execute("UPDATE users SET senha=? WHERE email=?", (nova_pwd, email_do_link))
+            conn.commit()
+            conn.close()
+            st.success("✅ Senha alterada! Agora limpe o link para logar.")
+            
+            # Botão para limpar o link da barra do navegador
+            if st.button("Ir para tela de Login"):
+                st.query_params.clear()
+                st.rerun()
+        else:
+            st.error("Senhas não conferem ou são curtas.")
+            
+    if st.button("Cancelar e Voltar"):
+        st.query_params.clear()
+        st.rerun()
+
+    # O st.stop() é o que garante que ele NÃO mostre a tela de login embaixo
+    st.stop() 
+
+# =========================================================
+# 3. CONTINUAÇÃO DO APP (LOGIN, GRÁFICOS, ETC)
+# =========================================================
+# (Aqui você coloca o resto do seu código que já estava funcionando)
 
 # =========================================================
 # 2. LOGICA DE EMERGÊNCIA - REDIRECIONAMENTO DE SENHA
