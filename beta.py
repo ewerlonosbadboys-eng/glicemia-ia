@@ -23,7 +23,7 @@ if 'logado' not in st.session_state:
 if 'user_email' not in st.session_state:
     st.session_state.user_email = ""
 
-# ================= MOTOR DE BANCO DE DADOS SQL =================
+# ================= MOTOR SQL (SALVA TUDO POR USUÁRIO) =================
 
 def get_connection():
     return sqlite3.connect('saude_kids_master.db')
@@ -33,25 +33,16 @@ def init_db():
     c = conn.cursor()
     # Tabela de Usuários
     c.execute('''CREATE TABLE IF NOT EXISTS users 
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, 
-                  nome TEXT, email TEXT UNIQUE, senha TEXT)''')
-    
-    # Tabela de Glicemia (Vinculada ao Usuário)
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT, email TEXT UNIQUE, senha TEXT)''')
+    # Tabela de Glicemia (Sua versão original)
     c.execute('''CREATE TABLE IF NOT EXISTS glicemia 
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  user_email TEXT, data TEXT, hora TEXT, valor INTEGER, momento TEXT,
-                  FOREIGN KEY(user_email) REFERENCES users(email))''')
-    
-    # Tabela de Nutrição (Vinculada ao Usuário)
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, user_email TEXT, data TEXT, hora TEXT, valor INTEGER, momento TEXT)''')
+    # Tabela de Nutrição
     c.execute('''CREATE TABLE IF NOT EXISTS nutricao 
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  user_email TEXT, data TEXT, refeicao TEXT, descricao TEXT, carbo REAL,
-                  FOREIGN KEY(user_email) REFERENCES users(email))''')
-    
-    # Tabela de Configurações de Insulina
-    c.execute('''CREATE TABLE IF NOT EXISTS config_insulina 
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, user_email TEXT, data TEXT, refeicao TEXT, descricao TEXT, carbo REAL)''')
+    # Tabela de Configurações
+    c.execute('''CREATE TABLE IF NOT EXISTS config_receita 
                  (user_email TEXT PRIMARY KEY, relacao REAL, sensibilidade REAL, meta REAL)''')
-    
     conn.commit()
     conn.close()
 
@@ -192,65 +183,86 @@ if not st.session_state.logado:
                 conn.close()
     st.stop()
 
-# ================= ÁREA LOGADA (SQL DINÂMICO) =================
+# --- CARREGAR DADOS DO SQL ---
+conn = get_connection()
+df_glic = pd.read_sql_query("SELECT data as Data, hora as Hora, valor as Valor, momento as Momento FROM glicemia WHERE user_email=?", conn, params=(st.session_state.user_email,))
+df_nutri = pd.read_sql_query("SELECT data as Data, refeicao as Refeicao, descricao as Descricao, carbo as 'Carbo(g)' FROM nutricao WHERE user_email=?", conn, params=(st.session_state.user_email,))
+df_config = pd.read_sql_query("SELECT relacao, sensibilidade, meta FROM config_receita WHERE user_email=?", conn, params=(st.session_state.user_email,))
+conn.close()
 
-st.sidebar.title("Saúde Kids PRO")
-st.sidebar.write(f"Conectado como: \n**{st.session_state.user_email}**")
-if st.sidebar.button("Sair"):
-    st.session_state.logado = False
-    st.rerun()
+# Mantendo as abas como na versão que você gosta
+t1, t2, t3 = st.tabs(["📊 Glicemia", "🍲 Alimentação", "💉 Calculadora e Config"])
 
-t1, t2, t3, t4 = st.tabs(["📊 Glicemia", "🍲 Alimentação", "💉 Configurações", "📈 Exportar"])
-
-# --- ABA 1: GLICEMIA (SQL) ---
+# ABA 1: GLICEMIA (Sua versão velha/original, agora salvando no SQL)
 with t1:
-    st.header("Seu Histórico Glicêmico")
-    conn = get_connection()
+    st.header("Controle de Glicemia")
     
-    with st.expander("➕ Novo Registro"):
-        col1, col2, col3 = st.columns(3)
-        v_gli = col1.number_input("Valor", 20, 600, 100)
-        m_gli = col2.selectbox("Momento", ["Jejum", "Pré-Almoço", "Pós-Almoço", "Pré-Jantar", "Pós-Jantar", "Madrugada"])
-        if st.button("Salvar Registro"):
+    with st.expander("Novo Registro"):
+        c1, c2, c3, c4 = st.columns(4)
+        data_n = c1.date_input("Data", datetime.now(fuso_br))
+        hora_n = c2.time_input("Hora", datetime.now(fuso_br))
+        valor_n = c3.number_input("Valor (mg/dL)", 20, 600, 100)
+        momento_n = c4.selectbox("Momento", ["Jejum", "Pré-Almoço", "Pós-Almoço", "Pré-Jantar", "Pós-Jantar", "Madrugada", "Outro"])
+        
+        if st.button("Salvar Glicemia"):
+            conn = get_connection()
             c = conn.cursor()
             c.execute("INSERT INTO glicemia (user_email, data, hora, valor, momento) VALUES (?,?,?,?,?)",
-                     (st.session_state.user_email, datetime.now(fuso_br).strftime('%d/%m/%Y'), 
-                      datetime.now(fuso_br).strftime('%H:%M'), v_gli, m_gli))
+                     (st.session_state.user_email, data_n.strftime('%d/%m/%Y'), hora_n.strftime('%H:%M'), valor_n, momento_n))
             conn.commit()
-            st.success("Salvo no banco de dados!")
+            conn.close()
+            st.success("Salvo no seu perfil!")
             st.rerun()
-    
-    df_g = pd.read_sql_query("SELECT data, hora, valor, momento FROM glicemia WHERE user_email=?", conn, 
-                             params=(st.session_state.user_email,))
-    if not df_g.empty:
-        st.plotly_chart(px.line(df_g, x='data', y='valor', title="Sua Curva"), use_container_width=True)
-        st.dataframe(df_g, use_container_width=True)
-    conn.close()
 
-# --- ABA 3: CONFIGURAÇÕES (SQL) ---
-with t3:
-    st.header("Seus Fatores")
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("SELECT relacao, sensibilidade, meta FROM config_insulina WHERE user_email=?", (st.session_state.user_email,))
-    config = c.fetchone()
-    
-    if not config:
-        st.warning("Configure seus dados pela primeira vez:")
-        r = st.number_input("Relação Carbo", value=15.0)
-        s = st.number_input("Sensibilidade", value=50.0)
-        m = st.number_input("Meta", value=100.0)
-        if st.button("Salvar"):
-            c.execute("INSERT INTO config_insulina VALUES (?,?,?,?)", (st.session_state.user_email, r, s, m))
+    if not df_glic.empty:
+        # Gráfico e Tabela originais
+        fig = px.line(df_glic, x='Data', y='Valor', color='Momento', title="Evolução Glicêmica", markers=True)
+        st.plotly_chart(fig, use_container_width=True)
+        st.dataframe(df_glic, use_container_width=True)
+
+# ABA 2: ALIMENTAÇÃO
+with t2:
+    st.header("Diário Alimentar")
+    with st.expander("Registrar Refeição"):
+        c1, c2, c3 = st.columns([1,2,1])
+        ref = c1.selectbox("Refeição", ["Café", "Lanche M", "Almoço", "Lanche T", "Jantar", "Ceia"])
+        desc = c2.text_input("O que comeu?")
+        carb = c3.number_input("Carbos (g)", 0, 300, 0)
+        if st.button("Salvar Refeição"):
+            conn = get_connection()
+            c = conn.cursor()
+            c.execute("INSERT INTO nutricao (user_email, data, refeicao, descricao, carbo) VALUES (?,?,?,?,?)",
+                     (st.session_state.user_email, datetime.now(fuso_br).strftime('%d/%m/%Y'), ref, desc, carb))
             conn.commit()
+            conn.close()
+            st.rerun()
+    st.dataframe(df_nutri, use_container_width=True)
+
+# ABA 3: CONFIG E CÁLCULO
+with t3:
+    st.header("Configurações e Receita")
+    if df_config.empty:
+        st.warning("Defina seus fatores primeiro.")
+        r_ = st.number_input("Relação", 15.0)
+        s_ = st.number_input("Sensibilidade", 50.0)
+        m_ = st.number_input("Meta", 100.0)
+        if st.button("Salvar Fatores"):
+            conn = get_connection()
+            c = conn.cursor()
+            c.execute("INSERT INTO config_receita VALUES (?,?,?,?)", (st.session_state.user_email, r_, s_, m_))
+            conn.commit()
+            conn.close()
             st.rerun()
     else:
-        st.info(f"Relação: 1:{config[0]} | Sensibilidade: {config[1]} | Meta: {config[2]}")
+        # Aqui você pode manter sua lógica de cálculo de dose de insulina original
+        st.info(f"Fatores: 1:{df_config['relacao'].iloc[0]}g | Sens: {df_config['sensibilidade'].iloc[0]} | Meta: {df_config['meta'].iloc[0]}")
         if st.button("Resetar Fatores"):
-            c.execute("DELETE FROM config_insulina WHERE user_email=?", (st.session_state.user_email,))
+            conn = get_connection()
+            c = conn.cursor()
+            c.execute("DELETE FROM config_receita WHERE user_email=?", (st.session_state.user_email,))
             conn.commit()
+            conn.close()
             st.rerun()
-    conn.close()
     
 # ================= ESTILO VISUAL =================
 st.markdown("""
