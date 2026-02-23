@@ -200,3 +200,182 @@ if st.button("📥 BAIXAR RELATÓRIO EXCEL"):
     if not dfg.empty:
         excel_data = gerar_excel_colorido(dfg, dfn)
         st.download_button("Clique para Baixar", excel_data, file_name="Relatorio_Medico.xlsx")
+
+import streamlit as st
+import pandas as pd
+from datetime import datetime
+import sqlite3
+from io import BytesIO
+import plotly.express as px
+import pytz
+from openpyxl.styles import PatternFill
+
+# ================= CONFIGURAÇÕES INICIAIS =================
+fuso_br = pytz.timezone('America/Sao_Paulo')
+st.set_page_config(page_title="Saúde Kids - v0.1 Original", page_icon="🩺", layout="wide")
+
+# ================= BANCO DE DADOS (SQLITE) =================
+def conectar_db():
+    return sqlite3.connect('saude_kids.db', check_same_thread=False)
+
+def criar_tabelas():
+    conn = conectar_db()
+    c = conn.cursor()
+    # Tabela de Usuários
+    c.execute('''CREATE TABLE IF NOT EXISTS usuarios 
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT, sobrenome TEXT, 
+                  telefone TEXT, email TEXT UNIQUE, senha TEXT)''')
+    # Tabela de Glicemia
+    c.execute('''CREATE TABLE IF NOT EXISTS glicemia 
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, email_user TEXT, data TEXT, 
+                  hora TEXT, valor INTEGER, momento TEXT, dose TEXT)''')
+    # Tabela de Receita (Doses)
+    c.execute('''CREATE TABLE IF NOT EXISTS receita 
+                 (email_user TEXT PRIMARY KEY, manha_f1 INTEGER, manha_f2 INTEGER, manha_f3 INTEGER,
+                  noite_f1 INTEGER, noite_f2 INTEGER, noite_f3 INTEGER)''')
+    conn.commit()
+    conn.close()
+
+criar_tabelas()
+
+# ================= LÓGICA DE ACESSO =================
+if 'logado' not in st.session_state:
+    st.session_state.logado = False
+    st.session_state.email = ""
+    st.session_state.nome = ""
+
+if not st.session_state.logado:
+    st.sidebar.title("🔐 Área de Acesso")
+    opcao = st.sidebar.selectbox("Entrar ou Cadastrar", ["Login", "Criar Conta"])
+
+    if opcao == "Criar Conta":
+        st.subheader("📝 Cadastro de Novo Paciente")
+        with st.form("cadastro"):
+            col1, col2 = st.columns(2)
+            n = col1.text_input("Nome")
+            s = col2.text_input("Sobrenome")
+            t = st.text_input("Telefone")
+            e = st.text_input("E-mail")
+            p = st.text_input("Senha", type="password")
+            if st.form_submit_button("Finalizar Cadastro"):
+                try:
+                    conn = conectar_db()
+                    c = conn.cursor()
+                    c.execute("INSERT INTO usuarios (nome, sobrenome, telefone, email, senha) VALUES (?,?,?,?,?)", (n,s,t,e,p))
+                    conn.commit()
+                    conn.close()
+                    st.success("Cadastro realizado! Mude para Login.")
+                except:
+                    st.error("E-mail já cadastrado.")
+    else:
+        st.subheader("🔑 Login")
+        e_login = st.text_input("E-mail")
+        p_login = st.text_input("Senha", type="password")
+        if st.button("Acessar"):
+            conn = conectar_db()
+            c = conn.cursor()
+            c.execute("SELECT nome FROM usuarios WHERE email = ? AND senha = ?", (e_login, p_login))
+            user = c.fetchone()
+            if user:
+                st.session_state.logado = True
+                st.session_state.email = e_login
+                st.session_state.nome = user[0]
+                st.rerun()
+            else:
+                st.error("Dados incorretos.")
+    st.stop()
+
+# ================= ÁREA DO SISTEMA (LOGADO) =================
+st.sidebar.write(f"👤 Paciente: **{st.session_state.nome}**")
+if st.sidebar.button("Sair do Sistema"):
+    st.session_state.logado = False
+    st.rerun()
+
+# --- Funções de Carregamento SQL ---
+def carregar_glicemia():
+    conn = conectar_db()
+    df = pd.read_sql(f"SELECT data, hora, valor, momento, dose FROM glicemia WHERE email_user = '{st.session_state.email}'", conn)
+    conn.close()
+    return df
+
+def carregar_receita():
+    conn = conectar_db()
+    c = conn.cursor()
+    c.execute("SELECT * FROM receita WHERE email_user = ?", (st.session_state.email,))
+    r = c.fetchone()
+    conn.close()
+    return r
+
+# --- Lógica de Cálculo ---
+def calcular_insulina_automatica(valor, momento):
+    r = carregar_receita()
+    if not r: return "Configurar Receita", "⚠️ Vá na aba 'Receita'"
+    
+    # Índices da tupla r: 0:email, 1:m_f1, 2:m_f2, 3:m_f3, 4:n_f1, 5:n_f2, 6:n_f3
+    prefixo_indices = (1, 2, 3) if momento in ["Antes Café", "Após Café", "Antes Almoço", "Após Almoço", "Antes Merenda"] else (4, 5, 6)
+    
+    if valor < 70: return "0 UI", "⚠️ Hipoglicemia!"
+    elif 70 <= valor <= 200: dose = r[prefixo_indices[0]]
+    elif 201 <= valor <= 400: dose = r[prefixo_indices[1]]
+    else: dose = r[prefixo_indices[2]]
+    
+    return f"{int(dose)} UI", "Calculado via SQL"
+
+# ================= ABAS =================
+t1, t2, t3 = st.tabs(["📊 Glicemia", "🍽️ Alimentação", "⚙️ Receita"])
+
+with t1:
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    c1, c2 = st.columns(2)
+    dfg = carregar_glicemia()
+
+    with c1:
+        v = st.number_input("Valor da Glicemia (mg/dL):", min_value=0, value=100)
+        m = st.selectbox("Momento:", ["Antes Café", "Após Café", "Antes Almoço", "Após Almoço", "Antes Merenda", "Antes Janta", "Após Janta", "Madrugada"])
+        dose_sug, ref_tab = calcular_insulina_automatica(v, m)
+        
+        st.markdown(f'<div class="dose-alerta"><h3>{dose_sug}</h3><small>{ref_tab}</small></div>', unsafe_allow_html=True)
+
+        if st.button("💾 Salvar Registro"):
+            agora = datetime.now(fuso_br)
+            conn = conectar_db()
+            c = conn.cursor()
+            c.execute("INSERT INTO glicemia (email_user, data, hora, valor, momento, dose) VALUES (?,?,?,?,?,?)",
+                      (st.session_state.email, agora.strftime("%d/%m/%Y"), agora.strftime("%H:%M"), v, m, dose_sug))
+            conn.commit()
+            conn.close()
+            st.success("Salvo no Banco de Dados!")
+            st.rerun()
+
+    with c2:
+        if not dfg.empty:
+            dfg['DataHora'] = pd.to_datetime(dfg['data'] + " " + dfg['hora'], dayfirst=True)
+            fig = px.line(dfg.tail(10), x='DataHora', y='valor', markers=True, title="Meu Histórico")
+            st.plotly_chart(fig, use_container_width=True)
+
+with t3:
+    st.subheader("⚙️ Configuração da Sua Receita")
+    r_atual = carregar_receita()
+    # Padrão 0 se não houver receita
+    v = r_atual if r_atual else (st.session_state.email, 0, 0, 0, 0, 0, 0)
+    
+    col_m, col_n = st.columns(2)
+    with col_m:
+        st.info("**☀️ Dia**")
+        mf1 = st.number_input("70-200 (Dia):", value=int(v[1]))
+        mf2 = st.number_input("201-400 (Dia):", value=int(v[2]))
+        mf3 = st.number_input("> 400 (Dia):", value=int(v[3]))
+    with col_n:
+        st.info("**🌙 Noite**")
+        nf1 = st.number_input("70-200 (Noite):", value=int(v[4]))
+        nf2 = st.number_input("201-400 (Noite):", value=int(v[5]))
+        nf3 = st.number_input("> 400 (Noite):", value=int(v[6]))
+
+    if st.button("💾 Salvar Minha Receita"):
+        conn = conectar_db()
+        c = conn.cursor()
+        c.execute("REPLACE INTO receita VALUES (?,?,?,?,?,?,?)", (st.session_state.email, mf1, mf2, mf3, nf1, nf2, nf3))
+        conn.commit()
+        conn.close()
+        st.success("Receita salva!")
+        st.rerun()
