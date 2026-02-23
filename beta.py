@@ -20,7 +20,7 @@ ARQ_G = "dados_glicemia_BETA.csv"
 ARQ_N = "dados_nutricao_BETA.csv"
 ARQ_R = "config_receita_BETA.csv"
 
-# DESIGN DARK MODE COM SUPORTE A CORES NO HISTÓRICO
+# DESIGN DARK MODE (PRESERVANDO CORES DE STATUS)
 st.markdown("""
 <style>
     .stApp { background-color: #0e1117; color: #ffffff; }
@@ -34,13 +34,12 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# FUNÇÃO PARA COLORIR A TABELA (VOLTOU!)
 def cor_glicemia_status(v):
     try:
         n = int(v)
-        if n < 70: return 'background-color: #8B8000; color: white;' # Amarelo Escuro
-        elif n > 180: return 'background-color: #8B0000; color: white;' # Vermelho Escuro
-        else: return 'background-color: #006400; color: white;' # Verde Escuro
+        if n < 70: return 'background-color: #8B8000; color: white;' 
+        elif n > 180: return 'background-color: #8B0000; color: white;' 
+        else: return 'background-color: #006400; color: white;' 
     except: return ''
 
 # ================= SEGURANÇA E LOGIN =================
@@ -90,11 +89,13 @@ def calc_insulina(v, m):
     if df_r.empty: return "0 UI", "Configurar Receita"
     rec = df_r.iloc[0]
     periodo = "manha" if m in ["Antes Café", "Após Café", "Antes Almoço", "Após Almoço", "Antes Merenda"] else "noite"
-    if v < 70: return "0 UI", "Hipoglicemia!"
-    elif v <= 200: d = rec[f'{periodo}_f1']
-    elif v <= 400: d = rec[f'{periodo}_f2']
-    else: d = rec[f'{periodo}_f3']
-    return f"{int(d)} UI", f"Tabela {periodo.capitalize()}"
+    try:
+        if v < 70: return "0 UI", "Hipoglicemia!"
+        elif v <= 200: d = rec[f'{periodo}_f1']
+        elif v <= 400: d = rec[f'{periodo}_f2']
+        else: d = rec[f'{periodo}_f3']
+        return f"{int(d)} UI", f"Tabela {periodo.capitalize()}"
+    except: return "0 UI", "Erro na Receita"
 
 MOMENTOS_ORDEM = ["Antes Café", "Após Café", "Antes Almoço", "Após Almoço", "Antes Merenda", "Antes Janta", "Após Janta", "Madrugada"]
 ALIMENTOS = {"Pão Francês": [28, 4, 1], "Leite (200ml)": [10, 6, 6], "Arroz": [15, 1, 0], "Feijão": [14, 5, 0], "Frango": [0, 23, 5], "Ovo": [1, 6, 5], "Banana": [22, 1, 0]}
@@ -119,9 +120,9 @@ with tab1:
             st.rerun()
     with c2:
         if not dfg.empty:
-            st.plotly_chart(px.line(dfg.tail(10), x='Hora', y='Valor', markers=True, title="Tendência Glicêmica").update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color="white"), use_container_width=True)
-    
-    st.write("### Histórico Colorido")
+            fig = px.line(dfg.tail(10), x='Hora', y='Valor', markers=True, title="Tendência")
+            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color="white")
+            st.plotly_chart(fig, use_container_width=True)
     if not dfg.empty:
         st.dataframe(dfg.tail(15).style.applymap(cor_glicemia_status, subset=['Valor']), use_container_width=True)
     st.markdown('</div>', unsafe_allow_html=True)
@@ -132,10 +133,8 @@ with tab2:
     m_nutri = st.selectbox("Refeição", MOMENTOS_ORDEM, key="n_m")
     sel = st.multiselect("Alimentos", list(ALIMENTOS.keys()))
     c_tot, p_tot, g_tot = sum([ALIMENTOS[x][0] for x in sel]), sum([ALIMENTOS[x][1] for x in sel]), sum([ALIMENTOS[x][2] for x in sel])
-    col_c, col_p, col_g = st.columns(3)
-    col_c.metric("C (Carbo)", f"{c_tot}g")
-    col_p.metric("P (Proteína)", f"{p_tot}g")
-    col_g.metric("G (Gordura)", f"{g_tot}g")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("C", f"{c_tot}g"); c2.metric("P", f"{p_tot}g"); c3.metric("G", f"{g_tot}g")
     if st.button("💾 Salvar Refeição"):
         agora = datetime.now(fuso_br)
         novo_n = pd.DataFrame([[st.session_state.user_email, agora.strftime("%d/%m/%Y"), m_nutri, ", ".join(sel), c_tot, p_tot, g_tot]], columns=["Usuario","Data","Momento","Info","C","P","G"])
@@ -151,13 +150,15 @@ with tab3:
     df_r_all = pd.read_csv(ARQ_R) if os.path.exists(ARQ_R) else pd.DataFrame()
     r_u = df_r_all[df_r_all['Usuario'] == st.session_state.user_email] if not df_r_all.empty else pd.DataFrame()
     v = r_u.iloc[0] if not r_u.empty else {'manha_f1':0, 'manha_f2':0, 'manha_f3':0, 'noite_f1':0, 'noite_f2':0, 'noite_f3':0}
-    c_m, c_n = st.columns(2)
-    with c_m:
-        st.write("**MANHÃ**")
-        m1, m2, m3 = st.number_input("70-200", value=int(v.get('manha_f1',0)), key="m1"), st.number_input("201-400", value=int(v.get('manha_f2',0)), key="m2"), st.number_input("> 400", value=int(v.get('manha_f3',0)), key="m3")
-    with c_n:
-        st.write("**NOITE**")
-        n1, n2, n3 = st.number_input("70-200 ", value=int(v.get('noite_f1',0)), key="n1"), st.number_input("201-400 ", value=int(v.get('noite_f2',0)), key="n2"), st.number_input("> 400 ", value=int(v.get('noite_f3',0)), key="n3")
+    cm, cn = st.columns(2)
+    with cm:
+        m1 = st.number_input("Manhã 70-200", value=int(v.get('manha_f1',0)), key="m1")
+        m2 = st.number_input("Manhã 201-400", value=int(v.get('manha_f2',0)), key="m2")
+        m3 = st.number_input("Manhã > 400", value=int(v.get('manha_f3',0)), key="m3")
+    with cn:
+        n1 = st.number_input("Noite 70-200", value=int(v.get('noite_f1',0)), key="n1")
+        n2 = st.number_input("Noite 201-400", value=int(v.get('noite_f2',0)), key="n2")
+        n3 = st.number_input("Noite > 400", value=int(v.get('noite_f3',0)), key="n3")
     if st.button("💾 Salvar Receita"):
         nova_rec = pd.DataFrame([{'Usuario': st.session_state.user_email, 'manha_f1':m1, 'manha_f2':m2, 'manha_f3':m3, 'noite_f1':n1, 'noite_f2':n2, 'noite_f3':n3}])
         df_r_all = df_r_all[df_r_all['Usuario'] != st.session_state.user_email] if not df_r_all.empty else pd.DataFrame()
@@ -165,17 +166,41 @@ with tab3:
         st.success("Salva!")
     st.markdown('</div>', unsafe_allow_html=True)
 
-# ================= EXCEL COM DUAS ABAS =================
+# ================= EXCEL COLORIDO (RESTAURADO IGUAL AO BETA 15) =================
 st.sidebar.markdown("---")
-if st.sidebar.button("📥 Gerar Excel Completo"):
-    df_e_g, df_e_n = carregar_dados_seguro(ARQ_G), carregar_dados_seguro(ARQ_N)
+if st.sidebar.button("📥 Gerar Excel Colorido"):
+    df_e_g = carregar_dados_seguro(ARQ_G)
+    df_e_n = carregar_dados_seguro(ARQ_N)
+    
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         if not df_e_g.empty:
-            df_e_g.pivot_table(index='Data', columns='Momento', values='Valor', aggfunc='last').to_excel(writer, sheet_name='Glicemia')
+            pivot = df_e_g.pivot_table(index='Data', columns='Momento', values='Valor', aggfunc='last')
+            # Garante a ordem das colunas
+            cols = [c for c in MOMENTOS_ORDEM if c in pivot.columns]
+            pivot = pivot[cols]
+            pivot.to_excel(writer, sheet_name='Glicemia')
+            
+            ws = writer.sheets['Glicemia']
+            f_v = PatternFill(start_color="C8E6C9", end_color="C8E6C9", fill_type="solid") # Verde
+            f_r = PatternFill(start_color="FFB6C1", end_color="FFB6C1", fill_type="solid") # Vermelho
+            f_a = PatternFill(start_color="FFFFE0", end_color="FFFFE0", fill_type="solid") # Amarelo
+            
+            for row in ws.iter_rows(min_row=2, min_col=2):
+                for cell in row:
+                    if cell.value:
+                        try:
+                            val = int(cell.value)
+                            cell.alignment = Alignment(horizontal='center')
+                            if val < 70: cell.fill = f_a
+                            elif val > 180: cell.fill = f_r
+                            else: cell.fill = f_v
+                        except: pass
+        
         if not df_e_n.empty:
             df_e_n.to_excel(writer, sheet_name='Alimentos', index=False)
-    st.sidebar.download_button("Baixar Agora", output.getvalue(), file_name="Relatorio_Kids.xlsx")
+
+    st.sidebar.download_button("Baixar Agora", output.getvalue(), file_name="Relatorio_Colorido.xlsx")
 
 if st.sidebar.button("Sair"):
     st.session_state.logado = False
