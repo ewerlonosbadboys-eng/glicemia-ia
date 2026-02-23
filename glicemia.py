@@ -51,10 +51,17 @@ def enviar_senha_nova(email_destino, senha_nova):
         return True
     except: return False
 
+ARQ_F = "feedbacks_BETA.csv" # Novo arquivo de mensagens
+
 def init_db():
     conn = sqlite3.connect('usuarios.db')
     conn.execute('''CREATE TABLE IF NOT EXISTS users (nome TEXT, email TEXT PRIMARY KEY, senha TEXT)''')
-    conn.commit(); conn.close()
+    # Cria o Admin se ele ainda não existir na base
+    try:
+        conn.execute("INSERT INTO users VALUES (?,?,?)", ("Administrador", "admin", "542820"))
+        conn.commit()
+    except: pass
+    conn.close()
 
 init_db()
 if 'logado' not in st.session_state: st.session_state.logado = False
@@ -119,6 +126,9 @@ if not st.session_state.logado:
 def carregar_dados_seguro(arq):
     if not os.path.exists(arq): return pd.DataFrame()
     df = pd.read_csv(arq)
+    # Se for o admin, retorna o arquivo inteiro (todos os usuários)
+    if st.session_state.user_email == "admin":
+        return df
     return df[df['Usuario'] == st.session_state.user_email].copy()
 
 def calc_insulina(v, m):
@@ -281,3 +291,4 @@ if st.sidebar.button("📥 Gerar Excel Colorido"):
 if st.sidebar.button("Sair"):
     st.session_state.logado = False
     st.rerun()
+
