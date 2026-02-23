@@ -17,6 +17,46 @@ import string
 fuso_br = pytz.timezone('America/Sao_Paulo')
 st.set_page_config(page_title="Saúde Kids BETA", page_icon="🧪", layout="wide")
 
+# Inicialização de Variáveis de Sessão
+if 'logado' not in st.session_state:
+    st.session_state.logado = False
+if 'user_email' not in st.session_state:
+    st.session_state.user_email = ""
+
+# ================= MOTOR DE BANCO DE DADOS SQL =================
+
+def get_connection():
+    return sqlite3.connect('saude_kids_master.db')
+
+def init_db():
+    conn = get_connection()
+    c = conn.cursor()
+    # Tabela de Usuários
+    c.execute('''CREATE TABLE IF NOT EXISTS users 
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, 
+                  nome TEXT, email TEXT UNIQUE, senha TEXT)''')
+    
+    # Tabela de Glicemia (Vinculada ao Usuário)
+    c.execute('''CREATE TABLE IF NOT EXISTS glicemia 
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  user_email TEXT, data TEXT, hora TEXT, valor INTEGER, momento TEXT,
+                  FOREIGN KEY(user_email) REFERENCES users(email))''')
+    
+    # Tabela de Nutrição (Vinculada ao Usuário)
+    c.execute('''CREATE TABLE IF NOT EXISTS nutricao 
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  user_email TEXT, data TEXT, refeicao TEXT, descricao TEXT, carbo REAL,
+                  FOREIGN KEY(user_email) REFERENCES users(email))''')
+    
+    # Tabela de Configurações de Insulina
+    c.execute('''CREATE TABLE IF NOT EXISTS config_insulina 
+                 (user_email TEXT PRIMARY KEY, relacao REAL, sensibilidade REAL, meta REAL)''')
+    
+    conn.commit()
+    conn.close()
+
+init_db()
+
 # ARQUIVOS DE DADOS (CSV)
 ARQ_G = "dados_glicemia_BETA.csv"
 ARQ_N = "dados_nutricao_BETA.csv"
@@ -152,8 +192,66 @@ if not st.session_state.logado:
                 conn.close()
     st.stop()
 
-# ================= ÁREA LOGADA =================
+# ================= ÁREA LOGADA (SQL DINÂMICO) =================
 
+st.sidebar.title("Saúde Kids PRO")
+st.sidebar.write(f"Conectado como: \n**{st.session_state.user_email}**")
+if st.sidebar.button("Sair"):
+    st.session_state.logado = False
+    st.rerun()
+
+t1, t2, t3, t4 = st.tabs(["📊 Glicemia", "🍲 Alimentação", "💉 Configurações", "📈 Exportar"])
+
+# --- ABA 1: GLICEMIA (SQL) ---
+with t1:
+    st.header("Seu Histórico Glicêmico")
+    conn = get_connection()
+    
+    with st.expander("➕ Novo Registro"):
+        col1, col2, col3 = st.columns(3)
+        v_gli = col1.number_input("Valor", 20, 600, 100)
+        m_gli = col2.selectbox("Momento", ["Jejum", "Pré-Almoço", "Pós-Almoço", "Pré-Jantar", "Pós-Jantar", "Madrugada"])
+        if st.button("Salvar Registro"):
+            c = conn.cursor()
+            c.execute("INSERT INTO glicemia (user_email, data, hora, valor, momento) VALUES (?,?,?,?,?)",
+                     (st.session_state.user_email, datetime.now(fuso_br).strftime('%d/%m/%Y'), 
+                      datetime.now(fuso_br).strftime('%H:%M'), v_gli, m_gli))
+            conn.commit()
+            st.success("Salvo no banco de dados!")
+            st.rerun()
+    
+    df_g = pd.read_sql_query("SELECT data, hora, valor, momento FROM glicemia WHERE user_email=?", conn, 
+                             params=(st.session_state.user_email,))
+    if not df_g.empty:
+        st.plotly_chart(px.line(df_g, x='data', y='valor', title="Sua Curva"), use_container_width=True)
+        st.dataframe(df_g, use_container_width=True)
+    conn.close()
+
+# --- ABA 3: CONFIGURAÇÕES (SQL) ---
+with t3:
+    st.header("Seus Fatores")
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("SELECT relacao, sensibilidade, meta FROM config_insulina WHERE user_email=?", (st.session_state.user_email,))
+    config = c.fetchone()
+    
+    if not config:
+        st.warning("Configure seus dados pela primeira vez:")
+        r = st.number_input("Relação Carbo", value=15.0)
+        s = st.number_input("Sensibilidade", value=50.0)
+        m = st.number_input("Meta", value=100.0)
+        if st.button("Salvar"):
+            c.execute("INSERT INTO config_insulina VALUES (?,?,?,?)", (st.session_state.user_email, r, s, m))
+            conn.commit()
+            st.rerun()
+    else:
+        st.info(f"Relação: 1:{config[0]} | Sensibilidade: {config[1]} | Meta: {config[2]}")
+        if st.button("Resetar Fatores"):
+            c.execute("DELETE FROM config_insulina WHERE user_email=?", (st.session_state.user_email,))
+            conn.commit()
+            st.rerun()
+    conn.close()
+    
 # ================= ESTILO VISUAL =================
 st.markdown("""
 <style>
