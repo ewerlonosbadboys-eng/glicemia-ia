@@ -70,7 +70,8 @@ if 'logado' not in st.session_state:
 
 if not st.session_state.logado:
     st.title("🧪 Saúde Kids - Acesso")
-    abas_login = st.tabs(["🔐 Entrar", "📝 Criar Conta", "❓ Esqueci Senha"])
+    # ADICIONADA A QUARTA ABA: ALTERAR SENHA
+    abas_login = st.tabs(["🔐 Entrar", "📝 Criar Conta", "❓ Esqueci Senha", "🔄 Alterar Senha"])
 
     with abas_login[0]:
         u = st.text_input("E-mail", key="l_email")
@@ -112,13 +113,10 @@ if not st.session_state.logado:
                 c = conn.cursor()
                 c.execute("SELECT email FROM users WHERE email=?", (email_alvo,))
                 if c.fetchone():
-                    # Geração da senha e atualização do banco
                     senha_gerada = gerar_senha_temporaria()
                     c.execute("UPDATE users SET senha=? WHERE email=?", (senha_gerada, email_alvo))
                     conn.commit()
                     conn.close()
-                    
-                    # Envio do e-mail
                     if enviar_senha_nova(email_alvo, senha_gerada):
                         st.success(f"✅ Senha enviada para {email_alvo}!")
                     else:
@@ -128,6 +126,30 @@ if not st.session_state.logado:
                     conn.close()
             else:
                 st.warning("Informe o e-mail.")
+
+    with abas_login[3]:
+        st.subheader("Alterar Minha Senha")
+        alt_email = st.text_input("Confirme seu e-mail", key="alt_em")
+        alt_antiga = st.text_input("Senha Atual", type="password", key="alt_ant")
+        alt_nova1 = st.text_input("Nova Senha", type="password", key="alt_n1")
+        alt_nova2 = st.text_input("Repita a Nova Senha", type="password", key="alt_n2")
+        
+        if st.button("Confirmar Alteração"):
+            if alt_nova1 != alt_nova2:
+                st.error("As novas senhas não coincidem!")
+            elif not alt_email or not alt_antiga or not alt_nova1:
+                st.warning("Preencha todos os campos.")
+            else:
+                conn = sqlite3.connect('usuarios.db')
+                c = conn.cursor()
+                c.execute("SELECT * FROM users WHERE email=? AND senha=?", (alt_email, alt_antiga))
+                if c.fetchone():
+                    c.execute("UPDATE users SET senha=? WHERE email=?", (alt_nova1, alt_email))
+                    conn.commit()
+                    st.success("✅ Senha alterada com sucesso! Volte na aba 'Entrar'.")
+                else:
+                    st.error("E-mail ou senha atual incorretos.")
+                conn.close()
     st.stop()
 
 # ================= ÁREA LOGADA =================
@@ -245,4 +267,4 @@ with t4:
 
     if st.button("📥 BAIXAR RELATÓRIO EXCEL"):
         dados_ex = gerar_excel()
-        st.download_button("Clique aqui para descarregar", dados_ex, "relatorio_saude_kids.xlsx")
+        st.download_button("Clique aqui para baixar", dados_ex, "relatorio_saude_kids.xlsx")
