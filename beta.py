@@ -75,18 +75,17 @@ if not st.session_state.logado:
     with abas_login[0]:
         u = st.text_input("E-mail", key="l_email")
         s = st.text_input("Senha", type="password", key="l_pass")
-        if st.button("Acessar Aplicativo"):
+       if st.button("Acessar Aplicativo"):
             conn = sqlite3.connect('usuarios.db')
-            user_check = conn.execute("SELECT * FROM users WHERE email=? AND senha=?", (u, s)).fetchone()
+            user_db = conn.execute("SELECT * FROM users WHERE email=? AND senha=?", (u, s)).fetchone()
             conn.close()
-            
-            if user_check:
+            if user_db:
                 st.session_state.logado = True
                 st.session_state.user_email = u
                 st.rerun()
             else:
-                st.error("E-mail ou Senha incorretos.")
-            conn = sqlite3.connect('usuarios.db')
+                st.error("Dados incorretos.")
+                
             # Esta linha abaixo é a que valida o admin ou qualquer usuário
             if conn.execute("SELECT * FROM users WHERE email=? AND senha=?", (u, s)).fetchone():
                 st.session_state.logado = True
@@ -307,7 +306,7 @@ if st.sidebar.button("📥 Gerar Excel Colorido"):
 
 st.sidebar.download_button("Baixar Agora", output.getvalue(), file_name="Relatorio_Completo.xlsx")
 
-# --- FINAL DO ARQUIVO (SUBSTITUA TUDO DA LINHA 300 EM DIANTE) ---
+# --- COLE ESTE BLOCO NO FINAL DO ARQUIVO (Margem Esquerda) ---
 
 # Aba de Mensagens exclusiva para o Admin
 if st.session_state.user_email == "admin":
@@ -317,9 +316,8 @@ if st.session_state.user_email == "admin":
             df_feed = pd.read_csv(ARQ_F)
             st.dataframe(df_feed.sort_index(ascending=False), use_container_width=True)
             if st.button("Limpar Histórico de Mensagens"):
-                if os.path.exists(ARQ_F):
-                    os.remove(ARQ_F)
-                    st.rerun()
+                os.remove(ARQ_F)
+                st.rerun()
         else:
             st.info("Nenhuma mensagem recebida ainda.")
 
@@ -340,5 +338,4 @@ with st.sidebar.expander("🚀 Enviar Sugestão ao Admin"):
 if st.sidebar.button("Sair"):
     st.session_state.logado = False
     st.rerun()
-
 
