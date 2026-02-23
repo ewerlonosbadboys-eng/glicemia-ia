@@ -13,52 +13,78 @@ import urllib.parse
 import streamlit as st
 import sqlite3
 import urllib.parse
-# ... seus outros imports (pandas, datetime, etc)
+# ... mantenha seus outros imports (pandas, datetime, etc)
 
 # 1. CONFIGURAÇÃO INICIAL
 st.set_page_config(page_title="Saúde Kids BETA", page_icon="🧪", layout="wide")
 
 # =========================================================
-# 2. O "X" DA QUESTÃO: CAPTURA DO LINK DE REDIRECIONAMENTO
+# 2. SENSOR DE LINK ULTRA-RÁPIDO (Lê antes de desenhar a tela)
+# =========================================================
+if 'modo_reset' not in st.session_state:
+    st.session_state.modo_reset = False
+
+# Captura os parâmetros da URL
+params = st.query_params
+
+# Se detectar "reset" no link, ativa o modo de segurança na memória
+if "reset" in params:
+    st.session_state.modo_reset = True
+    st.session_state.email_reset = params.get("email")
+
+# =========================================================
+# 3. LÓGICA DAS ABAS (LOGIN / CADASTRO / ESQUECI / RESET)
 # =========================================================
 
-# Pegamos os parâmetros da URL
-parametros = st.query_params
+if not st.session_state.get('logado'):
+    # Define as abas: se o modo_reset estiver na memória, cria a 4ª aba
+    if st.session_state.modo_reset:
+        titulos = ["🔐 Entrar", "📝 Cadastro", "❓ Esqueci", "🔑 NOVA SENHA"]
+    else:
+        titulos = ["🔐 Entrar", "📝 Cadastro", "❓ Esqueci"]
 
-# Se o link tiver 'reset', o app trava aqui e não sai por nada!
-if "reset" in parametros:
-    # Captura o e-mail que veio no link
-    email_do_link = parametros.get("email")
-    
-    st.markdown("---")
-    st.title("🔐 Criar Nova Senha")
-    st.info(f"Redefinindo acesso para: **{email_alvo}**")
-    
-    nova_pwd = st.text_input("Nova Senha", type="password", key="reset_final_1")
-    conf_pwd = st.text_input("Confirme a Nova Senha", type="password", key="reset_final_2")
-    
-    if st.button("Salvar Nova Senha"):
-        if nova_pwd == conf_pwd and len(nova_pwd) >= 4:
-            conn = sqlite3.connect('usuarios.db')
-            c = conn.cursor()
-            c.execute("UPDATE users SET senha=? WHERE email=?", (nova_pwd, email_do_link))
-            conn.commit()
-            conn.close()
-            st.success("✅ Senha alterada! Agora limpe o link para logar.")
-            
-            # Botão para limpar o link da barra do navegador
-            if st.button("Ir para tela de Login"):
-                st.query_params.clear()
-                st.rerun()
-        else:
-            st.error("Senhas não conferem ou são curtas.")
-            
-    if st.button("Cancelar e Voltar"):
-        st.query_params.clear()
-        st.rerun()
+    abas = st.tabs(titulos)
 
-    # O st.stop() é o que garante que ele NÃO mostre a tela de login embaixo
-    st.stop() 
+    with abas[0]:
+        st.subheader("Login")
+        # ... seu código de login ...
+
+    with abas[1]:
+        st.subheader("Cadastro")
+        # ... seu código de cadastro ...
+
+    with abas[2]:
+        st.subheader("Recuperar Acesso")
+        email_digitado = st.text_input("Seu e-mail", key="rec_input")
+        if st.button("Enviar Link"):
+            if enviar_link_recuperacao(email_digitado):
+                st.success("Link enviado! Ao clicar nele, a 4ª aba 'NOVA SENHA' aparecerá aqui.")
+
+    # A QUARTA ABA SÓ APARECE SE O MODO_RESET FOR TRUE
+    if st.session_state.modo_reset:
+        with abas[3]:
+            st.subheader("🔑 Criar Nova Senha")
+            email_alvo = st.session_state.get('email_reset')
+            st.warning(f"Alterando senha para: {email_alvo}")
+            
+            nova_p = st.text_input("Nova Senha", type="password", key="n_p_final")
+            conf_p = st.text_input("Confirme", type="password", key="c_p_final")
+            
+            if st.button("Salvar Nova Senha"):
+                if nova_p == conf_p and len(nova_p) >= 4:
+                    conn = sqlite3.connect('usuarios.db')
+                    c = conn.cursor()
+                    c.execute("UPDATE users SET senha=? WHERE email=?", (nova_p, email_alvo))
+                    conn.commit()
+                    conn.close()
+                    st.success("✅ Senha alterada! Use a aba 'Entrar' agora.")
+                    # Limpa a memória para a aba sumir depois de pronto
+                    st.session_state.modo_reset = False
+                    st.query_params.clear()
+                else:
+                    st.error("As senhas não coincidem.")
+    
+    st.stop() # Bloqueia o app para quem não está logado
 
 # =========================================================
 # 3. CONTINUAÇÃO DO APP (LOGIN, GRÁFICOS, ETC)
