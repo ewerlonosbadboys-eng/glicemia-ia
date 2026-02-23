@@ -288,7 +288,25 @@ if st.sidebar.button("📥 Gerar Excel Colorido"):
             df_e_n.to_excel(writer, sheet_name='Alimentos', index=False)
     st.sidebar.download_button("Baixar Agora", output.getvalue(), file_name="Relatorio_Completo.xlsx")
 
+st.sidebar.download_button("Baixar Agora", output.getvalue(), file_name="Relatorio_Completo.xlsx")
+
+    # --- COLE AQUI O NOVO CÓDIGO ---
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("🚀 Sugerir Melhorias")
+    with st.sidebar.expander("Enviar Mensagem ao Admin"):
+        txt_feed = st.text_area("O que podemos melhorar?", key="input_feedback")
+        if st.button("Enviar Feedback"):
+            if txt_feed:
+                agora = datetime.now(fuso_br).strftime("%d/%m/%Y %H:%M")
+                novo_f = pd.DataFrame([[st.session_state.user_email, agora, txt_feed]], columns=["Usuario", "Data", "Sugestão"])
+                base_f = pd.read_csv(ARQ_F) if os.path.exists(ARQ_F) else pd.DataFrame()
+                pd.concat([base_f, novo_f], ignore_index=True).to_csv(ARQ_F, index=False)
+                st.success("Feedback enviado!")
+            else:
+                st.error("Escreva algo antes de enviar.")
+
 if st.sidebar.button("Sair"):
     st.session_state.logado = False
     st.rerun()
+
 
