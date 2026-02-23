@@ -89,33 +89,6 @@ with abas[2]: # Aba Esqueci
         else:
             st.warning("⚠️ Digite o e-mail primeiro.")
             
-# ================= FUNÇÃO DE ENVIO DE E-MAIL =================
-def enviar_link_recuperacao(email_destino):
-    meu_email = "ewerlon.osbadboys@gmail.com" 
-    minha_senha = "okiu qihp lglk trcc" # Senha de App do Google
-    
-    link_app = "https://glicemia-ia.streamlit.app" 
-    email_codificado = urllib.parse.quote(email_destino)
-    link_final = f"{link_app}/?reset=true&email={email_codificado}"
-    
-    corpo = f"""
-    <h3>Recuperação de Senha - Saúde Kids</h3>
-    <p>Clique no link abaixo para cadastrar uma nova senha:</p>
-    <a href='{link_final}'>Redefinir minha senha agora</a>
-    """
-    msg = MIMEText(corpo, 'html')
-    msg['Subject'] = 'Link de Redefinição - Saúde Kids'
-    msg['From'] = meu_email
-    msg['To'] = email_destino
-
-    try:
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
-            smtp.login(meu_email, minha_senha)
-            smtp.send_message(msg)
-        return True
-    except:
-        return False
-
 # ================= SENSOR DE LINK DE RECUPERAÇÃO =================
 query_params = st.query_params
 if "reset" in query_params and "email" in query_params:
