@@ -152,7 +152,61 @@ if not st.session_state.logado:
                 conn.close()
     st.stop()
 
-# ================= ÁREA LOGADA =================
+# ================= ÁREA LOGADA (FILTRADA POR USUÁRIO) =================
+
+def carregar_dados_usuario(arq, colunas):
+    if os.path.exists(arq):
+        df = pd.read_csv(arq)
+        # Filtra apenas os dados do usuário logado
+        if 'user_email' in df.columns:
+            return df[df['user_email'] == st.session_state.user_email]
+    return pd.DataFrame(columns=colunas + ['user_email'])
+
+def salvar_dados_usuario(df, arq):
+    # Se o arquivo já existir, lê tudo, remove os dados antigos do usuário e salva os novos
+    if os.path.exists(arq):
+        df_completo = pd.read_csv(arq)
+        df_completo = df_completo[df_completo['user_email'] != st.session_state.user_email]
+        df_final = pd.concat([df_completo, df], ignore_index=True)
+    else:
+        df_final = df
+    df_final.to_csv(arq, index=False)
+
+st.sidebar.write(f"Logado como: **{st.session_state.user_email}**")
+if st.sidebar.button("Sair"):
+    st.session_state.logado = False
+    st.rerun()
+
+t1, t2, t3 = st.tabs(["📊 Glicemia", "🍲 Alimentação", "⚙️ Configuração"])
+
+with t1:
+    st.header("Seu Perfil Glicêmico")
+    df_g = carregar_dados_usuario(ARQ_G, ['Data', 'Hora', 'Valor', 'Momento'])
+    
+    with st.expander("Novo Registro"):
+        col1, col2, col3 = st.columns(3)
+        v = col1.number_input("Valor", 20, 600, 100)
+        m = col2.selectbox("Momento", ["Jejum", "Pós-Prandial", "Outro"])
+        if st.button("Salvar"):
+            novo = pd.DataFrame([[datetime.now().strftime('%d/%m/%Y'), datetime.now().strftime('%H:%M'), v, m, st.session_state.user_email]], 
+                               columns=['Data', 'Hora', 'Valor', 'Momento', 'user_email'])
+            df_g = pd.concat([df_g, novo], ignore_index=True)
+            salvar_dados_usuario(df_g, ARQ_G)
+            st.success("Registrado!")
+            st.rerun()
+
+    if not df_g.empty:
+        st.plotly_chart(px.line(df_g, x='Data', y='Valor', title="Minha Evolução"))
+        st.dataframe(df_g, use_container_width=True)
+
+with t2:
+    st.header("Sua Alimentação")
+    df_n = carregar_dados_usuario(ARQ_N, ['Data', 'Refeição', 'Carbo(g)'])
+    # Lógica similar de cadastro aqui...
+
+with t3:
+    st.header("Configurações Pessoais")
+    # Fatores de sensibilidade específicos do usuário logado...
 
 # ================= ESTILO VISUAL =================
 st.markdown("""
