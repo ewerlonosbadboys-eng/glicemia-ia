@@ -174,48 +174,73 @@ if not st.session_state.logado:
 
 # ================= 6. RESTANTE DO APP (GRÁFICOS, ETC) =================
 # O código que você já tinha de glicemia continua daqui para baixo...
-# 4. SISTEMA DE LOGIN (SÓ APARECE SE NÃO ESTIVER EM RESET)
-if 'logado' not in st.session_state:
-    st.session_state.logado = False
+# =========================================================
+# LÓGICA DAS ABAS DE ACESSO (LOGIN / CADASTRO / RESET)
+# =========================================================
 
 if not st.session_state.logado:
-    # USAR LISTA FIXA DE ABAS EVITA O ERRO "INDEX OUT OF RANGE"
-    abas = st.tabs(["🔐 Entrar", "📝 Criar Conta", "❓ Esqueci Senha"])
-    
+    # 1. Verificamos se o link de redefinição foi usado
+    params = st.query_params
+    modo_reset_ativo = "reset" in params and "email" in params
+
+    # 2. Definimos quais abas aparecem
+    if modo_reset_ativo:
+        titulos_abas = ["🔐 Entrar", "📝 Cadastro", "❓ Esqueci", "🔑 MUDAR SENHA"]
+    else:
+        titulos_abas = ["🔐 Entrar", "📝 Cadastro", "❓ Esqueci"]
+
+    # 3. Criamos as abas
+    abas = st.tabs(titulos_abas)
+
+    # --- ABA 1: LOGIN ---
     with abas[0]:
-        st.subheader("Login")
-        u = st.text_input("E-mail", key="login_email")
-        s = st.text_input("Senha", type="password", key="login_pass")
+        st.subheader("Acessar Conta")
+        u = st.text_input("E-mail", key="login_u")
+        s = st.text_input("Senha", type="password", key="login_s")
         if st.button("Entrar"):
-            conn = sqlite3.connect('usuarios.db')
-            c = conn.cursor()
-            c.execute("SELECT * FROM users WHERE email=? AND senha=?", (u, s))
-            if c.fetchone():
-                st.session_state.logado = True
-                st.rerun()
-            else:
-                st.error("E-mail ou senha inválidos.")
-            conn.close()
+            # ... sua lógica de conferir no banco de dados ...
+            st.success("Logado com sucesso!")
+            st.session_state.logado = True
+            st.rerun()
 
+    # --- ABA 2: CADASTRO ---
     with abas[1]:
-        st.subheader("Cadastro")
-        nome = st.text_input("Seu Nome")
-        email_c = st.text_input("Seu E-mail")
-        senha_c = st.text_input("Crie uma Senha", type="password")
-        if st.button("Cadastrar"):
-            # Coloque aqui sua lógica de INSERT no SQLite
-            st.success("Cadastro realizado!")
+        st.subheader("Criar Nova Conta")
+        # Seus campos de cadastro aqui...
 
+    # --- ABA 3: ESQUECI A SENHA ---
     with abas[2]:
-        st.subheader("Recuperar Senha")
-        email_alvo = st.text_input("E-mail cadastrado", key="email_reset_input")
-        if st.button("Enviar Link de Recuperação"):
-            if enviar_link_recuperacao(email_alvo):
-                st.success("Link enviado! Verifique seu e-mail.")
+        st.subheader("Recuperação")
+        email_rec = st.text_input("E-mail cadastrado", key="em_rec_aba")
+        if st.button("Enviar Link para E-mail"):
+            if enviar_link_recuperacao(email_rec):
+                st.success("Link enviado! Verifique seu e-mail e clique no link para liberar a 4ª aba.")
             else:
-                st.error("Erro ao enviar e-mail.")
-    st.stop()
+                st.error("Erro ao enviar.")
 
+    # --- ABA 4: MUDAR SENHA (A ABA OCULTA) ---
+    if modo_reset_ativo:
+        with abas[3]:
+            st.subheader("🔑 Definir Nova Senha")
+            email_do_link = params["email"]
+            st.warning(f"Alterando senha para: {email_do_link}")
+            
+            nova_p = st.text_input("Nova Senha", type="password", key="n_p")
+            conf_p = st.text_input("Confirme a Senha", type="password", key="c_p")
+            
+            if st.button("Salvar Nova Senha"):
+                if nova_p == conf_p and len(nova_p) >= 4:
+                    conn = sqlite3.connect('usuarios.db')
+                    c = conn.cursor()
+                    c.execute("UPDATE users SET senha=? WHERE email=?", (nova_p, email_do_link))
+                    conn.commit()
+                    conn.close()
+                    st.success("Senha atualizada! Agora você pode ir na aba 'Entrar'.")
+                    # Opcional: st.query_params.clear() para esconder a aba de novo após o sucesso
+                else:
+                    st.error("Senhas não coincidem.")
+
+    st.stop() # Impede de ver o app sem logar
 # 5. RESTANTE DO APP (GRÁFICOS, ETC)
 # (COLE AQUI O RESTANTE DO SEU CÓDIGO ORIGINAL QUE VOCÊ JÁ TEM)
 
