@@ -19,7 +19,6 @@ st.set_page_config(page_title="Saúde Kids BETA", page_icon="🧪", layout="wide
 ARQ_G = "dados_glicemia_BETA.csv"
 ARQ_N = "dados_nutricao_BETA.csv"
 ARQ_R = "config_receita_BETA.csv"
-ARQ_F = "feedbacks_BETA.csv"
 
 # DESIGN DARK MODE (PRESERVADO E REVISADO)
 st.markdown("""
@@ -52,17 +51,10 @@ def enviar_senha_nova(email_destino, senha_nova):
         return True
     except: return False
 
-ARQ_F = "feedbacks_BETA.csv" # Novo arquivo de mensagens
-
 def init_db():
     conn = sqlite3.connect('usuarios.db')
     conn.execute('''CREATE TABLE IF NOT EXISTS users (nome TEXT, email TEXT PRIMARY KEY, senha TEXT)''')
-    # Cria o Admin se ele ainda não existir na base
-    try:
-        conn.execute("INSERT INTO users VALUES (?,?,?)", ("Administrador", "admin", "542820"))
-        conn.commit()
-    except: pass
-    conn.close()
+    conn.commit(); conn.close()
 
 init_db()
 if 'logado' not in st.session_state: st.session_state.logado = False
@@ -127,9 +119,6 @@ if not st.session_state.logado:
 def carregar_dados_seguro(arq):
     if not os.path.exists(arq): return pd.DataFrame()
     df = pd.read_csv(arq)
-    # NOVO: Se for o admin, ele vê os dados de toda a gente
-    if st.session_state.user_email == "admin":
-        return df
     return df[df['Usuario'] == st.session_state.user_email].copy()
 
 def calc_insulina(v, m):
@@ -189,12 +178,7 @@ ALIMENTOS = {
 }
 
 # ================= INTERFACE PRINCIPAL =================
-# Define as abas: se for admin, adiciona a aba de mensagens
-abas_titulos = ["📊 Glicemia", "🍽️ Nutrição", "⚙️ Receita"]
-if st.session_state.user_email == "admin":
-    abas_titulos.append("📩 Mensagens (Admin)")
-
-tabs = st.tabs(abas_titulos)
+tab1, tab2, tab3 = st.tabs(["📊 Glicemia", "🍽️ Nutrição", "⚙️ Receita"])
 
 with tab1:
     st.markdown('<div class="card">', unsafe_allow_html=True)
@@ -294,26 +278,6 @@ if st.sidebar.button("📥 Gerar Excel Colorido"):
             df_e_n.to_excel(writer, sheet_name='Alimentos', index=False)
     st.sidebar.download_button("Baixar Agora", output.getvalue(), file_name="Relatorio_Completo.xlsx")
 
-st.sidebar.download_button("Baixar Agora", output.getvalue(), file_name="Relatorio_Completo.xlsx")
-
-    # --- COLE AQUI O NOVO CÓDIGO ---
-   if st.session_state.user_email == "admin":
-    with tabs[3]: # Esta é a aba de Mensagens
-        st.subheader("📬 Sugestões Recebidas")
-        if os.path.exists(ARQ_F):
-            df_feed = pd.read_csv(ARQ_F)
-            st.dataframe(df_feed.sort_index(ascending=False), use_container_width=True)
-            if st.button("Limpar todas as mensagens"):
-                os.remove(ARQ_F)
-                st.rerun()
-        else:
-            st.info("Nenhuma mensagem nova.")
-
 if st.sidebar.button("Sair"):
     st.session_state.logado = False
     st.rerun()
-
-
-
-
-
