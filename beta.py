@@ -29,7 +29,7 @@ def init_db():
     conn = get_connection()
     c = conn.cursor()
     
-    # 1. Tabelas Base
+    # 1. Criação das Tabelas
     c.execute('''CREATE TABLE IF NOT EXISTS users 
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT, email TEXT UNIQUE, senha TEXT)''')
     
@@ -79,21 +79,4 @@ def calcular_insulina(valor, momento):
     return f"{int(dose)} UI", f"Tabela {prefixo.capitalize()}"
 
 # ================= LOGIN =================
-if not st.session_state.logado:
-    st.title("🧪 Saúde Kids - Login")
-    abas = st.tabs(["🔐 Entrar", "📝 Criar Conta"])
-    with abas[0]:
-        u = st.text_input("E-mail", key="l_em")
-        s = st.text_input("Senha", type="password", key="l_ps")
-        if st.button("Acessar"):
-            conn = get_connection()
-            res = conn.execute("SELECT email FROM users WHERE email=? AND senha=?", (u, s)).fetchone()
-            conn.close()
-            if res:
-                st.session_state.logado = True
-                st.session_state.user_email = res[0]
-                st.rerun()
-            else: st.error("Dados incorretos.")
-    with abas[1]:
-        n = st.text_input("Nome")
-        e = st.text_input("
+if not
