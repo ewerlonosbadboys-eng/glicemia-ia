@@ -67,28 +67,30 @@ except: pass
 init_db()
 if 'logado' not in st.session_state: st.session_state.logado = False
 
-if not st.session_state.logado:
-    st.title("🧪 Saúde Kids - Acesso")
-    # VOLTEI AS 4 ABAS ORIGINAIS EXATAMENTE COMO NO SEU BETA 15
-    abas_login = st.tabs(["🔐 Entrar", "📝 Criar Conta", "❓ Esqueci Senha", "🔄 Alterar Senha"])
-    
-    with abas_login[0]:
+with abas_login[0]:
         u = st.text_input("E-mail", key="l_email")
         s = st.text_input("Senha", type="password", key="l_pass")
         
-        # O botão deve estar alinhado exatamente abaixo do 's' de senha
         if st.button("Acessar Aplicativo"):
+            # 1. Abre a conexão
             conn = sqlite3.connect('usuarios.db')
-            # Busca o admin ou qualquer usuário no banco
-            user_db = conn.execute("SELECT * FROM users WHERE email=? AND senha=?", (u, s)).fetchone()
-            conn.close()
-            
-            if user_db:
-                st.session_state.logado = True
-                st.session_state.user_email = u
-                st.rerun()
-            else:
-                st.error("E-mail ou Senha incorretos.")
+            try:
+                # 2. Executa a busca
+                cursor = conn.execute("SELECT * FROM users WHERE email=? AND senha=?", (u, s))
+                user_valido = cursor.fetchone()
+                
+                if user_valido:
+                    st.session_state.logado = True
+                    st.session_state.user_email = u
+                    st.success(f"Bem-vindo!")
+                    st.rerun()
+                else:
+                    st.error("E-mail ou Senha incorretos.")
+            except Exception as e:
+                st.error(f"Erro no banco de dados: {e}")
+            finally:
+                # 3. Fecha a conexão SEMPRE ao final
+                conn.close()
                 
             # Esta linha abaixo é a que valida o admin ou qualquer usuário
             if conn.execute("SELECT * FROM users WHERE email=? AND senha=?", (u, s)).fetchone():
