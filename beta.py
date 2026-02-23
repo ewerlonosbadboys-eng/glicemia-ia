@@ -75,16 +75,20 @@ if not st.session_state.logado:
     with abas_login[0]:
         u = st.text_input("E-mail", key="l_email")
         s = st.text_input("Senha", type="password", key="l_pass")
-       if st.button("Acessar Aplicativo"):
+        
+        # O botão deve estar alinhado exatamente abaixo do 's' de senha
+        if st.button("Acessar Aplicativo"):
             conn = sqlite3.connect('usuarios.db')
+            # Busca o admin ou qualquer usuário no banco
             user_db = conn.execute("SELECT * FROM users WHERE email=? AND senha=?", (u, s)).fetchone()
             conn.close()
+            
             if user_db:
                 st.session_state.logado = True
                 st.session_state.user_email = u
                 st.rerun()
             else:
-                st.error("Dados incorretos.")
+                st.error("E-mail ou Senha incorretos.")
                 
             # Esta linha abaixo é a que valida o admin ou qualquer usuário
             if conn.execute("SELECT * FROM users WHERE email=? AND senha=?", (u, s)).fetchone():
