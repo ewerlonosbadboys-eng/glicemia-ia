@@ -10,6 +10,112 @@ from openpyxl.styles import PatternFill
 import sqlite3
 
 import sqlite3
+import smtplib
+from email.mime.text import MIMEText
+import urllib.parse
+
+import smtplib
+from email.mime.text import MIMEText
+import urllib.parse
+
+def enviar_link_recuperacao(email_destino):
+    meu_email = "ewerlon.osbadboys@gmail.com" # Coloque seu Gmail aqui
+    minha_senha = "lara542820" # Coloque a senha de 16 letras que o Google vai te dar
+    
+    # Substitua pelo link real do seu app que aparece no navegador
+    link_app = "https://glicemia-ia.streamlit.app" 
+    email_codificado = urllib.parse.quote(email_destino)
+    link_final = f"{link_app}/?reset=true&email={email_codificado}"
+    
+    corpo = f"""
+    <h3>Recuperação de Senha</h3>
+    <p>Clique no link abaixo para cadastrar uma nova senha:</p>
+    <a href='{link_final}'>Redefinir minha senha agora</a>
+    """
+    msg = MIMEText(corpo, 'html')
+    msg['Subject'] = 'Link de Redefinição - Glicemia IA'
+    msg['From'] = meu_email
+    msg['To'] = email_destino
+
+    try:
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
+            smtp.login(meu_email, minha_senha)
+            smtp.send_message(msg)
+        return True
+    except:
+        return False
+    # Verificador de link de e-mail
+query_params = st.query_params
+if "reset" in query_params and "email" in query_params:
+    st.session_state.reset_mode = True
+    st.session_state.email_reset = query_params["email"]
+
+# Se o link foi clicado, mostra essa tela em vez do login
+if st.session_state.get("reset_mode"):
+    st.title("🔐 Nova Senha")
+    st.info(f"Redefinindo para: {st.session_state.email_reset}")
+    nova_s = st.text_input("Digite a nova senha", type="password")
+    confirmar_s = st.text_input("Confirme a nova senha", type="password")
+    
+    if st.button("Salvar Nova Senha"):
+        if nova_s == confirmar_s:
+            conn = sqlite3.connect('usuarios.db')
+            c = conn.cursor()
+            c.execute("UPDATE users SET senha=? WHERE email=?", (nova_s, st.session_state.email_reset))
+            conn.commit()
+            conn.close()
+            st.success("Pronto! Senha alterada. Agora faça login normalmente.")
+            st.session_state.reset_mode = False
+            st.query_params.clear()
+            st.rerun()
+        else:
+            st.error("As senhas não são iguais!")
+    st.stop() # Trava a tela aqui para ele não ver o resto do app
+
+# FUNÇÃO QUE DISPARA O E-MAIL (Coloque aqui)
+def enviar_link_recuperacao(email_destino):
+    meu_email = "seu-email@gmail.com"  # SEU GMAIL AQUI
+    minha_senha = "xxxx xxxx xxxx xxxx" # SUA SENHA DE APP DO GOOGLE
+    
+    # Substitua pelo link real do seu app no Streamlit Cloud
+    link_app = "https://glicemia-ia.streamlit.app" 
+    email_codificado = urllib.parse.quote(email_destino)
+    link_final = f"{link_app}/?reset=true&email={email_codificado}"
+    
+    corpo = f"Clique aqui para trocar sua senha: {link_final}"
+    msg = MIMEText(corpo, 'html')
+    msg['Subject'] = 'Redefinição de Senha'
+    msg['From'] = meu_email
+    msg['To'] = email_destino
+
+    try:
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
+            smtp.login(meu_email, minha_senha)
+            smtp.send_message(msg)
+        return True
+    except:
+        return False
+
+# SENSOR DE LINK (Coloque antes de mostrar as abas)
+query_params = st.query_params
+if "reset" in query_params and "email" in query_params:
+    st.session_state.reset_mode = True
+    st.session_state.email_reset = query_params["email"]
+
+if st.session_state.get("reset_mode"):
+    st.title("🔐 Nova Senha")
+    nova_s = st.text_input("Digite a nova senha", type="password")
+    if st.button("Salvar"):
+        conn = sqlite3.connect('usuarios.db')
+        c = conn.cursor()
+        c.execute("UPDATE users SET senha=? WHERE email=?", (nova_s, st.session_state.email_reset))
+        conn.commit()
+        conn.close()
+        st.success("Senha alterada! Volte para a tela inicial.")
+        st.session_state.reset_mode = False
+        st.query_params.clear()
+        st.rerun()
+    st.stop() # Importante: Isso trava a tela aqui até ele resetar
 
 # --- BANCO DE DADOS DE USUÁRIOS ---
 def gerenciar_usuarios():
@@ -51,6 +157,15 @@ def enviar_email_recuperacao(email_destino, nova_senha):
     except Exception as e:
         print(f"Erro ao enviar: {e}")
         return False
+    # Procure a aba[2] ou onde está o "Esqueci Senha" e coloque:
+with abas[2]: # ou o índice correspondente
+    st.subheader("Recuperar Acesso")
+    email_alvo = st.text_input("Seu e-mail cadastrado", key="email_rec")
+    if st.button("Enviar E-mail de Recuperação"):
+        if enviar_link_recuperacao(email_alvo):
+            st.success("Link enviado com sucesso!")
+        else:
+            st.error("Erro ao enviar. Verifique sua Senha de App.")
     
 # Inicializa o estado de 'conta_criada' se não existir
 if 'logado' not in st.session_state:
