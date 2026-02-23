@@ -84,13 +84,13 @@ if not st.session_state.logado:
                 st.success("Cadastro atualizado! Agora entre na aba 'Entrar'.")
                 st.rerun()
                 
-                        # Ativa o gatilho para sumir com a aba
-                        st.session_state.conta_criada = True
+                # Ativa o gatilho para sumir com a aba
+                st.session_state.conta_criada = True
                         st.rerun()
-                    except:
-                        st.error("Este e-mail já está cadastrado.")
+                except:
+                st.error("Este e-mail já está cadastrado.")
                 else:
-                    st.warning("Preencha e-mail e senha.")
+                st.warning("Preencha e-mail e senha.")
 
         # Lógica da Aba Esqueci Senha (é a terceira quando tem criar conta)
         with abas[2]:
