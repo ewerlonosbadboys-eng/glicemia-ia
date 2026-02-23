@@ -22,6 +22,35 @@ def gerenciar_usuarios():
                  (nome TEXT, sobrenome TEXT, telefone TEXT, email TEXT PRIMARY KEY, senha TEXT)''')
     conn.commit()
     conn.close()
+    import smtplib
+from email.mime.text import MIMEText
+
+def enviar_email_recuperacao(email_destino, nova_senha):
+    # Configurações do seu e-mail (Use Gmail como exemplo)
+    meu_email = "seu-email@gmail.com"
+    minha_senha = "sua-senha-de-app-aqui" # Não é a senha normal, é a senha de app do Google
+    
+    corpo_email = f"""
+    <h3>Recuperação de Senha - App Glicemia</h3>
+    <p>Você solicitou a alteração de sua senha.</p>
+    <p>Sua nova senha temporária é: <b>{nova_senha}</b></p>
+    <p>Acesse o aplicativo aqui: <a href="https://seu-app.streamlit.app">Link do Aplicativo</a></p>
+    <p>Recomendamos trocar essa senha após o login.</p>
+    """
+    
+    msg = MIMEText(corpo_email, 'html')
+    msg['Subject'] = 'Alteração de Senha - App Glicemia'
+    msg['From'] = meu_email
+    msg['To'] = email_destino
+
+    try:
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
+            smtp.login(meu_email, minha_senha)
+            smtp.send_message(msg)
+        return True
+    except Exception as e:
+        print(f"Erro ao enviar: {e}")
+        return False
     
 # Inicializa o estado de 'conta_criada' se não existir
 if 'logado' not in st.session_state:
