@@ -92,28 +92,15 @@ if not st.session_state.logado:
                 st.success("Conta criada! Vá em 'Entrar'.")
             except: st.error("E-mail já existe.")
     
-    # Abas de Esqueci/Alterar simplificadas para o código não ficar gigante, mas mantendo a lógica
     with abas_login[2]:
-        em_rec = st.text_input("E-mail para recuperar", key="em_rec")
-        if st.button("Enviar Senha"):
-            st.info("Função de recuperação acionada.")
-            
-    st.stop()
-
-# ================= ÁREA LOGADA =================
-
-st.markdown("""
-<style>
-    .main { background-color: #f8fafc; }
-    .card { background-color: white; padding: 20px; border-radius: 15px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); margin-bottom: 20px; border: 1px solid #e2e8f0; }
-    .dose-alerta { background-color: #f0fdf4; padding: 15px; border-radius: 10px; border: 1px solid #16a34a; text-align: center; }
-</style>
-""", unsafe_allow_html=True)
-
-def carregar_dados(arq):
-    if not os.path.exists(arq): return pd.DataFrame()
-    df = pd.read_csv(arq)
-    if 'Usuario' not in df.columns: df['Usuario'] = st.session_state.user_email
-    return df[df['Usuario'] == st.session_state.user_email].copy()
-
-ALIMENTOS = {"Pão Francês": [28, 4, 1], "Leite (200ml)": [10, 6, 6], "Arroz": [15, 1,
+        email_alvo = st.text_input("E-mail da conta", key="rec_em")
+        if st.button("Enviar Nova Senha"):
+            conn = sqlite3.connect('usuarios.db')
+            c = conn.cursor()
+            if c.execute("SELECT email FROM users WHERE email=?", (email_alvo,)).fetchone():
+                nova = gerar_senha_temporaria()
+                c.execute("UPDATE users SET senha=? WHERE email=?", (nova, email_alvo))
+                conn.commit()
+                if enviar_senha_nova(email_alvo, nova): st.success("Senha enviada!")
+                else: st.error("Erro no envio.")
+            else: st.error("E-
