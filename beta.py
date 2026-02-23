@@ -247,17 +247,34 @@ if not st.session_state.logado:
                     # 2. Atualiza o Banco
                     c.execute("UPDATE users SET senha=? WHERE email=?", (nova_pwd, email_alvo))
                     conn.commit()
-                    # 3. Envia e-mail
-                    if enviar_senha_nova(email_alvo, nova_pwd):
-                        st.success(f"Senha enviada para {email_alvo}!")
-                    else:
-                        st.error("Erro ao enviar e-mail.")
-                else:
-                    st.error("E-mail não encontrado.")
-                conn.close()
-    st.stop()
-                    # 1. Gera a senha nova
+                    with abas_login[2]:
+        st.subheader("Recuperar Acesso")
+        email_alvo = st.text_input("Digite o e-mail cadastrado", key="rec_em_direto")
+        
+        if st.button("Gerar e Enviar Nova Senha"):
+            if email_alvo:
+                conn = sqlite3.connect('usuarios.db')
+                c = conn.cursor()
+                c.execute("SELECT email FROM users WHERE email=?", (email_alvo,))
+                if c.fetchone():
+                    # 1. GERA A SENHA NOVA
                     senha_gerada = gerar_senha_temporaria()
+                    
+                    # 2. ATUALIZA O BANCO DE DADOS
+                    c.execute("UPDATE users SET senha=? WHERE email=?", (senha_gerada, email_alvo))
+                    conn.commit()
+                    conn.close()
+                    
+                    # 3. ENVIA O E-MAIL
+                    if enviar_senha_nova(email_alvo, senha_gerada):
+                        st.success(f"✅ Nova senha enviada para {email_alvo}!")
+                    else:
+                        st.error("❌ Erro ao enviar e-mail.")
+                else:
+                    st.error("❌ E-mail não encontrado.")
+                    conn.close()
+            else:
+                st.warning("⚠️ Informe o e-mail.")
                     
                     # 2. Atualiza o banco (apaga a antiga)
                     c.execute("UPDATE users SET senha=? WHERE email=?", (senha_gerada, email_alvo))
