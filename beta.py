@@ -297,26 +297,38 @@ if st.sidebar.button("📥 Gerar Excel Colorido"):
 
 st.sidebar.download_button("Baixar Agora", output.getvalue(), file_name="Relatorio_Completo.xlsx")
 
-    # --- COLE ESTE BLOCO NO FINAL DO ARQUIVO (Lado de fora de qualquer if anterior) ---
+ # --- COLE EXATAMENTE ASSIM NO FINAL DO ARQUIVO ---
 
 # Verifica se o usuário logado é o admin para mostrar a aba de mensagens
 if st.session_state.user_email == "admin":
     with tabs[3]: # Esta aba só existe se for admin
         st.subheader("📬 Sugestões e Melhorias Recebidas")
-        # ... (restante do código de exibição)
+        if os.path.exists(ARQ_F):
+            df_feed = pd.read_csv(ARQ_F)
+            st.dataframe(df_feed.sort_index(ascending=False), use_container_width=True)
             if st.button("Limpar Histórico de Mensagens"):
                 os.remove(ARQ_F)
                 st.rerun()
         else:
             st.info("Nenhuma mensagem recebida ainda.")
 
-# Área da Barra Lateral (Sidebar)
+# Botão de Sair e Feedback na Barra Lateral
+st.sidebar.markdown("---")
+with st.sidebar.expander("🚀 Enviar Feedback ao Admin"):
+    txt_feed = st.text_area("O que podemos melhorar?", key="input_feedback")
+    if st.button("Enviar"):
+        if txt_feed:
+            agora = datetime.now(fuso_br).strftime("%d/%m/%Y %H:%M")
+            novo_f = pd.DataFrame([[st.session_state.user_email, agora, txt_feed]], columns=["Usuario", "Data", "Sugestão"])
+            base_f = pd.read_csv(ARQ_F) if os.path.exists(ARQ_F) else pd.DataFrame()
+            pd.concat([base_f, novo_f], ignore_index=True).to_csv(ARQ_F, index=False)
+            st.success("Enviado!")
+        else:
+            st.error("Escreva algo.")
+
 if st.sidebar.button("Sair"):
     st.session_state.logado = False
     st.rerun()
-
-
-
 
 
 
