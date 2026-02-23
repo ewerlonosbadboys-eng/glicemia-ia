@@ -77,6 +77,16 @@ if not st.session_state.logado:
         s = st.text_input("Senha", type="password", key="l_pass")
         if st.button("Acessar Aplicativo"):
             conn = sqlite3.connect('usuarios.db')
+            user_check = conn.execute("SELECT * FROM users WHERE email=? AND senha=?", (u, s)).fetchone()
+            conn.close()
+            
+            if user_check:
+                st.session_state.logado = True
+                st.session_state.user_email = u
+                st.rerun()
+            else:
+                st.error("E-mail ou Senha incorretos.")
+            conn = sqlite3.connect('usuarios.db')
             # Esta linha abaixo é a que valida o admin ou qualquer usuário
             if conn.execute("SELECT * FROM users WHERE email=? AND senha=?", (u, s)).fetchone():
                 st.session_state.logado = True
@@ -297,24 +307,25 @@ if st.sidebar.button("📥 Gerar Excel Colorido"):
 
 st.sidebar.download_button("Baixar Agora", output.getvalue(), file_name="Relatorio_Completo.xlsx")
 
- # --- COLE EXATAMENTE ASSIM NO FINAL DO ARQUIVO ---
+# --- FINAL DO ARQUIVO (SUBSTITUA TUDO DA LINHA 300 EM DIANTE) ---
 
-# Verifica se o usuário logado é o admin para mostrar a aba de mensagens
+# Aba de Mensagens exclusiva para o Admin
 if st.session_state.user_email == "admin":
-    with tabs[3]: # Esta aba só existe se for admin
+    with tabs[3]: 
         st.subheader("📬 Sugestões e Melhorias Recebidas")
         if os.path.exists(ARQ_F):
             df_feed = pd.read_csv(ARQ_F)
             st.dataframe(df_feed.sort_index(ascending=False), use_container_width=True)
             if st.button("Limpar Histórico de Mensagens"):
-                os.remove(ARQ_F)
-                st.rerun()
+                if os.path.exists(ARQ_F):
+                    os.remove(ARQ_F)
+                    st.rerun()
         else:
             st.info("Nenhuma mensagem recebida ainda.")
 
-# Botão de Sair e Feedback na Barra Lateral
+# Barra Lateral: Feedback e Botão Sair
 st.sidebar.markdown("---")
-with st.sidebar.expander("🚀 Enviar Feedback ao Admin"):
+with st.sidebar.expander("🚀 Enviar Sugestão ao Admin"):
     txt_feed = st.text_area("O que podemos melhorar?", key="input_feedback")
     if st.button("Enviar"):
         if txt_feed:
@@ -329,6 +340,5 @@ with st.sidebar.expander("🚀 Enviar Feedback ao Admin"):
 if st.sidebar.button("Sair"):
     st.session_state.logado = False
     st.rerun()
-
 
 
