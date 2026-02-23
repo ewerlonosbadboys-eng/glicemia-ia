@@ -20,7 +20,6 @@ ARQ_G = "dados_glicemia_BETA.csv"
 ARQ_N = "dados_nutricao_BETA.csv"
 ARQ_R = "config_receita_BETA.csv"
 
-# CSS para o layout de cards
 st.markdown("""
 <style>
     .main { background-color: #f1f5f9; }
@@ -167,8 +166,8 @@ with tab1:
     dfg = carregar_dados_seguro(ARQ_G)
     c1, c2 = st.columns([1, 2])
     with c1:
-        v_gl = st.number_input("Valor", 0, 600, 100)
-        m_gl = st.selectbox("Momento", MOMENTOS_ORDEM)
+        v_gl = st.number_input("Valor", 0, 600, 100, key="v_gl_in")
+        m_gl = st.selectbox("Momento", MOMENTOS_ORDEM, key="m_gl_in")
         dose, msg_d = calc_insulina(v_gl, m_gl)
         st.markdown(f'<div class="metric-box"><small>{msg_d}</small><br><span class="dose-destaque">{dose}</span></div>', unsafe_allow_html=True)
         if st.button("💾 Salvar Glicemia"):
@@ -190,14 +189,22 @@ with tab1:
 with tab2:
     st.markdown('<div class="card">', unsafe_allow_html=True)
     dfn = carregar_dados_seguro(ARQ_N)
+    
+    # NOVAS ABAS DE MOMENTOS NA NUTRIÇÃO
+    st.write("### Registrar Refeição por Momento")
+    m_nutri = st.selectbox("Selecione o Momento da Refeição", MOMENTOS_ORDEM, key="m_nutri_sel")
     sel = st.multiselect("Alimentos", list(ALIMENTOS.keys()))
+    
     if st.button("💾 Salvar Alimentação"):
         carb = sum([ALIMENTOS[x][0] for x in sel])
         agora = datetime.now(fuso_br)
-        novo_n = pd.DataFrame([[st.session_state.user_email, agora.strftime("%d/%m/%Y"), ", ".join(sel), carb]], columns=["Usuario","Data","Info","C"])
+        # Agora salvamos também o MOMENTO na nutrição
+        novo_n = pd.DataFrame([[st.session_state.user_email, agora.strftime("%d/%m/%Y"), m_nutri, ", ".join(sel), carb]], 
+                             columns=["Usuario","Data","Momento","Info","C"])
         base = pd.read_csv(ARQ_N) if os.path.exists(ARQ_N) else pd.DataFrame()
         pd.concat([base, novo_n], ignore_index=True).to_csv(ARQ_N, index=False)
         st.rerun()
+        
     st.write("### Histórico de Nutrição")
     st.dataframe(dfn.tail(15), use_container_width=True)
     st.markdown('</div>', unsafe_allow_html=True)
