@@ -7,6 +7,28 @@ import plotly.express as px
 import pytz
 from openpyxl.styles import PatternFill
 
+# --- CONTROLE DE ACESSO (ADICIONAR NO TOPO) ---
+if 'logado' not in st.session_state:
+    st.session_state.logado = False
+
+# Se não estiver logado, desenha a tela de login e para o código aqui
+if not st.session_state.logado:
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.title("🔐 Acesso ao Saúde Kids")
+    
+    u = st.text_input("E-mail")
+    s = st.text_input("Senha", type="password")
+    
+    if st.button("Entrar no Sistema"):
+        if u == "admin@saude.com" and s == "12345":
+            st.session_state.logado = True
+            st.rerun()
+        else:
+            st.error("Incorreto")
+    st.markdown('</div>', unsafe_allow_html=True)
+    
+    st.stop() # Esta linha é o segredo: ela impede que o resto do app apareça
+
 # ================= CONFIGURAÇÕES INICIAIS =================
 fuso_br = pytz.timezone('America/Sao_Paulo')
 st.set_page_config(page_title="Saúde Kids BETA - v17", page_icon="🧪", layout="wide")
