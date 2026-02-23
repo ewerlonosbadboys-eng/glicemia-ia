@@ -70,7 +70,8 @@ if 'logado' not in st.session_state:
 
 if not st.session_state.logado:
     st.title("🧪 Saúde Kids - Acesso")
-    abas_login = st.tabs(["🔐 Entrar", "📝 Criar Conta", "❓ Esqueci Senha"])
+    # ADICIONADA A QUARTA ABA: ALTERAR SENHA
+    abas_login = st.tabs(["🔐 Entrar", "📝 Criar Conta", "❓ Esqueci Senha", "🔄 Alterar Senha"])
 
     with abas_login[0]:
         u = st.text_input("E-mail", key="l_email")
@@ -112,13 +113,10 @@ if not st.session_state.logado:
                 c = conn.cursor()
                 c.execute("SELECT email FROM users WHERE email=?", (email_alvo,))
                 if c.fetchone():
-                    # Geração da senha e atualização do banco
                     senha_gerada = gerar_senha_temporaria()
                     c.execute("UPDATE users SET senha=? WHERE email=?", (senha_gerada, email_alvo))
                     conn.commit()
                     conn.close()
-                    
-                    # Envio do e-mail
                     if enviar_senha_nova(email_alvo, senha_gerada):
                         st.success(f"✅ Senha enviada para {email_alvo}!")
                     else:
@@ -128,191 +126,145 @@ if not st.session_state.logado:
                     conn.close()
             else:
                 st.warning("Informe o e-mail.")
+
+    with abas_login[3]:
+        st.subheader("Alterar Minha Senha")
+        alt_email = st.text_input("Confirme seu e-mail", key="alt_em")
+        alt_antiga = st.text_input("Senha Atual", type="password", key="alt_ant")
+        alt_nova1 = st.text_input("Nova Senha", type="password", key="alt_n1")
+        alt_nova2 = st.text_input("Repita a Nova Senha", type="password", key="alt_n2")
+        
+        if st.button("Confirmar Alteração"):
+            if alt_nova1 != alt_nova2:
+                st.error("As novas senhas não coincidem!")
+            elif not alt_email or not alt_antiga or not alt_nova1:
+                st.warning("Preencha todos os campos.")
+            else:
+                conn = sqlite3.connect('usuarios.db')
+                c = conn.cursor()
+                c.execute("SELECT * FROM users WHERE email=? AND senha=?", (alt_email, alt_antiga))
+                if c.fetchone():
+                    c.execute("UPDATE users SET senha=? WHERE email=?", (alt_nova1, alt_email))
+                    conn.commit()
+                    st.success("✅ Senha alterada com sucesso! Volte na aba 'Entrar'.")
+                else:
+                    st.error("E-mail ou senha atual incorretos.")
+                conn.close()
     st.stop()
 
 # ================= ÁREA LOGADA =================
 
-# ================= ESTILO VISUAL =================
-st.markdown("""
-<style>
-.main {background-color: #f8fafc;}
-.card { background-color: white; padding: 25px; border-radius: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); margin-bottom: 25px; }
-.dose-alerta { background-color: #f0fdf4; padding: 20px; border-radius: 12px; border: 2px solid #16a34a; text-align: center; margin-top: 10px; }
-</style>
-""", unsafe_allow_html=True)
+def carregar_dados(arq, colunas):
+    if os.path.exists(arq):
+        return pd.read_csv(arq)
+    return pd.DataFrame(columns=colunas)
 
-# ================= CORES COM PRIORIDADE =================
-def cor_glicemia(v):
-    if v == "-" or pd.isna(v): return ""
-    try:
-        n = int(str(v).split(" ")[0])
-        if n < 70:
-            return 'background-color: #FFFFE0; color: black'
-        elif n > 180:
-            return 'background-color: #FFB6C1; color: black'
-        elif n > 140:
-            return 'background-color: #FFFFE0; color: black'
-        else:
-            return 'background-color: #90EE90; color: black'
-    except:
-        return ""
+def salvar_dados(df, arq):
+    df.to_csv(arq, index=False)
 
-# ================= FUNÇÕES DE APOIO =================
-def carregar(arq):
-    return pd.read_csv(arq) if os.path.exists(arq) else pd.DataFrame()
+st.sidebar.title("Bem-vindo!")
+if st.sidebar.button("Sair"):
+    st.session_state.logado = False
+    st.rerun()
 
-ALIMENTOS = {
-    "Pão Francês": [28, 4, 1], "Leite (200ml)": [10, 6, 6],
-    "Arroz": [15, 1, 0], "Feijão": [14, 5, 0],
-    "Frango": [0, 23, 5], "Ovo": [1, 6, 5],
-    "Banana": [22, 1, 0], "Maçã": [15, 0, 0]
-}
+t1, t2, t3, t4 = st.tabs(["📊 Glicemia", "🍲 Alimentação", "💉 Insulina/Receita", "📈 Relatórios"])
 
-def calcular_insulina_automatica(valor, momento):
-    df_r = carregar(ARQ_R)
-    if df_r.empty:
-        return "Configurar Receita", "⚠️ Vá na aba 'Receita'"
-    
-    r = df_r.iloc[0]
-    prefixo = "manha" if momento in ["Antes Café", "Após Café", "Antes Almoço", "Após Almoço", "Antes Merenda"] else "noite"
-    
-    if valor < 70: return "0 UI", "⚠️ Hipoglicemia! Tratar agora."
-    elif 70 <= valor <= 200: dose = r[f'{prefixo}_f1']
-    elif 201 <= valor <= 400: dose = r[f'{prefixo}_f2']
-    else: dose = r[f'{prefixo}_f3']
-    
-    return f"{int(dose)} UI", f"Tabela {prefixo.capitalize()}"
-
-# ================= DEFINIÇÃO DAS ABAS (CÂMERA REMOVIDA) =================
-t1, t2, t3 = st.tabs(["📊 Glicemia", "🍽️ Alimentação", "⚙️ Receita"])
-
-# --- ABA 1: GLICEMIA ---
 with t1:
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    c1, c2 = st.columns(2)
-    dfg = carregar(ARQ_G)
-
-    with c1:
-        st.subheader("📝 Novo Registro")
-        v = st.number_input("Valor da Glicemia (mg/dL):", min_value=0, value=100)
-        m = st.selectbox("Momento:", ["Antes Café", "Após Café", "Antes Almoço", "Após Almoço", "Antes Merenda", "Antes Janta", "Após Janta", "Madrugada"])
+    st.header("Controle de Glicemia")
+    df_g = carregar_dados(ARQ_G, ['Data', 'Hora', 'Valor', 'Momento'])
+    
+    with st.expander("Novo Registro"):
+        col1, col2, col3, col4 = st.columns(4)
+        data = col1.date_input("Data", datetime.now(fuso_br))
+        hora = col2.time_input("Hora", datetime.now(fuso_br))
+        valor = col3.number_input("Valor (mg/dL)", min_value=20, max_value=600, value=100)
+        momento = col4.selectbox("Momento", ["Jejum", "Pré-Almoço", "Pós-Almoço", "Pré-Jantar", "Pós-Jantar", "Madrugada", "Outro"])
         
-        dose_sug, ref_tab = calcular_insulina_automatica(v, m)
-        st.markdown(f"""<div class="dose-alerta">
-            <p style="margin:0; color:#166534;">Dose Sugerida:</p>
-            <h1 style="margin:0; color:#15803d;">{dose_sug}</h1>
-            <small>{ref_tab}</small>
-        </div>""", unsafe_allow_html=True)
-
-        if st.button("💾 Salvar Registro"):
-            agora = datetime.now(fuso_br)
-            novo = pd.DataFrame([[agora.strftime("%d/%m/%Y"), agora.strftime("%H:%M"), v, m, dose_sug]],
-                                columns=["Data", "Hora", "Valor", "Momento", "Dose"])
-            pd.concat([dfg, novo], ignore_index=True).to_csv(ARQ_G, index=False)
-            st.success("Salvo com sucesso!")
+        if st.button("Salvar Glicemia"):
+            novo_d = pd.DataFrame([[data.strftime('%d/%m/%Y'), hora.strftime('%H:%M'), valor, momento]], 
+                                columns=['Data', 'Hora', 'Valor', 'Momento'])
+            df_g = pd.concat([df_g, novo_d], ignore_index=True)
+            salvar_dados(df_g, ARQ_G)
+            st.success("Salvo!")
             st.rerun()
 
-    with c2:
-        if not dfg.empty:
-            dfg['DataHora'] = pd.to_datetime(dfg['Data'] + " " + dfg['Hora'], dayfirst=True)
-            fig = px.line(dfg.tail(10), x='DataHora', y='Valor', markers=True, title="Evolução Recente")
-            st.plotly_chart(fig, use_container_width=True)
+    if not df_g.empty:
+        fig = px.line(df_g, x='Data', y='Valor', color='Momento', title="Evolução Glicêmica", markers=True)
+        st.plotly_chart(fig, use_container_width=True)
+        st.dataframe(df_g.sort_index(ascending=False), use_container_width=True)
 
-    if not dfg.empty:
-        st.subheader("📋 Histórico")
-        st.dataframe(dfg.tail(10), use_container_width=True)
-    st.markdown('</div>', unsafe_allow_html=True)
-
-# --- ABA 2: ALIMENTAÇÃO ---
 with t2:
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.subheader("🍽️ Controle de Nutrientes")
-    ca1, ca2 = st.columns(2)
+    st.header("Diário Alimentar")
+    df_n = carregar_dados(ARQ_N, ['Data', 'Refeição', 'Descrição', 'Carbo(g)'])
+    
+    with st.expander("Registrar Refeição"):
+        c1, c2, c3 = st.columns([1,2,1])
+        refeicao = c1.selectbox("Refeição", ["Café", "Lanche M", "Almoço", "Lanche T", "Jantar", "Ceia"])
+        desc = c2.text_input("O que comeu?")
+        carb = c3.number_input("Carbos (g)", min_value=0)
+        
+        if st.button("Salvar Refeição"):
+            novo_n = pd.DataFrame([[datetime.now(fuso_br).strftime('%d/%m/%Y'), refeicao, desc, carb]], 
+                                 columns=['Data', 'Refeição', 'Descrição', 'Carbo(g)'])
+            df_n = pd.concat([df_n, novo_n], ignore_index=True)
+            salvar_dados(df_n, ARQ_N)
+            st.rerun()
+    st.dataframe(df_n, use_container_width=True)
 
-    with ca1:
-        escolha = st.multiselect("Alimentos:", list(ALIMENTOS.keys()))
-        carb = sum([ALIMENTOS[i][0] for i in escolha])
-        prot = sum([ALIMENTOS[i][1] for i in escolha])
-        gord = sum([ALIMENTOS[i][2] for i in escolha])
-
-        st.info(f"Totais: Carboidratos: {carb}g | Proteínas: {prot}g | Gorduras: {gord}g")
-
-        if st.button("💾 Salvar Alimentação"):
-            agora = datetime.now(fuso_br)
-            txt = f"{', '.join(escolha)} (C:{carb} P:{prot} G:{gord})"
-            novo_n = pd.DataFrame([[agora.strftime("%d/%m/%Y"), txt, carb, prot, gord]],
-                                 columns=["Data", "Info", "C", "P", "G"])
-            pd.concat([carregar(ARQ_N), novo_n], ignore_index=True).to_csv(ARQ_N, index=False)
+with t3:
+    st.header("Configuração de Insulina")
+    df_r = carregar_dados(ARQ_R, ['Relacao', 'Sensibilidade', 'Meta'])
+    
+    if df_r.empty:
+        st.warning("Configure seus fatores primeiro.")
+        rel = st.number_input("Relação Carbo (1U para X gramas)", value=15)
+        sens = st.number_input("Fator de Sensibilidade", value=50)
+        meta = st.number_input("Meta Glicêmica", value=100)
+        if st.button("Salvar Configuração"):
+            df_r = pd.DataFrame([[rel, sens, meta]], columns=['Relacao', 'Sensibilidade', 'Meta'])
+            salvar_dados(df_r, ARQ_R)
+            st.rerun()
+    else:
+        st.info(f"Fatores: 1U/{df_r['Relacao'][0]}g | Sensibilidade: {df_r['Sensibilidade'][0]} | Meta: {df_r['Meta'][0]}")
+        if st.button("Resetar Fatores"):
+            if os.path.exists(ARQ_R): os.remove(ARQ_R)
             st.rerun()
 
-    with ca2:
-        dfn = carregar(ARQ_N)
-        if not dfn.empty:
-            fig2 = px.pie(values=[dfn['C'].sum(), dfn['P'].sum(), dfn['G'].sum()],
-                         names=['Carbo', 'Prot', 'Gord'], title="Distribuição Nutricional Total")
-            st.plotly_chart(fig2, use_container_width=True)
-    st.markdown('</div>', unsafe_allow_html=True)
-
-# --- ABA 3: RECEITA (Antiga Configuração) ---
-with t3:
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.subheader("⚙️ Configurar Doses do Médico (Receita)")
+with t4:
+    st.header("Gerar Relatório Excel")
     
-    df_r = carregar(ARQ_R)
-    v_at = df_r.iloc[0] if not df_r.empty else {'manha_f1':0, 'manha_f2':0, 'manha_f3':0, 'noite_f1':0, 'noite_f2':0, 'noite_f3':0}
-    
-    col_m, col_n = st.columns(2)
-    with col_m:
-        st.info("**☀️ Café / Almoço / Merenda**")
-        mf1 = st.number_input("Dose 70-200:", value=int(v_at['manha_f1']), key="mf1")
-        mf2 = st.number_input("Dose 201-400:", value=int(v_at['manha_f2']), key="mf2")
-        mf3 = st.number_input("Dose > 400:", value=int(v_at['manha_f3']), key="mf3")
-    with col_n:
-        st.info("**🌙 Jantar / Madrugada**")
-        nf1 = st.number_input("Dose 70-200:", value=int(v_at['noite_f1']), key="nf1")
-        nf2 = st.number_input("Dose 201-400:", value=int(v_at['noite_f2']), key="nf2")
-        nf3 = st.number_input("Dose > 400:", value=int(v_at['noite_f3']), key="nf3")
-        
-    if st.button("💾 Salvar Receita"):
-        pd.DataFrame([{'manha_f1':mf1, 'manha_f2':mf2, 'manha_f3':mf3, 'noite_f1':nf1, 'noite_f2':nf2, 'noite_f3':nf3}]).to_csv(ARQ_R, index=False)
-        st.success("Receita atualizada!")
-        st.rerun()
-    st.markdown('</div>', unsafe_allow_html=True)
+    def gerar_excel():
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df_glic = carregar_dados(ARQ_G, [])
+            df_nutri = carregar_dados(ARQ_N, [])
+            
+            if not df_glic.empty:
+                df_temp = df_glic.copy()
+                df_temp['Exibe'] = df_temp['Valor'].astype(str) + " (" + df_temp['Hora'] + ")"
+                pivot = df_temp.pivot_table(index='Data', columns='Momento', values='Exibe', aggfunc='last').fillna("-")
+                pivot.to_excel(writer, sheet_name='Glicemia')
+                ws = writer.sheets['Glicemia']
 
-# ================= EXCEL COLORIDO =================
-def gerar_excel_colorido(df_glic, df_nutri):
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        if not df_glic.empty:
-            df_glic = df_glic.copy()
-            df_glic['Exibe'] = df_glic['Valor'].astype(str) + " (" + df_glic['Hora'] + ")"
-            pivot = df_glic.pivot_table(index='Data', columns='Momento', values='Exibe', aggfunc='last').fillna("-")
-            pivot.to_excel(writer, sheet_name='Glicemia')
-            ws = writer.sheets['Glicemia']
+                v_fill = PatternFill(start_color="90EE90", end_color="90EE90", fill_type="solid")
+                a_fill = PatternFill(start_color="FFFFE0", end_color="FFFFE0", fill_type="solid")
+                r_fill = PatternFill(start_color="FFB6C1", end_color="FFB6C1", fill_type="solid")
 
-            v_fill = PatternFill(start_color="90EE90", end_color="90EE90", fill_type="solid")
-            a_fill = PatternFill(start_color="FFFFE0", end_color="FFFFE0", fill_type="solid")
-            r_fill = PatternFill(start_color="FFB6C1", end_color="FFB6C1", fill_type="solid")
+                for row in ws.iter_rows(min_row=2, min_col=2):
+                    for cell in row:
+                        if cell.value and cell.value != "-":
+                            try:
+                                val = int(str(cell.value).split(" ")[0])
+                                if val < 70: cell.fill = a_fill
+                                elif val > 180: cell.fill = r_fill
+                                elif val > 140: cell.fill = a_fill
+                                else: cell.fill = v_fill
+                            except: pass
 
-            for row in ws.iter_rows(min_row=2, min_col=2):
-                for cell in row:
-                    if cell.value and cell.value != "-":
-                        try:
-                            val = int(str(cell.value).split(" ")[0])
-                            if val < 70: cell.fill = a_fill
-                            elif val > 180: cell.fill = r_fill
-                            elif val > 140: cell.fill = a_fill
-                            else: cell.fill = v_fill
-                        except: pass
+            if not df_nutri.empty:
+                df_nutri.to_excel(writer, index=False, sheet_name='Alimentacao')
+        return output.getvalue()
 
-        if not df_nutri.empty:
-            df_nutri.to_excel(writer, index=False, sheet_name='Alimentacao')
-    return output.getvalue()
-
-st.markdown("---")
-if st.button("📥 BAIXAR RELATÓRIO EXCEL"):
-    dfg = carregar(ARQ_G)
-    dfn = carregar(ARQ_N)
-    if not dfg.empty:
-        excel_data = gerar_excel_colorido(dfg, dfn)
-        st.download_button("Clique para Baixar", excel_data, file_name="Relatorio_Medico.xlsx")
+    if st.button("📥 BAIXAR RELATÓRIO EXCEL"):
+        dados_ex = gerar_excel()
+        st.download_button("Clique aqui para baixar", dados_ex, "relatorio_saude_kids.xlsx")
