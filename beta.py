@@ -25,26 +25,19 @@ ARQ_R = "config_receita_BETA.csv"
 # ================= FUNÇÕES DE SEGURANÇA =================
 
 def gerar_senha_temporaria(tamanho=6):
-    """Gera uma senha aleatória de letras e números"""
+    """Gera senha aleatória"""
     caracteres = string.ascii_letters + string.digits
     return ''.join(random.choice(caracteres) for i in range(tamanho))
 
 def enviar_senha_nova(email_destino, senha_nova):
-    """Envia a senha gerada diretamente para o e-mail"""
+    """Envia e-mail direto"""
     meu_email = "ewerlon.osbadboys@gmail.com" 
     minha_senha = "okiu qihp lglk trcc" 
-    
-    corpo = f"""
-    <h3>Saúde Kids - Nova Senha Gerada</h3>
-    <p>Sua senha antiga foi resetada por segurança.</p>
-    <p>Sua nova senha de acesso é: <b style='font-size: 20px; color: blue;'>{senha_nova}</b></p>
-    <p>Use esta senha para entrar no aplicativo agora.</p>
-    """
+    corpo = f"<h3>Saúde Kids</h3><p>Sua nova senha de acesso é: <b>{senha_nova}</b></p>"
     msg = MIMEText(corpo, 'html')
     msg['Subject'] = 'Sua Nova Senha - Saúde Kids'
     msg['From'] = meu_email
     msg['To'] = email_destino
-
     try:
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
             smtp.login(meu_email, minha_senha)
@@ -106,29 +99,32 @@ if not st.session_state.logado:
         st.subheader("Recuperar Acesso")
         email_alvo = st.text_input("Digite o e-mail da conta", key="rec_em_direto")
         
-        if st.button("Enviar Nova Senha"):
+        if st.button("Gerar e Enviar Nova Senha"):
             if email_alvo:
                 conn = sqlite3.connect('usuarios.db')
                 c = conn.cursor()
+                # Verifica se o e-mail existe no banco
                 c.execute("SELECT email FROM users WHERE email=?", (email_alvo,))
                 if c.fetchone():
-                    # 1. Gera senha
+                    # 1. Gera a senha nova (Aqui estava o erro de espaço!)
                     senha_gerada = gerar_senha_temporaria()
-                    # 2. Atualiza Banco
+                    
+                    # 2. Atualiza o banco (Reseta a antiga)
                     c.execute("UPDATE users SET senha=? WHERE email=?", (senha_gerada, email_alvo))
                     conn.commit()
-                    # 3. Envia E-mail
+                    conn.close()
+                    
+                    # 3. Envia o e-mail com a senha nova
                     if enviar_senha_nova(email_alvo, senha_gerada):
-                        st.success(f"✅ Senha enviada para {email_alvo}!")
+                        st.success(f"✅ Senha resetada! A nova senha foi enviada para {email_alvo}.")
                     else:
-                        st.error("Erro ao enviar e-mail.")
+                        st.error("❌ Erro ao enviar e-mail.")
                 else:
-                    st.error("E-mail não cadastrado.")
-                conn.close()
+                    st.error("❌ E-mail não encontrado no sistema.")
+                    conn.close()
             else:
-                st.warning("Informe o e-mail.")
-    st.stop()
-
+                st.warning("⚠️ Digite o e-mail primeiro.")
+                
 # ================= ÁREA LOGADA (GLICEMIA / ALIMENTAÇÃO) =================
 # O restante do seu código (t1, t2, t3) deve vir aqui abaixo...
 st.success("Você está logado!")
