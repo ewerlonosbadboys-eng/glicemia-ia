@@ -11,53 +11,50 @@ import smtplib
 from email.mime.text import MIMEText
 import urllib.parse
 
-# 1. CONFIGURAÇÕES INICIAIS
+# 1. CONFIGURAÇÃO INICIAL
 st.set_page_config(page_title="Saúde Kids BETA", page_icon="🧪", layout="wide")
 
 # =========================================================
-# LÓGICA DE REDIRECIONAMENTO (O CORAÇÃO DO PROBLEMA)
+# 2. LOGICA DE EMERGÊNCIA - REDIRECIONAMENTO DE SENHA
 # =========================================================
-
-# Pegamos os dados do link (ex: ?reset=true&email=...)
+# Pegamos os parâmetros direto da URL (o que vem depois do ?)
 params = st.query_params
 
-# Se o link contém "reset", travamos o app na tela de senha
-if "reset" in params:
-    email_para_reset = params.get("email")
+if "reset" in params and "email" in params:
+    # Se o link tiver 'reset', o app PARA aqui e mostra SÓ isso:
+    email_alvo = params["email"]
     
-    st.title("🔐 Redefinir sua Senha")
-    st.markdown(f"Você está alterando a senha de: **{email_para_reset}**")
+    st.title("🔐 Redefinição de Senha")
+    st.markdown(f"Alterando senha para: **{email_alvo}**")
     
-    nova_senha = st.text_input("Nova Senha", type="password", key="new_pwd_reset")
-    confirmar_senha = st.text_input("Confirme a Nova Senha", type="password", key="conf_pwd_reset")
+    nova_pwd = st.text_input("Nova Senha", type="password", key="reset_key_1")
+    conf_pwd = st.text_input("Confirme a Nova Senha", type="password", key="reset_key_2")
     
     if st.button("Gravar Nova Senha"):
-        if nova_senha == confirmar_senha and len(nova_senha) >= 4:
+        if nova_pwd == conf_pwd and len(nova_pwd) >= 4:
             conn = sqlite3.connect('usuarios.db')
             c = conn.cursor()
-            c.execute("UPDATE users SET senha=? WHERE email=?", (nova_senha, email_para_reset))
+            c.execute("UPDATE users SET senha=? WHERE email=?", (nova_pwd, email_alvo))
             conn.commit()
             conn.close()
             
             st.success("✅ Senha alterada com sucesso!")
-            st.info("Clique no botão abaixo para ir ao login.")
-            
-            # Botão para limpar o link e voltar ao normal
-            if st.button("Ir para o Login"):
+            # Botão para limpar a URL e voltar ao normal
+            if st.button("Voltar para o Login"):
                 st.query_params.clear()
                 st.rerun()
         else:
-            st.error("❌ As senhas não conferem ou são muito curtas.")
+            st.error("As senhas não coincidem ou são curtas demais.")
             
-    if st.button("Cancelar e Sair"):
+    if st.button("Cancelar"):
         st.query_params.clear()
         st.rerun()
 
-    # O st.stop() aqui é obrigatório: ele impede que o login apareça embaixo
+    # IMPORTANTE: Este stop impede que qualquer erro de abas ou login apareça
     st.stop() 
 
 # =========================================================
-# FUNÇÕES DE E-MAIL E LOGIN (SÓ CARREGA SE NÃO ESTIVER RESETANDO)
+# 3. FUNÇÕES DO SISTEMA (E-MAIL E BANCO)
 # =========================================================
 
 def enviar_link_recuperacao(email_destino):
@@ -65,17 +62,12 @@ def enviar_link_recuperacao(email_destino):
     minha_senha = "okiu qihp lglk trcc" 
     link_app = "https://glicemia-ia.streamlit.app" 
     email_codificado = urllib.parse.quote(email_destino)
-    # Criamos o link exatamente como o sensor lá de cima espera
+    # O link precisa ter o ?reset=true
     link_final = f"{link_app}/?reset=true&email={email_codificado}"
     
-    corpo = f"""
-    <h2>Recuperação de Senha - Saúde Kids</h2>
-    <p>Você solicitou a troca de senha. Clique no botão abaixo:</p>
-    <a href='{link_final}' style='padding:10px; background-color:blue; color:white; text-decoration:none; border-radius:5px;'>REDEFINIR SENHA</a>
-    <p>Se o botão não funcionar, copie o link: {link_final}</p>
-    """
+    corpo = f"<h3>Saúde Kids</h3><p>Clique abaixo para trocar sua senha:</p><a href='{link_final}'>TROCAR SENHA</a>"
     msg = MIMEText(corpo, 'html')
-    msg['Subject'] = 'Recuperação de Senha'
+    msg['Subject'] = 'Recuperação de Acesso'
     msg['From'] = meu_email
     msg['To'] = email_destino
 
@@ -87,6 +79,46 @@ def enviar_link_recuperacao(email_destino):
     except:
         return False
 
+# =========================================================
+# 4. TELA DE LOGIN (SÓ CARREGA SE NÃO ESTIVER RESETANDO)
+# =========================================================
+if 'logado' not in st.session_state:
+    st.session_state.logado = False
+
+if not st.session_state.logado:
+    st.title("🧪 Acesso ao Sistema")
+    # Abas fixas para evitar o erro de IndexError
+    t_login, t_cad, t_rec = st.tabs(["🔐 Entrar", "📝 Cadastro", "❓ Esqueci"])
+    
+    with t_login:
+        user_log = st.text_input("E-mail", key="u_log")
+        pass_log = st.text_input("Senha", type="password", key="p_log")
+        if st.button("Entrar"):
+            conn = sqlite3.connect('usuarios.db')
+            c = conn.cursor()
+            c.execute("SELECT * FROM users WHERE email=? AND senha=?", (user_log, pass_log))
+            if c.fetchone():
+                st.session_state.logado = True
+                st.rerun()
+            else:
+                st.error("E-mail ou senha incorretos.")
+            conn.close()
+
+    with t_rec:
+        st.subheader("Esqueci minha senha")
+        email_rec = st.text_input("Seu e-mail cadastrado", key="em_rec")
+        if st.button("Enviar Link"):
+            if enviar_link_recuperacao(email_rec):
+                st.success("Link enviado! Verifique seu e-mail.")
+            else:
+                st.error("Erro ao enviar.")
+    
+    st.stop() # Bloqueia o app para quem não está logado
+
+# =========================================================
+# 5. RESTANTE DO APP (GRÁFICOS, ETC)
+# =========================================================
+# Cole aqui suas abas de Glicemia e Alimentação...
 # Daqui para baixo segue seu código normal de Login e as abas t1, t2, t3...
 
 # ================= 6. RESTANTE DO APP (GRÁFICOS, ETC) =================
