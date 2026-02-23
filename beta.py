@@ -249,7 +249,9 @@ if not st.session_state.logado:
                     conn.commit()
                     with abas_login[2]:
         # ESTA LINHA ABAIXO PRECISA DE 8 ESPAÇOS (OU 2 TABS) ANTES DO TEXTO
-        st.subheader("Recuperar Acesso")
+
+        
+                st.subheader("Recuperar Acesso")
         email_alvo = st.text_input("Digite seu e-mail cadastrado", key="rec_em_direto")
         
         if st.button("Gerar e Enviar Nova Senha"):
