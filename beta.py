@@ -58,11 +58,11 @@ def init_db():
     conn = sqlite3.connect('usuarios.db')
     conn.execute('''CREATE TABLE IF NOT EXISTS users (nome TEXT, email TEXT PRIMARY KEY, senha TEXT)''')
     # Cria o Admin se ele ainda não existir na base
-    try:
-        conn.execute("INSERT INTO users VALUES (?,?,?)", ("Administrador", "admin", "542820"))
-        conn.commit()
-    except: pass
-    conn.close()
+   # Linhas 54 a 58
+try:
+    conn.execute("INSERT INTO users VALUES (?,?,?)", ("Administrador", "admin", "542820"))
+    conn.commit()
+except: pass
 
 init_db()
 if 'logado' not in st.session_state: st.session_state.logado = False
@@ -124,12 +124,12 @@ if not st.session_state.logado:
     st.stop()
 
 # ================= FUNÇÕES DE APOIO =================
+# Linhas 115 a 118
 def carregar_dados_seguro(arq):
     if not os.path.exists(arq): return pd.DataFrame()
     df = pd.read_csv(arq)
-    # NOVO: Se for o admin, ele vê os dados de toda a gente
     if st.session_state.user_email == "admin":
-        return df
+        return df  # <--- Aqui ele libera tudo
     return df[df['Usuario'] == st.session_state.user_email].copy()
 
 def calc_insulina(v, m):
