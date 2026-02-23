@@ -166,6 +166,60 @@ if not st.session_state.logado:
     
     st.stop() # Bloqueia o app para quem não está logado
 
+# --- LÓGICA DE DETECÇÃO DO LINK ---
+params = st.query_params
+# Só ativa a 4ª aba se o link tiver "reset=true"
+modo_reset = "reset" in params and "email" in params
+
+# --- DEFINIÇÃO DINÂMICA DAS ABAS ---
+if modo_reset:
+    titulos = ["🔐 Entrar", "📝 Cadastro", "❓ Esqueci", "🔑 MUDAR SENHA"]
+else:
+    titulos = ["🔐 Entrar", "📝 Cadastro", "❓ Esqueci"]
+
+# Cria as abas (se tiver link, cria 4. Se não, cria 3)
+abas = st.tabs(titulos)
+
+# ABA 1: LOGIN
+with abas[0]:
+    st.subheader("Login")
+    # ... seu código de login aqui ...
+
+# ABA 2: CADASTRO
+with abas[1]:
+    st.subheader("Criar Conta")
+    # ... seu código de cadastro aqui ...
+
+# ABA 3: ESQUECI A SENHA
+with abas[2]:
+    st.subheader("Recuperar Acesso")
+    email_rec = st.text_input("Seu e-mail", key="email_rec_v1")
+    if st.button("Enviar Link"):
+        if enviar_link_recuperacao(email_rec):
+            st.success("Link enviado! Clique nele no seu e-mail para liberar a 4ª aba aqui.")
+
+# ABA 4: MUDAR SENHA (SÓ EXISTE SE MODO_RESET FOR TRUE)
+if modo_reset:
+    with abas[3]:
+        st.subheader("🔑 Defina sua Nova Senha")
+        email_do_link = params["email"]
+        st.info(f"Alterando para: {email_do_link}")
+        
+        nova_s = st.text_input("Nova Senha", type="password", key="n_s_final")
+        conf_s = st.text_input("Confirme", type="password", key="c_s_final")
+        
+        if st.button("Salvar Nova Senha"):
+            if nova_s == conf_s and len(nova_s) >= 4:
+                conn = sqlite3.connect('usuarios.db')
+                c = conn.cursor()
+                c.execute("UPDATE users SET senha=? WHERE email=?", (nova_s, email_do_link))
+                conn.commit()
+                conn.close()
+                st.success("Senha alterada! Agora você já pode usar a aba 'Entrar'.")
+                # Opcional: st.query_params.clear() para sumir com a aba após o sucesso
+            else:
+                st.error("As senhas não conferem.")
+
 # =========================================================
 # 5. RESTANTE DO APP (GRÁFICOS, ETC)
 # =========================================================
