@@ -15,7 +15,7 @@ import urllib.parse
 def enviar_link_recuperacao(email_destino):
     meu_email = "ewerlon.osbadboys@gmail.com" 
     # ATENÇÃO: A senha abaixo precisa ser a de 16 letras do Google, não a sua pessoal!
-    minha_senha = "xxxx xxxx xxxx xxxx" 
+    minha_senha = "okiu qihp lglk trcc" 
     
     link_app = "https://glicemia-ia.streamlit.app" 
     email_codificado = urllib.parse.quote(email_destino)
