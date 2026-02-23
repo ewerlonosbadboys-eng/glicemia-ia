@@ -5,7 +5,7 @@ import os
 from io import BytesIO
 import plotly.express as px
 import pytz
-from openpyxl.styles import PatternFill
+from openpyxl.styles import PatternFill, Alignment
 import sqlite3
 import smtplib
 from email.mime.text import MIMEText
@@ -61,8 +61,8 @@ if 'logado' not in st.session_state: st.session_state.logado = False
 
 if not st.session_state.logado:
     st.title("🧪 Saúde Kids BETA")
-    tab_l, tab_c = st.tabs(["🔐 Login", "📝 Cadastro"])
-    with tab_l:
+    t_l, t_c = st.tabs(["🔐 Login", "📝 Cadastro"])
+    with t_l:
         u = st.text_input("E-mail")
         s = st.text_input("Senha", type="password")
         if st.button("Entrar"):
@@ -74,7 +74,7 @@ if not st.session_state.logado:
                 st.rerun()
             else: st.error("Login inválido.")
             conn.close()
-    with tab_c:
+    with t_c:
         n_n = st.text_input("Nome")
         n_e = st.text_input("E-mail ")
         n_s = st.text_input("Senha ", type="password")
@@ -90,18 +90,19 @@ if not st.session_state.logado:
 
 # ================= ÁREA LOGADA =================
 
+MOMENTOS_ORDEM = ["Antes Café", "Após Café", "Antes Almoço", "Após Almoço", "Antes Merenda", "Antes Janta", "Após Janta", "Madrugada"]
 ALIMENTOS = {"Pão Francês": [28, 4, 1], "Leite (200ml)": [10, 6, 6], "Arroz": [15, 1, 0], "Feijão": [14, 5, 0], "Frango": [0, 23, 5], "Ovo": [1, 6, 5], "Banana": [22, 1, 0], "Maçã": [15, 0, 0]}
 
 def calc_insulina(v, m):
     df_r = carregar_dados_seguro(ARQ_R)
     if df_r.empty: return "0 UI", "Configurar Receita"
     rec = df_r.iloc[0]
-    periodo = "manha" if m in ["Antes Café", "Após Café", "Antes Almoço", "Após Almoço", "Antes Merenda"] else "noite"
+    per = "manha" if m in ["Antes Café", "Após Café", "Antes Almoço", "Após Almoço", "Antes Merenda"] else "noite"
     if v < 70: return "0 UI", "Hipoglicemia!"
-    elif v <= 200: d = rec[f'{periodo}_f1']
-    elif v <= 400: d = rec[f'{periodo}_f2']
-    else: d = rec[f'{periodo}_f3']
-    return f"{int(d)} UI", f"Tabela {periodo.capitalize()}"
+    elif v <= 200: d = rec[f'{per}_f1']
+    elif v <= 400: d = rec[f'{per}_f2']
+    else: d = rec[f'{per}_f3']
+    return f"{int(d)} UI", f"Tabela {per.capitalize()}"
 
 st.sidebar.info(f"Logado: {st.session_state.user_email}")
 
@@ -113,7 +114,7 @@ with tab1:
     c1, c2 = st.columns([1, 2])
     with c1:
         v_gl = st.number_input("Valor", 0, 600, 100)
-        m_gl = st.selectbox("Momento", ["Antes Café", "Após Café", "Antes Almoço", "Após Almoço", "Antes Merenda", "Antes Janta", "Após Janta", "Madrugada"])
+        m_gl = st.selectbox("Momento", MOMENTOS_ORDEM)
         ds, msg = calc_insulina(v_gl, m_gl)
         st.markdown(f'<div class="metric-box"><small>{msg}</small><br><span class="dose-destaque">{ds}</span></div>', unsafe_allow_html=True)
         if st.button("💾 Salvar Glicemia"):
@@ -127,7 +128,7 @@ with tab1:
             dfg['DT'] = pd.to_datetime(dfg['Data'] + " " + dfg['Hora'], dayfirst=True)
             st.plotly_chart(px.line(dfg.tail(10), x='DT', y='Valor', markers=True), use_container_width=True)
     
-    st.write("### Histórico (Marcações)")
+    st.write("### Histórico Local")
     if not dfg.empty:
         st.dataframe(dfg.tail(15).style.applymap(cor_glicemia_status, subset=['Valor']), use_container_width=True)
     st.markdown('</div>', unsafe_allow_html=True)
@@ -143,7 +144,6 @@ with tab2:
         base = pd.read_csv(ARQ_N) if os.path.exists(ARQ_N) else pd.DataFrame()
         pd.concat([base, novo_n], ignore_index=True).to_csv(ARQ_N, index=False)
         st.rerun()
-    st.write("### Histórico de Nutrição")
     st.dataframe(dfn.tail(15), use_container_width=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -170,24 +170,42 @@ with tab3:
         st.success("Salvo!")
     st.markdown('</div>', unsafe_allow_html=True)
 
-# ================= EXPORTAÇÃO EXCEL CORRIGIDA =================
+# ================= EXPORTAÇÃO EXCEL (PIVOT E CORES) =================
 st.sidebar.markdown("---")
-if st.sidebar.button("📥 Gerar Excel"):
+if st.sidebar.button("📥 Gerar Excel Colorido"):
     df_e = carregar_dados_seguro(ARQ_G)
     if not df_e.empty:
+        # Criar a grade (Pivot Table)
+        df_e['Exibe'] = df_e['Valor'].astype(str)
+        pivot = df_e.pivot_table(index='Data', columns='Momento', values='Exibe', aggfunc='last')
+        
+        # Reordenar colunas conforme a sequência médica
+        colunas_existentes = [c for c in MOMENTOS_ORDEM if c in pivot.columns]
+        pivot = pivot[colunas_existentes]
+        
         output = BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            df_e.to_excel(writer, sheet_name='Glicemia', index=False)
+            pivot.to_excel(writer, sheet_name='Glicemia')
             ws = writer.sheets['Glicemia']
-            f_v = PatternFill(start_color="C8E6C9", end_color="C8E6C9", fill_type="solid")
-            f_r = PatternFill(start_color="FFB6C1", end_color="FFB6C1", fill_type="solid")
-            # Correção aqui: verifica se o valor é número antes de comparar
-            for row in ws.iter_rows(min_row=2, min_col=4, max_col=4):
+            
+            # Definição de Cores
+            f_verde = PatternFill(start_color="C8E6C9", end_color="C8E6C9", fill_type="solid")
+            f_vermelho = PatternFill(start_color="FFB6C1", end_color="FFB6C1", fill_type="solid")
+            f_amarelo = PatternFill(start_color="FFFFE0", end_color="FFFFE0", fill_type="solid")
+            
+            # Aplicar cores célula por célula na grade
+            for row in ws.iter_rows(min_row=2, min_col=2):
                 for cell in row:
-                    if isinstance(cell.value, (int, float)):
-                        if cell.value > 180: cell.fill = f_r
-                        elif cell.value >= 70: cell.fill = f_v
-        st.sidebar.download_button("Baixar Arquivo", output.getvalue(), file_name="Relatorio.xlsx")
+                    if cell.value and cell.value != "None":
+                        try:
+                            val = int(cell.value)
+                            cell.alignment = Alignment(horizontal='center')
+                            if val < 70: cell.fill = f_amarelo
+                            elif val > 180: cell.fill = f_vermelho
+                            else: cell.fill = f_verde
+                        except: pass
+                        
+        st.sidebar.download_button("Baixar Relatório Colorido", output.getvalue(), file_name=f"Relatorio_{st.session_state.user_email}.xlsx")
     else: st.sidebar.warning("Sem dados.")
 
 if st.sidebar.button("Sair"):
