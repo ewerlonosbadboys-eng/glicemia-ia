@@ -11,19 +11,18 @@ import smtplib
 from email.mime.text import MIMEText
 import urllib.parse
 
-# FUNÇÃO ÚNICA PARA ENVIAR O LINK
+# --- FUNÇÃO ÚNICA DE E-MAIL ---
 def enviar_link_recuperacao(email_destino):
     meu_email = "ewerlon.osbadboys@gmail.com" 
-    # ATENÇÃO: A senha abaixo precisa ser a de 16 letras do Google, não a sua pessoal!
-    minha_senha = "okiu qihp lglk trcc" 
+    minha_senha = "okiu qihp lglk trcc" # Sua senha de 16 letras já está aqui!
     
     link_app = "https://glicemia-ia.streamlit.app" 
     email_codificado = urllib.parse.quote(email_destino)
     link_final = f"{link_app}/?reset=true&email={email_codificado}"
     
-    corpo = f"<h3>Recuperação</h3><p>Clique para redefinir: <a href='{link_final}'>Link</a></p>"
+    corpo = f"<h3>Recuperação de Senha</h3><p>Clique no link para definir sua nova senha: <a href='{link_final}'>Redefinir Senha</a></p>"
     msg = MIMEText(corpo, 'html')
-    msg['Subject'] = 'Redefinição de Senha'
+    msg['Subject'] = 'Redefinição de Senha - Saúde Kids'
     msg['From'] = meu_email
     msg['To'] = email_destino
 
@@ -34,95 +33,28 @@ def enviar_link_recuperacao(email_destino):
         return True
     except:
         return False
-    
-    # Substitua pelo link real do seu app que aparece no navegador
-    link_app = "https://glicemia-ia.streamlit.app" 
-    email_codificado = urllib.parse.quote(email_destino)
-    link_final = f"{link_app}/?reset=true&email={email_codificado}"
-    
-    corpo = f"""
-    <h3>Recuperação de Senha</h3>
-    <p>Clique no link abaixo para cadastrar uma nova senha:</p>
-    <a href='{link_final}'>Redefinir minha senha agora</a>
-    """
-    msg = MIMEText(corpo, 'html')
-    msg['Subject'] = 'Link de Redefinição - Glicemia IA'
-    msg['From'] = meu_email
-    msg['To'] = email_destino
 
-    try:
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
-            smtp.login(meu_email, minha_senha)
-            smtp.send_message(msg)
-        return True
-    except:
-        return False
-    # Verificador de link de e-mail
+# --- SENSOR DE LINK (O "OUVINTE") ---
 query_params = st.query_params
 if "reset" in query_params and "email" in query_params:
     st.session_state.reset_mode = True
     st.session_state.email_reset = query_params["email"]
 
-# Se o link foi clicado, mostra essa tela em vez do login
 if st.session_state.get("reset_mode"):
-    st.title("🔐 Nova Senha")
+    st.title("🔐 Criar Nova Senha")
     st.info(f"Redefinindo para: {st.session_state.email_reset}")
-    nova_s = st.text_input("Digite a nova senha", type="password")
-    confirmar_s = st.text_input("Confirme a nova senha", type="password")
-    
-    if st.button("Salvar Nova Senha"):
-        if nova_s == confirmar_s:
-            conn = sqlite3.connect('usuarios.db')
-            c = conn.cursor()
-            c.execute("UPDATE users SET senha=? WHERE email=?", (nova_s, st.session_state.email_reset))
-            conn.commit()
-            conn.close()
-            st.success("Pronto! Senha alterada. Agora faça login normalmente.")
-            st.session_state.reset_mode = False
-            st.query_params.clear()
-            st.rerun()
-        else:
-            st.error("As senhas não são iguais!")
-    st.stop() # Trava a tela aqui para ele não ver o resto do app
-
-# FUNÇÃO QUE DISPARA O E-MAIL (Coloque aqui)
-def enviar_link_recuperacao(email_destino):
-    meu_email = "seu-email@gmail.com"  # SEU GMAIL AQUI
-    minha_senha = "xxxx xxxx xxxx xxxx" # SUA SENHA DE APP DO GOOGLE
-    
-    # Substitua pelo link real do seu app no Streamlit Cloud
-    link_app = "https://glicemia-ia.streamlit.app" 
-    email_codificado = urllib.parse.quote(email_destino)
-    link_final = f"{link_app}/?reset=true&email={email_codificado}"
-    
-    corpo = f"Clique aqui para trocar sua senha: {link_final}"
-    msg = MIMEText(corpo, 'html')
-    msg['Subject'] = 'Redefinição de Senha'
-    msg['From'] = meu_email
-    msg['To'] = email_destino
-
-    try:
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
-            smtp.login(meu_email, minha_senha)
-            smtp.send_message(msg)
-        return True
-    except:
-        return False
-        
-# Usamos [-1] para pegar sempre a última aba disponível (Esqueci Senha)
-        with abas[-1]:
-            st.subheader("Recuperar Acesso")
-            email_alvo = st.text_input("Seu e-mail cadastrado", key="email_recup_link")
-            
-            if st.button("Enviar Link de Recuperação"):
-                if email_alvo:
-                    # Aqui chamamos a função que você criou no topo do arquivo
-                    if enviar_link_recuperacao(email_alvo):
-                        st.success("Link enviado com sucesso! Verifique sua caixa de entrada.")
-                    else:
-                        st.error("Erro ao enviar. Verifique sua 'Senha de App' no código.")
-                else:
-                    st.warning("Por favor, digite seu e-mail.")
+    nova_s = st.text_input("Nova Senha", type="password")
+    if st.button("Confirmar Alteração"):
+        conn = sqlite3.connect('usuarios.db')
+        c = conn.cursor()
+        c.execute("UPDATE users SET senha=? WHERE email=?", (nova_s, st.session_state.email_reset))
+        conn.commit()
+        conn.close()
+        st.success("Senha atualizada! Agora faça o login.")
+        st.session_state.reset_mode = False
+        st.query_params.clear()
+        st.rerun()
+    st.stop()
                     
 # SENSOR DE LINK (Coloque antes de mostrar as abas)
 query_params = st.query_params
