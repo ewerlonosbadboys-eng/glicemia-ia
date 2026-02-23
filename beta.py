@@ -55,24 +55,35 @@ if not st.session_state.logado:
             else:
                 st.error("E-mail ou senha incorretos.")
 
-    # Lógica da Aba Criar Conta (só aparece se conta_criada for False)
+    # ABA CRIAR CONTA (Lógica que limpa erro de e-mail cadastrado)
     if not st.session_state.conta_criada:
         with abas[1]:
             c1, c2 = st.columns(2)
-            nome = c1.text_input("Nome")
-            sobrenome = c2.text_input("Sobrenome")
-            tel = st.text_input("Telefone/WhatsApp")
-            n_email = st.text_input("Seu E-mail", key="n_email")
-            n_senha = st.text_input("Crie uma Senha", type="password", key="n_senha")
+            n = c1.text_input("Nome", key="reg_nome")
+            sn = c2.text_input("Sobrenome", key="reg_sn")
+            t = st.text_input("Telefone", key="reg_tel")
+            em = st.text_input("E-mail", key="reg_em")
+            se = st.text_input("Senha", type="password", key="reg_se")
             
             if st.button("Finalizar Cadastro"):
-                if n_email and n_senha:
-                    try:
-                        conn = sqlite3.connect('usuarios.db')
-                        c = conn.cursor()
-                        c.execute("INSERT INTO users VALUES (?,?,?,?,?)", (nome, sobrenome, tel, n_email, n_senha))
-                        conn.commit()
-                        conn.close()
+                conn = sqlite3.connect('usuarios.db')
+                c = conn.cursor()
+                try:
+                    # Tenta inserir normalmente
+                    c.execute("INSERT INTO users VALUES (?,?,?,?,?)", (n, sn, t, em, se))
+                    conn.commit()
+                except sqlite3.IntegrityError:
+                    # SE O EMAIL JÁ EXISTIR: Ele apaga o antigo e coloca o novo
+                    c.execute("DELETE FROM users WHERE email=?", (em,))
+                    c.execute("INSERT INTO users VALUES (?,?,?,?,?)", (n, sn, t, em, se))
+                    conn.commit()
+                
+                conn.close()
+                # Força a aba a sumir e libera o login
+                st.session_state.conta_criada = True
+                st.success("Cadastro atualizado! Agora entre na aba 'Entrar'.")
+                st.rerun()
+                
                         # Ativa o gatilho para sumir com a aba
                         st.session_state.conta_criada = True
                         st.rerun()
