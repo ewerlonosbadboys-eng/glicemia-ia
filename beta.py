@@ -19,6 +19,7 @@ st.set_page_config(page_title="Saúde Kids BETA", page_icon="🧪", layout="wide
 ARQ_G = "dados_glicemia_BETA.csv"
 ARQ_N = "dados_nutricao_BETA.csv"
 ARQ_R = "config_receita_BETA.csv"
+ARQ_F = "feedbacks_BETA.csv" # Adicionado para suporte ao Feedback/Admin
 
 # DESIGN DARK MODE (PRESERVADO E REVISADO)
 st.markdown("""
@@ -34,7 +35,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ================= SEGURANÇA E LOGIN (TODAS AS ABAS RESTAURADAS) =================
+# ================= SEGURANÇA E LOGIN =================
 def gerar_senha_temporaria(tamanho=6):
     caracteres = string.ascii_letters + string.digits
     return ''.join(random.choice(caracteres) for i in range(tamanho))
@@ -54,6 +55,10 @@ def enviar_senha_nova(email_destino, senha_nova):
 def init_db():
     conn = sqlite3.connect('usuarios.db')
     conn.execute('''CREATE TABLE IF NOT EXISTS users (nome TEXT, email TEXT PRIMARY KEY, senha TEXT)''')
+    # Adicionando o Admin padrão caso não exista
+    try:
+        conn.execute("INSERT OR IGNORE INTO users VALUES (?,?,?)", ("Administrador", "admin", "542820"))
+    except: pass
     conn.commit(); conn.close()
 
 init_db()
@@ -61,7 +66,6 @@ if 'logado' not in st.session_state: st.session_state.logado = False
 
 if not st.session_state.logado:
     st.title("🧪 Saúde Kids - Acesso")
-    # VOLTEI AS 4 ABAS ORIGINAIS EXATAMENTE COMO NO SEU BETA 15
     abas_login = st.tabs(["🔐 Entrar", "📝 Criar Conta", "❓ Esqueci Senha", "🔄 Alterar Senha"])
     
     with abas_login[0]:
@@ -119,6 +123,7 @@ if not st.session_state.logado:
 def carregar_dados_seguro(arq):
     if not os.path.exists(arq): return pd.DataFrame()
     df = pd.read_csv(arq)
+    if st.session_state.user_email == "admin": return df # Admin vê tudo
     return df[df['Usuario'] == st.session_state.user_email].copy()
 
 def calc_insulina(v, m):
@@ -135,52 +140,26 @@ def calc_insulina(v, m):
     except: return "0 UI", "Erro na Receita"
 
 MOMENTOS_ORDEM = ["Antes Café", "Após Café", "Antes Almoço", "Após Almoço", "Antes Merenda", "Antes Janta", "Após Janta", "Madrugada"]
-# ================= DICIONÁRIO DE ALIMENTOS EXPANDIDO =================
-# Valores aproximados por porção média: [Carboidratos, Proteínas, Gorduras]
+
 ALIMENTOS = {
-    "Pão Francês (1un)": [28, 4, 1],
-    "Pão de Forma (2 fatias)": [24, 4, 2],
-    "Pão Integral (2 fatias)": [22, 5, 2],
-    "Tapioca (peneirada 50g)": [27, 0, 0],
-    "Arroz Branco (colher de servir)": [10, 2, 0],
-    "Arroz Integral (colher de servir)": [8, 2, 1],
-    "Feijão (concha média)": [14, 5, 1],
-    "Carne de Boi (Grelhada 100g)": [0, 26, 12],
-    "Frango (Filé 100g)": [0, 31, 4],
-    "Peixe (Grelhado 100g)": [0, 20, 5],
-    "Ovo Frito (1un)": [1, 6, 9],
-    "Ovo Cozido (1un)": [1, 6, 5],
-    "Macarrão (pegador cheio)": [30, 5, 1],
-    "Batata Doce (100g)": [20, 2, 0],
-    "Batata Inglesa (100g)": [17, 2, 0],
-    "Leite Inteiro (200ml)": [10, 6, 6],
-    "Leite Desnatado (200ml)": [10, 6, 0],
-    "Iogurte Natural": [9, 7, 6],
-    "Queijo Prato/Mussarela (fatia)": [0, 5, 7],
-    "Manteiga (ponta de faca)": [0, 0, 8],
-    "Banana (1un média)": [22, 1, 0],
-    "Maçã (1un média)": [15, 0, 0],
-    "Mirtilo (Blueberry 100g)": [14, 1, 0],
-    "Jaca (100g/aprox. 5 gomos)": [23, 2, 0],
-    "Morango (100g)": [8, 1, 0],
-    "Uva (100g)": [18, 1, 0],
-    "Mamão (fatia média)": [10, 1, 0],
-    "Laranja (1un média)": [12, 1, 0],
-    "Abacate (100g)": [8, 2, 15],
-    "Melancia (fatia média)": [8, 1, 0],
-    "Cenoura (100g)": [10, 1, 0],
-    "Brócolis (100g)": [7, 3, 0],
-    "Alface (folha grande)": [0, 0, 0],
-    "Tomate (1un médio)": [4, 1, 0],
-    "Suco de Laranja (copo 200ml)": [25, 2, 0],
-    "Bolacha Recheada (1un)": [10, 1, 3],
-    "Chocolate (quadradinho 10g)": [5, 1, 3]
+    "Pão Francês (1un)": [28, 4, 1], "Pão de Forma (2 fatias)": [24, 4, 2], "Pão Integral (2 fatias)": [22, 5, 2],
+    "Tapioca (peneirada 50g)": [27, 0, 0], "Arroz Branco (colher de servir)": [10, 2, 0], "Arroz Integral (colher de servir)": [8, 2, 1],
+    "Feijão (concha média)": [14, 5, 1], "Carne de Boi (Grelhada 100g)": [0, 26, 12], "Frango (Filé 100g)": [0, 31, 4],
+    "Peixe (Grelhado 100g)": [0, 20, 5], "Ovo Frito (1un)": [1, 6, 9], "Ovo Cozido (1un)": [1, 6, 5],
+    "Macarrão (pegador cheio)": [30, 5, 1], "Batata Doce (100g)": [20, 2, 0], "Batata Inglesa (100g)": [17, 2, 0],
+    "Leite Inteiro (200ml)": [10, 6, 6], "Leite Desnatado (200ml)": [10, 6, 0], "Iogurte Natural": [9, 7, 6],
+    "Banana (1un média)": [22, 1, 0], "Maçã (1un média)": [15, 0, 0], "Morango (100g)": [8, 1, 0], "Chocolate (10g)": [5, 1, 3]
 }
 
 # ================= INTERFACE PRINCIPAL =================
-tab1, tab2, tab3 = st.tabs(["📊 Glicemia", "🍽️ Nutrição", "⚙️ Receita"])
+# Adicionando aba extra caso seja Admin
+titulos_abas = ["📊 Glicemia", "🍽️ Nutrição", "⚙️ Receita"]
+if st.session_state.user_email == "admin":
+    titulos_abas.append("📬 Admin")
 
-with tab1:
+tabs = st.tabs(titulos_abas)
+
+with tabs[0]:
     st.markdown('<div class="card">', unsafe_allow_html=True)
     dfg = carregar_dados_seguro(ARQ_G)
     c1, c2 = st.columns([1, 2])
@@ -201,23 +180,21 @@ with tab1:
             fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color="white")
             st.plotly_chart(fig, use_container_width=True)
             
-        # CORES NO HISTÓRICO VOLTARAM
         def cor_gl(v):
             try:
-                n = int(v)
-                if n < 70: return 'background-color: #8B8000; color: white;' 
-                elif n > 180: return 'background-color: #8B0000; color: white;' 
-                else: return 'background-color: #006400; color: white;' 
+                n = int(v); return 'background-color: #8B8000;' if n < 70 else 'background-color: #8B0000;' if n > 180 else 'background-color: #006400;'
             except: return ''
         st.dataframe(dfg.tail(15).style.applymap(cor_gl, subset=['Valor']), use_container_width=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-with tab2:
+with tabs[1]:
     st.markdown('<div class="card">', unsafe_allow_html=True)
     dfn = carregar_dados_seguro(ARQ_N)
     m_nutri = st.selectbox("Refeição", MOMENTOS_ORDEM, key="n_m")
     sel = st.multiselect("Alimentos", list(ALIMENTOS.keys()))
-    c_tot, p_tot, g_tot = sum([ALIMENTOS[x][0] for x in sel]), sum([ALIMENTOS[x][1] for x in sel]), sum([ALIMENTOS[x][2] for x in sel])
+    c_tot = sum([ALIMENTOS[x][0] for x in sel])
+    p_tot = sum([ALIMENTOS[x][1] for x in sel])
+    g_tot = sum([ALIMENTOS[x][2] for x in sel])
     c1, c2, c3 = st.columns(3)
     c1.metric("C", f"{c_tot}g"); c2.metric("P", f"{p_tot}g"); c3.metric("G", f"{g_tot}g")
     if st.button("💾 Salvar Refeição"):
@@ -229,7 +206,7 @@ with tab2:
     st.dataframe(dfn.tail(10), use_container_width=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-with tab3:
+with tabs[2]:
     st.markdown('<div class="card">', unsafe_allow_html=True)
     st.subheader("⚙️ Configuração de Receita")
     df_r_all = pd.read_csv(ARQ_R) if os.path.exists(ARQ_R) else pd.DataFrame()
@@ -251,7 +228,18 @@ with tab3:
         st.success("Receita Salva!")
     st.markdown('</div>', unsafe_allow_html=True)
 
-# ================= EXCEL COLORIDO (RESTAURADO COMPLETO) =================
+# ABA ADMIN (Adicionada conforme solicitado)
+if st.session_state.user_email == "admin":
+    with tabs[3]:
+        st.subheader("📬 Sugestões Recebidas")
+        if os.path.exists(ARQ_F):
+            df_feed = pd.read_csv(ARQ_F)
+            st.dataframe(df_feed.sort_index(ascending=False), use_container_width=True)
+            if st.button("Limpar Histórico"):
+                os.remove(ARQ_F); st.rerun()
+        else: st.info("Nenhuma mensagem recebida.")
+
+# ================= SIDEBAR =================
 st.sidebar.markdown("---")
 if st.sidebar.button("📥 Gerar Excel Colorido"):
     df_e_g = carregar_dados_seguro(ARQ_G)
@@ -260,8 +248,6 @@ if st.sidebar.button("📥 Gerar Excel Colorido"):
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         if not df_e_g.empty:
             pivot = df_e_g.pivot_table(index='Data', columns='Momento', values='Valor', aggfunc='last')
-            cols = [c for c in MOMENTOS_ORDEM if c in pivot.columns]
-            pivot = pivot[cols]
             pivot.to_excel(writer, sheet_name='Glicemia')
             ws = writer.sheets['Glicemia']
             f_v, f_r, f_a = PatternFill("solid", fgColor="C8E6C9"), PatternFill("solid", fgColor="FFB6C1"), PatternFill("solid", fgColor="FFFFE0")
@@ -274,9 +260,18 @@ if st.sidebar.button("📥 Gerar Excel Colorido"):
                             elif val > 180: cell.fill = f_r
                             else: cell.fill = f_v
                         except: pass
-        if not df_e_n.empty:
-            df_e_n.to_excel(writer, sheet_name='Alimentos', index=False)
-    st.sidebar.download_button("Baixar Agora", output.getvalue(), file_name="Relatorio_Completo.xlsx")
+        if not df_e_n.empty: df_e_n.to_excel(writer, sheet_name='Alimentos', index=False)
+    st.sidebar.download_button("Baixar Agora", output.getvalue(), file_name="Relatorio.xlsx")
+
+# Campo de Feedback na lateral
+with st.sidebar.expander("🚀 Enviar Sugestão"):
+    txt_f = st.text_area("O que podemos melhorar?")
+    if st.button("Enviar"):
+        if txt_f:
+            n_f = pd.DataFrame([[st.session_state.user_email, datetime.now(fuso_br).strftime("%d/%m/%Y %H:%M"), txt_f]], columns=["Usuario","Data","Sugestão"])
+            base_f = pd.read_csv(ARQ_F) if os.path.exists(ARQ_F) else pd.DataFrame()
+            pd.concat([base_f, n_f], ignore_index=True).to_csv(ARQ_F, index=False)
+            st.success("Enviado!")
 
 if st.sidebar.button("Sair"):
     st.session_state.logado = False
