@@ -77,20 +77,19 @@ if not st.session_state.logado:
                     c.execute("DELETE FROM users WHERE email=?", (em,))
                     c.execute("INSERT INTO users VALUES (?,?,?,?,?)", (n, sn, t, em, se))
                     conn.commit()
+                try:
+                    # Tenta inserir normalmente
+                    c.execute("INSERT INTO users VALUES (?,?,?,?,?)", (n, sn, t, em, se))
+                    conn.commit()
+                except:
+                    # Se der erro, ele apaga o antigo e coloca o novo por cima
+                    c.execute("DELETE FROM users WHERE email=?", (em,))
+                    c.execute("INSERT INTO users VALUES (?,?,?,?,?)", (n, sn, t, em, se))
+                    conn.commit()
                 
                 conn.close()
-                # Força a aba a sumir e libera o login
-                st.session_state.conta_criada = True
-                st.success("Cadastro atualizado! Agora entre na aba 'Entrar'.")
-                st.rerun()
-                
-                # Ativa o gatilho para sumir com a aba
                 st.session_state.conta_criada = True
                 st.rerun()
-                except:
-                st.error("Este e-mail já está cadastrado.")
-                else:
-                st.warning("Preencha e-mail e senha.")
 
         # Lógica da Aba Esqueci Senha (é a terceira quando tem criar conta)
         with abas[2]:
