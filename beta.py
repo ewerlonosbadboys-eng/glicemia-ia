@@ -29,7 +29,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ================= BANCO DE DADOS E SEGURANÇA =================
+# ================= BANCO DE DADOS =================
 
 def init_db():
     conn = sqlite3.connect('usuarios.db')
@@ -39,21 +39,6 @@ def init_db():
     conn.close()
 
 init_db()
-
-def enviar_email_senha(destinatario, nova_senha):
-    remetente = "ewerlon.osbadboys@gmail.com"
-    senha_app = "okiu qihp lglk trcc"
-    corpo = f"Sua nova senha no Saúde Kids é: {nova_senha}"
-    msg = MIMEText(corpo)
-    msg['Subject'] = 'Recuperação de Senha - Saúde Kids'
-    msg['From'] = remetente
-    msg['To'] = destinatario
-    try:
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
-            server.login(remetente, senha_app)
-            server.send_message(msg)
-        return True
-    except: return False
 
 def carregar_dados_seguro(arq):
     if not os.path.exists(arq): return pd.DataFrame()
@@ -76,8 +61,7 @@ if 'logado' not in st.session_state: st.session_state.logado = False
 
 if not st.session_state.logado:
     st.title("🧪 Saúde Kids BETA")
-    tab_l, tab_c, tab_r = st.tabs(["🔐 Login", "📝 Cadastro", "🔑 Recuperar"])
-    
+    tab_l, tab_c = st.tabs(["🔐 Login", "📝 Cadastro"])
     with tab_l:
         u = st.text_input("E-mail")
         s = st.text_input("Senha", type="password")
@@ -90,7 +74,6 @@ if not st.session_state.logado:
                 st.rerun()
             else: st.error("Login inválido.")
             conn.close()
-
     with tab_c:
         n_n = st.text_input("Nome")
         n_e = st.text_input("E-mail ")
@@ -102,20 +85,7 @@ if not st.session_state.logado:
                 conn.commit()
                 st.success("Conta criada!")
                 conn.close()
-            except: st.error("E-mail já existe.")
-
-    with tab_r:
-        r_e = st.text_input("E-mail para recuperar")
-        if st.button("Enviar Senha Temporária"):
-            nova = ''.join(random.choices(string.digits, k=6))
-            conn = sqlite3.connect('usuarios.db')
-            if conn.execute("SELECT * FROM users WHERE email=?", (r_e,)).fetchone():
-                conn.execute("UPDATE users SET senha=? WHERE email=?", (nova, r_e))
-                conn.commit()
-                if enviar_email_senha(r_e, nova): st.success("Verifique seu e-mail!")
-                else: st.error("Falha no envio.")
-            else: st.error("E-mail não cadastrado.")
-            conn.close()
+            except: st.error("Erro no cadastro.")
     st.stop()
 
 # ================= ÁREA LOGADA =================
@@ -133,7 +103,7 @@ def calc_insulina(v, m):
     else: d = rec[f'{periodo}_f3']
     return f"{int(d)} UI", f"Tabela {periodo.capitalize()}"
 
-st.sidebar.info(f"Logado como: {st.session_state.user_email}")
+st.sidebar.info(f"Logado: {st.session_state.user_email}")
 
 tab1, tab2, tab3 = st.tabs(["📊 Glicemia", "🍽️ Nutrição", "⚙️ Receita"])
 
@@ -142,13 +112,13 @@ with tab1:
     dfg = carregar_dados_seguro(ARQ_G)
     c1, c2 = st.columns([1, 2])
     with c1:
-        v_gl = st.number_input("Valor Glicemia", 0, 600, 100)
+        v_gl = st.number_input("Valor", 0, 600, 100)
         m_gl = st.selectbox("Momento", ["Antes Café", "Após Café", "Antes Almoço", "Após Almoço", "Antes Merenda", "Antes Janta", "Após Janta", "Madrugada"])
-        dose, msg_d = calc_insulina(v_gl, m_gl)
-        st.markdown(f'<div class="metric-box"><small>{msg_d}</small><br><span class="dose-destaque">{dose}</span></div>', unsafe_allow_html=True)
-        if st.button("💾 Salvar Registro"):
+        ds, msg = calc_insulina(v_gl, m_gl)
+        st.markdown(f'<div class="metric-box"><small>{msg}</small><br><span class="dose-destaque">{ds}</span></div>', unsafe_allow_html=True)
+        if st.button("💾 Salvar Glicemia"):
             agora = datetime.now(fuso_br)
-            novo = pd.DataFrame([[st.session_state.user_email, agora.strftime("%d/%m/%Y"), agora.strftime("%H:%M"), v_gl, m_gl, dose]], columns=["Usuario","Data","Hora","Valor","Momento","Dose"])
+            novo = pd.DataFrame([[st.session_state.user_email, agora.strftime("%d/%m/%Y"), agora.strftime("%H:%M"), v_gl, m_gl, ds]], columns=["Usuario","Data","Hora","Valor","Momento","Dose"])
             base = pd.read_csv(ARQ_G) if os.path.exists(ARQ_G) else pd.DataFrame()
             pd.concat([base, novo], ignore_index=True).to_csv(ARQ_G, index=False)
             st.rerun()
@@ -157,7 +127,7 @@ with tab1:
             dfg['DT'] = pd.to_datetime(dfg['Data'] + " " + dfg['Hora'], dayfirst=True)
             st.plotly_chart(px.line(dfg.tail(10), x='DT', y='Valor', markers=True), use_container_width=True)
     
-    st.subheader("Histórico de Glicemias")
+    st.write("### Histórico (Marcações)")
     if not dfg.empty:
         st.dataframe(dfg.tail(15).style.applymap(cor_glicemia_status, subset=['Valor']), use_container_width=True)
     st.markdown('</div>', unsafe_allow_html=True)
@@ -165,7 +135,7 @@ with tab1:
 with tab2:
     st.markdown('<div class="card">', unsafe_allow_html=True)
     dfn = carregar_dados_seguro(ARQ_N)
-    sel = st.multiselect("O que comeu?", list(ALIMENTOS.keys()))
+    sel = st.multiselect("Alimentos", list(ALIMENTOS.keys()))
     if st.button("💾 Salvar Refeição"):
         carb = sum([ALIMENTOS[x][0] for x in sel])
         agora = datetime.now(fuso_br)
@@ -173,7 +143,7 @@ with tab2:
         base = pd.read_csv(ARQ_N) if os.path.exists(ARQ_N) else pd.DataFrame()
         pd.concat([base, novo_n], ignore_index=True).to_csv(ARQ_N, index=False)
         st.rerun()
-    st.subheader("Histórico de Nutrição")
+    st.write("### Histórico de Nutrição")
     st.dataframe(dfn.tail(15), use_container_width=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -182,41 +152,43 @@ with tab3:
     df_r_all = pd.read_csv(ARQ_R) if os.path.exists(ARQ_R) else pd.DataFrame()
     r_u = df_r_all[df_r_all['Usuario'] == st.session_state.user_email] if not df_r_all.empty else pd.DataFrame()
     v = r_u.iloc[0] if not r_u.empty else {'manha_f1':0, 'manha_f2':0, 'manha_f3':0, 'noite_f1':0, 'noite_f2':0, 'noite_f3':0}
-    
-    cm, cn = st.columns(2)
-    with cm:
+    c_m, c_n = st.columns(2)
+    with c_m:
         st.info("MANHÃ")
-        m1 = st.number_input("Dose 70-200", value=int(v.get('manha_f1',0)), key="m1")
-        m2 = st.number_input("Dose 201-400", value=int(v.get('manha_f2',0)), key="m2")
-        m3 = st.number_input("Dose > 400", value=int(v.get('manha_f3',0)), key="m3")
-    with cn:
+        m1 = st.number_input("70-200", value=int(v.get('manha_f1',0)), key="m1")
+        m2 = st.number_input("201-400", value=int(v.get('manha_f2',0)), key="m2")
+        m3 = st.number_input("> 400", value=int(v.get('manha_f3',0)), key="m3")
+    with c_n:
         st.info("NOITE")
-        n1 = st.number_input("Dose 70-200 ", value=int(v.get('noite_f1',0)), key="n1")
-        n2 = st.number_input("Dose 201-400 ", value=int(v.get('noite_f2',0)), key="n2")
-        n3 = st.number_input("Dose > 400 ", value=int(v.get('noite_f3',0)), key="n3")
-    if st.button("💾 Salvar Minha Receita"):
+        n1 = st.number_input("70-200 ", value=int(v.get('noite_f1',0)), key="n1")
+        n2 = st.number_input("201-400 ", value=int(v.get('noite_f2',0)), key="n2")
+        n3 = st.number_input("> 400 ", value=int(v.get('noite_f3',0)), key="n3")
+    if st.button("💾 Atualizar Receita"):
         nova_rec = pd.DataFrame([{'Usuario': st.session_state.user_email, 'manha_f1':m1, 'manha_f2':m2, 'manha_f3':m3, 'noite_f1':n1, 'noite_f2':n2, 'noite_f3':n3}])
         df_r_all = df_r_all[df_r_all['Usuario'] != st.session_state.user_email] if not df_r_all.empty else pd.DataFrame()
         pd.concat([df_r_all, nova_rec], ignore_index=True).to_csv(ARQ_R, index=False)
-        st.success("Receita Atualizada!")
+        st.success("Salvo!")
     st.markdown('</div>', unsafe_allow_html=True)
 
+# ================= EXPORTAÇÃO EXCEL CORRIGIDA =================
 st.sidebar.markdown("---")
-if st.sidebar.button("📥 Gerar Excel Colorido"):
-    df_g = carregar_dados_seguro(ARQ_G)
-    if not df_g.empty:
+if st.sidebar.button("📥 Gerar Excel"):
+    df_e = carregar_dados_seguro(ARQ_G)
+    if not df_e.empty:
         output = BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            df_g.to_excel(writer, sheet_name='Glicemia', index=False)
+            df_e.to_excel(writer, sheet_name='Glicemia', index=False)
             ws = writer.sheets['Glicemia']
-            # Aplicando cores no Excel
             f_v = PatternFill(start_color="C8E6C9", end_color="C8E6C9", fill_type="solid")
             f_r = PatternFill(start_color="FFB6C1", end_color="FFB6C1", fill_type="solid")
+            # Correção aqui: verifica se o valor é número antes de comparar
             for row in ws.iter_rows(min_row=2, min_col=4, max_col=4):
                 for cell in row:
-                    if cell.value > 180: cell.fill = f_r
-                    elif cell.value >= 70: cell.fill = f_v
-        st.sidebar.download_button("Baixar Agora", output.getvalue(), file_name="Relatorio.xlsx")
+                    if isinstance(cell.value, (int, float)):
+                        if cell.value > 180: cell.fill = f_r
+                        elif cell.value >= 70: cell.fill = f_v
+        st.sidebar.download_button("Baixar Arquivo", output.getvalue(), file_name="Relatorio.xlsx")
+    else: st.sidebar.warning("Sem dados.")
 
 if st.sidebar.button("Sair"):
     st.session_state.logado = False
