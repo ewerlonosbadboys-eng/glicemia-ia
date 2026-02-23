@@ -21,6 +21,7 @@ def gerenciar_usuarios():
                  (nome TEXT, sobrenome TEXT, telefone TEXT, email TEXT PRIMARY KEY, senha TEXT)''')
     conn.commit()
     conn.close()
+    
 # Inicializa o estado de 'conta_criada' se não existir
 if 'logado' not in st.session_state:
     st.session_state.logado = False
