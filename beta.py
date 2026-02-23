@@ -10,6 +10,8 @@ import sqlite3
 import smtplib
 from email.mime.text import MIMEText
 import urllib.parse
+import random
+import string
 
 # ================= CONFIGURAÇÕES INICIAIS =================
 fuso_br = pytz.timezone('America/Sao_Paulo')
@@ -20,22 +22,18 @@ ARQ_G = "dados_glicemia_BETA.csv"
 ARQ_N = "dados_nutricao_BETA.csv"
 ARQ_R = "config_receita_BETA.csv"
 
-# ================= FUNÇÃO DE ENVIO DE E-MAIL =================
-def enviar_link_recuperacao(email_destino):
+def enviar_senha_nova(email_destino, senha_nova):
     meu_email = "ewerlon.osbadboys@gmail.com" 
-    minha_senha = "okiu qihp lglk trcc" # Senha de App do Google
-    
-    link_app = "https://glicemia-ia.streamlit.app" 
-    email_codificado = urllib.parse.quote(email_destino)
-    link_final = f"{link_app}/?reset=true&email={email_codificado}"
+    minha_senha = "okiu qihp lglk trcc" 
     
     corpo = f"""
-    <h3>Recuperação de Senha - Saúde Kids</h3>
-    <p>Clique no link abaixo para cadastrar uma nova senha:</p>
-    <a href='{link_final}'>Redefinir minha senha agora</a>
+    <h3>Saúde Kids - Nova Senha Gerada</h3>
+    <p>Sua senha antiga foi resetada por segurança.</p>
+    <p>Sua nova senha de acesso é: <b style='font-size: 20px; color: blue;'>{senha_nova}</b></p>
+    <p>Use esta senha para entrar no aplicativo agora.</p>
     """
     msg = MIMEText(corpo, 'html')
-    msg['Subject'] = 'Link de Redefinição - Saúde Kids'
+    msg['Subject'] = 'Sua Nova Senha - Saúde Kids'
     msg['From'] = meu_email
     msg['To'] = email_destino
 
@@ -46,6 +44,10 @@ def enviar_link_recuperacao(email_destino):
         return True
     except:
         return False
+
+def gerar_senha_temporaria(tamanho=6):
+    caracteres = string.ascii_letters + string.digits
+    return ''.join(random.choice(caracteres) for i in range(tamanho))
 
 # ================= SENSOR DE LINK DE RECUPERAÇÃO =================
 query_params = st.query_params
@@ -133,13 +135,35 @@ if not st.session_state.logado:
                 except:
                     st.error("Este e-mail já está cadastrado.")
         
-        with abas_login[2]: # ESQUECI SENHA
-            email_rec = st.text_input("E-mail cadastrado", key="rec_em")
-            if st.button("Enviar Link"):
-                if enviar_link_recuperacao(email_rec):
-                    st.success("Link enviado! Verifique seu e-mail.")
+        with abas_login[2]: # Aba Esqueci Senha
+        st.subheader("Recuperar Acesso")
+        email_alvo = st.text_input("Digite seu e-mail cadastrado", key="rec_em_direto")
+        
+        if st.button("Gerar e Enviar Nova Senha"):
+            if email_alvo:
+                conn = sqlite3.connect('usuarios.db')
+                c = conn.cursor()
+                c.execute("SELECT email FROM users WHERE email=?", (email_alvo,))
+                usuario = c.fetchone()
+                
+                if usuario:
+                    # 1. Gera a senha nova
+                    senha_gerada = gerar_senha_temporaria()
+                    
+                    # 2. Atualiza o banco (apaga a antiga)
+                    c.execute("UPDATE users SET senha=? WHERE email=?", (senha_gerada, email_alvo))
+                    conn.commit()
+                    conn.close()
+                    
+                    # 3. Envia o e-mail
+                    if enviar_senha_nova(email_alvo, senha_gerada):
+                        st.success(f"✅ Nova senha enviada para {email_alvo}!")
+                        st.info("Copie a senha do seu e-mail e use-a na aba 'Entrar'.")
+                    else:
+                        st.error("Erro ao enviar e-mail.")
                 else:
-                    st.error("Erro ao enviar e-mail.")
+                    st.error("E-mail não encontrado.")
+                    conn.close()
     else:
         with abas_login[1]: # ESQUECI SENHA (QUANDO LOGADO)
             email_rec = st.text_input("E-mail cadastrado", key="rec_em_2")
