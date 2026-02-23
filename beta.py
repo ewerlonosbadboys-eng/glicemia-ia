@@ -32,7 +32,7 @@ def init_db():
     conn = sqlite3.connect('usuarios.db')
     conn.execute('''CREATE TABLE IF NOT EXISTS users (nome TEXT, email TEXT PRIMARY KEY, senha TEXT)''')
     try:
-        # Garante que o admin exista no banco
+        # Garante a existência do Admin
         conn.execute("INSERT OR REPLACE INTO users VALUES (?,?,?)", ("Administrador", "admin", "542820"))
         conn.commit()
     except: pass
@@ -47,11 +47,12 @@ def carregar_dados_seguro(arq):
         return df
     return df[df['Usuario'] == st.session_state.get('user_email', '')].copy()
 
-# ================= SISTEMA DE ENTRADA =================
+# ================= SISTEMA DE ENTRADA (LOGIN / CADASTRO / RECUPERAÇÃO) =================
 if 'logado' not in st.session_state: st.session_state.logado = False
 
 if not st.session_state.logado:
     st.title("🧪 Saúde Kids BETA")
+    # AQUI ESTÁ A ABA DE RECUPERAÇÃO QUE FALTAVA
     abas_login = st.tabs(["Acessar", "Criar Conta", "Esqueci a Senha"])
     
     with abas_login[0]:
@@ -87,16 +88,16 @@ if not st.session_state.logado:
                 st.warning("Preencha todos os campos.")
 
     with abas_login[2]:
-        st.subheader("Recuperar Senha")
-        email_recup = st.text_input("Digite seu e-mail cadastrado")
+        st.subheader("Recuperar Acesso")
+        email_recup = st.text_input("Digite o seu e-mail cadastrado")
         if st.button("Verificar minha Senha"):
             conn = sqlite3.connect('usuarios.db')
             res = conn.execute("SELECT senha FROM users WHERE email=?", (email_recup,)).fetchone()
             conn.close()
             if res:
-                st.info(f"Sua senha cadastrada é: **{res[0]}**")
+                st.info(f"A sua senha cadastrada é: **{res[0]}**")
             else:
-                st.error("E-mail não encontrado.")
+                st.error("E-mail não encontrado na base de dados.")
     st.stop()
 
 # ================= DASHBOARD (ÁREA LOGADA) =================
@@ -108,15 +109,16 @@ if st.session_state.user_email == "admin":
 
 tabs = st.tabs(titulos_abas)
 
+# --- ABA GLICEMIA ---
 with tabs[0]:
-    st.subheader("Registro de Glicemia")
+    st.subheader("Registo de Glicemia")
     with st.form("form_glicemia"):
         col1, col2, col3 = st.columns(3)
-        with col1: data_r = st.date_input("Data", datetime.now(fuso_br))
-        with col2: momento_r = st.selectbox("Momento", MOMENTOS_ORDEM)
-        with col3: valor_r = st.number_input("Valor (mg/dL)", 20, 600, 100)
+        d_reg = col1.date_input("Data", datetime.now(fuso_br))
+        m_reg = col2.selectbox("Momento", MOMENTOS_ORDEM)
+        v_reg = col3.number_input("Valor (mg/dL)", 20, 600, 100)
         if st.form_submit_button("Salvar Registro"):
-            novo_d = pd.DataFrame([[st.session_state.user_email, data_r.strftime('%d/%m/%Y'), momento_r, valor_r]], 
+            novo_d = pd.DataFrame([[st.session_state.user_email, d_reg.strftime('%d/%m/%Y'), m_reg, v_reg]], 
                                   columns=['Usuario', 'Data', 'Momento', 'Valor'])
             base = carregar_dados_seguro(ARQ_G)
             pd.concat([base, novo_d], ignore_index=True).to_csv(ARQ_G, index=False)
@@ -125,60 +127,62 @@ with tabs[0]:
 
     df_plot = carregar_dados_seguro(ARQ_G)
     if not df_plot.empty:
-        fig = px.line(df_plot, x='Data', y='Valor', color='Usuario' if st.session_state.user_email == 'admin' else None, markers=True, title="Tendência")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(px.line(df_plot, x='Data', y='Valor', markers=True, title="Histórico"), use_container_width=True)
 
+# --- ABA NUTRIÇÃO ---
 with tabs[1]:
     st.subheader("Diário Nutricional")
     with st.form("form_nutri"):
-        alimento = st.text_input("Alimento")
-        carbos = st.number_input("Carboidratos (g)", min_value=0)
+        ali = st.text_input("Alimento")
+        car = st.number_input("Carboidratos (g)", min_value=0)
         if st.form_submit_button("Registrar"):
-            novo_n = pd.DataFrame([[st.session_state.user_email, datetime.now(fuso_br).strftime('%d/%m/%Y %H:%M'), alimento, carbos]], 
+            novo_n = pd.DataFrame([[st.session_state.user_email, datetime.now(fuso_br).strftime('%d/%m/%Y %H:%M'), ali, car]], 
                                   columns=['Usuario', 'Data', 'Alimento', 'Carbos'])
             base_n = carregar_dados_seguro(ARQ_N)
             pd.concat([base_n, novo_n], ignore_index=True).to_csv(ARQ_N, index=False)
             st.success("Registrado!")
 
+# --- ABA RECEITA ---
 with tabs[2]:
-    st.subheader("⚙️ Configurações da Receita")
-    st.info("Área para doses e proporções personalizada.")
+    st.subheader("⚙️ Configurações")
+    st.info("Doses e proporções calculadas conforme a receita médica.")
 
+# --- ABA ADMIN ---
 if st.session_state.user_email == "admin":
     with tabs[3]:
-        st.subheader("📬 Mensagens dos Usuários")
+        st.subheader("📬 Sugestões Recebidas")
         if os.path.exists(ARQ_F):
             df_f = pd.read_csv(ARQ_F)
             st.dataframe(df_f, use_container_width=True)
-            if st.button("Limpar Histórico de Mensagens"):
+            if st.button("Limpar Histórico"):
                 os.remove(ARQ_F)
                 st.rerun()
         else:
-            st.info("Nenhuma mensagem recebida.")
+            st.info("Nenhuma mensagem.")
 
 # ================= SIDEBAR (EXCEL E FEEDBACK) =================
 st.sidebar.title(f"👤 {st.session_state.user_email}")
 
-# Exportação Excel
-df_e_g = carregar_dados_seguro(ARQ_G)
-df_e_n = carregar_dados_seguro(ARQ_N)
-output = BytesIO()
-with pd.ExcelWriter(output, engine='openpyxl') as writer:
-    if not df_e_g.empty: df_e_g.to_excel(writer, sheet_name='Glicemia', index=False)
-    if not df_e_n.empty: df_e_n.to_excel(writer, sheet_name='Nutricao', index=False)
+# Lógica Excel
+df_ex_g = carregar_dados_seguro(ARQ_G)
+df_ex_n = carregar_dados_seguro(ARQ_N)
+out = BytesIO()
+with pd.ExcelWriter(out, engine='openpyxl') as w:
+    if not df_ex_g.empty: df_ex_g.to_excel(w, sheet_name='Glicemia', index=False)
+    if not df_ex_n.empty: df_ex_n.to_excel(w, sheet_name='Nutricao', index=False)
 
-st.sidebar.download_button("📥 Baixar Relatório Excel", output.getvalue(), file_name="Relatorio_Saude.xlsx")
+st.sidebar.download_button("📥 Exportar para Excel", out.getvalue(), file_name="Relatorio_Kids.xlsx")
 
 st.sidebar.markdown("---")
-with st.sidebar.expander("🚀 Enviar Sugestão"):
-    msg = st.text_area("O que podemos melhorar?")
+with st.sidebar.expander("🚀 Enviar Feedback"):
+    f_msg = st.text_area("Sugestão de melhoria:")
     if st.button("Enviar"):
-        if msg:
-            novo_f = pd.DataFrame([[st.session_state.user_email, datetime.now(fuso_br).strftime('%d/%m/%Y'), msg]], 
-                                  columns=['Usuario', 'Data', 'Sugestão'])
+        if f_msg:
+            n_f = pd.DataFrame([[st.session_state.user_email, datetime.now(fuso_br).strftime('%d/%m/%Y'), f_msg]], 
+                               columns=['Usuario', 'Data', 'Sugestão'])
             base_f = pd.read_csv(ARQ_F) if os.path.exists(ARQ_F) else pd.DataFrame()
-            pd.concat([base_f, novo_f], ignore_index=True).to_csv(ARQ_F, index=False)
-            st.success("Enviado!")
+            pd.concat([base_f, n_f], ignore_index=True).to_csv(ARQ_F, index=False)
+            st.success("Obrigado!")
 
 if st.sidebar.button("Sair"):
     st.session_state.logado = False
