@@ -199,4 +199,42 @@ if st.button("📥 BAIXAR RELATÓRIO EXCEL"):
     dfn = carregar(ARQ_N)
     if not dfg.empty:
         excel_data = gerar_excel_colorido(dfg, dfn)
+
+        # =========================================================
+# BLOCO NOVO: TELA DE LOGIN COM O MESMO LAYOUT
+# (Cole no final do arquivo, sem apagar nada acima)
+# =========================================================
+
+if 'logado' not in st.session_state:
+    st.session_state.logado = False
+
+if not st.session_state.logado:
+    # Usando o mesmo estilo de 'card' que você já tem no código
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.title("🔐 Acesso ao Saúde Kids")
+    
+    # Criando colunas para o formulário ficar centralizado
+    col_login, _ = st.columns([1, 1])
+    
+    with col_login:
+        user_input = st.text_input("Usuário (E-mail)")
+        pass_input = st.text_input("Senha", type="password")
+        
+        if st.button("Entrar no Sistema"):
+            # Aqui você define seu usuário e senha padrão
+            if user_input == "admin@saude.com" and pass_input == "12345":
+                st.session_state.logado = True
+                st.success("Login realizado com sucesso!")
+                st.rerun()
+            else:
+                st.error("Usuário ou senha incorretos.")
+                
+    st.markdown('</div>', unsafe_allow_html=True)
+    
+    # Este comando impede que o código antigo (que está acima) 
+    # apareça antes da pessoa logar
+    st.stop() 
+
+# O seu código antigo que está acima deste bloco passará a ser 
+# exibido somente quando st.session_state.logado for True.
         st.download_button("Clique para Baixar", excel_data, file_name="Relatorio_Medico.xlsx")
