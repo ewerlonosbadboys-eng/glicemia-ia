@@ -17,12 +17,18 @@ import string
 fuso_br = pytz.timezone('America/Sao_Paulo')
 st.set_page_config(page_title="Saúde Kids BETA", page_icon="🧪", layout="wide")
 
+# Inicialização das variáveis de sessão para evitar erros de atributo
+if 'logado' not in st.session_state:
+    st.session_state.logado = False
+if 'user_email' not in st.session_state:
+    st.session_state.user_email = ""
+
 # ARQUIVOS DE DADOS
 ARQ_G = "dados_glicemia_BETA.csv"
 ARQ_N = "dados_nutricao_BETA.csv"
 ARQ_R = "config_receita_BETA.csv"
 
-# ================= FUNÇÕES DE SEGURANÇA =================
+# ================= FUNÇÕES DE SEGURANÇA E BANCO =================
 
 def gerar_senha_temporaria(tamanho=6):
     caracteres = string.ascii_letters + string.digits
@@ -41,8 +47,7 @@ def enviar_senha_nova(email_destino, senha_nova):
             smtp.login(meu_email, minha_senha)
             smtp.send_message(msg)
         return True
-    except:
-        return False
+    except: return False
 
 def init_db():
     conn = sqlite3.connect('usuarios.db')
@@ -52,15 +57,27 @@ def init_db():
     conn.commit()
     conn.close()
 
+# Funções para filtrar dados por perfil de usuário
+def carregar_dados_perfil(arq, colunas):
+    if os.path.exists(arq):
+        df = pd.read_csv(arq)
+        if 'user_email' in df.columns:
+            return df[df['user_email'] == st.session_state.user_email]
+    return pd.DataFrame(columns=colunas + ['user_email'])
+
+def salvar_dados_perfil(df_novo, arq):
+    if os.path.exists(arq):
+        df_geral = pd.read_csv(arq)
+        # Mantém dados de outros usuários e atualiza apenas o do atual
+        df_outros = df_geral[df_geral['user_email'] != st.session_state.user_email]
+        df_final = pd.concat([df_outros, df_novo], ignore_index=True)
+    else:
+        df_final = df_novo
+    df_final.to_csv(arq, index=False)
+
 init_db()
 
-# ================= SISTEMA DE LOGIN =================
-
-# CORREÇÃO DO ERRO: Inicializar as variáveis de estado logo no início
-if 'logado' not in st.session_state:
-    st.session_state.logado = False
-if 'user_email' not in st.session_state:
-    st.session_state.user_email = ""
+# ================= SISTEMA DE LOGIN (TELA INICIAL) =================
 
 if not st.session_state.logado:
     st.title("🧪 Saúde Kids - Acesso")
@@ -75,7 +92,7 @@ if not st.session_state.logado:
             c.execute("SELECT * FROM users WHERE email=? AND senha=?", (u, s))
             if c.fetchone():
                 st.session_state.logado = True
-                st.session_state.user_email = u # Salva o email para filtrar os dados
+                st.session_state.user_email = u
                 st.rerun()
             else:
                 st.error("E-mail ou senha incorretos.")
@@ -83,307 +100,140 @@ if not st.session_state.logado:
 
     with abas_login[1]:
         st.subheader("Cadastro")
-        n = st.text_input("Nome completo")
-        em = st.text_input("E-mail")
-        se = st.text_input("Senha", type="password")
+        nome_c = st.text_input("Nome")
+        email_c = st.text_input("E-mail", key="c_email")
+        senha_c = st.text_input("Senha", type="password", key="c_senha")
         if st.button("Cadastrar"):
             try:
                 conn = sqlite3.connect('usuarios.db')
                 c = conn.cursor()
-                c.execute("INSERT INTO users (nome, email, senha) VALUES (?,?,?)", (n, em, se))
+                c.execute("INSERT INTO users (nome, email, senha) VALUES (?,?,?)", (nome_c, email_c, senha_c))
                 conn.commit()
                 conn.close()
-                st.success("Conta criada!")
-            except:
-                st.error("Erro ou e-mail já existe.")
+                st.success("Conta criada! Vá em 'Entrar'.")
+            except: st.error("Erro ou e-mail já existe.")
 
     with abas_login[2]:
-        st.subheader("Recuperar Acesso")
-        email_alvo = st.text_input("E-mail da conta", key="rec_em_direto")
+        st.subheader("Recuperar Senha")
+        e_rec = st.text_input("E-mail", key="r_email")
         if st.button("Enviar Nova Senha"):
-            if email_alvo:
-                conn = sqlite3.connect('usuarios.db')
-                c = conn.cursor()
-                c.execute("SELECT email FROM users WHERE email=?", (email_alvo,))
-                if c.fetchone():
-                    nova_pwd = gerar_senha_temporaria()
-                    c.execute("UPDATE users SET senha=? WHERE email=?", (nova_pwd, email_alvo))
-                    conn.commit()
-                    conn.close()
-                    if enviar_senha_nova(email_alvo, nova_pwd):
-                        st.success(f"Nova senha enviada para {email_alvo}!")
-                    else:
-                        st.error("Erro ao enviar e-mail.")
-                else:
-                    st.error("E-mail não encontrado.")
-                    conn.close()
+            conn = sqlite3.connect('usuarios.db')
+            c = conn.cursor()
+            c.execute("SELECT email FROM users WHERE email=?", (e_rec,))
+            if c.fetchone():
+                pw = gerar_senha_temporaria()
+                c.execute("UPDATE users SET senha=? WHERE email=?", (pw, e_rec))
+                conn.commit()
+                if enviar_senha_nova(e_rec, pw): st.success("Senha enviada!")
+                else: st.error("Erro ao enviar e-mail.")
+            else: st.error("E-mail não cadastrado.")
+            conn.close()
 
     with abas_login[3]:
-        st.subheader("Alterar Senha")
-        alt_email = st.text_input("Confirme seu e-mail", key="alt_em")
-        alt_antiga = st.text_input("Senha Atual", type="password", key="alt_ant")
-        alt_nova1 = st.text_input("Nova Senha", type="password", key="alt_n1")
-        alt_nova2 = st.text_input("Repita a Nova Senha", type="password", key="alt_n2")
-        if st.button("Confirmar Alteração"):
-            if alt_nova1 == alt_nova2 and alt_email:
-                conn = sqlite3.connect('usuarios.db')
-                c = conn.cursor()
-                c.execute("SELECT * FROM users WHERE email=? AND senha=?", (alt_email, alt_antiga))
-                if c.fetchone():
-                    c.execute("UPDATE users SET senha=? WHERE email=?", (alt_nova1, alt_email))
-                    conn.commit()
-                    st.success("Senha alterada!")
-                else:
-                    st.error("Dados incorretos.")
-                conn.close()
-            else:
-                st.error("Senhas não coincidem.")
+        st.subheader("Trocar Senha")
+        ae = st.text_input("E-mail", key="a_email")
+        aa = st.text_input("Senha Antiga", type="password")
+        an = st.text_input("Nova Senha", type="password")
+        if st.button("Confirmar Troca"):
+            conn = sqlite3.connect('usuarios.db')
+            c = conn.cursor()
+            c.execute("UPDATE users SET senha=? WHERE email=? AND senha=?", (an, ae, aa))
+            if conn.total_changes > 0:
+                conn.commit()
+                st.success("Senha alterada!")
+            else: st.error("Dados incorretos.")
+            conn.close()
     st.stop()
 
-# ================= ÁREA LOGADA (FILTRO POR USUÁRIO) =================
+# ================= ÁREA DO APLICATIVO (LOGADO) =================
 
-def carregar_dados_usuario(arq, colunas):
-    if os.path.exists(arq):
-        df = pd.read_csv(arq)
-        if 'user_email' in df.columns:
-            # Retorna apenas as linhas do usuário logado
-            return df[df['user_email'] == st.session_state.user_email]
-    return pd.DataFrame(columns=colunas + ['user_email'])
-
-def salvar_dados_usuario(df_usuario_novo, arq):
-    if os.path.exists(arq):
-        df_geral = pd.read_csv(arq)
-        # Remove registros antigos desse usuário para não duplicar e junta com os novos
-        df_geral = df_geral[df_geral['user_email'] != st.session_state.user_email]
-        df_final = pd.concat([df_geral, df_usuario_novo], ignore_index=True)
-    else:
-        df_final = df_usuario_novo
-    df_final.to_csv(arq, index=False)
-
-st.sidebar.write(f"Logado como: **{st.session_state.user_email}**")
+st.sidebar.title(f"Saúde Kids")
+st.sidebar.write(f"Perfil: **{st.session_state.user_email}**")
 if st.sidebar.button("Sair"):
     st.session_state.logado = False
     st.session_state.user_email = ""
     st.rerun()
 
-t1, t2, t3, t4 = st.tabs(["📊 Minha Glicemia", "🍲 Alimentação", "💉 Insulina", "📈 Relatórios"])
+# Voltei com as suas abas originais (t1 a t4)
+t1, t2, t3, t4 = st.tabs(["📊 Glicemia", "🍲 Alimentação", "💉 Insulina/Receita", "📈 Relatórios"])
 
-# Aba 1: Glicemia (Exemplo de gravação com e-mail)
+# ABA 1: GLICEMIA (Filtrada por Perfil)
 with t1:
-    st.header("Seu Perfil Glicêmico")
-    df_g = carregar_dados_usuario(ARQ_G, ['Data', 'Hora', 'Valor', 'Momento'])
+    st.header("Controle de Glicemia")
+    df_g = carregar_dados_perfil(ARQ_G, ['Data', 'Hora', 'Valor', 'Momento'])
     
     with st.expander("Novo Registro"):
-        c1, c2, c3 = st.columns(3)
-        val = c1.number_input("Valor (mg/dL)", 20, 600, 100)
-        mom = c2.selectbox("Momento", ["Jejum", "Pré-Refeição", "Pós-Refeição", "Madrugada"])
-        if st.button("Salvar Registro"):
-            novo_reg = pd.DataFrame([[
-                datetime.now(fuso_br).strftime('%d/%m/%Y'), 
-                datetime.now(fuso_br).strftime('%H:%M'), 
-                val, mom, st.session_state.user_email # GRAVA O EMAIL DO DONO
-            ]], columns=['Data', 'Hora', 'Valor', 'Momento', 'user_email'])
-            
-            df_g = pd.concat([df_g, novo_reg], ignore_index=True)
-            salvar_dados_usuario(df_g, ARQ_G)
-            st.success("Salvo com sucesso!")
+        col1, col2, col3, col4 = st.columns(4)
+        data = col1.date_input("Data", datetime.now(fuso_br))
+        hora = col2.time_input("Hora", datetime.now(fuso_br))
+        valor = col3.number_input("Valor (mg/dL)", 20, 600, 100)
+        momento = col4.selectbox("Momento", ["Jejum", "Pré-Almoço", "Pós-Almoço", "Pré-Jantar", "Pós-Jantar", "Madrugada", "Outro"])
+        
+        if st.button("Salvar Glicemia"):
+            novo_d = pd.DataFrame([[data.strftime('%d/%m/%Y'), hora.strftime('%H:%M'), valor, momento, st.session_state.user_email]], 
+                                columns=['Data', 'Hora', 'Valor', 'Momento', 'user_email'])
+            df_g = pd.concat([df_g, novo_d], ignore_index=True)
+            salvar_dados_perfil(df_g, ARQ_G)
+            st.success("Salvo!")
             st.rerun()
 
     if not df_g.empty:
-        st.plotly_chart(px.line(df_g, x='Data', y='Valor', title="Minha Evolução"), use_container_width=True)
-        st.dataframe(df_g, use_container_width=True)
+        fig = px.line(df_g, x='Data', y='Valor', color='Momento', title="Minha Evolução Glicêmica", markers=True)
+        st.plotly_chart(fig, use_container_width=True)
+        st.dataframe(df_g.drop(columns=['user_email']), use_container_width=True)
 
-# Aba 4: Relatório (Só exporta o que for do usuário)
+# ABA 2: ALIMENTAÇÃO (Filtrada por Perfil)
+with t2:
+    st.header("Diário Alimentar")
+    df_n = carregar_dados_perfil(ARQ_N, ['Data', 'Refeição', 'Descrição', 'Carbo(g)'])
+    
+    with st.expander("Registrar Refeição"):
+        c1, c2, c3 = st.columns([1,2,1])
+        refeicao = c1.selectbox("Refeição", ["Café", "Lanche M", "Almoço", "Lanche T", "Jantar", "Ceia"])
+        desc = c2.text_input("O que comeu?")
+        carb = c3.number_input("Carbos (g)", min_value=0)
+        
+        if st.button("Salvar Refeição"):
+            novo_n = pd.DataFrame([[datetime.now(fuso_br).strftime('%d/%m/%Y'), refeicao, desc, carb, st.session_state.user_email]], 
+                                 columns=['Data', 'Refeição', 'Descrição', 'Carbo(g)', 'user_email'])
+            df_n = pd.concat([df_n, novo_n], ignore_index=True)
+            salvar_dados_perfil(df_n, ARQ_N)
+            st.rerun()
+    st.dataframe(df_n.drop(columns=['user_email']), use_container_width=True)
+
+# ABA 3: INSULINA (Configuração do Perfil)
+with t3:
+    st.header("Configuração de Insulina")
+    df_r = carregar_dados_perfil(ARQ_R, ['Relacao', 'Sensibilidade', 'Meta'])
+    
+    if df_r.empty:
+        st.warning("Configure seus fatores.")
+        rel = st.number_input("Relação Carbo", value=15)
+        sens = st.number_input("Fator Sensibilidade", value=50)
+        meta = st.number_input("Meta Glicêmica", value=100)
+        if st.button("Salvar Configuração"):
+            df_r = pd.DataFrame([[rel, sens, meta, st.session_state.user_email]], columns=['Relacao', 'Sensibilidade', 'Meta', 'user_email'])
+            salvar_dados_perfil(df_r, ARQ_R)
+            st.rerun()
+    else:
+        st.info(f"Seus Fatores: 1U/{df_r['Relacao'].iloc[0]}g | Sensibilidade: {df_r['Sensibilidade'].iloc[0]} | Meta: {df_r['Meta'].iloc[0]}")
+        if st.button("Resetar Fatores"):
+            # Apenas remove os fatores deste usuário
+            df_r = pd.DataFrame(columns=['Relacao', 'Sensibilidade', 'Meta', 'user_email'])
+            salvar_dados_perfil(df_r, ARQ_R)
+            st.rerun()
+
+# ABA 4: RELATÓRIOS (Gera Excel apenas com os dados do usuário logado)
 with t4:
-    st.header("Gerar Relatório Excel")
-    if st.button("📥 BAIXAR MEU RELATÓRIO"):
-        # Aqui o carregar_dados_usuario já garante que só venha o dele
+    st.header("Relatório Individual")
+    
+    def gerar_excel_perfil():
         output = BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            df_g.to_excel(writer, sheet_name='Minha Glicemia', index=False)
-        st.download_button("Clique para baixar", output.getvalue(), "meu_perfil.xlsx")
+            df_g.drop(columns=['user_email']).to_excel(writer, index=False, sheet_name='Glicemia')
+            df_n.drop(columns=['user_email']).to_excel(writer, index=False, sheet_name='Alimentação')
+        return output.getvalue()
 
-# ================= ESTILO VISUAL =================
-st.markdown("""
-<style>
-.main {background-color: #f8fafc;}
-.card { background-color: white; padding: 25px; border-radius: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); margin-bottom: 25px; }
-.dose-alerta { background-color: #f0fdf4; padding: 20px; border-radius: 12px; border: 2px solid #16a34a; text-align: center; margin-top: 10px; }
-</style>
-""", unsafe_allow_html=True)
-
-# ================= CORES COM PRIORIDADE =================
-def cor_glicemia(v):
-    if v == "-" or pd.isna(v): return ""
-    try:
-        n = int(str(v).split(" ")[0])
-        if n < 70:
-            return 'background-color: #FFFFE0; color: black'
-        elif n > 180:
-            return 'background-color: #FFB6C1; color: black'
-        elif n > 140:
-            return 'background-color: #FFFFE0; color: black'
-        else:
-            return 'background-color: #90EE90; color: black'
-    except:
-        return ""
-
-# ================= FUNÇÕES DE APOIO =================
-def carregar(arq):
-    return pd.read_csv(arq) if os.path.exists(arq) else pd.DataFrame()
-
-ALIMENTOS = {
-    "Pão Francês": [28, 4, 1], "Leite (200ml)": [10, 6, 6],
-    "Arroz": [15, 1, 0], "Feijão": [14, 5, 0],
-    "Frango": [0, 23, 5], "Ovo": [1, 6, 5],
-    "Banana": [22, 1, 0], "Maçã": [15, 0, 0]
-}
-
-def calcular_insulina_automatica(valor, momento):
-    df_r = carregar(ARQ_R)
-    if df_r.empty:
-        return "Configurar Receita", "⚠️ Vá na aba 'Receita'"
-    
-    r = df_r.iloc[0]
-    prefixo = "manha" if momento in ["Antes Café", "Após Café", "Antes Almoço", "Após Almoço", "Antes Merenda"] else "noite"
-    
-    if valor < 70: return "0 UI", "⚠️ Hipoglicemia! Tratar agora."
-    elif 70 <= valor <= 200: dose = r[f'{prefixo}_f1']
-    elif 201 <= valor <= 400: dose = r[f'{prefixo}_f2']
-    else: dose = r[f'{prefixo}_f3']
-    
-    return f"{int(dose)} UI", f"Tabela {prefixo.capitalize()}"
-
-# ================= DEFINIÇÃO DAS ABAS (CÂMERA REMOVIDA) =================
-t1, t2, t3 = st.tabs(["📊 Glicemia", "🍽️ Alimentação", "⚙️ Receita"])
-
-# --- ABA 1: GLICEMIA ---
-with t1:
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    c1, c2 = st.columns(2)
-    dfg = carregar(ARQ_G)
-
-    with c1:
-        st.subheader("📝 Novo Registro")
-        v = st.number_input("Valor da Glicemia (mg/dL):", min_value=0, value=100)
-        m = st.selectbox("Momento:", ["Antes Café", "Após Café", "Antes Almoço", "Após Almoço", "Antes Merenda", "Antes Janta", "Após Janta", "Madrugada"])
-        
-        dose_sug, ref_tab = calcular_insulina_automatica(v, m)
-        st.markdown(f"""<div class="dose-alerta">
-            <p style="margin:0; color:#166534;">Dose Sugerida:</p>
-            <h1 style="margin:0; color:#15803d;">{dose_sug}</h1>
-            <small>{ref_tab}</small>
-        </div>""", unsafe_allow_html=True)
-
-        if st.button("💾 Salvar Registro"):
-            agora = datetime.now(fuso_br)
-            novo = pd.DataFrame([[agora.strftime("%d/%m/%Y"), agora.strftime("%H:%M"), v, m, dose_sug]],
-                                columns=["Data", "Hora", "Valor", "Momento", "Dose"])
-            pd.concat([dfg, novo], ignore_index=True).to_csv(ARQ_G, index=False)
-            st.success("Salvo com sucesso!")
-            st.rerun()
-
-    with c2:
-        if not dfg.empty:
-            dfg['DataHora'] = pd.to_datetime(dfg['Data'] + " " + dfg['Hora'], dayfirst=True)
-            fig = px.line(dfg.tail(10), x='DataHora', y='Valor', markers=True, title="Evolução Recente")
-            st.plotly_chart(fig, use_container_width=True)
-
-    if not dfg.empty:
-        st.subheader("📋 Histórico")
-        st.dataframe(dfg.tail(10), use_container_width=True)
-    st.markdown('</div>', unsafe_allow_html=True)
-
-# --- ABA 2: ALIMENTAÇÃO ---
-with t2:
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.subheader("🍽️ Controle de Nutrientes")
-    ca1, ca2 = st.columns(2)
-
-    with ca1:
-        escolha = st.multiselect("Alimentos:", list(ALIMENTOS.keys()))
-        carb = sum([ALIMENTOS[i][0] for i in escolha])
-        prot = sum([ALIMENTOS[i][1] for i in escolha])
-        gord = sum([ALIMENTOS[i][2] for i in escolha])
-
-        st.info(f"Totais: Carboidratos: {carb}g | Proteínas: {prot}g | Gorduras: {gord}g")
-
-        if st.button("💾 Salvar Alimentação"):
-            agora = datetime.now(fuso_br)
-            txt = f"{', '.join(escolha)} (C:{carb} P:{prot} G:{gord})"
-            novo_n = pd.DataFrame([[agora.strftime("%d/%m/%Y"), txt, carb, prot, gord]],
-                                 columns=["Data", "Info", "C", "P", "G"])
-            pd.concat([carregar(ARQ_N), novo_n], ignore_index=True).to_csv(ARQ_N, index=False)
-            st.rerun()
-
-    with ca2:
-        dfn = carregar(ARQ_N)
-        if not dfn.empty:
-            fig2 = px.pie(values=[dfn['C'].sum(), dfn['P'].sum(), dfn['G'].sum()],
-                         names=['Carbo', 'Prot', 'Gord'], title="Distribuição Nutricional Total")
-            st.plotly_chart(fig2, use_container_width=True)
-    st.markdown('</div>', unsafe_allow_html=True)
-
-# --- ABA 3: RECEITA (Antiga Configuração) ---
-with t3:
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.subheader("⚙️ Configurar Doses do Médico (Receita)")
-    
-    df_r = carregar(ARQ_R)
-    v_at = df_r.iloc[0] if not df_r.empty else {'manha_f1':0, 'manha_f2':0, 'manha_f3':0, 'noite_f1':0, 'noite_f2':0, 'noite_f3':0}
-    
-    col_m, col_n = st.columns(2)
-    with col_m:
-        st.info("**☀️ Café / Almoço / Merenda**")
-        mf1 = st.number_input("Dose 70-200:", value=int(v_at['manha_f1']), key="mf1")
-        mf2 = st.number_input("Dose 201-400:", value=int(v_at['manha_f2']), key="mf2")
-        mf3 = st.number_input("Dose > 400:", value=int(v_at['manha_f3']), key="mf3")
-    with col_n:
-        st.info("**🌙 Jantar / Madrugada**")
-        nf1 = st.number_input("Dose 70-200:", value=int(v_at['noite_f1']), key="nf1")
-        nf2 = st.number_input("Dose 201-400:", value=int(v_at['noite_f2']), key="nf2")
-        nf3 = st.number_input("Dose > 400:", value=int(v_at['noite_f3']), key="nf3")
-        
-    if st.button("💾 Salvar Receita"):
-        pd.DataFrame([{'manha_f1':mf1, 'manha_f2':mf2, 'manha_f3':mf3, 'noite_f1':nf1, 'noite_f2':nf2, 'noite_f3':nf3}]).to_csv(ARQ_R, index=False)
-        st.success("Receita atualizada!")
-        st.rerun()
-    st.markdown('</div>', unsafe_allow_html=True)
-
-# ================= EXCEL COLORIDO =================
-def gerar_excel_colorido(df_glic, df_nutri):
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        if not df_glic.empty:
-            df_glic = df_glic.copy()
-            df_glic['Exibe'] = df_glic['Valor'].astype(str) + " (" + df_glic['Hora'] + ")"
-            pivot = df_glic.pivot_table(index='Data', columns='Momento', values='Exibe', aggfunc='last').fillna("-")
-            pivot.to_excel(writer, sheet_name='Glicemia')
-            ws = writer.sheets['Glicemia']
-
-            v_fill = PatternFill(start_color="90EE90", end_color="90EE90", fill_type="solid")
-            a_fill = PatternFill(start_color="FFFFE0", end_color="FFFFE0", fill_type="solid")
-            r_fill = PatternFill(start_color="FFB6C1", end_color="FFB6C1", fill_type="solid")
-
-            for row in ws.iter_rows(min_row=2, min_col=2):
-                for cell in row:
-                    if cell.value and cell.value != "-":
-                        try:
-                            val = int(str(cell.value).split(" ")[0])
-                            if val < 70: cell.fill = a_fill
-                            elif val > 180: cell.fill = r_fill
-                            elif val > 140: cell.fill = a_fill
-                            else: cell.fill = v_fill
-                        except: pass
-
-        if not df_nutri.empty:
-            df_nutri.to_excel(writer, index=False, sheet_name='Alimentacao')
-    return output.getvalue()
-
-st.markdown("---")
-if st.button("📥 BAIXAR RELATÓRIO EXCEL"):
-    dfg = carregar(ARQ_G)
-    dfn = carregar(ARQ_N)
-    if not dfg.empty:
-        excel_data = gerar_excel_colorido(dfg, dfn)
-        st.download_button("Clique para Baixar", excel_data, file_name="Relatorio_Medico.xlsx")
+    if st.button("📥 BAIXAR MEU RELATÓRIO EXCEL"):
+        dados_ex = gerar_excel_perfil()
+        st.download_button("Clique aqui para baixar", dados_ex, f"relatorio_{st.session_state.user_email}.xlsx")
