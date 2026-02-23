@@ -20,7 +20,7 @@ ARQ_G = "dados_glicemia_BETA.csv"
 ARQ_N = "dados_nutricao_BETA.csv"
 ARQ_R = "config_receita_BETA.csv"
 
-# DESIGN DARK MODE (FUNDO ESCURO) - PARA NÃO CANSAR A VISTA
+# DESIGN DARK MODE COM SUPORTE A CORES NO HISTÓRICO
 st.markdown("""
 <style>
     .stApp { background-color: #0e1117; color: #ffffff; }
@@ -34,7 +34,16 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ================= SEGURANÇA E LOGIN (COMPLETO) =================
+# FUNÇÃO PARA COLORIR A TABELA (VOLTOU!)
+def cor_glicemia_status(v):
+    try:
+        n = int(v)
+        if n < 70: return 'background-color: #8B8000; color: white;' # Amarelo Escuro
+        elif n > 180: return 'background-color: #8B0000; color: white;' # Vermelho Escuro
+        else: return 'background-color: #006400; color: white;' # Verde Escuro
+    except: return ''
+
+# ================= SEGURANÇA E LOGIN =================
 def init_db():
     conn = sqlite3.connect('usuarios.db')
     conn.execute('''CREATE TABLE IF NOT EXISTS users (nome TEXT, email TEXT PRIMARY KEY, senha TEXT)''')
@@ -67,7 +76,7 @@ if not st.session_state.logado:
                 conn.execute("INSERT INTO users VALUES (?,?,?)", (n_cad, e_cad, s_cad))
                 conn.commit(); conn.close()
                 st.success("Conta criada!")
-            except: st.error("Erro no cadastro.")
+            except: st.error("Erro.")
     st.stop()
 
 # ================= FUNÇÕES DE APOIO =================
@@ -110,8 +119,11 @@ with tab1:
             st.rerun()
     with c2:
         if not dfg.empty:
-            st.plotly_chart(px.line(dfg.tail(10), x='Hora', y='Valor', markers=True, title="Tendência Glicêmica"), use_container_width=True)
-    st.dataframe(dfg.tail(10), use_container_width=True)
+            st.plotly_chart(px.line(dfg.tail(10), x='Hora', y='Valor', markers=True, title="Tendência Glicêmica").update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color="white"), use_container_width=True)
+    
+    st.write("### Histórico Colorido")
+    if not dfg.empty:
+        st.dataframe(dfg.tail(15).style.applymap(cor_glicemia_status, subset=['Valor']), use_container_width=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
 with tab2:
@@ -142,26 +154,21 @@ with tab3:
     c_m, c_n = st.columns(2)
     with c_m:
         st.write("**MANHÃ**")
-        m1 = st.number_input("Dose 70-200", value=int(v.get('manha_f1',0)), key="m1")
-        m2 = st.number_input("Dose 201-400", value=int(v.get('manha_f2',0)), key="m2")
-        m3 = st.number_input("Dose > 400", value=int(v.get('manha_f3',0)), key="m3")
+        m1, m2, m3 = st.number_input("70-200", value=int(v.get('manha_f1',0)), key="m1"), st.number_input("201-400", value=int(v.get('manha_f2',0)), key="m2"), st.number_input("> 400", value=int(v.get('manha_f3',0)), key="m3")
     with c_n:
         st.write("**NOITE**")
-        n1 = st.number_input("Dose 70-200 ", value=int(v.get('noite_f1',0)), key="n1")
-        n2 = st.number_input("Dose 201-400 ", value=int(v.get('noite_f2',0)), key="n2")
-        n3 = st.number_input("Dose > 400 ", value=int(v.get('noite_f3',0)), key="n3")
+        n1, n2, n3 = st.number_input("70-200 ", value=int(v.get('noite_f1',0)), key="n1"), st.number_input("201-400 ", value=int(v.get('noite_f2',0)), key="n2"), st.number_input("> 400 ", value=int(v.get('noite_f3',0)), key="n3")
     if st.button("💾 Salvar Receita"):
         nova_rec = pd.DataFrame([{'Usuario': st.session_state.user_email, 'manha_f1':m1, 'manha_f2':m2, 'manha_f3':m3, 'noite_f1':n1, 'noite_f2':n2, 'noite_f3':n3}])
         df_r_all = df_r_all[df_r_all['Usuario'] != st.session_state.user_email] if not df_r_all.empty else pd.DataFrame()
         pd.concat([df_r_all, nova_rec], ignore_index=True).to_csv(ARQ_R, index=False)
-        st.success("Receita Salva!")
+        st.success("Salva!")
     st.markdown('</div>', unsafe_allow_html=True)
 
 # ================= EXCEL COM DUAS ABAS =================
 st.sidebar.markdown("---")
 if st.sidebar.button("📥 Gerar Excel Completo"):
-    df_e_g = carregar_dados_seguro(ARQ_G)
-    df_e_n = carregar_dados_seguro(ARQ_N)
+    df_e_g, df_e_n = carregar_dados_seguro(ARQ_G), carregar_dados_seguro(ARQ_N)
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         if not df_e_g.empty:
