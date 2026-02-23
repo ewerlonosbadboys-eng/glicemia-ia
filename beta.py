@@ -142,60 +142,74 @@ if not st.session_state.logado:
     st.markdown('</div>', unsafe_allow_html=True)
     st.stop()
 
-# --- CONTROLE DE ACESSO COM CADASTRO (SUBSTITUIR NO TOPO) ---
+# --- CONTROLE DE ACESSO ATUALIZADO (SUBSTITUIR NO TOPO) ---
 if 'logado' not in st.session_state:
     st.session_state.logado = False
+if 'conta_criada' not in st.session_state:
+    st.session_state.conta_criada = False
 
 if not st.session_state.logado:
     st.markdown('<div class="card">', unsafe_allow_html=True)
     
-    # Criando abas para separar Login de Cadastro
-    aba_login, aba_criar = st.tabs(["🔐 Entrar", "📝 Criar Conta"])
-    
-    with aba_login:
-        u = st.text_input("E-mail", key="login_email")
-        s = st.text_input("Senha", type="password", key="login_senha")
-        if st.button("Entrar no Sistema"):
-            # Aqui você pode manter sua lógica de verificação
-            if u == "admin@saude.com" and s == "12345":
+    # Se a conta foi criada, mostra apenas 2 abas. Se não, mostra as 3.
+    if not st.session_state.conta_criada:
+        abas = st.tabs(["🔐 Entrar", "📝 Criar Conta", "❓ Esqueci Senha"])
+    else:
+        abas = st.tabs(["🔐 Entrar", "❓ Esqueci Senha"])
+        st.success("Conta criada com sucesso! Use a aba 'Entrar' agora.")
+
+    # Lógica da Aba LOGIN
+    with abas[0]:
+        u = st.text_input("E-mail", key="login_user")
+        s = st.text_input("Senha", type="password", key="login_pass")
+        if st.button("Acessar Aplicativo"):
+            conn = sqlite3.connect('usuarios.db')
+            c = conn.cursor()
+            c.execute("SELECT * FROM users WHERE email=? AND senha=?", (u, s))
+            if c.fetchone():
                 st.session_state.logado = True
                 st.rerun()
             else:
-                st.error("E-mail ou senha incorretos.")
-                
-    with aba_criar:
-        novo_nome = st.text_input("Nome Completo")
-        novo_email = st.text_input("E-mail para Cadastro")
-        nova_senha = st.text_input("Crie uma Senha", type="password")
-        confirma_senha = st.text_input("Confirme a Senha", type="password")
-        
-        if st.button("Finalizar Cadastro"):
-            if nova_senha == confirma_senha and novo_email:
-                st.success("Conta criada com sucesso! Agora clique na aba 'Entrar'.")
-                # No futuro, aqui você adicionará o código para salvar no banco
-            else:
-                st.error("As senhas não conferem ou campos estão vazios.")
-                
+                st.error("Usuário ou senha não encontrados.")
+            conn.close()
+
+    # Lógica da Aba CRIAR CONTA (Só aparece se conta_criada for False)
+    if not st.session_state.conta_criada:
+        with abas[1]:
+            col1, col2 = st.columns(2)
+            nome = col1.text_input("Nome")
+            sobrenome = col2.text_input("Sobrenome")
+            email_novo = st.text_input("E-mail", key="email_novo")
+            senha_nova = st.text_input("Senha", type="password", key="senha_nova")
+            
+            if st.button("Finalizar Cadastro"):
+                try:
+                    conn = sqlite3.connect('usuarios.db')
+                    c = conn.cursor()
+                    c.execute("INSERT INTO users (nome, sobrenome, email, senha) VALUES (?,?,?,?)", 
+                             (nome, sobrenome, email_novo, senha_nova))
+                    conn.commit()
+                    conn.close()
+                    # AQUI ESTÁ O SEGREDO: Marcamos que a conta foi criada e reiniciamos
+                    st.session_state.conta_criada = True
+                    st.rerun()
+                except:
+                    st.error("Erro: Este e-mail já existe no sistema.")
+
+        # Aba Esqueci Senha (posição 2)
+        with abas[2]:
+            st.write("Insira seu e-mail para receber o link de recuperação.")
+            st.text_input("E-mail cadastrado", key="recupera_email")
+            st.button("Enviar Link para E-mail")
+    else:
+        # Se a conta já foi criada, a aba Esqueci Senha vira a posição 1
+        with abas[1]:
+            st.write("Insira seu e-mail para receber o link de recuperação.")
+            st.text_input("E-mail cadastrado", key="recupera_email_2")
+            st.button("Enviar Link para E-mail")
+
     st.markdown('</div>', unsafe_allow_html=True)
     st.stop()
-    
-# Se não estiver logado, desenha a tela de login e para o código aqui
-if not st.session_state.logado:
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.title("🔐 Acesso ao Saúde Kids")
-    
-    u = st.text_input("E-mail")
-    s = st.text_input("Senha", type="password")
-    
-    if st.button("Entrar no Sistema"):
-        if u == "admin@saude.com" and s == "12345":
-            st.session_state.logado = True
-            st.rerun()
-        else:
-            st.error("Incorreto")
-    st.markdown('</div>', unsafe_allow_html=True)
-    
-    st.stop() # Esta linha é o segredo: ela impede que o resto do app apareça
 
 # ================= CONFIGURAÇÕES INICIAIS =================
 fuso_br = pytz.timezone('America/Sao_Paulo')
