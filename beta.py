@@ -103,10 +103,41 @@ if not st.session_state.logado:
 
     abas_login = st.tabs(titulos)
 
-    with abas_login[0]: # LOGIN
-        u = st.text_input("E-mail", key="l_user")
+    # --- FUNÇÕES DE APOIO PARA SENHA ---
+def gerar_senha_temporaria(tamanho=6):
+    caracteres = string.ascii_letters + string.digits
+    return ''.join(random.choice(caracteres) for i in range(tamanho))
+
+def enviar_senha_nova(email_destino, senha_nova):
+    meu_email = "ewerlon.osbadboys@gmail.com" 
+    minha_senha = "okiu qihp lglk trcc" 
+    corpo = f"""
+    <h3>Saúde Kids - Nova Senha</h3>
+    <p>Sua senha foi resetada conforme solicitado.</p>
+    <p>Sua nova senha é: <b style='font-size: 20px; color: blue;'>{senha_nova}</b></p>
+    <p>Use esta senha para logar agora.</p>
+    """
+    msg = MIMEText(corpo, 'html')
+    msg['Subject'] = 'Nova Senha - Saúde Kids'
+    msg['From'] = meu_email
+    msg['To'] = email_destino
+    try:
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
+            smtp.login(meu_email, minha_senha)
+            smtp.send_message(msg)
+        return True
+    except:
+        return False
+
+# --- TELA DE ACESSO ---
+if not st.session_state.logado:
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    abas_login = st.tabs(["🔐 Entrar", "📝 Criar Conta", "❓ Esqueci Senha"])
+
+    with abas_login[0]:
+        u = st.text_input("E-mail", key="l_email")
         s = st.text_input("Senha", type="password", key="l_pass")
-        if st.button("Acessar Sistema"):
+        if st.button("Acessar Aplicativo"):
             conn = sqlite3.connect('usuarios.db')
             c = conn.cursor()
             c.execute("SELECT * FROM users WHERE email=? AND senha=?", (u, s))
@@ -117,36 +148,34 @@ if not st.session_state.logado:
                 st.error("E-mail ou senha incorretos.")
             conn.close()
 
-    if not st.session_state.conta_criada:
-        with abas_login[1]: # CADASTRO
-            nome = st.text_input("Nome")
-            email_cad = st.text_input("E-mail")
-            senha_cad = st.text_input("Senha", type="password")
-            if st.button("Finalizar Cadastro"):
-                try:
-                    conn = sqlite3.connect('usuarios.db')
-                    c = conn.cursor()
-                    c.execute("INSERT INTO users (nome, email, senha) VALUES (?,?,?)", (nome, email_cad, senha_cad))
-                    conn.commit()
-                    conn.close()
-                    st.session_state.conta_criada = True
-                    st.success("Conta criada! Vá para a aba Entrar.")
-                    st.rerun()
-                except:
-                    st.error("Este e-mail já está cadastrado.")
-        
-        with abas_login[2]: # Aba Esqueci Senha
+    with abas_login[1]:
+        # Seu código de cadastro aqui (nome, email, senha...)
+        st.info("Preencha os dados para se cadastrar.")
+
+    with abas_login[2]:
         st.subheader("Recuperar Acesso")
-        email_alvo = st.text_input("Digite seu e-mail cadastrado", key="rec_em_direto")
+        email_alvo = st.text_input("Digite seu e-mail cadastrado", key="rec_direto")
         
-        if st.button("Gerar e Enviar Nova Senha"):
+        if st.button("Enviar Nova Senha por E-mail"):
             if email_alvo:
                 conn = sqlite3.connect('usuarios.db')
                 c = conn.cursor()
                 c.execute("SELECT email FROM users WHERE email=?", (email_alvo,))
-                usuario = c.fetchone()
-                
-                if usuario:
+                if c.fetchone():
+                    # 1. Gera a senha
+                    nova_pwd = gerar_senha_temporaria()
+                    # 2. Atualiza o Banco
+                    c.execute("UPDATE users SET senha=? WHERE email=?", (nova_pwd, email_alvo))
+                    conn.commit()
+                    # 3. Envia e-mail
+                    if enviar_senha_nova(email_alvo, nova_pwd):
+                        st.success(f"Senha enviada para {email_alvo}!")
+                    else:
+                        st.error("Erro ao enviar e-mail.")
+                else:
+                    st.error("E-mail não encontrado.")
+                conn.close()
+    st.stop()
                     # 1. Gera a senha nova
                     senha_gerada = gerar_senha_temporaria()
                     
