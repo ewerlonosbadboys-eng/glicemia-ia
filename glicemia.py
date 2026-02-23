@@ -19,6 +19,7 @@ st.set_page_config(page_title="Saúde Kids BETA", page_icon="🧪", layout="wide
 ARQ_G = "dados_glicemia_BETA.csv"
 ARQ_N = "dados_nutricao_BETA.csv"
 ARQ_R = "config_receita_BETA.csv"
+ARQ_F = "feedbacks_BETA.csv"
 
 # DESIGN DARK MODE (PRESERVADO E REVISADO)
 st.markdown("""
@@ -308,5 +309,6 @@ st.sidebar.download_button("Baixar Agora", output.getvalue(), file_name="Relator
 if st.sidebar.button("Sair"):
     st.session_state.logado = False
     st.rerun()
+
 
 
