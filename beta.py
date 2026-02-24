@@ -19,6 +19,7 @@ st.set_page_config(page_title="Saúde Kids BETA", page_icon="🧪", layout="wide
 ARQ_G = "dados_glicemia_BETA.csv"
 ARQ_N = "dados_nutricao_BETA.csv"
 ARQ_R = "config_receita_BETA.csv"
+ARQ_M = "mensagens_admin_BETA.csv" # Arquivo para as mensagens
 
 # DESIGN DARK MODE
 st.markdown("""
@@ -54,6 +55,9 @@ def enviar_senha_nova(email_destino, senha_nova):
 def init_db():
     conn = sqlite3.connect('usuarios.db')
     conn.execute('''CREATE TABLE IF NOT EXISTS users (nome TEXT, email TEXT PRIMARY KEY, senha TEXT)''')
+    # Cria o admin por padrão se não existir
+    if not conn.execute("SELECT 1 FROM users WHERE email='admin'").fetchone():
+        conn.execute("INSERT INTO users VALUES ('Administrador', 'admin', '542820')")
     conn.commit(); conn.close()
 
 init_db()
@@ -144,78 +148,101 @@ ALIMENTOS = {
 }
 
 # ================= INTERFACE PRINCIPAL =================
-tab1, tab2, tab3 = st.tabs(["📊 Glicemia", "🍽️ Nutrição", "⚙️ Receita"])
+if st.session_state.user_email == "admin":
+    st.title("🛡️ Painel Admin - Mensagens de Melhoria")
+    if os.path.exists(ARQ_M):
+        df_msg = pd.read_csv(ARQ_M)
+        st.dataframe(df_msg, use_container_width=True)
+    else:
+        st.info("Nenhuma mensagem de melhoria recebida.")
+else:
+    tab1, tab2, tab3, tab4 = st.tabs(["📊 Glicemia", "🍽️ Nutrição", "⚙️ Receita", "📩 Sugerir Melhoria"])
 
-with tab1:
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    dfg = carregar_dados_seguro(ARQ_G)
-    c1, c2 = st.columns([1, 2])
-    with c1:
-        v_gl = st.number_input("Valor Glicemia", 0, 600, 100)
-        m_gl = st.selectbox("Momento", MOMENTOS_ORDEM)
-        dose, msg_d = calc_insulina(v_gl, m_gl)
-        st.markdown(f'<div class="metric-box"><small>{msg_d}</small><br><span class="dose-destaque">{dose}</span></div>', unsafe_allow_html=True)
-        if st.button("💾 Salvar Glicemia", use_container_width=True):
-            agora = datetime.now(fuso_br)
-            novo = pd.DataFrame([[st.session_state.user_email, agora.strftime("%d/%m/%Y"), agora.strftime("%H:%M"), v_gl, m_gl, dose]], columns=["Usuario","Data","Hora","Valor","Momento","Dose"])
-            base = pd.read_csv(ARQ_G) if os.path.exists(ARQ_G) else pd.DataFrame()
-            pd.concat([base, novo], ignore_index=True).to_csv(ARQ_G, index=False)
-            st.rerun()
-    with c2:
+    with tab1:
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        dfg = carregar_dados_seguro(ARQ_G)
+        c1, c2 = st.columns([1, 2])
+        with c1:
+            v_gl = st.number_input("Valor Glicemia", 0, 600, 100)
+            m_gl = st.selectbox("Momento", MOMENTOS_ORDEM)
+            dose, msg_d = calc_insulina(v_gl, m_gl)
+            st.markdown(f'<div class="metric-box"><small>{msg_d}</small><br><span class="dose-destaque">{dose}</span></div>', unsafe_allow_html=True)
+            if st.button("💾 Salvar Glicemia", use_container_width=True):
+                agora = datetime.now(fuso_br)
+                novo = pd.DataFrame([[st.session_state.user_email, agora.strftime("%d/%m/%Y"), agora.strftime("%H:%M"), v_gl, m_gl, dose]], columns=["Usuario","Data","Hora","Valor","Momento","Dose"])
+                base = pd.read_csv(ARQ_G) if os.path.exists(ARQ_G) else pd.DataFrame()
+                pd.concat([base, novo], ignore_index=True).to_csv(ARQ_G, index=False)
+                st.rerun()
+        with c2:
+            if not dfg.empty:
+                fig = px.line(dfg.tail(10), x='Hora', y='Valor', markers=True, title="Tendência")
+                fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color="white")
+                st.plotly_chart(fig, use_container_width=True)
+                
         if not dfg.empty:
-            fig = px.line(dfg.tail(10), x='Hora', y='Valor', markers=True, title="Tendência")
-            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color="white")
-            st.plotly_chart(fig, use_container_width=True)
-            
-    if not dfg.empty:
-        def cor_gl(v):
-            try:
-                n = int(v)
-                if n < 70: return 'background-color: #8B8000' 
-                elif n > 180: return 'background-color: #8B0000' 
-                else: return 'background-color: #006400' 
-            except: return ''
-        st.dataframe(dfg.tail(15).style.applymap(cor_gl, subset=['Valor']), use_container_width=True)
-    st.markdown('</div>', unsafe_allow_html=True)
+            def cor_gl(v):
+                try:
+                    n = int(v)
+                    if n < 70: return 'background-color: #8B8000' 
+                    elif n > 180: return 'background-color: #8B0000' 
+                    else: return 'background-color: #006400' 
+                except: return ''
+            st.dataframe(dfg.tail(15).style.applymap(cor_gl, subset=['Valor']), use_container_width=True)
+        st.markdown('</div>', unsafe_allow_html=True)
 
-with tab2:
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    dfn = carregar_dados_seguro(ARQ_N)
-    m_nutri = st.selectbox("Refeição", MOMENTOS_ORDEM, key="n_m")
-    sel = st.multiselect("Alimentos", list(ALIMENTOS.keys()))
-    c_tot, p_tot, g_tot = sum([ALIMENTOS[x][0] for x in sel]), sum([ALIMENTOS[x][1] for x in sel]), sum([ALIMENTOS[x][2] for x in sel])
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Carbs", f"{c_tot}g"); c2.metric("Prot", f"{p_tot}g"); c3.metric("Gord", f"{g_tot}g")
-    if st.button("💾 Salvar Refeição", use_container_width=True):
-        agora = datetime.now(fuso_br)
-        novo_n = pd.DataFrame([[st.session_state.user_email, agora.strftime("%d/%m/%Y"), m_nutri, ", ".join(sel), c_tot, p_tot, g_tot]], columns=["Usuario","Data","Momento","Info","C","P","G"])
-        base = pd.read_csv(ARQ_N) if os.path.exists(ARQ_N) else pd.DataFrame()
-        pd.concat([base, novo_n], ignore_index=True).to_csv(ARQ_N, index=False)
-        st.rerun()
-    st.dataframe(dfn.tail(10), use_container_width=True)
-    st.markdown('</div>', unsafe_allow_html=True)
+    with tab2:
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        dfn = carregar_dados_seguro(ARQ_N)
+        m_nutri = st.selectbox("Refeição", MOMENTOS_ORDEM, key="n_m")
+        sel = st.multiselect("Alimentos", list(ALIMENTOS.keys()))
+        c_tot, p_tot, g_tot = sum([ALIMENTOS[x][0] for x in sel]), sum([ALIMENTOS[x][1] for x in sel]), sum([ALIMENTOS[x][2] for x in sel])
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Carbs", f"{c_tot}g"); c2.metric("Prot", f"{p_tot}g"); c3.metric("Gord", f"{g_tot}g")
+        if st.button("💾 Salvar Refeição", use_container_width=True):
+            agora = datetime.now(fuso_br)
+            novo_n = pd.DataFrame([[st.session_state.user_email, agora.strftime("%d/%m/%Y"), m_nutri, ", ".join(sel), c_tot, p_tot, g_tot]], columns=["Usuario","Data","Momento","Info","C","P","G"])
+            base = pd.read_csv(ARQ_N) if os.path.exists(ARQ_N) else pd.DataFrame()
+            pd.concat([base, novo_n], ignore_index=True).to_csv(ARQ_N, index=False)
+            st.rerun()
+        st.dataframe(dfn.tail(10), use_container_width=True)
+        st.markdown('</div>', unsafe_allow_html=True)
 
-with tab3:
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.subheader("⚙️ Configuração de Receita")
-    df_r_all = pd.read_csv(ARQ_R) if os.path.exists(ARQ_R) else pd.DataFrame()
-    r_u = df_r_all[df_r_all['Usuario'] == st.session_state.user_email] if not df_r_all.empty else pd.DataFrame()
-    v = r_u.iloc[0] if not r_u.empty else {'manha_f1':0, 'manha_f2':0, 'manha_f3':0, 'noite_f1':0, 'noite_f2':0, 'noite_f3':0}
-    cm, cn = st.columns(2)
-    with cm:
-        m1 = st.number_input("Manhã 70-200", value=int(v.get('manha_f1',0)), key="m1")
-        m2 = st.number_input("Manhã 201-400", value=int(v.get('manha_f2',0)), key="m2")
-        m3 = st.number_input("Manhã > 400", value=int(v.get('manha_f3',0)), key="m3")
-    with cn:
-        n1 = st.number_input("Noite 70-200", value=int(v.get('noite_f1',0)), key="n1")
-        n2 = st.number_input("Noite 201-400", value=int(v.get('noite_f2',0)), key="n2")
-        n3 = st.number_input("Noite > 400", value=int(v.get('noite_f3',0)), key="n3")
-    if st.button("💾 Salvar Receita", use_container_width=True):
-        nova_rec = pd.DataFrame([{'Usuario': st.session_state.user_email, 'manha_f1':m1, 'manha_f2':m2, 'manha_f3':m3, 'noite_f1':n1, 'noite_f2':n2, 'noite_f3':n3}])
-        df_r_all = df_r_all[df_r_all['Usuario'] != st.session_state.user_email] if not df_r_all.empty else pd.DataFrame()
-        pd.concat([df_r_all, nova_rec], ignore_index=True).to_csv(ARQ_R, index=False)
-        st.success("Receita Salva!")
-    st.markdown('</div>', unsafe_allow_html=True)
+    with tab3:
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.subheader("⚙️ Configuração de Receita")
+        df_r_all = pd.read_csv(ARQ_R) if os.path.exists(ARQ_R) else pd.DataFrame()
+        r_u = df_r_all[df_r_all['Usuario'] == st.session_state.user_email] if not df_r_all.empty else pd.DataFrame()
+        v = r_u.iloc[0] if not r_u.empty else {'manha_f1':0, 'manha_f2':0, 'manha_f3':0, 'noite_f1':0, 'noite_f2':0, 'noite_f3':0}
+        cm, cn = st.columns(2)
+        with cm:
+            m1 = st.number_input("Manhã 70-200", value=int(v.get('manha_f1',0)), key="m1")
+            m2 = st.number_input("Manhã 201-400", value=int(v.get('manha_f2',0)), key="m2")
+            m3 = st.number_input("Manhã > 400", value=int(v.get('manha_f3',0)), key="m3")
+        with cn:
+            n1 = st.number_input("Noite 70-200", value=int(v.get('noite_f1',0)), key="n1")
+            n2 = st.number_input("Noite 201-400", value=int(v.get('noite_f2',0)), key="n2")
+            n3 = st.number_input("Noite > 400", value=int(v.get('noite_f3',0)), key="n3")
+        if st.button("💾 Salvar Receita", use_container_width=True):
+            nova_rec = pd.DataFrame([{'Usuario': st.session_state.user_email, 'manha_f1':m1, 'manha_f2':m2, 'manha_f3':m3, 'noite_f1':n1, 'noite_f2':n2, 'noite_f3':n3}])
+            df_r_all = df_r_all[df_r_all['Usuario'] != st.session_state.user_email] if not df_r_all.empty else pd.DataFrame()
+            pd.concat([df_r_all, nova_rec], ignore_index=True).to_csv(ARQ_R, index=False)
+            st.success("Receita Salva!")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with tab4:
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.subheader("📩 Enviar Sugestão de Melhoria")
+        txt_melhoria = st.text_area("Descreva aqui o que podemos melhorar no sistema:")
+        if st.button("Enviar para Admin", use_container_width=True):
+            if txt_melhoria:
+                agora = datetime.now(fuso_br).strftime("%d/%m/%Y %H:%M")
+                nova_msg = pd.DataFrame([[st.session_state.user_email, agora, txt_melhoria]], columns=["Usuario", "Data", "Sugestão"])
+                base_msg = pd.read_csv(ARQ_M) if os.path.exists(ARQ_M) else pd.DataFrame()
+                pd.concat([base_msg, nova_msg], ignore_index=True).to_csv(ARQ_M, index=False)
+                st.success("Sua sugestão foi enviada com sucesso ao administrador!")
+            else:
+                st.warning("Por favor, escreva algo antes de enviar.")
+        st.markdown('</div>', unsafe_allow_html=True)
 
 # ================= EXCEL =================
 st.sidebar.markdown("---")
