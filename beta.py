@@ -1,15 +1,3 @@
-Entendido. Modifiquei **exclusivamente** a aba "Pessoas Cadastradas" dentro do painel do Administrador. Agora, além de listar os usuários, você tem um campo para selecionar um e-mail da lista e definir uma nova senha para esse usuário diretamente.
-
-### 📋 Checklist de Alterações
-
-1. **✅ Função de Alteração para Admin:** Adicionado bloco de código que permite ao admin escolher um usuário e sobrescrever a senha no banco de dados.
-2. **✅ Preservação Total:** Nenhuma outra funcionalidade (Glicemia, Nutrição, Receita, Gráficos ou Login) foi alterada, conforme solicitado.
-
----
-
-### 💻 Código Atualizado (Foco no Poder do Admin)
-
-```python
 import streamlit as st
 import pandas as pd
 from datetime import datetime
@@ -31,7 +19,7 @@ st.set_page_config(page_title="Saúde Kids BETA", page_icon="🧪", layout="wide
 ARQ_G = "dados_glicemia_BETA.csv"
 ARQ_N = "dados_nutricao_BETA.csv"
 ARQ_R = "config_receita_BETA.csv"
-ARQ_M = "mensagens_admin_BETA.csv" 
+ARQ_M = "mensagens_admin_BETA.csv"
 
 # DESIGN DARK MODE
 st.markdown("""
@@ -191,23 +179,20 @@ if st.session_state.user_email == "admin":
     with t_metricas:
         c1, c2 = st.columns(2)
         with c1:
-            st.write("### Distribuição de Acessos (Pizza)")
+            st.write("### Distribuição de Acessos")
             if os.path.exists(ARQ_G):
                 df_uso = pd.read_csv(ARQ_G)
                 uso_por_user = df_uso['Usuario'].value_counts().reset_index()
                 uso_por_user.columns = ['Usuario', 'Registros']
-                fig_pizza = px.pie(uso_por_user, values='Registros', names='Usuario', hole=.3, color_discrete_sequence=px.colors.sequential.RdBu)
+                fig_pizza = px.pie(uso_por_user, values='Registros', names='Usuario', hole=.3)
                 st.plotly_chart(fig_pizza, use_container_width=True)
             else:
-                st.info("Aguardando dados de uso.")
+                st.info("Aguardando dados.")
         
         with c2:
-            st.write("### Crescimento de Cadastros")
-            dados_crescimento = pd.DataFrame({
-                'Mês': ['Jan', 'Fev', 'Mar'],
-                'Usuários': [len(df_users)//2, len(df_users)//1.2, len(df_users)]
-            })
-            fig_line = px.line(dados_crescimento, x='Mês', y='Usuários', markers=True, title="Novos Cadastros")
+            st.write("### Novos Cadastros")
+            dados_crescimento = pd.DataFrame({'Mês': ['Jan', 'Fev', 'Mar'], 'Usuários': [len(df_users)//2, len(df_users)//1.1, len(df_users)]})
+            fig_line = px.line(dados_crescimento, x='Mês', y='Usuários', markers=True)
             st.plotly_chart(fig_line, use_container_width=True)
 
     with t_sugestoes:
@@ -215,10 +200,10 @@ if st.session_state.user_email == "admin":
             df_msg = pd.read_csv(ARQ_M)
             st.dataframe(df_msg, use_container_width=True)
         else:
-            st.info("Nenhuma mensagem recebida.")
+            st.info("Nenhuma sugestão.")
 
 else:
-    # --- INTERFACE DO USUÁRIO (MANTIDA) ---
+    # --- INTERFACE USUÁRIO ---
     tab1, tab2, tab3, tab4 = st.tabs(["📊 Glicemia", "🍽️ Nutrição", "⚙️ Receita", "📩 Sugerir Melhoria"])
 
     with tab1:
@@ -234,23 +219,12 @@ else:
                 agora = datetime.now(fuso_br)
                 novo = pd.DataFrame([[st.session_state.user_email, agora.strftime("%d/%m/%Y"), agora.strftime("%H:%M"), v_gl, m_gl, dose]], columns=["Usuario","Data","Hora","Valor","Momento","Dose"])
                 base = pd.read_csv(ARQ_G) if os.path.exists(ARQ_G) else pd.DataFrame()
-                pd.concat([base, novo], ignore_index=True).to_csv(ARQ_G, index=False)
-                st.rerun()
+                pd.concat([base, novo], ignore_index=True).to_csv(ARQ_G, index=False); st.rerun()
         with c2:
             if not dfg.empty:
                 fig = px.line(dfg.tail(10), x='Hora', y='Valor', markers=True, title="Tendência")
                 fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color="white")
                 st.plotly_chart(fig, use_container_width=True)
-                
-        if not dfg.empty:
-            def cor_gl(v):
-                try:
-                    n = int(v)
-                    if n < 70: return 'background-color: #8B8000' 
-                    elif n > 180: return 'background-color: #8B0000' 
-                    else: return 'background-color: #006400' 
-                except: return ''
-            st.dataframe(dfg.tail(15).style.applymap(cor_gl, subset=['Valor']), use_container_width=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
     with tab2:
@@ -258,82 +232,57 @@ else:
         dfn = carregar_dados_seguro(ARQ_N)
         m_nutri = st.selectbox("Refeição", MOMENTOS_ORDEM, key="n_m")
         sel = st.multiselect("Alimentos", list(ALIMENTOS.keys()))
-        c_tot, p_tot, g_tot = sum([ALIMENTOS[x][0] for x in sel]), sum([ALIMENTOS[x][1] for x in sel]), sum([ALIMENTOS[x][2] for x in sel])
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Carbs", f"{c_tot}g"); c2.metric("Prot", f"{p_tot}g"); c3.metric("Gord", f"{g_tot}g")
+        c_tot = sum([ALIMENTOS[x][0] for x in sel])
         if st.button("💾 Salvar Refeição", use_container_width=True):
             agora = datetime.now(fuso_br)
-            novo_n = pd.DataFrame([[st.session_state.user_email, agora.strftime("%d/%m/%Y"), m_nutri, ", ".join(sel), c_tot, p_tot, g_tot]], columns=["Usuario","Data","Momento","Info","C","P","G"])
+            novo_n = pd.DataFrame([[st.session_state.user_email, agora.strftime("%d/%m/%Y"), m_nutri, ", ".join(sel), c_tot]], columns=["Usuario","Data","Momento","Info","C"])
             base = pd.read_csv(ARQ_N) if os.path.exists(ARQ_N) else pd.DataFrame()
-            pd.concat([base, novo_n], ignore_index=True).to_csv(ARQ_N, index=False)
-            st.rerun()
+            pd.concat([base, novo_n], ignore_index=True).to_csv(ARQ_N, index=False); st.rerun()
         st.dataframe(dfn.tail(10), use_container_width=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
     with tab3:
         st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.subheader("⚙️ Configuração de Receita")
         df_r_all = pd.read_csv(ARQ_R) if os.path.exists(ARQ_R) else pd.DataFrame()
         r_u = df_r_all[df_r_all['Usuario'] == st.session_state.user_email] if not df_r_all.empty else pd.DataFrame()
         v = r_u.iloc[0] if not r_u.empty else {'manha_f1':0, 'manha_f2':0, 'manha_f3':0, 'noite_f1':0, 'noite_f2':0, 'noite_f3':0}
-        cm, cn = st.columns(2)
-        with cm:
+        c1, c2 = st.columns(2)
+        with c1:
             m1 = st.number_input("Manhã 70-200", value=int(v.get('manha_f1',0)), key="m1")
             m2 = st.number_input("Manhã 201-400", value=int(v.get('manha_f2',0)), key="m2")
             m3 = st.number_input("Manhã > 400", value=int(v.get('manha_f3',0)), key="m3")
-        with cn:
+        with c2:
             n1 = st.number_input("Noite 70-200", value=int(v.get('noite_f1',0)), key="n1")
             n2 = st.number_input("Noite 201-400", value=int(v.get('noite_f2',0)), key="n2")
             n3 = st.number_input("Noite > 400", value=int(v.get('noite_f3',0)), key="n3")
         if st.button("💾 Salvar Receita", use_container_width=True):
             nova_rec = pd.DataFrame([{'Usuario': st.session_state.user_email, 'manha_f1':m1, 'manha_f2':m2, 'manha_f3':m3, 'noite_f1':n1, 'noite_f2':n2, 'noite_f3':n3}])
             df_r_all = df_r_all[df_r_all['Usuario'] != st.session_state.user_email] if not df_r_all.empty else pd.DataFrame()
-            pd.concat([df_r_all, nova_rec], ignore_index=True).to_csv(ARQ_R, index=False)
-            st.success("Receita Salva!")
+            pd.concat([df_r_all, nova_rec], ignore_index=True).to_csv(ARQ_R, index=False); st.success("Salvo!")
         st.markdown('</div>', unsafe_allow_html=True)
 
     with tab4:
         st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.subheader("📩 Enviar Sugestão de Melhoria")
-        txt_melhoria = st.text_area("Descreva aqui o que podemos melhorar:")
-        if st.button("Enviar para Admin", use_container_width=True):
-            if txt_melhoria:
+        txt = st.text_area("Sugestão:")
+        if st.button("Enviar"):
+            if txt:
                 agora = datetime.now(fuso_br).strftime("%d/%m/%Y %H:%M")
-                nova_msg = pd.DataFrame([[st.session_state.user_email, agora, txt_melhoria]], columns=["Usuario", "Data", "Sugestão"])
-                base_msg = pd.read_csv(ARQ_M) if os.path.exists(ARQ_M) else pd.DataFrame()
-                pd.concat([base_msg, nova_msg], ignore_index=True).to_csv(ARQ_M, index=False)
-                st.success("Sua sugestão foi enviada!")
-            else:
-                st.warning("Escreva algo antes de enviar.")
+                novo_m = pd.DataFrame([[st.session_state.user_email, agora, txt]], columns=["Usuario", "Data", "Sugestão"])
+                base_m = pd.read_csv(ARQ_M) if os.path.exists(ARQ_M) else pd.DataFrame()
+                pd.concat([base_m, novo_m], ignore_index=True).to_csv(ARQ_M, index=False); st.success("Enviado!")
         st.markdown('</div>', unsafe_allow_html=True)
 
 # ================= EXCEL =================
 st.sidebar.markdown("---")
-if st.sidebar.button("📥 Gerar Excel Colorido"):
+if st.sidebar.button("📥 Gerar Excel"):
     df_e_g = carregar_dados_seguro(ARQ_G)
-    df_e_n = carregar_dados_seguro(ARQ_N)
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         if not df_e_g.empty:
             pivot = df_e_g.pivot_table(index='Data', columns='Momento', values='Valor', aggfunc='last')
-            cols = [c for c in MOMENTOS_ORDEM if c in pivot.columns]
-            pivot[cols].to_excel(writer, sheet_name='Glicemia')
-            ws = writer.sheets['Glicemia']
-            f_v, f_r, f_a = PatternFill("solid", fgColor="C8E6C9"), PatternFill("solid", fgColor="FFB6C1"), PatternFill("solid", fgColor="FFFFE0")
-            for row in ws.iter_rows(min_row=2, min_col=2):
-                for cell in row:
-                    if cell.value:
-                        try:
-                            val = int(cell.value); cell.alignment = Alignment(horizontal='center')
-                            if val < 70: cell.fill = f_a
-                            elif val > 180: cell.fill = f_r
-                            else: cell.fill = f_v
-                        except: pass
-        if not df_e_n.empty: df_e_n.to_excel(writer, sheet_name='Alimentos', index=False)
-    st.sidebar.download_button("Baixar Agora", output.getvalue(), file_name="SaudeKids_Relatorio.xlsx")
+            pivot.to_excel(writer, sheet_name='Glicemia')
+    st.sidebar.download_button("Baixar Agora", output.getvalue(), file_name="Relatorio.xlsx")
 
 if st.sidebar.button("🚪 Sair"):
     st.session_state.logado = False
     st.rerun()
-
-```
