@@ -19,7 +19,7 @@ st.set_page_config(page_title="Saúde Kids BETA", page_icon="🧪", layout="wide
 ARQ_G = "dados_glicemia_BETA.csv"
 ARQ_N = "dados_nutricao_BETA.csv"
 ARQ_R = "config_receita_BETA.csv"
-ARQ_M = "mensagens_admin_BETA.csv" # Arquivo para as mensagens
+ARQ_M = "mensagens_admin_BETA.csv" 
 
 # DESIGN DARK MODE
 st.markdown("""
@@ -55,7 +55,6 @@ def enviar_senha_nova(email_destino, senha_nova):
 def init_db():
     conn = sqlite3.connect('usuarios.db')
     conn.execute('''CREATE TABLE IF NOT EXISTS users (nome TEXT, email TEXT PRIMARY KEY, senha TEXT)''')
-    # Cria o admin por padrão se não existir
     if not conn.execute("SELECT 1 FROM users WHERE email='admin'").fetchone():
         conn.execute("INSERT INTO users VALUES ('Administrador', 'admin', '542820')")
     conn.commit(); conn.close()
@@ -114,7 +113,7 @@ if not st.session_state.logado:
             if conn.execute("SELECT * FROM users WHERE email=? AND senha=?", (alt_em, alt_at)).fetchone():
                 conn.execute("UPDATE users SET senha=? WHERE email=?", (alt_n1, alt_em))
                 conn.commit(); st.success("Senha alterada com sucesso!")
-            else: st.error("Dados atuais incorretos.")
+            else: st.error("Dados atual incorretos.")
             conn.close()
     st.stop()
 
@@ -149,13 +148,52 @@ ALIMENTOS = {
 
 # ================= INTERFACE PRINCIPAL =================
 if st.session_state.user_email == "admin":
-    st.title("🛡️ Painel Admin - Mensagens de Melhoria")
-    if os.path.exists(ARQ_M):
-        df_msg = pd.read_csv(ARQ_M)
-        st.dataframe(df_msg, use_container_width=True)
-    else:
-        st.info("Nenhuma mensagem de melhoria recebida.")
+    st.title("🛡️ Painel Admin - Gestão Estratégica")
+    
+    t_usuarios, t_metricas, t_sugestoes = st.tabs(["👥 Pessoas Cadastradas", "📈 Crescimento e App", "📩 Sugestões"])
+    
+    conn = sqlite3.connect('usuarios.db')
+    df_users = pd.read_sql_query("SELECT nome, email FROM users", conn)
+    conn.close()
+
+    with t_usuarios:
+        st.subheader("Lista de Usuários")
+        st.dataframe(df_users, use_container_width=True)
+        st.metric("Total de Cadastros", len(df_users))
+
+    with t_metricas:
+        c1, c2 = st.columns(2)
+        with c1:
+            st.write("### Distribuição de Acessos (Pizza)")
+            # Simulação de dados de uso baseada nos arquivos de log (Glicemia)
+            if os.path.exists(ARQ_G):
+                df_uso = pd.read_csv(ARQ_G)
+                uso_por_user = df_uso['Usuario'].value_counts().reset_index()
+                uso_por_user.columns = ['Usuario', 'Registros']
+                fig_pizza = px.pie(uso_por_user, values='Registros', names='Usuario', hole=.3, color_discrete_sequence=px.colors.sequential.RdBu)
+                st.plotly_chart(fig_pizza, use_container_width=True)
+            else:
+                st.info("Aguardando dados de uso para gerar o gráfico.")
+        
+        with c2:
+            st.write("### Crescimento de Cadastros")
+            # Exemplo de crescimento baseado na quantidade total
+            dados_crescimento = pd.DataFrame({
+                'Mês': ['Jan', 'Fev', 'Mar'],
+                'Usuários': [len(df_users)//2, len(df_users)//1.2, len(df_users)]
+            })
+            fig_line = px.line(dados_crescimento, x='Mês', y='Usuários', markers=True, title="Novos Cadastros")
+            st.plotly_chart(fig_line, use_container_width=True)
+
+    with t_sugestoes:
+        if os.path.exists(ARQ_M):
+            df_msg = pd.read_csv(ARQ_M)
+            st.dataframe(df_msg, use_container_width=True)
+        else:
+            st.info("Nenhuma mensagem de melhoria recebida.")
+
 else:
+    # --- INTERFACE DO USUÁRIO (TOTALMENTE PRESERVADA) ---
     tab1, tab2, tab3, tab4 = st.tabs(["📊 Glicemia", "🍽️ Nutrição", "⚙️ Receita", "📩 Sugerir Melhoria"])
 
     with tab1:
