@@ -25,7 +25,6 @@ st.markdown("""
     .card { background-color: #1a1c24; padding: 25px; border-radius: 20px; border: 1px solid #30363d; margin-bottom: 25px; }
     .metric-box { background: #262730; border: 1px solid #4a4a4a; padding: 15px; border-radius: 12px; text-align: center; }
     .dose-destaque { font-size: 38px; font-weight: 700; color: #4ade80; }
-    .check-item { color: #4ade80; font-weight: bold; font-size: 16px; margin-bottom: 5px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -43,21 +42,16 @@ def init_db():
 init_db()
 if 'logado' not in st.session_state: st.session_state.logado = False
 
-# ================= TELA DE ENTRADA =================
+# ================= TELA DE ENTRADA (LIMPA) =================
 if not st.session_state.logado:
-    c1, c2 = st.columns([1.2, 1])
-    with c1:
-        st.title("🧪 Saúde Kids - BETA")
-        st.markdown("### 📋 Checklist de Recursos Ativos:")
-        st.markdown("""
-        <div class="check-item">✅ Admin Master & Categorias</div>
-        <div class="check-item">✅ Histórico Glicêmico Colorido</div>
-        <div class="check-item">✅ Gráficos de Tendência Plotly</div>
-        <div class="check-item">✅ Calculadora de Carboidratos</div>
-        <div class="check-item">✅ Tabela de Insulina Personalizada</div>
-        <div class="check-item">✅ Excel Profissional com Cores</div>
-        """, unsafe_allow_html=True)
-    with c2:
+    st.title("🧪 Saúde Kids - Login")
+    
+    col_l, col_r = st.columns([1, 1])
+    with col_l:
+        st.subheader("Bem-vindo ao sistema de controle.")
+        st.image("https://cdn-icons-png.flaticon.com/512/3022/3022251.png", width=150) # Ícone decorativo simples
+
+    with col_r:
         abas = st.tabs(["🔐 Login", "📝 Cadastro", "🔄 Senha"])
         with abas[0]:
             u = st.text_input("E-mail", key="l_e")
@@ -93,7 +87,7 @@ if not st.session_state.logado:
                 conn.close()
     st.stop()
 
-# ================= ÁREA PRIVADA =================
+# ================= ÁREA PRIVADA (ADMIN / USUÁRIO) =================
 if st.session_state.user_email == "admin":
     st.title("🛡️ Admin Master")
     t1, t2 = st.tabs(["👥 Usuários", "📬 Mensagens"])
@@ -128,15 +122,15 @@ else:
             if not df_g.empty:
                 st.plotly_chart(px.line(df_g.tail(10), x='Hora', y='Valor', markers=True), use_container_width=True)
                 def cor(val):
-                    if val < 70: return 'background-color: #8B8000'
-                    if val > 180: return 'background-color: #8B0000'
-                    return 'background-color: #006400'
+                    if val < 70: return 'background-color: #8B8000; color: white;'
+                    if val > 180: return 'background-color: #8B0000; color: white;'
+                    return 'background-color: #006400; color: white;'
                 st.dataframe(df_g.tail(10).style.applymap(cor, subset=['Valor']), use_container_width=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
     with tab_n:
         st.markdown('<div class="card">', unsafe_allow_html=True)
-        alims = {"Pão": 28, "Arroz": 10, "Feijão": 14}
+        alims = {"Pão Francês": 28, "Arroz": 10, "Feijão": 14, "Banana": 22}
         sel = st.multiselect("Alimentos", list(alims.keys()))
         soma = sum([alims[x] for x in sel])
         st.metric("Total Carboidratos", f"{soma}g")
@@ -156,11 +150,11 @@ else:
         if st.button("Salvar Tabela"):
             nova_r = pd.DataFrame([{'Usuario': st.session_state.user_email, 'Dose': dose_nv}])
             df_r_all = df_r_all[df_r_all['Usuario'] != st.session_state.user_email] if not df_r_all.empty else pd.DataFrame()
-            pd.concat([df_r_all, nova_r], ignore_index=True).to_csv(ARQ_R, index=False); st.success("Configuração Salva!")
+            pd.concat([df_r_all, nova_r], ignore_index=True).to_csv(ARQ_R, index=False); st.success("Salvo!")
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # SIDEBAR: EXCEL COLORIDO
-    if st.sidebar.button("📥 Baixar Excel Colorido"):
+    # SIDEBAR
+    if st.sidebar.button("📥 Baixar Relatório Excel"):
         df_ex = carregar(ARQ_G)
         output = BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -172,7 +166,7 @@ else:
                     if v_c < 70: cell.fill = PatternFill("solid", fgColor="FFFFE0")
                     elif v_c > 180: cell.fill = PatternFill("solid", fgColor="FFB6C1")
                     else: cell.fill = PatternFill("solid", fgColor="C8E6C9")
-        st.sidebar.download_button("Clique para Baixar", output.getvalue(), "Relatorio.xlsx")
+        st.sidebar.download_button("Baixar Agora", output.getvalue(), "Relatorio.xlsx")
 
 if st.sidebar.button("Sair"):
     st.session_state.logado = False
