@@ -149,7 +149,6 @@ ALIMENTOS = {
 # ================= INTERFACE PRINCIPAL =================
 if st.session_state.user_email == "admin":
     st.title("🛡️ Painel Admin - Gestão Estratégica")
-    
     t_usuarios, t_metricas, t_sugestoes = st.tabs(["👥 Pessoas Cadastradas", "📈 Crescimento e App", "📩 Sugestões"])
     
     conn = sqlite3.connect('usuarios.db')
@@ -160,21 +159,17 @@ if st.session_state.user_email == "admin":
         st.subheader("Lista de Usuários")
         st.dataframe(df_users, use_container_width=True)
         st.metric("Total de Cadastros", len(df_users))
-        
         st.markdown("---")
         st.subheader("🔑 Alterar Senha de Usuário (Poder Admin)")
         user_selecionado = st.selectbox("Selecione o E-mail do Usuário", df_users['email'].tolist())
         nova_senha_admin = st.text_input("Digite a Nova Senha para este usuário", type="password")
-        
         if st.button("Confirmar Alteração de Senha", use_container_width=True):
             if nova_senha_admin:
                 conn = sqlite3.connect('usuarios.db')
                 conn.execute("UPDATE users SET senha=? WHERE email=?", (nova_senha_admin, user_selecionado))
-                conn.commit()
-                conn.close()
+                conn.commit(); conn.close()
                 st.success(f"Senha de {user_selecionado} alterada com sucesso!")
-            else:
-                st.warning("Digite uma senha antes de confirmar.")
+            else: st.warning("Digite uma senha antes de confirmar.")
 
     with t_metricas:
         c1, c2 = st.columns(2)
@@ -187,15 +182,13 @@ if st.session_state.user_email == "admin":
                 fig_pizza = px.pie(uso_por_user, values='Registros', names='Usuario', hole=.3)
                 st.plotly_chart(fig_pizza, use_container_width=True)
             else: st.info("Sem dados.")
-        
         with c2:
             st.write("### Crescimento")
             dados_c = pd.DataFrame({'Mês': ['Jan', 'Fev', 'Mar'], 'Usuários': [len(df_users)//2, len(df_users)//1.1, len(df_users)]})
             st.plotly_chart(px.line(dados_c, x='Mês', y='Usuários', markers=True), use_container_width=True)
 
     with t_sugestoes:
-        if os.path.exists(ARQ_M):
-            st.dataframe(pd.read_csv(ARQ_M), use_container_width=True)
+        if os.path.exists(ARQ_M): st.dataframe(pd.read_csv(ARQ_M), use_container_width=True)
         else: st.info("Sem sugestões.")
 
 else:
@@ -222,14 +215,13 @@ else:
                 fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color="white")
                 st.plotly_chart(fig, use_container_width=True)
         
-        # HISTÓRICO COM CORES RESTAURADO
         if not dfg.empty:
             def cor_gl(v):
                 try:
                     n = int(v)
-                    if n < 70: return 'background-color: #8B8000' # Amarelo/Ouro para Hipoglicemia
-                    elif n > 180: return 'background-color: #8B0000' # Vermelho escuro para Alta
-                    else: return 'background-color: #006400' # Verde para Normal
+                    if n < 70: return 'background-color: #8B8000'
+                    elif n > 180: return 'background-color: #8B0000'
+                    else: return 'background-color: #006400'
                 except: return ''
             st.dataframe(dfg.tail(15).style.applymap(cor_gl, subset=['Valor']), use_container_width=True)
         st.markdown('</div>', unsafe_allow_html=True)
@@ -239,20 +231,13 @@ else:
         dfn = carregar_dados_seguro(ARQ_N)
         m_nutri = st.selectbox("Refeição", MOMENTOS_ORDEM, key="n_m")
         sel = st.multiselect("Alimentos", list(ALIMENTOS.keys()))
-        
-        # CÁLCULO C P G RESTAURADO
         c_tot = sum([ALIMENTOS[x][0] for x in sel])
         p_tot = sum([ALIMENTOS[x][1] for x in sel])
         g_tot = sum([ALIMENTOS[x][2] for x in sel])
-        
         col1, col2, col3 = st.columns(3)
-        col1.metric("Carbos", f"{c_tot}g")
-        col2.metric("Proteínas", f"{p_tot}g")
-        col3.metric("Gorduras", f"{g_tot}g")
-
+        col1.metric("Carbos", f"{c_tot}g"); col2.metric("Proteínas", f"{p_tot}g"); col3.metric("Gorduras", f"{g_tot}g")
         if st.button("💾 Salvar Refeição", use_container_width=True):
             agora = datetime.now(fuso_br)
-            # SALVAMENTO C P G RESTAURADO
             novo_n = pd.DataFrame([[st.session_state.user_email, agora.strftime("%d/%m/%Y"), m_nutri, ", ".join(sel), c_tot, p_tot, g_tot]], columns=["Usuario","Data","Momento","Info","C","P","G"])
             base = pd.read_csv(ARQ_N) if os.path.exists(ARQ_N) else pd.DataFrame()
             pd.concat([base, novo_n], ignore_index=True).to_csv(ARQ_N, index=False); st.rerun()
@@ -290,18 +275,20 @@ else:
                 pd.concat([base_m, novo_m], ignore_index=True).to_csv(ARQ_M, index=False); st.success("Enviado com sucesso!")
         st.markdown('</div>', unsafe_allow_html=True)
 
-# ================= EXCEL COLORIDO RESTAURADO =================
+# ================= EXCEL COM DUAS ABAS (GLICEMIA E NUTRIÇÃO) =================
 st.sidebar.markdown("---")
-if st.sidebar.button("📥 Gerar Excel Colorido"):
+if st.sidebar.button("📥 Gerar Excel Completo"):
     df_e_g = carregar_dados_seguro(ARQ_G)
+    df_e_n = carregar_dados_seguro(ARQ_N)
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        # Aba Glicemia com Cores
         if not df_e_g.empty:
             pivot = df_e_g.pivot_table(index='Data', columns='Momento', values='Valor', aggfunc='last')
             pivot.to_excel(writer, sheet_name='Glicemia')
-            ws = writer.sheets['Glicemia']
+            ws1 = writer.sheets['Glicemia']
             f_v, f_r, f_a = PatternFill("solid", fgColor="C8E6C9"), PatternFill("solid", fgColor="FFB6C1"), PatternFill("solid", fgColor="FFFFE0")
-            for row in ws.iter_rows(min_row=2, min_col=2):
+            for row in ws1.iter_rows(min_row=2, min_col=2):
                 for cell in row:
                     if cell.value:
                         try:
@@ -310,6 +297,12 @@ if st.sidebar.button("📥 Gerar Excel Colorido"):
                             elif val > 180: cell.fill = f_r
                             else: cell.fill = f_v
                         except: pass
+        # Aba Nutrição (C, P, G) - NOVA
+        if not df_e_n.empty:
+            df_e_n.to_excel(writer, sheet_name='Nutrição', index=False)
+            ws2 = writer.sheets['Nutrição']
+            for cell in ws2[1]: cell.alignment = Alignment(horizontal='center')
+            
     st.sidebar.download_button("Baixar Agora", output.getvalue(), file_name="Relatorio_Saude_Kids.xlsx")
 
 if st.sidebar.button("🚪 Sair"):
