@@ -186,21 +186,17 @@ if st.session_state.user_email == "admin":
                 uso_por_user.columns = ['Usuario', 'Registros']
                 fig_pizza = px.pie(uso_por_user, values='Registros', names='Usuario', hole=.3)
                 st.plotly_chart(fig_pizza, use_container_width=True)
-            else:
-                st.info("Aguardando dados.")
+            else: st.info("Sem dados.")
         
         with c2:
-            st.write("### Novos Cadastros")
-            dados_crescimento = pd.DataFrame({'Mês': ['Jan', 'Fev', 'Mar'], 'Usuários': [len(df_users)//2, len(df_users)//1.1, len(df_users)]})
-            fig_line = px.line(dados_crescimento, x='Mês', y='Usuários', markers=True)
-            st.plotly_chart(fig_line, use_container_width=True)
+            st.write("### Crescimento")
+            dados_c = pd.DataFrame({'Mês': ['Jan', 'Fev', 'Mar'], 'Usuários': [len(df_users)//2, len(df_users)//1.1, len(df_users)]})
+            st.plotly_chart(px.line(dados_c, x='Mês', y='Usuários', markers=True), use_container_width=True)
 
     with t_sugestoes:
         if os.path.exists(ARQ_M):
-            df_msg = pd.read_csv(ARQ_M)
-            st.dataframe(df_msg, use_container_width=True)
-        else:
-            st.info("Nenhuma sugestão.")
+            st.dataframe(pd.read_csv(ARQ_M), use_container_width=True)
+        else: st.info("Sem sugestões.")
 
 else:
     # --- INTERFACE USUÁRIO ---
@@ -225,6 +221,17 @@ else:
                 fig = px.line(dfg.tail(10), x='Hora', y='Valor', markers=True, title="Tendência")
                 fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color="white")
                 st.plotly_chart(fig, use_container_width=True)
+        
+        # HISTÓRICO COM CORES RESTAURADO
+        if not dfg.empty:
+            def cor_gl(v):
+                try:
+                    n = int(v)
+                    if n < 70: return 'background-color: #8B8000' # Amarelo/Ouro para Hipoglicemia
+                    elif n > 180: return 'background-color: #8B0000' # Vermelho escuro para Alta
+                    else: return 'background-color: #006400' # Verde para Normal
+                except: return ''
+            st.dataframe(dfg.tail(15).style.applymap(cor_gl, subset=['Valor']), use_container_width=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
     with tab2:
@@ -232,10 +239,21 @@ else:
         dfn = carregar_dados_seguro(ARQ_N)
         m_nutri = st.selectbox("Refeição", MOMENTOS_ORDEM, key="n_m")
         sel = st.multiselect("Alimentos", list(ALIMENTOS.keys()))
+        
+        # CÁLCULO C P G RESTAURADO
         c_tot = sum([ALIMENTOS[x][0] for x in sel])
+        p_tot = sum([ALIMENTOS[x][1] for x in sel])
+        g_tot = sum([ALIMENTOS[x][2] for x in sel])
+        
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Carbos", f"{c_tot}g")
+        col2.metric("Proteínas", f"{p_tot}g")
+        col3.metric("Gorduras", f"{g_tot}g")
+
         if st.button("💾 Salvar Refeição", use_container_width=True):
             agora = datetime.now(fuso_br)
-            novo_n = pd.DataFrame([[st.session_state.user_email, agora.strftime("%d/%m/%Y"), m_nutri, ", ".join(sel), c_tot]], columns=["Usuario","Data","Momento","Info","C"])
+            # SALVAMENTO C P G RESTAURADO
+            novo_n = pd.DataFrame([[st.session_state.user_email, agora.strftime("%d/%m/%Y"), m_nutri, ", ".join(sel), c_tot, p_tot, g_tot]], columns=["Usuario","Data","Momento","Info","C","P","G"])
             base = pd.read_csv(ARQ_N) if os.path.exists(ARQ_N) else pd.DataFrame()
             pd.concat([base, novo_n], ignore_index=True).to_csv(ARQ_N, index=False); st.rerun()
         st.dataframe(dfn.tail(10), use_container_width=True)
@@ -263,25 +281,36 @@ else:
 
     with tab4:
         st.markdown('<div class="card">', unsafe_allow_html=True)
-        txt = st.text_area("Sugestão:")
-        if st.button("Enviar"):
+        txt = st.text_area("Sugestão de Melhoria:")
+        if st.button("Enviar Sugestão"):
             if txt:
                 agora = datetime.now(fuso_br).strftime("%d/%m/%Y %H:%M")
                 novo_m = pd.DataFrame([[st.session_state.user_email, agora, txt]], columns=["Usuario", "Data", "Sugestão"])
                 base_m = pd.read_csv(ARQ_M) if os.path.exists(ARQ_M) else pd.DataFrame()
-                pd.concat([base_m, novo_m], ignore_index=True).to_csv(ARQ_M, index=False); st.success("Enviado!")
+                pd.concat([base_m, novo_m], ignore_index=True).to_csv(ARQ_M, index=False); st.success("Enviado com sucesso!")
         st.markdown('</div>', unsafe_allow_html=True)
 
-# ================= EXCEL =================
+# ================= EXCEL COLORIDO RESTAURADO =================
 st.sidebar.markdown("---")
-if st.sidebar.button("📥 Gerar Excel"):
+if st.sidebar.button("📥 Gerar Excel Colorido"):
     df_e_g = carregar_dados_seguro(ARQ_G)
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         if not df_e_g.empty:
             pivot = df_e_g.pivot_table(index='Data', columns='Momento', values='Valor', aggfunc='last')
             pivot.to_excel(writer, sheet_name='Glicemia')
-    st.sidebar.download_button("Baixar Agora", output.getvalue(), file_name="Relatorio.xlsx")
+            ws = writer.sheets['Glicemia']
+            f_v, f_r, f_a = PatternFill("solid", fgColor="C8E6C9"), PatternFill("solid", fgColor="FFB6C1"), PatternFill("solid", fgColor="FFFFE0")
+            for row in ws.iter_rows(min_row=2, min_col=2):
+                for cell in row:
+                    if cell.value:
+                        try:
+                            val = int(cell.value); cell.alignment = Alignment(horizontal='center')
+                            if val < 70: cell.fill = f_a
+                            elif val > 180: cell.fill = f_r
+                            else: cell.fill = f_v
+                        except: pass
+    st.sidebar.download_button("Baixar Agora", output.getvalue(), file_name="Relatorio_Saude_Kids.xlsx")
 
 if st.sidebar.button("🚪 Sair"):
     st.session_state.logado = False
