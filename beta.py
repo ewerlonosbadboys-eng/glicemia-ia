@@ -48,14 +48,15 @@ def init_db():
 init_db()
 if 'logado' not in st.session_state: st.session_state.logado = False
 
-# ================= LOGIN =================
+# ================= TELAS DE ACESSO (CORRIGIDO COM KEYS ÚNICAS) =================
 if not st.session_state.logado:
     st.title("🧪 Saúde Kids - Acesso")
     abas_login = st.tabs(["🔐 Entrar", "📝 Criar Conta"])
+    
     with abas_login[0]:
-        u = st.text_input("E-mail")
-        s = st.text_input("Senha", type="password")
-        if st.button("Acessar Aplicativo"):
+        u = st.text_input("E-mail", key="login_email")
+        s = st.text_input("Senha", type="password", key="login_senha")
+        if st.button("Acessar Aplicativo", key="btn_login"):
             conn = sqlite3.connect(DB_NAME)
             user = conn.execute("SELECT * FROM users WHERE email=? AND senha=?", (u, s)).fetchone()
             if user:
@@ -64,12 +65,13 @@ if not st.session_state.logado:
                 st.rerun()
             else: st.error("Dados incorretos.")
             conn.close()
+
     with abas_login[1]:
-        n_cad = st.text_input("Nome Completo")
-        e_cad = st.text_input("E-mail")
-        s_cad = st.text_input("Senha", type="password")
-        cat_cad = st.selectbox("Categoria:", ["Pai/Mãe", "Médico(a)", "Nutricionista", "Outro"])
-        if st.button("Cadastrar"):
+        n_cad = st.text_input("Nome Completo", key="cad_nome")
+        e_cad = st.text_input("E-mail", key="cad_email")
+        s_cad = st.text_input("Senha", type="password", key="cad_senha")
+        cat_cad = st.selectbox("Categoria:", ["Pai/Mãe", "Médico(a)", "Nutricionista", "Outro"], key="cad_cat")
+        if st.button("Cadastrar Conta", key="btn_cad"):
             try:
                 conn = sqlite3.connect(DB_NAME)
                 conn.execute("INSERT INTO users VALUES (?,?,?,?)", (n_cad, e_cad, s_cad, cat_cad))
@@ -77,23 +79,26 @@ if not st.session_state.logado:
             except: st.error("E-mail já existe.")
     st.stop()
 
-# ================= ÁREA ADMIN =================
+# ================= ÁREA DO ADMINISTRADOR =================
 if st.session_state.user_email == "admin":
     st.title("🛡️ Painel Admin")
     tab_a1, tab_a2 = st.tabs(["👥 Usuários & Categorias", "📬 Mensagens"])
+    
     with tab_a1:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         conn = sqlite3.connect(DB_NAME)
-        st.dataframe(pd.read_sql_query("SELECT nome, email, categoria FROM users", conn), use_container_width=True)
+        df_users = pd.read_sql_query("SELECT nome, email, categoria FROM users", conn)
         conn.close()
+        st.dataframe(df_users, use_container_width=True)
         st.markdown('</div>', unsafe_allow_html=True)
+        
     with tab_a2:
         if os.path.exists(ARQ_F):
             st.dataframe(pd.read_csv(ARQ_F), use_container_width=True)
             if st.button("🗑️ Limpar Mensagens"): os.remove(ARQ_F); st.rerun()
         else: st.info("Sem mensagens.")
 
-# ================= ÁREA USUÁRIO =================
+# ================= ÁREA DO USUÁRIO COMUM (HISTÓRICO, CORES, EXCEL) =================
 else:
     def carregar_dados(arq):
         if not os.path.exists(arq): return pd.DataFrame()
@@ -123,23 +128,15 @@ else:
         dfg = carregar_dados(ARQ_G)
         c1, c2 = st.columns([1, 2])
         with c1:
-            v_gl = st.number_input("Valor Glicemia", 0, 600, 100)
-            m_gl = st.selectbox("Momento", MOMENTOS)
+            v_gl = st.number_input("Valor Glicemia", 0, 600, 100, key="val_gl")
+            m_gl = st.selectbox("Momento", MOMENTOS, key="mom_gl")
             dose, msg_d = calc_insulina(v_gl, m_gl)
             st.markdown(f'<div class="metric-box"><small>{msg_d}</small><br><span class="dose-destaque">{dose}</span></div>', unsafe_allow_html=True)
-            if st.button("💾 Salvar Glicemia"):
+            if st.button("💾 Salvar Glicemia", key="btn_save_gl"):
                 agora = datetime.now(fuso_br)
                 novo = pd.DataFrame([[st.session_state.user_email, agora.strftime("%d/%m/%Y"), agora.strftime("%H:%M"), v_gl, m_gl, dose]], columns=["Usuario","Data","Hora","Valor","Momento","Dose"])
                 base = pd.read_csv(ARQ_G) if os.path.exists(ARQ_G) else pd.DataFrame()
                 pd.concat([base, novo], ignore_index=True).to_csv(ARQ_G, index=False); st.rerun()
-            
-            # NOVO: Botão para limpar histórico se houver erro
-            if not dfg.empty:
-                if st.button("🗑️ Limpar Meu Histórico"):
-                    completo = pd.read_csv(ARQ_G)
-                    completo = completo[completo['Usuario'] != st.session_state.user_email]
-                    completo.to_csv(ARQ_G, index=False); st.rerun()
-
         with c2:
             if not dfg.empty:
                 fig = px.line(dfg.tail(10), x='Hora', y='Valor', markers=True, title="Tendência Glicêmica")
@@ -155,10 +152,10 @@ else:
     with tab2:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         dfn = carregar_dados(ARQ_N)
-        sel = st.multiselect("Alimentos", list(ALIMENTOS.keys()))
+        sel = st.multiselect("Selecione os Alimentos", list(ALIMENTOS.keys()), key="sel_alim")
         carb_total = sum([ALIMENTOS[x][0] for x in sel])
-        st.write(f"**Total Carboidratos:** {carb_total}g")
-        if st.button("💾 Salvar Refeição"):
+        st.write(f"**Total de Carboidratos:** {carb_total}g")
+        if st.button("💾 Salvar Refeição", key="btn_save_nut"):
             agora = datetime.now(fuso_br)
             novo_n = pd.DataFrame([[st.session_state.user_email, agora.strftime("%d/%m/%Y"), ", ".join(sel), carb_total]], columns=["Usuario","Data","Alimentos","Carboidratos"])
             base = pd.read_csv(ARQ_N) if os.path.exists(ARQ_N) else pd.DataFrame()
@@ -169,35 +166,39 @@ else:
     with tab3:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         df_r_all = pd.read_csv(ARQ_R) if os.path.exists(ARQ_R) else pd.DataFrame()
-        r_u = df_r_all[df_r_all['Usuario'] == st.session_state.user_email]
+        r_u = df_r_all[df_r_all['Usuario'] == st.session_state.user_email] if not df_r_all.empty else pd.DataFrame()
         v = r_u.iloc[0] if not r_u.empty else {'manha_f1':0}
-        m1 = st.number_input("Manhã (UI)", value=int(v.get('manha_f1', 0)))
-        if st.button("💾 Salvar Tabela"):
+        m1 = st.number_input("Manhã (UI)", value=int(v.get('manha_f1', 0)), key="rec_m1")
+        if st.button("💾 Salvar Configuração", key="btn_save_rec"):
             nova_rec = pd.DataFrame([{'Usuario': st.session_state.user_email, 'manha_f1':m1, 'manha_f2':0, 'manha_f3':0, 'noite_f1':0, 'noite_f2':0, 'noite_f3':0}])
             df_r_all = df_r_all[df_r_all['Usuario'] != st.session_state.user_email] if not df_r_all.empty else pd.DataFrame()
             pd.concat([df_r_all, nova_rec], ignore_index=True).to_csv(ARQ_R, index=False); st.success("Salvo!")
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # SIDEBAR: EXCEL COLORIDO + MENSAGENS
+    # --- SIDEBAR (EXCEL COLORIDO E MENSAGENS) ---
     st.sidebar.markdown("---")
-    if st.sidebar.button("📥 Baixar Excel Colorido"):
+    if st.sidebar.button("📥 Baixar Excel Colorido", key="btn_excel"):
         df_e_g = carregar_dados(ARQ_G)
         output = BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             if not df_e_g.empty:
                 df_e_g.to_excel(writer, sheet_name='Glicemia', index=False)
                 ws = writer.sheets['Glicemia']
-                f_v, f_r, f_a = PatternFill("solid", fgColor="C8E6C9"), PatternFill("solid", fgColor="FFB6C1"), PatternFill("solid", fgColor="FFFFE0")
                 for row in ws.iter_rows(min_row=2, min_col=4, max_col=4):
                     for cell in row:
                         val = int(cell.value)
-                        if val < 70: cell.fill = f_a
-                        elif val > 180: cell.fill = f_r
-                        else: cell.fill = f_v
-        st.sidebar.download_button("Clique aqui para baixar", output.getvalue(), file_name="Relatorio_Kids.xlsx")
+                        if val < 70: cell.fill = PatternFill("solid", fgColor="FFFFE0")
+                        elif val > 180: cell.fill = PatternFill("solid", fgColor="FFB6C1")
+                        else: cell.fill = PatternFill("solid", fgColor="C8E6C9")
+        st.sidebar.download_button("Clique para baixar", output.getvalue(), file_name="Relatorio_Saude_Kids.xlsx")
 
     with st.sidebar.expander("🚀 Mensagem ao Admin"):
-        t_m = st.text_area("Mensagem:")
-        if st.button("Enviar"):
+        t_m = st.text_area("Sua sugestão:", key="msg_admin")
+        if st.button("Enviar", key="btn_msg"):
             n_f = pd.DataFrame([[st.session_state.user_email, datetime.now(fuso_br), t_m]], columns=["Usuario", "Data", "Sugestão"])
-            pd.concat([pd.read_csv(ARQ_F) if os.path.exists(ARQ_F) else pd.DataFrame(), n_f], ignore_index=True).to_csv(ARQ_F, index=False); st.success("Enviado!")
+            b_f = pd.read_csv(ARQ_F) if os.path.exists(ARQ_F) else pd.DataFrame()
+            pd.concat([b_f, n_f], ignore_index=True).to_csv(ARQ_F, index=False); st.success("Enviado!")
+
+if st.sidebar.button("Sair", key="btn_sair"):
+    st.session_state.logado = False
+    st.rerun()
