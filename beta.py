@@ -32,16 +32,16 @@ def init_db():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute('''CREATE TABLE IF NOT EXISTS users 
-                    (nome TEXT, email TEXT PRIMARY KEY, senha TEXT, categoria TEXT, pergunta_secreta TEXT)''')
+                    (nome TEXT, email TEXT PRIMARY KEY, senha TEXT, categoria TEXT)''')
     if not cursor.execute("SELECT 1 FROM users WHERE email='admin'").fetchone():
-        cursor.execute("INSERT INTO users VALUES (?,?,?,?,?)", ("Administrador", "admin", "542820", "Admin", "0000"))
+        cursor.execute("INSERT INTO users VALUES (?,?,?,?)", ("Administrador", "admin", "542820", "Admin"))
     conn.commit()
     conn.close()
 
 init_db()
 if 'logado' not in st.session_state: st.session_state.logado = False
 
-# ================= TELA DE ENTRADA (AS 4 ABAS) =================
+# ================= TELA DE ENTRADA (REVERTIDA) =================
 if not st.session_state.logado:
     st.title("🧪 Saúde Kids - Acesso")
     aba1, aba2, aba3, aba4 = st.tabs(["🔐 Entrar", "📝 Criar Conta", "❓ Esqueci Senha", "🔄 Alterar Senha"])
@@ -55,44 +55,42 @@ if not st.session_state.logado:
             if user:
                 st.session_state.logado, st.session_state.user_email = True, u_l
                 st.rerun()
-            else: st.error("E-mail ou senha incorretos.")
+            else: st.error("Acesso Negado.")
             conn.close()
 
     with aba2:
         n_c = st.text_input("Nome Completo", key="c_n")
         e_c = st.text_input("E-mail", key="c_e")
         s_c = st.text_input("Senha", type="password", key="c_s")
-        p_c = st.text_input("Palavra-Chave (para recuperar senha)", key="c_p")
         cat_c = st.selectbox("Categoria", ["Pai/Mãe", "Médico(a)", "Nutri"], key="c_cat")
         if st.button("Cadastrar", use_container_width=True):
             try:
                 conn = sqlite3.connect(DB_NAME)
-                conn.execute("INSERT INTO users VALUES (?,?,?,?,?)", (n_c, e_c, s_c, cat_c, p_c))
+                conn.execute("INSERT INTO users VALUES (?,?,?,?)", (n_c, e_c, s_c, cat_c))
                 conn.commit(); conn.close(); st.success("Conta criada!")
             except: st.error("E-mail já cadastrado.")
 
     with aba3:
-        st.subheader("Recuperação de Acesso")
+        st.subheader("Recuperação Simples")
         e_esq = st.text_input("Digite seu E-mail", key="e_esq")
-        p_esq = st.text_input("Sua Palavra-Chave", type="password", key="p_esq")
-        if st.button("Verificar Identidade", use_container_width=True):
+        if st.button("Recuperar Senha", use_container_width=True):
             conn = sqlite3.connect(DB_NAME)
-            res = conn.execute("SELECT senha FROM users WHERE email=? AND pergunta_secreta=?", (e_esq, p_esq)).fetchone()
+            res = conn.execute("SELECT senha FROM users WHERE email=?", (e_esq,)).fetchone()
             if res: st.success(f"Sua senha é: {res[0]}")
-            else: st.error("Dados não conferem.")
+            else: st.error("E-mail não encontrado.")
             conn.close()
 
     with aba4:
-        st.subheader("Mudar Senha Atual")
-        e_alt = st.text_input("E-mail", key="alt_e")
+        st.subheader("Alterar Senha")
+        e_alt = st.text_input("E-mail para alteração", key="alt_e")
         s_at = st.text_input("Senha Atual", type="password", key="alt_sa")
         s_nv = st.text_input("Nova Senha", type="password", key="alt_sn")
-        if st.button("Atualizar", use_container_width=True):
+        if st.button("Confirmar Troca", use_container_width=True):
             conn = sqlite3.connect(DB_NAME)
             if conn.execute("SELECT 1 FROM users WHERE email=? AND senha=?", (e_alt, s_at)).fetchone():
                 conn.execute("UPDATE users SET senha=? WHERE email=?", (s_nv, e_alt))
-                conn.commit(); st.success("Senha alterada!")
-            else: st.error("Dados atuais incorretos.")
+                conn.commit(); st.success("Senha atualizada!")
+            else: st.error("Senha atual incorreta.")
             conn.close()
     st.stop()
 
@@ -119,8 +117,8 @@ else:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         df_g = carregar(ARQ_G)
         v = st.number_input("Valor", 0, 600, 100)
-        m = st.selectbox("Momento", ["Jejum", "Pré-Refeição", "Pós-Refeição", "Madrugada"])
-        if st.button("💾 Salvar Glicemia"):
+        m = st.selectbox("Momento", ["Antes Café", "Após Café", "Antes Almoço", "Após Almoço", "Antes Janta", "Após Janta", "Madrugada"])
+        if st.button("💾 Salvar Registro"):
             agora = datetime.now(fuso_br)
             novo = pd.DataFrame([[st.session_state.user_email, agora.strftime("%d/%m/%Y"), agora.strftime("%H:%M"), v, m]], columns=["Usuario","Data","Hora","Valor","Momento"])
             pd.concat([pd.read_csv(ARQ_G) if os.path.exists(ARQ_G) else pd.DataFrame(), novo], ignore_index=True).to_csv(ARQ_G, index=False); st.rerun()
@@ -135,28 +133,28 @@ else:
 
     with tab_n:
         st.markdown('<div class="card">', unsafe_allow_html=True)
-        alims = {"Pão Francês": 28, "Arroz": 10, "Feijão": 14}
+        alims = {"Pão Francês": 28, "Arroz": 10, "Feijão": 14, "Banana": 22}
         sel = st.multiselect("Alimentos", list(alims.keys()))
         soma = sum([alims[x] for x in sel])
         st.metric("Total Carboidratos", f"{soma}g")
-        if st.button("💾 Salvar Nutrição"):
+        if st.button("💾 Salvar Refeição"):
             novo_n = pd.DataFrame([[st.session_state.user_email, datetime.now(fuso_br).strftime("%d/%m/%Y"), ", ".join(sel), soma]], columns=["Usuario","Data","Itens","Carbs"])
             pd.concat([pd.read_csv(ARQ_N) if os.path.exists(ARQ_N) else pd.DataFrame(), novo_n], ignore_index=True).to_csv(ARQ_N, index=False); st.success("Salvo!")
         st.markdown('</div>', unsafe_allow_html=True)
 
     with tab_r:
         st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.subheader("Configurar Dose Padrão")
+        st.subheader("Configurar Dose")
         df_r = carregar(ARQ_R)
         v_i = df_r.iloc[0]['Dose'] if not df_r.empty else 0
-        dose = st.number_input("Dose de Insulina", value=int(v_i))
+        dose = st.number_input("Dose Padrão (UI)", value=int(v_i))
         if st.button("💾 Salvar Dose"):
             nova_r = pd.DataFrame([{'Usuario': st.session_state.user_email, 'Dose': dose}])
             base_r = pd.read_csv(ARQ_R) if os.path.exists(ARQ_R) else pd.DataFrame()
-            pd.concat([base_r[base_r['Usuario'] != st.session_state.user_email], nova_r], ignore_index=True).to_csv(ARQ_R, index=False); st.success("Salvo!")
+            pd.concat([base_r[base_r['Usuario'] != st.session_state.user_email], nova_r], ignore_index=True).to_csv(ARQ_R, index=False); st.success("Dose Salva!")
         st.markdown('</div>', unsafe_allow_html=True)
 
-    if st.sidebar.button("📥 Baixar Excel Colorido"):
+    if st.sidebar.button("📥 Gerar Excel Colorido"):
         df_ex = carregar(ARQ_G)
         output = BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -168,7 +166,7 @@ else:
                     if v_c < 70: cell.fill = PatternFill("solid", fgColor="FFFFE0")
                     elif v_c > 180: cell.fill = PatternFill("solid", fgColor="FFB6C1")
                     else: cell.fill = PatternFill("solid", fgColor="C8E6C9")
-        st.sidebar.download_button("Baixar Agora", output.getvalue(), "Relatorio.xlsx")
+        st.sidebar.download_button("Baixar Relatório", output.getvalue(), "SaudeKids.xlsx")
 
 if st.sidebar.button("Sair"):
     st.session_state.logado = False
