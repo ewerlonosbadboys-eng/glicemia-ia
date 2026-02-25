@@ -28,22 +28,23 @@ def gerar_escala_inteligente(lista_usuarios):
     novo_hist = {}
     cats = {}
     for u in lista_usuarios:
-        c = u.get('Categoria', 'Geral'); cats.setdefault(c, []).append(u)
+        c = u.get('Categoria', 'Geral')
+        cats.setdefault(c, []).append(u)
     
     for cat_nome, membros in cats.items():
-        # Este mapa garante que Joice e Ewerlon não folguem no mesmo dia
+        # mapa_folgas_dia garante que Joice e Ewerlon não folguem no mesmo dia
         mapa_folgas_dia = {i: 0 for i in range(31)} 
         
         for user in membros:
             nome = user['Nome']
             df = pd.DataFrame({'Data': datas, 'Dia': [d_pt[d.day_name()] for d in datas], 'Status': 'Trabalho'})
             
-            # Analisa o mês em blocos de 7 dias para garantir a escala 5x2
+            # Divide o mês em blocos de 7 dias para a regra 5x2
             for sem in range(0, 31, 7):
                 fim = min(sem + 7, 31)
                 folgas_na_semana = 0 
                 
-                # 1. REGRA DO DOMINGO: Se folgar, já conta como a 1ª folga da semana
+                # 1. REGRA DO DOMINGO: Se folgar, já conta como a 1ª folga
                 dom_no_bloco = [j for j in range(sem, fim) if df.loc[j, 'Dia'] == 'dom']
                 for d_idx in dom_no_bloco:
                     if (d_idx // 7) % 2 == user.get('offset_dom', random.randint(0,1)):
@@ -51,7 +52,7 @@ def gerar_escala_inteligente(lista_usuarios):
                         mapa_folgas_dia[d_idx] += 1
                         folgas_na_semana += 1 
                 
-                # 2. SEGUNDA FOLGA: Só busca se ainda não completou 2 folgas no total
+                # 2. SEGUNDA FOLGA: Só adiciona se ainda não completou 2 folgas
                 while folgas_na_semana < 2:
                     possiveis = [j for j in range(sem, fim) if df.loc[j, 'Status'] == 'Trabalho' and 
                                  not (df.loc[j-1, 'Status'] == 'Folga' if j > 0 else False) and 
@@ -59,7 +60,7 @@ def gerar_escala_inteligente(lista_usuarios):
                                  not (df.loc[j, 'Dia'] == 'sáb' and not user.get("Rod_Sab"))]
                     
                     if possiveis:
-                        # Ordena para escolher o dia com menos folgas no grupo (Balanceamento)
+                        # Balanceamento para evitar folgas no mesmo dia
                         possiveis.sort(key=lambda x: mapa_folgas_dia[x])
                         escolhido = possiveis[0]
                         df.loc[escolhido, 'Status'] = 'Folga'
@@ -68,21 +69,23 @@ def gerar_escala_inteligente(lista_usuarios):
                     else:
                         break
             
-            # Gera horários de entrada e saída
+            # CÁLCULO DE HORÁRIOS (Corrigindo o erro das linhas 84/85)
             ents, sais = [], []
             hp = user.get("Entrada", "06:00")
             for m in range(len(df)):
-                if df.loc[m, 'Status'] == 'Folga': ents.append(""); sais.append("")
+                if df.loc[m, 'Status'] == 'Folga':
+                    ents.append("")
+                    sais.append("")
                 else:
                     e = hp
-                    if m > 0 and sais and sais[-1] != "": e = calcular_entrada_segura(sais[-1], hp)
-                    ents.append(e); sais.append((datetime.strptime(e, "%H:%M") + timedelta(hours=9, minutes=58)).strftime("%H:%M"))
+                    if m > 0 and len(sais) > 0 and sais[-1] != "":
+                        e = calcular_entrada_segura(sais[-1], hp)
+                    ents.append(e)
+                    sais.append((datetime.strptime(e, "%H:%M") + timedelta(hours=9, minutes=58)).strftime("%H:%M"))
             
             df['H_Entrada'], df['H_Saida'] = ents, sais
             novo_hist[nome] = df
     return novo_hist
-            for m in range(len(df)):
-                if df.loc[m, 'Status'] == 'Folga': ents.append(""); sais.append("")
                 else:
                     e = hp
                     if m > 0 and sais and sais[-1] != "": e = calcular_entrada_segura(sais[-1], hp)
