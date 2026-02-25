@@ -22,44 +22,55 @@ if "password_correct" not in st.session_state:
 if 'db_users' not in st.session_state: st.session_state['db_users'] = []
 if 'historico' not in st.session_state: st.session_state['historico'] = {}
 
-st.title("📅 Gestão de Escala com Troca de Folgas")
+st.title("📅 Gestão de Escala com Balanceamento")
 
 aba1, aba2, aba3, aba4 = st.tabs(["👥 1. Cadastro", "📅 2. Gerar Escala", "⚙️ 3. Ajustes", "📥 4. Baixar Excel"])
 
-# --- LÓGICA DE GERAÇÃO ---
+# --- LÓGICA DE GERAÇÃO BALANCEADA (NOVA) ---
 def gerar_escalas_balanceadas(lista_usuarios):
     datas = pd.date_range(start='2026-03-01', periods=31)
     d_pt = {'Monday':'seg','Tuesday':'ter','Wednesday':'qua','Thursday':'qui','Friday':'sex','Saturday':'sáb','Sunday':'dom'}
     novo_historico = {}
-    folgas_por_dia = {i: 0 for i in range(31)}
-    for user in lista_usuarios:
+    
+    # Ordenar por categoria para balancear dentro do grupo
+    lista_ordenada = sorted(lista_usuarios, key=lambda x: x.get('Categoria', 'Geral'))
+    
+    for idx, user in enumerate(lista_ordenada):
         nome = user['Nome']
         df = pd.DataFrame({'Data': datas, 'Dia': [d_pt[d.day_name()] for d in datas], 'Status': 'Trabalho'})
-        offset_dom = user.get('offset_dom', 1)
+        
+        # 1. Regra de Domingos (1x1)
         dom_idx = df[df['Dia'] == 'dom'].index.tolist()
+        offset_dom = user.get('offset_dom', idx % 2) # Alterna baseado na posição
         for i, d_idx in enumerate(dom_idx):
             if i % 2 == offset_dom:
                 df.loc[d_idx, 'Status'] = 'Folga'
-                folgas_por_dia[d_idx] += 1
                 if user.get("Casada") and (d_idx + 1) < 31:
                     df.loc[d_idx + 1, 'Status'] = 'Folga'
-                    folgas_por_dia[d_idx + 1] += 1
-        for sem in range(0, 31, 7):
-            bloco = df.iloc[sem:min(sem+7, 31)]
-            meta = 1 if any((bloco['Dia'] == 'dom') & (bloco['Status'] == 'Folga')) else 2
-            atuais = len(bloco[(bloco['Status'] == 'Folga') & (bloco['Dia'] != 'dom')])
-            while atuais < meta:
-                pode = [p for p in bloco[bloco['Status'] == 'Trabalho'].index.tolist() if df.loc[p, 'Dia'] != 'dom']
-                if not user.get("Rod_Sab"): pode = [p for p in pode if df.loc[p, 'Dia'] != 'sáb']
-                p_real = [p for p in pode if not ((p > 0 and df.loc[p-1, 'Status'] == 'Folga') or (p < 30 and df.loc[p+1, 'Status'] == 'Folga'))]
-                if not p_real: break
-                dia_escolhido = min(p_real, key=lambda x: folgas_por_dia[x])
-                df.loc[dia_escolhido, 'Status'] = 'Folga'
-                folgas_por_dia[dia_escolhido] += 1
-                atuais += 1
+
+        # 2. Balanceamento Semanal (Escalonamento como na imagem)
+        # Define um dia da semana fixo para folga extra baseado no índice do funcionário
+        # Pula domingo (0) e sábados se não permitido
+        dias_uteis_escala = ['seg', 'ter', 'qua', 'qui', 'sex']
+        if user.get("Rod_Sab"): dias_uteis_escala.append('sáb')
+        
+        dia_fixo_semana = dias_uteis_escala[idx % len(dias_uteis_escala)]
+        
+        for sem_inicio in range(0, 31, 7):
+            fim_sem = min(sem_inicio + 7, 31)
+            bloco = df.iloc[sem_inicio:fim_sem]
+            
+            # Se a semana já não tem folga (domingo trabalhado), adiciona no dia da escala
+            if not (bloco['Status'] == 'Folga').any():
+                indices_dia_fixo = bloco[bloco['Dia'] == dia_fixo_semana].index.tolist()
+                for f_idx in indices_dia_fixo:
+                    df.loc[f_idx, 'Status'] = 'Folga'
+
+        # Ajuste de horários
         df['H_Entrada'] = user.get("Entrada", "06:00")
-        df['H_Saida'] = [(datetime.strptime(e, "%H:%M") + timedelta(hours=9, minutes=58)).strftime("%H:%M") for e in df['H_Entrada']]
+        df['H_Saida'] = [(datetime.strptime(e, "%H:%M") + timedelta(hours=9, minutes=58)).strftime("%H:%M") if e else "" for e in df['H_Entrada']]
         novo_historico[nome] = df
+        
     return novo_historico
 
 # --- ABA 1: CADASTRO ---
@@ -80,124 +91,67 @@ with aba1:
 
 # --- ABA 2: GERAR ---
 with aba2:
-    st.subheader("👥 Funcionários Cadastrados")
+    st.subheader("👥 Histórico de Cadastros")
     if st.session_state['db_users']:
         df_cadastrados = pd.DataFrame(st.session_state['db_users'])
-        df_view = df_cadastrados[['Nome', 'Categoria', 'Entrada', 'Rod_Sab', 'Casada']].copy()
-        df_view.columns = ['Nome', 'Categoria', 'H. Entrada', 'Rodízio Sábado', 'Folga Casada']
-        st.table(df_view) 
-        if st.button("🚀 GERAR ESCALA BALANCEADA PARA TODOS"):
+        st.table(df_cadastrados[['Nome', 'Categoria', 'Entrada', 'Rod_Sab', 'Casada']]) 
+        if st.button("🚀 GERAR ESCALA BALANCEADA"):
             st.session_state['historico'] = gerar_escalas_balanceadas(st.session_state['db_users'])
-            st.success("✅ Escalas geradas!")
+            st.success("✅ Escala gerada com balanceamento por categoria!")
+    else:
+        st.info("Cadastre funcionários primeiro.")
 
-# --- ABA 3: AJUSTES (COM INCLUIR FOLGA) ---
+# --- ABA 3: AJUSTES ---
 with aba3:
     if st.session_state['db_users'] and st.session_state['historico']:
         f_ed = st.selectbox("Escolha quem editar:", list(st.session_state['historico'].keys()))
         df_e = st.session_state['historico'][f_ed]
-        idx_user = next((i for i, u in enumerate(st.session_state['db_users']) if u['Nome'] == f_ed), None)
-        u_info = st.session_state['db_users'][idx_user]
+        u_info = next(u for u in st.session_state['db_users'] if u['Nome'] == f_ed)
 
-        st.subheader("🏷️ Alterar Categoria")
-        cats_existentes = sorted(list(set([u.get('Categoria', 'Geral') for u in st.session_state['db_users']])))
-        cat_atual = u_info.get('Categoria', 'Geral')
-        nova_cat = st.selectbox("Selecione uma Categoria:", cats_existentes, index=cats_existentes.index(cat_atual) if cat_atual in cats_existentes else 0)
-        if st.button("Atualizar Categoria"):
-            st.session_state['db_users'][idx_user]['Categoria'] = nova_cat
-            st.success("Categoria atualizada!"); st.rerun()
-
-        st.divider()
-        st.subheader("📅 Gestão de Folgas")
-        
         col_f1, col_f2 = st.columns(2)
-        
         with col_f1:
-            st.markdown("**🔄 Mover Folga Existente**")
+            st.subheader("🔄 Mover Folga")
             folgas_atuais = df_e[df_e['Status'] == 'Folga'].index.tolist()
-            dia_v = st.selectbox("Tirar folga do dia:", [d+1 for d in folgas_atuais], key="mv_v")
-            dia_n = st.number_input("Colocar folga no dia:", 1, 31, value=1, key="mv_n")
-            
-            if st.button("Confirmar Troca de Folga"):
+            dia_v = st.selectbox("De:", [d+1 for d in folgas_atuais])
+            dia_n = st.number_input("Para:", 1, 31, value=1)
+            if st.button("Trocar"):
                 idx_v, idx_n = dia_v - 1, dia_n - 1
-                
-                # Regra de Domingos (Propagação)
+                # Lógica de propagação se for domingo
                 if df_e.loc[idx_n, 'Dia'] == 'dom' or df_e.loc[idx_v, 'Dia'] == 'dom':
                     dom_indices = df_e[df_e['Dia'] == 'dom'].index.tolist()
                     for d_idx in dom_indices:
-                        is_folga = (d_idx == idx_n) or (abs(d_idx - idx_n) % 14 == 0)
-                        df_e.loc[d_idx, 'Status'] = 'Folga' if is_folga else 'Trabalho'
-                        df_e.loc[d_idx, 'H_Entrada'] = "" if is_folga else u_info['Entrada']
-                        df_e.loc[d_idx, 'H_Saida'] = "" if is_folga else (datetime.strptime(u_info['Entrada'], "%H:%M") + timedelta(hours=9, minutes=58)).strftime("%H:%M")
+                        is_f = (d_idx == idx_n) or (abs(d_idx - idx_n) % 14 == 0)
+                        df_e.loc[d_idx, 'Status'] = 'Folga' if is_f else 'Trabalho'
                 else:
-                    df_e.loc[idx_v, 'Status'] = 'Trabalho'
-                    df_e.loc[idx_v, 'H_Entrada'] = u_info['Entrada']
-                    df_e.loc[idx_v, 'H_Saida'] = (datetime.strptime(u_info['Entrada'], "%H:%M") + timedelta(hours=9, minutes=58)).strftime("%H:%M")
-                    df_e.loc[idx_n, 'Status'], df_e.loc[idx_n, 'H_Entrada'], df_e.loc[idx_n, 'H_Saida'] = 'Folga', "", ""
-                
+                    df_e.loc[idx_v, 'Status'], df_e.loc[idx_n, 'Status'] = 'Trabalho', 'Folga'
                 st.session_state['historico'][f_ed] = df_e
-                st.success("Folga movida!"); st.rerun()
+                st.rerun()
 
         with col_f2:
-            st.markdown("**➕ Incluir Folga Extra**")
-            dia_extra = st.number_input("Dia para adicionar folga:", 1, 31, value=1, key="inc_f")
-            
-            if st.button("Adicionar Folga Extra"):
-                idx_e = dia_extra - 1
-                
-                # Se for domingo, aplica a regra de propagação 1x1
-                if df_e.loc[idx_e, 'Dia'] == 'dom':
-                    dom_indices = df_e[df_e['Dia'] == 'dom'].index.tolist()
-                    for d_idx in dom_indices:
-                        is_folga = (d_idx == idx_e) or (abs(d_idx - idx_e) % 14 == 0)
-                        df_e.loc[d_idx, 'Status'] = 'Folga' if is_folga else 'Trabalho'
-                        df_e.loc[d_idx, 'H_Entrada'] = "" if is_folga else u_info['Entrada']
-                        df_e.loc[d_idx, 'H_Saida'] = "" if is_folga else (datetime.strptime(u_info['Entrada'], "%H:%M") + timedelta(hours=9, minutes=58)).strftime("%H:%M")
-                else:
-                    df_e.loc[idx_e, 'Status'] = 'Folga'
-                    df_e.loc[idx_e, 'H_Entrada'] = ""
-                    df_e.loc[idx_e, 'H_Saida'] = ""
-                
+            st.subheader("➕ Incluir Folga")
+            dia_inc = st.number_input("Dia da Folga Extra:", 1, 31, value=1)
+            if st.button("Incluir"):
+                df_e.loc[dia_inc-1, 'Status'] = 'Folga'
                 st.session_state['historico'][f_ed] = df_e
-                st.success(f"Folga adicionada no dia {dia_extra}!"); st.rerun()
-
-        st.divider()
-        st.subheader("🕒 Ajustar Horário Individual")
-        dia_h = st.number_input("Dia para mudar", 1, 31)
-        n_h = st.time_input("Novo Horário")
-        if st.button("Aplicar Horário"):
-            idx = int(dia_h - 1)
-            if df_e.loc[idx, 'Status'] != 'Folga':
-                df_e.loc[idx, 'H_Entrada'] = n_h.strftime("%H:%M")
-                df_e.loc[idx, 'H_Saida'] = (datetime.combine(datetime.today(), n_h) + timedelta(hours=9, minutes=58)).strftime("%H:%M")
-                st.session_state['historico'][f_ed] = df_e
-                st.success("Horário ajustado!")
+                st.success("Adicionado!")
 
 # --- ABA 4: DOWNLOAD ---
 with aba4:
     if st.session_state['historico']:
-        if st.button("📥 BAIXAR EXCEL CONSOLIDADO"):
+        if st.button("📥 BAIXAR EXCEL"):
             out = io.BytesIO()
             with pd.ExcelWriter(out, engine='openpyxl') as writer:
                 wb = writer.book
-                ws = wb.create_sheet("Escala Final")
-                red, yel = PatternFill(start_color="FF0000", end_color="FF0000", patternType="solid"), PatternFill(start_color="FFFF00", end_color="FFFF00", patternType="solid")
-                border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
-                ws.cell(1, 1, "FUNCIONÁRIO").font = Font(bold=True)
-                df_ref = list(st.session_state['historico'].values())[0]
-                for i in range(31):
-                    ws.cell(1, i+2, i+1).alignment = Alignment(horizontal="center")
-                    ws.cell(2, i+2, df_ref.iloc[i]['Dia']).alignment = Alignment(horizontal="center")
-                row_idx = 3
+                ws = wb.create_sheet("Escala")
+                red = PatternFill(start_color="FF0000", end_color="FF0000", patternType="solid")
+                yel = PatternFill(start_color="FFFF00", end_color="FFFF00", patternType="solid")
+                
+                row = 3
                 for nome, df_f in st.session_state['historico'].items():
-                    u_inf = next((u for u in st.session_state['db_users'] if u['Nome'] == nome), {"Categoria": "Geral"})
-                    ws.cell(row_idx, 1, f"{nome}\n({u_inf.get('Categoria', 'Geral')})").alignment = Alignment(wrap_text=True, vertical="center", horizontal="center")
-                    ws.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx+1, end_column=1)
-                    for i, day_row in df_f.iterrows():
-                        col = i + 2
-                        is_f = (day_row['Status'] == 'Folga')
-                        c_ent = ws.cell(row_idx, col, "FOLGA" if is_f else day_row['H_Entrada'])
-                        c_sai = ws.cell(row_idx+1, col, "" if is_f else day_row['H_Saida'])
-                        if is_f: c_ent.fill = c_sai.fill = red if day_row['Dia'] == 'dom' else yel
-                        c_ent.border = c_sai.border = border
-                    row_idx += 2
-            st.download_button("Salvar Arquivo", out.getvalue(), "escala_corrigida.xlsx")
+                    ws.cell(row, 1, nome)
+                    for i, r in df_f.iterrows():
+                        cell = ws.cell(row, i+2, "FOLGA" if r['Status'] == 'Folga' else r['H_Entrada'])
+                        if r['Status'] == 'Folga':
+                            cell.fill = red if r['Dia'] == 'dom' else yel
+                    row += 2
+            st.download_button("Clique para baixar", out.getvalue(), "escala.xlsx")
