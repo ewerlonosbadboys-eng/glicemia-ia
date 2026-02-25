@@ -26,7 +26,7 @@ st.title("📅 Gestão de Escala 5x2")
 
 aba1, aba2, aba3, aba4 = st.tabs(["👥 1. Cadastro", "📅 2. Gerar Escala", "⚙️ 3. Ajustes Específicos", "📥 4. Baixar Excel"])
 
-# --- ABA 1: CADASTRO (Adiciona ao Grupo) ---
+# --- ABA 1: CADASTRO ---
 with aba1:
     st.subheader("Cadastrar no Grupo")
     nome = st.text_input("Nome do Funcionário")
@@ -37,7 +37,6 @@ with aba1:
     
     if st.button("Salvar no Grupo"):
         if nome:
-            # Remove se já existir e adiciona o novo (evita duplicados no grupo)
             st.session_state['db_users'] = [i for i in st.session_state['db_users'] if i.get('Nome') != nome]
             st.session_state['db_users'].append({
                 "Nome": nome, "Entrada": h_ent_padrao.strftime('%H:%M'),
@@ -48,7 +47,6 @@ with aba1:
 # --- ABA 2: GERAR ESCALA ---
 with aba2:
     if st.session_state['db_users']:
-        # Seleciona qualquer um do grupo
         func_sel = st.selectbox("Selecione o Funcionário do Grupo", [u.get('Nome') for u in st.session_state['db_users']])
         if st.button("✨ GERAR ESCALA"):
             datas = pd.date_range(start='2026-03-01', periods=31)
@@ -65,8 +63,4 @@ with aba2:
                         df.loc[d_idx + 1, 'Status'] = 'Folga'
 
             for sem in range(0, 31, 7):
-                bloco = df.iloc[sem:min(sem+7, 31)]
-                meta = 1 if any((bloco['Dia'] == 'dom') & (bloco['Status'] == 'Folga')) else 2
-                atuais = len(bloco[(bloco['Status'] == 'Folga') & (bloco['Dia'] != 'dom')])
-                while atuais < meta:
-                    pode = [p for p in bloco[bloco['Status'] == 'Trabalho'].index.tolist()
+                bloco = df.iloc[sem:min(sem+7,
