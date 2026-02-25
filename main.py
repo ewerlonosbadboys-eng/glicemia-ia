@@ -122,4 +122,15 @@ with aba3:
             
             ws.cell(1, 1, "Nome")
             for i in range(31):
-                ws.cell(
+                ws.cell(1, i+2, i+1).alignment = Alignment(horizontal="center")
+                ws.cell(2, i+2, df_f.iloc[i]['Dia']).alignment = Alignment(horizontal="center")
+            ws.cell(3, 1, func_sel); ws.cell(4, 1, "Horário")
+            for i, row in df_f.iterrows():
+                col = i + 2
+                folga = (row['Status'] == 'Folga')
+                c_e = ws.cell(3, col, "Folga" if folga else row['Entrada'])
+                c_s = ws.cell(4, col, "" if folga else row['Saida'])
+                if folga:
+                    c_e.fill = c_s.fill = red if row['Dia'] == 'dom' else yel
+            for c in range(1, 33): ws.column_dimensions[ws.cell(1, c).column_letter].width = 8
+        st.download_button("📥 Baixar Excel", out.getvalue(), "escala.xlsx")
