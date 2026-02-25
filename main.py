@@ -50,11 +50,11 @@ def gerar_escala_inteligente(lista_usuarios):
                                  not (df.loc[j, 'Dia'] == 'sáb' and not user.get("Rod_Sab"))]
                     if possiveis:   
             # Pressione TAB no início das linhas abaixo para alinhá-las:
-            possiveis.sort(key=lambda x: mapa_folgas[x]) 
-            escolhido = possiveis[0]
-            df.loc[escolhido, 'Status'] = 'Folga'
-            mapa_folgas[escolhido] += 1
-        else:
+                possiveis.sort(key=lambda x: mapa_folgas[x]) 
+                escolhido = possiveis[0]
+                df.loc[escolhido, 'Status'] = 'Folga'
+                mapa_folgas[escolhido] += 1
+            else:
             
             break
             
