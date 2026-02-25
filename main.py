@@ -75,43 +75,61 @@ with aba1:
     s_rk, c_rk = st.checkbox("Rodízio Sábado"), st.checkbox("Folga Casada")
     if st.button("Salvar"):
         st.session_state['db_users'].append({"Nome": n, "Categoria": ct, "Entrada": h_in.strftime('%H:%M'), "Rod_Sab": s_rk, "Casada": c_rk})
-        st.success("Salvo!")
+        st.success("Funcionário salvo com sucesso!")
 
 with aba2:
     if st.button("🚀 GERAR ESCALA"):
-        st.session_state['historico'] = gerar_escala_inteligente(st.session_state['db_users'])
+        if st.session_state['db_users']:
+            st.session_state['historico'] = gerar_escala_inteligente(st.session_state['db_users'])
+            st.success("✅ Escala gerada com sucesso! As folgas foram balanceadas por grupo.")
+        else:
+            st.warning("⚠️ Cadastre funcionários na Aba 1 antes de gerar.")
     if st.session_state['historico']:
         for nome, df in st.session_state['historico'].items():
             with st.expander(f"Escala: {nome}"): st.dataframe(df)
 
-with aba3: # RESTAURADA
+with aba3:
     st.subheader("⚙️ Ajustes Manuais")
     if st.session_state['historico']:
         f_ed = st.selectbox("Selecionar Funcionário:", list(st.session_state['historico'].keys()))
         df_e = st.session_state['historico'][f_ed]
+        u_idx = next(i for i, u in enumerate(st.session_state['db_users']) if u['Nome'] == f_ed)
+        
         col_a, col_b = st.columns(2)
         with col_a:
-            st.markdown("#### Mover Folga")
-            d_tira = st.selectbox("Dia para trabalhar:", [d+1 for d in df_e[df_e['Status'] == 'Folga'].index])
-            d_poe = st.number_input("Novo dia de folga:", 1, 31)
-            if st.button("Confirmar Troca"):
+            st.markdown("#### 🏷️ Categoria")
+            nova_cat = st.text_input("Mudar para:", value=st.session_state['db_users'][u_idx]['Categoria'])
+            if st.button("Atualizar Categoria"):
+                st.session_state['db_users'][u_idx]['Categoria'] = nova_cat
+                st.success("Categoria atualizada!")
+            
+            st.markdown("#### 🔄 Mover Folga")
+            folgas_atuais = df_e[df_e['Status'] == 'Folga'].index.tolist()
+            d_tira = st.selectbox("Dia para voltar a trabalhar:", [d+1 for d in folgas_atuais])
+            d_poe = st.number_input("Novo dia para folgar (1-31):", 1, 31)
+            if st.button("Confirmar Troca de Folga"):
                 df_e.loc[d_tira-1, 'Status'], df_e.loc[d_poe-1, 'Status'] = 'Trabalho', 'Folga'
-                st.session_state['historico'][f_ed] = df_e; st.rerun()
+                st.session_state['historico'][f_ed] = df_e; st.success("Folga movida!"); st.rerun()
+        
         with col_b:
-            st.markdown("#### Horário e Extra")
-            d_h = st.number_input("Dia:", 1, 31, key="dh")
+            st.markdown("#### 🕒 Horário e Extra")
+            d_h = st.number_input("Escolha o Dia:", 1, 31, key="dh")
             n_h = st.time_input("Nova Entrada:", key="nh")
-            if st.button("Ajustar Horário"):
+            if st.button("Salvar Novo Horário"):
                 df_e.loc[d_h-1, 'H_Entrada'] = n_h.strftime("%H:%M")
-                st.session_state['historico'][f_ed] = df_e; st.success("Ajustado!")
-            if st.button("Inserir Folga Extra"):
+                df_e.loc[d_h-1, 'H_Saida'] = (datetime.combine(datetime.today(), n_h) + timedelta(hours=9, minutes=58)).strftime("%H:%M")
+                st.session_state['historico'][f_ed] = df_e; st.success("Horário ajustado!")
+            
+            if st.button("🎁 Adicionar Folga Extra"):
                 df_e.loc[d_h-1, 'Status'] = 'Folga'
-                st.session_state['historico'][f_ed] = df_e; st.rerun()
+                df_e.loc[d_h-1, 'H_Entrada'], df_e.loc[d_h-1, 'H_Saida'] = "", ""
+                st.session_state['historico'][f_ed] = df_e; st.success("Folga extra adicionada!"); st.rerun()
+    else: st.warning("Gere a escala na Aba 2 para habilitar os ajustes.")
 
-with aba4: # RESTAURADA
-    st.subheader("📥 Exportar Excel")
+with aba4:
+    st.subheader("📥 Exportar para Excel")
     if st.session_state['historico']:
-        if st.button("📊 GERAR ARQUIVO"):
+        if st.button("📊 GERAR ARQUIVO FINAL"):
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
                 wb = writer.book; ws = wb.create_sheet("Escala", index=0)
@@ -136,4 +154,4 @@ with aba4: # RESTAURADA
                         c1.border = c2.border = border; c1.alignment = c2.alignment = center
                         if is_f: c1.fill = c2.fill = red if row['Dia'] == 'dom' else yel
                     row_idx += 2
-            st.download_button("📥 Baixar Planilha", output.getvalue(), "escala.xlsx")
+            st.download_button("📥 Baixar Planilha Excel", output.getvalue(), "escala_balanceada.xlsx")
