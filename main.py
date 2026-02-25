@@ -3,7 +3,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 import io
 import random
-from openpyxl.styles import PatternFill, Font, Alignment
+from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 
 st.set_page_config(page_title="Gestor Escala 2026", layout="wide")
 
@@ -26,7 +26,6 @@ st.title("📅 Gestão de Escala Profissional")
 
 aba1, aba2, aba3, aba4 = st.tabs(["👥 1. Cadastro", "📅 2. Gerar Escala", "⚙️ 3. Ajustes", "📥 4. Baixar Excel"])
 
-# --- FUNÇÃO DE GERAÇÃO ---
 def gerar_escala_func(user_dict):
     datas = pd.date_range(start='2026-03-01', periods=31)
     d_pt = {'Monday':'seg','Tuesday':'ter','Wednesday':'qua','Thursday':'qui','Friday':'sex','Saturday':'sáb','Sunday':'dom'}
@@ -51,7 +50,7 @@ def gerar_escala_func(user_dict):
     df['H_Saida'] = [(datetime.strptime(e, "%H:%M") + timedelta(hours=9, minutes=58)).strftime("%H:%M") for e in df['H_Entrada']]
     return df
 
-# --- ABA 1: CADASTRO ---
+# --- ABAS 1, 2 e 3 (Mantidas) ---
 with aba1:
     st.subheader("Cadastrar Novo Funcionário")
     c_cad1, c_cad2 = st.columns(2)
@@ -67,7 +66,6 @@ with aba1:
             st.session_state['db_users'].append({"Nome": nome, "Categoria": categoria if categoria else "Geral", "Entrada": h_ent_padrao.strftime('%H:%M'), "Rod_Sab": f_sab, "Casada": f_cas})
             st.success(f"✅ {nome} salvo!")
 
-# --- ABA 2: GERAR ---
 with aba2:
     if st.session_state['db_users']:
         c_g1, c_g2 = st.columns(2)
@@ -84,7 +82,6 @@ with aba2:
                 for u in st.session_state['db_users']: st.session_state['historico'][u['Nome']] = gerar_escala_func(u)
                 st.success("Escalas do grupo geradas!")
 
-# --- ABA 3: AJUSTES ---
 with aba3:
     if st.session_state['db_users']:
         f_ed = st.selectbox("Editar:", [u.get('Nome') for u in st.session_state['db_users']])
@@ -113,50 +110,59 @@ with aba3:
                 st.session_state['historico'][f_ed] = df_e
                 st.success("Ajustado!")
 
-# --- ABA 4: DOWNLOAD ---
+# --- ABA 4: DOWNLOAD (FORMATO IGUAL A FOTO) ---
 with aba4:
     if st.session_state['historico']:
-        c_d1, c_d2 = st.columns(2)
-        with c_d1:
-            st.subheader("Individual")
-            f_n = st.selectbox("Escolha o funcionário:", list(st.session_state['historico'].keys()))
-            if st.button("📥 Baixar Individual"):
-                out = io.BytesIO()
-                u_cat = next((u.get('Categoria', 'Geral') for u in st.session_state['db_users'] if u['Nome'] == f_n), "Geral")
-                with pd.ExcelWriter(out, engine='openpyxl') as writer:
-                    df_f = st.session_state['historico'][f_n]
-                    ws = writer.book.create_sheet(f_n[:30], index=0)
-                    # CORREÇÃO AQUI: patternType adicionado
-                    red = PatternFill(start_color="FF0000", end_color="FF0000", patternType="solid")
-                    yel = PatternFill(start_color="FFFF00", end_color="FFFF00", patternType="solid")
-                    ws.cell(1, 1, "Categoria"); ws.cell(1, 2, u_cat)
-                    ws.cell(2, 1, "Nome"); ws.cell(2, 2, f_n)
-                    for i in range(31):
-                        ws.cell(3, i+2, i+1).alignment = Alignment(horizontal="center")
-                        ws.cell(4, i+2, df_f.iloc[i]['Dia']).alignment = Alignment(horizontal="center")
-                        is_f = (df_f.iloc[i]['Status'] == 'Folga')
-                        c_e = ws.cell(5, i+2, "Folga" if is_f else df_f.iloc[i]['H_Entrada'])
-                        c_s = ws.cell(6, i+2, "" if is_f else df_f.iloc[i]['H_Saida'])
-                        if is_f: c_e.fill = c_s.fill = red if df_f.iloc[i]['Dia'] == 'dom' else yel
-                st.download_button("Clique para Baixar", out.getvalue(), f"escala_{f_n}.xlsx")
+        st.subheader("Download da Escala")
+        if st.button("📥 BAIXAR ESCALA DO GRUPO (FORMATO FOTO)"):
+            out = io.BytesIO()
+            with pd.ExcelWriter(out, engine='openpyxl') as writer:
+                wb = writer.book
+                ws = wb.create_sheet("Escala Geral")
+                
+                # Estilos
+                red = PatternFill(start_color="FF0000", end_color="FF0000", patternType="solid")
+                yel = PatternFill(start_color="FFFF00", end_color="FFFF00", patternType="solid")
+                blue_head = PatternFill(start_color="DDEBF7", end_color="DDEBF7", patternType="solid")
+                border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
+                
+                # Cabeçalho: Dias e Semanas
+                df_ref = list(st.session_state['historico'].values())[0]
+                ws.cell(1, 1, "FUNCIONÁRIO").font = Font(bold=True)
+                for i in range(31):
+                    col = i + 2
+                    ws.cell(1, col, i+1).fill = blue_head
+                    ws.cell(1, col, i+1).alignment = Alignment(horizontal="center")
+                    ws.cell(2, col, df_ref.iloc[i]['Dia']).alignment = Alignment(horizontal="center")
+                
+                # Linhas: Funcionários
+                row_idx = 3
+                for nome, df_f in st.session_state['historico'].items():
+                    ws.cell(row_idx, 1, nome).font = Font(bold=True)
+                    ws.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx+1, end_column=1)
+                    
+                    for i, day_row in df_f.iterrows():
+                        col = i + 2
+                        is_f = (day_row['Status'] == 'Folga')
+                        
+                        c_ent = ws.cell(row_idx, col, "FOLGA" if is_f else day_row['H_Entrada'])
+                        c_sai = ws.cell(row_idx+1, col, "" if is_f else day_row['H_Saida'])
+                        
+                        c_ent.alignment = Alignment(horizontal="center")
+                        c_sai.alignment = Alignment(horizontal="center")
+                        
+                        if is_f:
+                            fill_color = red if day_row['Dia'] == 'dom' else yel
+                            c_ent.fill = c_sai.fill = fill_color
+                        
+                        c_ent.border = border
+                        c_sai.border = border
+                    
+                    row_idx += 2 # Pula para o próximo funcionário
 
-        with c_d2:
-            st.subheader("Baixar Grupo Completo")
-            if st.button("📥 BAIXAR TUDO"):
-                out_g = io.BytesIO()
-                with pd.ExcelWriter(out_g, engine='openpyxl') as writer:
-                    for nome_f, df_f in st.session_state['historico'].items():
-                        u_cat = next((u.get('Categoria', 'Geral') for u in st.session_state['db_users'] if u['Nome'] == nome_f), "Geral")
-                        ws = writer.book.create_sheet(nome_f[:30])
-                        red = PatternFill(start_color="FF0000", end_color="FF0000", patternType="solid")
-                        yel = PatternFill(start_color="FFFF00", end_color="FFFF00", patternType="solid")
-                        ws.cell(1, 1, "Categoria"); ws.cell(1, 2, u_cat)
-                        ws.cell(2, 1, "Nome"); ws.cell(2, 2, nome_f)
-                        for i in range(31):
-                            ws.cell(3, i+2, i+1).alignment = Alignment(horizontal="center")
-                            ws.cell(4, i+2, df_f.iloc[i]['Dia']).alignment = Alignment(horizontal="center")
-                            is_f = (df_f.iloc[i]['Status'] == 'Folga')
-                            c_e = ws.cell(5, i+2, "Folga" if is_f else df_f.iloc[i]['H_Entrada'])
-                            c_s = ws.cell(6, i+2, "" if is_f else df_f.iloc[i]['H_Saida'])
-                            if is_f: c_e.fill = c_s.fill = red if df_f.iloc[i]['Dia'] == 'dom' else yel
-                st.download_button("Clique para Baixar Grupo", out_g.getvalue(), "escala_grupo_completo.xlsx")
+                # Ajuste de largura
+                ws.column_dimensions['A'].width = 30
+                for i in range(31):
+                    ws.column_dimensions[ws.cell(1, i+2).column_letter].width = 8
+
+            st.download_button("Clique para salvar o arquivo", out.getvalue(), "escala_consolidada_2026.xlsx")
