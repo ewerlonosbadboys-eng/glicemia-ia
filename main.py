@@ -1,11 +1,12 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime
 import io
 
-# Configuração inicial
-st.set_page_config(page_title="Gestor de Escala Pro", layout="wide")
+# 1. Configuração da página (Deve ser a primeira linha)
+st.set_page_config(page_title="Gerenciador de Escala Pro", layout="wide")
 
+# 2. Inicialização do banco de dados (Memória)
 if 'db_users' not in st.session_state:
     st.session_state['db_users'] = []
 if 'db_cats' not in st.session_state:
@@ -13,8 +14,10 @@ if 'db_cats' not in st.session_state:
 
 st.title("🚀 Gerenciador de Escala Inteligente")
 
+# 3. Abas do sistema
 aba1, aba2, aba3 = st.tabs(["👥 Cadastro", "📁 Categorias", "📅 Gerar Escala"])
 
+# --- ABA DE CATEGORIAS ---
 with aba2:
     st.subheader("Gerenciar Setores")
     nova_cat = st.text_input("Nome do novo setor")
@@ -23,6 +26,7 @@ with aba2:
             st.session_state['db_cats'].append(nova_cat)
             st.success("Categoria adicionada!")
 
+# --- ABA DE CADASTRO ---
 with aba1:
     st.subheader("Cadastro de Funcionário")
     nome = st.text_input("Nome Completo")
@@ -38,29 +42,23 @@ with aba1:
                 "Nome": nome, "Setor": setor, 
                 "Rodízio Sáb": r_sabado, "Folga Casada": r_dom_seg
             })
-            st.success(f"{nome} cadastrado!")
+            st.success(f"{nome} cadastrado com sucesso!")
         else:
             st.error("Digite o nome!")
 
     if st.session_state['db_users']:
+        st.write("### Equipe Cadastrada")
         st.table(pd.DataFrame(st.session_state['db_users']))
 
+# --- ABA DO GERADOR ---
 with aba3:
     st.subheader("Gerador de Escala")
     if not st.session_state['db_users']:
         st.info("Cadastre funcionários primeiro.")
     else:
         setor_sel = st.selectbox("Escolha o Setor", st.session_state['db_cats'])
-        if st.button("GERAR ESCALA DA CATEGORIA"):
-            # Lógica de datas para Março/2026
+        
+        if st.button("GERAR ESCALA"):
+            # Gerando datas para Março de 2026
             datas = pd.date_range(start='2026-03-01', end='2026-03-31')
-            df_escala = pd.DataFrame({
-                'Data': datas.strftime('%d/%m/%Y'),
-                'Dia': datas.day_name(),
-                'Status': ['Trabalho'] * len(datas)
-            })
-            
-            # Marca folgas nos domingos para o exemplo
-            df_escala.loc[df_escala['Dia'] == 'Sunday', 'Status'] = 'Folga'
-            
-            st.write(f"### Escala:
+            df_escala = pd.
