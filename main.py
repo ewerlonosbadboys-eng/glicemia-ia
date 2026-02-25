@@ -49,11 +49,16 @@ def gerar_escala_inteligente(lista_usuarios):
                                  not (df.loc[j+1, 'Status'] == 'Folga' if j < 30 else False) and
                                  not (df.loc[j, 'Dia'] == 'sáb' and not user.get("Rod_Sab"))]
                     if possiveis:
-            # Organiza: dias com menos folgas no grupo vêm primeiro
+            # Esta linha organiza os dias: os que têm 0 folgas no grupo vêm primeiro
             possiveis.sort(key=lambda x: mapa_folgas[x])
+            
+            # Escolhe o primeiro da lista organizada (o dia mais vazio)
             escolhido = possiveis[0]
             
+            # Define o status como Folga (com F maiúsculo para o Excel reconhecer)
             df.loc[escolhido, 'Status'] = 'Folga'
+            
+            # Soma +1 no mapa de folgas do grupo para travar esse dia para o próximo colega
             mapa_folgas[escolhido] += 1
         else:
             break
