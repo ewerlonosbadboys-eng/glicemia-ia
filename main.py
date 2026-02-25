@@ -5,7 +5,7 @@ import io
 import random
 from openpyxl.styles import PatternFill, Font, Alignment
 
-# 1. Configuração e Segurança
+# 1. Configuração de Segurança
 st.set_page_config(page_title="Gestor Escala 5x2 Pro", layout="wide")
 
 if "password_correct" not in st.session_state:
@@ -18,11 +18,11 @@ if "password_correct" not in st.session_state:
             st.rerun()
     st.stop()
 
-# Inicialização de memória robusta
+# Inicialização de memória blindada
 if 'db_users' not in st.session_state: st.session_state['db_users'] = []
 if 'historico' not in st.session_state: st.session_state['historico'] = {}
 
-# 2. Interface
+# 2. Interface de Abas
 aba1, aba2, aba3 = st.tabs(["👥 Cadastro", "📅 Gerar Escala", "📜 Histórico"])
 
 with aba1:
@@ -30,19 +30,19 @@ with aba1:
     nome = st.text_input("Nome do Funcionário")
     h_entrada = st.time_input("Horário de Entrada", value=datetime.strptime("06:00", "%H:%M").time())
     
-    # Cálculo: 8:48 trabalho + 1:10 almoço = 9:58 total de permanência
+    # Cálculo: 8:48 + 1:10 = 9:58 total
     delta_total = timedelta(hours=9, minutes=58)
     h_saida = (datetime.combine(datetime.today(), h_entrada) + delta_total).time()
     
-    st.write(f"⏱️ **Saída Calculada (Carga + Almoço):** {h_saida.strftime('%H:%M')}")
+    st.write(f"⏱️ **Saída Calculada:** {h_saida.strftime('%H:%M')}")
     
     c1, c2 = st.columns(2)
-    f_sab = c1.checkbox("Participar de Rodízio no Sábado")
+    f_sab = c1.checkbox("Rodízio de Sábado")
     f_cas = c2.checkbox("Folga Casada (Dom + Seg)")
     
     if st.button("Salvar Funcionário"):
         if nome:
-            # Proteção: Limpa dados antigos com mesmo nome para evitar conflito de chaves
+            # Limpa qualquer dado antigo com esse nome para evitar bugs
             st.session_state['db_users'] = [i for i in st.session_state['db_users'] if i.get('Nome') != nome]
             st.session_state['db_users'].append({
                 "Nome": nome, 
@@ -59,14 +59,14 @@ with aba1:
 with aba2:
     st.subheader("Gerar Escala Mensal")
     if st.session_state['db_users']:
-        lista_nomes = [u.get('Nome') for u in st.session_state['db_users'] if u.get('Nome')]
-        func_sel = st.selectbox("Escolha o Funcionário", lista_nomes)
+        lista_nomes = [u.get('Nome', 'Sem Nome') for u in st.session_state['db_users']]
+        func_sel = st.selectbox("Selecione o Funcionário", lista_nomes)
         
         if st.button("✨ GERAR ESCALA"):
             datas = pd.date_range(start='2026-03-01', periods=31)
             d_pt = {'Monday':'seg','Tuesday':'ter','Wednesday':'qua','Thursday':'qui','Friday':'sex','Saturday':'sáb','Sunday':'dom'}
             
-            # Busca segura com .get() para não dar KeyError
+            # Busca segura para evitar StopIteration ou KeyError
             user = next((i for i in st.session_state['db_users'] if i.get("Nome") == func_sel), None)
             
             if user:
@@ -77,10 +77,10 @@ with aba2:
                 for idx, d_idx in enumerate(dom_idx):
                     if idx % 2 == 1:
                         df.loc[d_idx, 'Status'] = 'Folga'
-                        if user.get("Casada") and (d_idx + 1) < 31:
+                        if user.get("Casada", False) and (d_idx + 1) < 31:
                             df.loc[d_idx + 1, 'Status'] = 'Folga'
                 
-                # Regra 5x2 Semanal
+                # Regra 5x2 Semanal (Respeitando trava do Sábado)
                 for i in range(0, 31, 7):
                     sem = df.iloc[i:i+7]
                     if len(sem[sem['Status'] == 'Folga']) < 2:
@@ -89,7 +89,7 @@ with aba2:
                         pode = sem[cond].index.tolist()
                         if pode: df.loc[random.choice(pode), 'Status'] = 'Folga'
                 
-                # Trava Final: Máximo 5 dias seguidos
+                # TRAVA FINAL: NUNCA PASSAR DE 5 DIAS TRABALHADOS
                 cont = 0
                 for i in range(len(df)):
                     cont = cont + 1 if df.loc[i, 'Status'] == 'Trabalho' else 0
@@ -98,12 +98,13 @@ with aba2:
                         cont = 0
                 
                 st.session_state['historico'][func_sel] = df
+                st.success(f"Escala de {func_sel} gerada!")
                 st.table(df)
 
 with aba3:
-    st.subheader("📜 Exportar Histórico")
+    st.subheader("📜 Histórico e Exportação")
     if st.session_state['historico']:
-        f_nome = st.selectbox("Selecione a Escala", list(st.session_state['historico'].keys()))
+        f_nome = st.selectbox("Escolha a Escala para Baixar", list(st.session_state['historico'].keys()))
         df_h = st.session_state['historico'][f_nome]
         u_info = next((i for i in st.session_state['db_users'] if i.get("Nome") == f_nome), None)
         
@@ -118,11 +119,11 @@ with aba3:
                 white_font = Font(color="FFFFFF", bold=True)
                 center = Alignment(horizontal="center", vertical="center")
 
-                # Layout Horizontal (Igual à imagem)
+                # Layout Horizontal igual à imagem do usuário
                 ws.cell(1, 1, "Nome")
                 for i in range(31):
-                    ws.cell(1, i+2, i+1).alignment = center # Números
-                    ws.cell(2, i+2, df_h.iloc[i]['Dia']).alignment = center # Nome do dia
+                    ws.cell(1, i+2, i+1).alignment = center # Linha 1: Dias (1-31)
+                    ws.cell(2, i+2, df_h.iloc[i]['Dia']).alignment = center # Linha 2: Nome do dia (seg, ter...)
                 
                 ws.cell(3, 1, f_nome)
                 ws.cell(4, 1, "Horário")
@@ -139,11 +140,9 @@ with aba3:
                     
                     if is_folga:
                         cor = red if row['Dia'] == 'dom' else yel
-                        c_top.fill = cor
-                        c_bot.fill = cor
-                        if row['Dia'] == 'dom':
-                            c_top.font = white_font
-                            c_bot.font = white_font
+                        for cell in [c_top, c_bot]:
+                            cell.fill = cor
+                            if row['Dia'] == 'dom': cell.font = white_font
                 
                 for col in range(1, 33): ws.column_dimensions[ws.cell(1, col).column_letter].width = 7
 
