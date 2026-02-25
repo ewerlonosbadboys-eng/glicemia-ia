@@ -78,24 +78,21 @@ with aba1:
             st.session_state['db_users'].append({"Nome": nome_in, "Categoria": cat_in if cat_in else "Geral", "Entrada": h_ent_padrao.strftime('%H:%M'), "Rod_Sab": f_sab, "Casada": f_cas, "offset_dom": random.randint(0,1)})
             st.success(f"✅ {nome_in} salvo!")
 
-# --- ABA 2: GERAR (ADICIONADO HISTÓRICO VISUAL) ---
+# --- ABA 2: GERAR (MANTIDA) ---
 with aba2:
     st.subheader("👥 Funcionários Cadastrados")
     if st.session_state['db_users']:
-        # Mostra o histórico/lista de todos os cadastrados
         df_cadastrados = pd.DataFrame(st.session_state['db_users'])
-        # Renomear colunas para ficar bonito
         df_view = df_cadastrados[['Nome', 'Categoria', 'Entrada', 'Rod_Sab', 'Casada']].copy()
         df_view.columns = ['Nome', 'Categoria', 'H. Entrada', 'Rodízio Sábado', 'Folga Casada']
-        st.table(df_view) # Exibe a lista completa
-        
+        st.table(df_view) 
         if st.button("🚀 GERAR ESCALA BALANCEADA PARA TODOS"):
             st.session_state['historico'] = gerar_escalas_balanceadas(st.session_state['db_users'])
-            st.success("✅ Escalas geradas com sucesso!")
+            st.success("✅ Escalas geradas!")
     else:
-        st.info("Nenhum funcionário cadastrado. Vá até a Aba 1.")
+        st.info("Nenhum funcionário cadastrado.")
 
-# --- ABA 3: AJUSTES (MANTIDA COM CATEGORIA) ---
+# --- ABA 3: AJUSTES (CATEGORIA POR SELEÇÃO) ---
 with aba3:
     if st.session_state['db_users'] and st.session_state['historico']:
         f_ed = st.selectbox("Escolha quem editar:", list(st.session_state['historico'].keys()))
@@ -104,10 +101,14 @@ with aba3:
         u_info = st.session_state['db_users'][idx_user]
 
         st.subheader("🏷️ Alterar Categoria")
-        nova_cat = st.text_input("Nova Categoria/Setor:", value=u_info.get('Categoria', 'Geral'))
+        # PEGA APENAS AS CATEGORIAS JÁ EXISTENTES NA LISTA DE USUÁRIOS
+        cats_existentes = sorted(list(set([u['Categoria'] for u in st.session_state['db_users']])))
+        
+        nova_cat = st.selectbox("Selecione uma Categoria existente:", options=cats_existentes, index=cats_existentes.index(u_info['Categoria']) if u_info['Categoria'] in cats_existentes else 0)
+        
         if st.button("Atualizar Categoria"):
             st.session_state['db_users'][idx_user]['Categoria'] = nova_cat
-            st.success("Categoria atualizada!")
+            st.success(f"Categoria de {f_ed} atualizada para {nova_cat}!")
 
         st.divider()
         st.subheader("🔄 Mover Folga (Regra 5x2)")
