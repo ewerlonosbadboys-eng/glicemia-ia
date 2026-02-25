@@ -5,64 +5,71 @@ import io
 import random
 from openpyxl.styles import PatternFill, Alignment
 
-# 1. Configuração Inicial Única
-st.set_page_config(page_title="Escala 5x2 Oficial", layout="wide")
+# 1. Configuração de Página (Obrigatório ser a primeira linha)
+st.set_page_config(page_title="Escala 5x2 Fixa", layout="wide")
 
-# Inicialização de Memória sem Loops
-if 'db_users' not in st.session_state: st.session_state['db_users'] = []
-if 'escala_final' not in st.session_state: st.session_state['escala_final'] = None
+# Limpeza forçada de estados que causam loop
+if 'password_correct' not in st.session_state:
+    st.session_state['password_correct'] = False
 
-# Login Direto
-if "password_correct" not in st.session_state:
-    st.title("🔐 Login")
-    u = st.text_input("Usuário")
-    p = st.text_input("Senha", type="password")
+# Login Simples e Estático
+if not st.session_state['password_correct']:
+    st.title("🔐 Acesso")
+    senha = st.text_input("Senha", type="password")
     if st.button("Entrar"):
-        if u == "admin" and p == "123":
-            st.session_state["password_correct"] = True
+        if senha == "123":
+            st.session_state['password_correct'] = True
             st.rerun()
     st.stop()
 
-aba1, aba2, aba3 = st.tabs(["👥 Cadastro", "📅 Escala e Ajustes", "📥 Baixar"])
+# Inicialização Manual de Dados
+if 'lista_func' not in st.session_state: st.session_state['lista_func'] = []
+if 'escala_ativa' not in st.session_state: st.session_state['escala_ativa'] = None
 
-# --- ABA 1: CADASTRO ---
-with aba1:
-    st.subheader("Novo Funcionário")
-    nome = st.text_input("Nome")
-    h_ent_padrao = st.time_input("Entrada", value=datetime.strptime("06:00", "%H:%M").time())
+# Interface
+st.title("📅 Gestor de Escala Profissional")
+menu = ["Cadastro", "Gerar Escala", "Ajustar e Baixar"]
+escolha = st.sidebar.selectbox("Menu", menu)
+
+# --- CADASTRO ---
+if escolha == "Cadastro":
+    st.subheader("👥 Cadastro de Funcionário")
+    nome = st.text_input("Nome completo")
+    h_entrada = st.time_input("Horário Padrão", value=datetime.strptime("06:00", "%H:%M").time())
     c1, c2 = st.columns(2)
-    f_sab = c1.checkbox("Rodízio Sábado")
-    f_cas = c2.checkbox("Folga Casada (Dom+Seg)")
+    sab = c1.checkbox("Rodízio de Sábado")
+    cas = c2.checkbox("Folga Casada (Dom+Seg)")
     
-    if st.button("Salvar Cadastro"):
+    if st.button("💾 Salvar Funcionário"):
         if nome:
-            st.session_state['db_users'] = [u for u in st.session_state['db_users'] if u['Nome'] != nome]
-            st.session_state['db_users'].append({
-                "Nome": nome, "Entrada": h_ent_padrao.strftime('%H:%M'),
-                "Rod_Sab": f_sab, "Casada": f_cas
+            st.session_state['lista_func'] = [f for f in st.session_state['lista_func'] if f['Nome'] != nome]
+            st.session_state['lista_func'].append({
+                "Nome": nome, "Entrada": h_entrada.strftime('%H:%M'),
+                "Sab": sab, "Casada": cas
             })
-            st.success(f"{nome} salvo!")
+            st.success(f"Funcionário {nome} cadastrado!")
 
-# --- ABA 2: GERAR E AJUSTAR ---
-with aba2:
-    if st.session_state['db_users']:
-        func_sel = st.selectbox("Selecione", [u['Nome'] for u in st.session_state['db_users']])
-        
-        if st.button("✨ GERAR ESCALA"):
-            user = next(u for u in st.session_state['db_users'] if u['Nome'] == func_sel)
+# --- GERADOR ---
+elif escolha == "Gerar Escala":
+    if not st.session_state['lista_func']:
+        st.warning("Cadastre alguém primeiro!")
+    else:
+        func = st.selectbox("Escolha o Funcionário", [f['Nome'] for f in st.session_state['lista_func']])
+        if st.button("✨ GERAR ESCALA DE MARÇO"):
+            f_data = next(f for f in st.session_state['lista_func'] if f['Nome'] == func)
             datas = pd.date_range(start='2026-03-01', periods=31)
             d_pt = {'Monday':'seg','Tuesday':'ter','Wednesday':'qua','Thursday':'qui','Friday':'sex','Saturday':'sáb','Sunday':'dom'}
             
             df = pd.DataFrame({'Data': datas, 'Dia': [d_pt[d.day_name()] for d in datas], 'Status': 'Trabalho'})
             
-            # Domingos 1x1
-            dom_idx = df[df['Dia'] == 'dom'].index.tolist()
-            for i, idx in enumerate(dom_idx):
+            # Regra de Domingos 1x1
+            doms = df[df['Dia'] == 'dom'].index.tolist()
+            for i, idx in enumerate(doms):
                 if i % 2 == 1: 
                     df.loc[idx, 'Status'] = 'Folga'
-                    if user['Casada'] and (idx + 1) < 31: df.loc[idx+1, 'Status'] = 'Folga'
+                    if f_data['Casada'] and (idx + 1) < 31: df.loc[idx+1, 'Status'] = 'Folga'
 
-            # Folgas Semanais com Trava de Segunda
+            # Folgas da Semana (Sem grudar se não for casada)
             for s in range(0, 31, 7):
                 bloco = df.iloc[s:s+7]
                 meta = 1 if any((bloco['Dia'] == 'dom') & (bloco['Status'] == 'Folga')) else 2
@@ -70,52 +77,51 @@ with aba2:
                 
                 while atuais < meta:
                     pode = [p for p in bloco[bloco['Status'] == 'Trabalho'].index.tolist() if df.loc[p, 'Dia'] != 'dom']
-                    if not user['Rod_Sab']: pode = [p for p in pode if df.loc[p, 'Dia'] != 'sáb']
-                    if not user['Casada']: # TRAVA CRÍTICA
+                    if not f_data['Sab']: pode = [p for p in pode if df.loc[p, 'Dia'] != 'sáb']
+                    if not f_data['Casada']:
                         pode = [p for p in pode if not (df.loc[p, 'Dia'] == 'seg' and p > 0 and df.loc[p-1, 'Status'] == 'Folga')]
                     
                     if not pode: break
-                    escolha = random.choice(pode)
-                    if not (escolha > 0 and df.loc[escolha-1, 'Status'] == 'Folga' and df.loc[escolha-1, 'Dia'] != 'dom'):
-                        df.loc[escolha, 'Status'] = 'Folga'
+                    escolha_f = random.choice(pode)
+                    if not (escolha_f > 0 and df.loc[escolha_f-1, 'Status'] == 'Folga' and df.loc[escolha_f-1, 'Dia'] != 'dom'):
+                        df.loc[escolha_f, 'Status'] = 'Folga'
                         atuais += 1
 
-            df['Entrada'] = user['Entrada']
+            df['Entrada'] = f_data['Entrada']
             df['Saida'] = [(datetime.strptime(e, "%H:%M") + timedelta(hours=9, minutes=58)).strftime("%H:%M") for e in df['Entrada']]
-            st.session_state['escala_final'] = df
+            st.session_state['escala_ativa'] = df
+            st.session_state['nome_ativo'] = func
+            st.success("Escala gerada! Vá para a aba 'Ajustar e Baixar'.")
 
-    if st.session_state['escala_final'] is not None:
-        st.divider()
-        st.subheader("Alterar Dia Específico")
-        c1, c2, c3 = st.columns([1,1,1])
-        dia_mudar = c1.number_input("Dia", 1, 31, step=1)
-        hora_nova = c2.time_input("Nova Entrada")
+# --- AJUSTES E DOWNLOAD ---
+elif escolha == "Ajustar e Baixar":
+    if st.session_state['escala_ativa'] is None:
+        st.info("Gere a escala na aba anterior.")
+    else:
+        df = st.session_state['escala_ativa']
+        st.write(f"### Escala de {st.session_state['nome_ativo']}")
         
-        if c3.button("🔄 Aplicar Mudança"):
-            idx = dia_mudar - 1
-            df_at = st.session_state['escala_final']
-            df_at.loc[idx, 'Entrada'] = hora_nova.strftime("%H:%M")
-            df_at.loc[idx, 'Saida'] = (datetime.combine(datetime.today(), hora_nova) + timedelta(hours=9, minutes=58)).strftime("%H:%M")
-            
-            # Regra de 11h: Se sair tarde hoje, empurra amanhã
-            if idx < 30 and df_at.loc[idx, 'Status'] == 'Trabalho':
-                s_hj = datetime.strptime(df_at.loc[idx, 'Saida'], "%H:%M")
-                min_amanha = (s_hj + timedelta(hours=11)).time()
-                h_padrao = datetime.strptime(next(u['Entrada'] for u in st.session_state['db_users'] if u['Nome'] == func_sel), "%H:%M").time()
+        with st.expander("🛠️ Mudar Horário de um Dia"):
+            d_aj = st.number_input("Dia do Mês", 1, 31)
+            h_aj = st.time_input("Novo Horário")
+            if st.button("Confirmar Alteração"):
+                idx = d_aj - 1
+                df.loc[idx, 'Entrada'] = h_aj.strftime("%H:%M")
+                df.loc[idx, 'Saida'] = (datetime.combine(datetime.today(), h_aj) + timedelta(hours=9, minutes=58)).strftime("%H:%M")
                 
-                if min_amanha > h_padrao and s_hj.hour > 18:
-                    df_at.loc[idx+1, 'Entrada'] = min_amanha.strftime("%H:%M")
-                    df_at.loc[idx+1, 'Saida'] = (datetime.combine(datetime.today(), min_amanha) + timedelta(hours=9, minutes=58)).strftime("%H:%M")
-            
-            st.session_state['escala_final'] = df_at
-            st.rerun()
+                # Recalcula 11h para o dia seguinte se for tarde
+                if idx < 30 and h_aj.hour >= 12:
+                    s_hj = datetime.strptime(df.loc[idx, 'Saida'], "%H:%M")
+                    min_am = (s_hj + timedelta(hours=11)).strftime("%H:%M")
+                    df.loc[idx+1, 'Entrada'] = min_am
+                    df.loc[idx+1, 'Saida'] = (datetime.strptime(min_am, "%H:%M") + timedelta(hours=9, minutes=58)).strftime("%H:%M")
+                
+                st.session_state['escala_ativa'] = df
+                st.rerun()
 
-        st.dataframe(st.session_state['escala_final'], use_container_width=True)
+        st.dataframe(df, use_container_width=True)
 
-# --- ABA 3: DOWNLOAD ---
-with aba3:
-    if st.session_state['escala_final'] is not None:
-        df_exp = st.session_state['escala_final']
+        # Exportação para Excel
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             wb = writer.book
@@ -126,14 +132,15 @@ with aba3:
             ws.cell(1, 1, "Nome")
             for i in range(31):
                 ws.cell(1, i+2, i+1).alignment = Alignment(horizontal="center")
-                ws.cell(2, i+2, df_exp.iloc[i]['Dia']).alignment = Alignment(horizontal="center")
-            ws.cell(3, 1, func_sel); ws.cell(4, 1, "Horário")
-            for i, row in df_exp.iterrows():
+                ws.cell(2, i+2, df.iloc[i]['Dia']).alignment = Alignment(horizontal="center")
+            ws.cell(3, 1, st.session_state['nome_ativo']); ws.cell(4, 1, "Horário")
+            for i, row in df.iterrows():
                 col = i + 2
-                is_f = (row['Status'] == 'Folga')
-                c_e = ws.cell(3, col, "Folga" if is_f else row['Entrada'])
-                c_s = ws.cell(4, col, "" if is_f else row['Saida'])
-                if is_f:
+                folga = (row['Status'] == 'Folga')
+                c_e = ws.cell(3, col, "Folga" if folga else row['Entrada'])
+                c_s = ws.cell(4, col, "" if folga else row['Saida'])
+                if folga:
                     c_e.fill = c_s.fill = red if row['Dia'] == 'dom' else yel
             for c in range(1, 33): ws.column_dimensions[ws.cell(1, c).column_letter].width = 9
-        st.download_button("📥 Baixar Planilha Excel", output.getvalue(), "escala_corrigida.xlsx")
+        
+        st.download_button("📥 Baixar Excel", output.getvalue(), "escala.xlsx")
