@@ -22,17 +22,18 @@ if "password_correct" not in st.session_state:
 if 'db_users' not in st.session_state: st.session_state['db_users'] = []
 if 'historico' not in st.session_state: st.session_state['historico'] = {}
 
-st.title("📅 Gestão de Escala por Categoria")
+st.title("📅 Gestão de Escala Profissional")
 
 aba1, aba2, aba3, aba4 = st.tabs(["👥 1. Cadastro", "📅 2. Gerar Escala", "⚙️ 3. Ajustes", "📥 4. Baixar Excel"])
 
-# --- ABA 1: CADASTRO ---
+# --- ABA 1: CADASTRO COM TEXTO LIVRE ---
 with aba1:
     st.subheader("Cadastrar Novo Funcionário")
     c_cad1, c_cad2 = st.columns(2)
     nome = c_cad1.text_input("Nome do Funcionário")
-    lista_cats = ["Cozinha", "Salão", "Copa", "Limpeza", "Administrativo", "Outros"]
-    categoria = c_cad2.selectbox("Categoria / Alocação", lista_cats)
+    # ALTERADO: Agora é text_input para você escrever o que quiser
+    categoria = c_cad2.text_input("Categoria / Alocação (Digite o setor)")
+    
     h_ent_padrao = st.time_input("Horário Padrão", value=datetime.strptime("06:00", "%H:%M").time())
     
     c1, c2 = st.columns(2)
@@ -43,18 +44,19 @@ with aba1:
         if nome:
             st.session_state['db_users'] = [i for i in st.session_state['db_users'] if i.get('Nome') != nome]
             st.session_state['db_users'].append({
-                "Nome": nome, "Categoria": categoria,
+                "Nome": nome, 
+                "Categoria": categoria if categoria else "Geral",
                 "Entrada": h_ent_padrao.strftime('%H:%M'),
                 "Rod_Sab": f_sab, "Casada": f_cas
             })
-            st.success(f"✅ {nome} salvo!")
+            st.success(f"✅ {nome} salvo em {categoria}!")
 
 # --- ABA 2: GERAR ESCALA ---
 with aba2:
     if st.session_state['db_users']:
         func_sel = st.selectbox("Selecione o Funcionário", [u.get('Nome') for u in st.session_state['db_users']])
         user = next((i for i in st.session_state['db_users'] if i.get("Nome") == func_sel), {})
-        st.info(f"Setor Atual: {user.get('Categoria', 'Não Definido')}")
+        st.info(f"Setor: {user.get('Categoria', 'Geral')}")
         
         if st.button("✨ GERAR ESCALA"):
             datas = pd.date_range(start='2026-03-01', periods=31)
@@ -83,25 +85,27 @@ with aba2:
             st.session_state['historico'][func_sel] = df
             st.table(df)
 
-# --- ABA 3: AJUSTES (EDITAR CATEGORIA E HORÁRIO) ---
+# --- ABA 3: AJUSTES (EDITAR LIVREMENTE) ---
 with aba3:
     if st.session_state['db_users']:
-        st.subheader("Editar Dados e Horários")
-        f_edit = st.selectbox("Escolha o Funcionário para Ajustar:", [u.get('Nome') for u in st.session_state['db_users']])
-        
-        # Editar Categoria
+        st.subheader("Editar Cadastro e Categoria")
+        f_edit = st.selectbox("Escolha quem editar:", [u.get('Nome') for u in st.session_state['db_users']])
         user_idx = next(i for i, u in enumerate(st.session_state['db_users']) if u['Nome'] == f_edit)
-        nova_cat = st.selectbox("Mudar Categoria para:", lista_cats, index=lista_cats.index(st.session_state['db_users'][user_idx].get('Categoria', 'Outros')))
-        if st.button("💾 Salvar Nova Categoria"):
-            st.session_state['db_users'][user_idx]['Categoria'] = nova_cat
-            st.success("Categoria atualizada!")
+        
+        # ALTERADO: Edição de categoria agora é texto livre
+        nova_cat_input = st.text_input("Nova Categoria para este usuário:", value=st.session_state['db_users'][user_idx].get('Categoria', ''))
+        
+        if st.button("💾 Atualizar Categoria"):
+            st.session_state['db_users'][user_idx]['Categoria'] = nova_cat_input
+            st.success("Categoria atualizada com sucesso!")
 
         st.divider()
         if f_edit in st.session_state['historico']:
+            st.subheader("Ajustar Horário do Dia")
             df_e = st.session_state['historico'][f_edit]
-            dia = st.number_input("Dia do Mês para mudar horário", 1, 31)
+            dia = st.number_input("Dia do Mês", 1, 31)
             novo_h = st.time_input("Nova Entrada")
-            if st.button("💾 Aplicar Horário (Descanso 11h10)"):
+            if st.button("💾 Aplicar (Descanso 11h10)"):
                 idx = int(dia - 1)
                 df_e.loc[idx, 'H_Entrada'] = novo_h.strftime("%H:%M")
                 df_e.loc[idx, 'H_Saida'] = (datetime.combine(datetime.today(), novo_h) + timedelta(hours=9, minutes=58)).strftime("%H:%M")
@@ -114,16 +118,15 @@ with aba3:
                             df_e.loc[i, 'H_Entrada'] = minimo.strftime("%H:%M")
                             df_e.loc[i, 'H_Saida'] = (datetime.combine(datetime.today(), minimo) + timedelta(hours=9, minutes=58)).strftime("%H:%M")
                 st.session_state['historico'][f_edit] = df_e
-                st.success("Horário e descansos ajustados!")
+                st.success("Pronto!")
 
 # --- ABA 4: DOWNLOAD ---
 with aba4:
     if st.session_state['historico']:
-        f_nome = st.selectbox("Baixar de:", list(st.session_state['historico'].keys()))
+        f_nome = st.selectbox("Baixar Escala de:", list(st.session_state['historico'].keys()))
         df_final = st.session_state['historico'][f_nome]
-        # Trava para evitar KeyError: Categoria
         u_data = next((u for u in st.session_state['db_users'] if u['Nome'] == f_nome), {})
-        u_cat = u_data.get('Categoria', 'Outros')
+        u_cat = u_data.get('Categoria', 'Geral')
         
         out = io.BytesIO()
         with pd.ExcelWriter(out, engine='openpyxl') as writer:
