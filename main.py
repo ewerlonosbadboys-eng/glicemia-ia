@@ -69,17 +69,24 @@ def gerar_escalas_balanceadas(lista_usuarios):
 with aba1:
     st.subheader("Cadastrar Novo Funcionário")
     c_cad1, c_cad2 = st.columns(2)
-    nome_cad = c_cad1.text_input("Nome do Funcionário")
-    categoria = c_cad2.text_input("Categoria / Alocação")
+    nome_input = c_cad1.text_input("Nome do Funcionário")
+    cat_input = c_cad2.text_input("Categoria / Alocação")
     h_ent_padrao = st.time_input("Horário Padrão", value=datetime.strptime("06:00", "%H:%M").time())
     c1, c2 = st.columns(2)
     f_sab = c1.checkbox("Rodízio de Sábado")
     f_cas = c2.checkbox("Folga Casada (Dom + Seg)")
+    
     if st.button("Salvar no Grupo"):
-        if nome_cad:
-            st.session_state['db_users'] = [i for i in st.session_state['db_users'] if i.get('Nome') != nome_cad]
-            st.session_state['db_users'].append({"Nome": nome_cad, "Categoria": categoria if categoria else "Geral", "Entrada": h_ent_padrao.strftime('%H:%M'), "Rod_Sab": f_sab, "Casada": f_cas, "offset_dom": random.randint(0,1)})
-            st.success(f"✅ {nome_cad} salvo!")
+        if nome_input:
+            contagem = {0: 0, 1: 0}
+            for u in st.session_state['db_users']:
+                o = u.get('offset_dom', 0)
+                contagem[o] += 1
+            novo_offset = 0 if contagem[0] <= contagem[1] else 1
+            
+            st.session_state['db_users'] = [i for i in st.session_state['db_users'] if i.get('Nome') != nome_input]
+            st.session_state['db_users'].append({"Nome": nome_input, "Categoria": cat_input if cat_input else "Geral", "Entrada": h_ent_padrao.strftime('%H:%M'), "Rod_Sab": f_sab, "Casada": f_cas, "offset_dom": novo_offset})
+            st.success(f"✅ {nome_input} salvo!")
 
 # --- ABA 2: GERAR ---
 with aba2:
@@ -88,23 +95,22 @@ with aba2:
             st.session_state['historico'] = gerar_escalas_balanceadas(st.session_state['db_users'])
             st.success("✅ Escalas geradas!")
 
-# --- ABA 3: AJUSTES (ADICIONADO ALTERAR GRUPO) ---
+# --- ABA 3: AJUSTES (ADICIONADO CATEGORIA) ---
 with aba3:
     if st.session_state['db_users'] and st.session_state['historico']:
         f_ed = st.selectbox("Escolha quem editar:", list(st.session_state['historico'].keys()))
         df_e = st.session_state['historico'][f_ed]
         
-        # BUSCA SEGURA DO USUÁRIO
+        # LOCALIZA O USUÁRIO NA MEMÓRIA
         idx_user = next((i for i, u in enumerate(st.session_state['db_users']) if u['Nome'] == f_ed), None)
         u_info = st.session_state['db_users'][idx_user]
 
-        # --- NOVA SEÇÃO: ALTERAR GRUPO ---
-        st.subheader("👥 Alterar Grupo de Domingos")
-        grupo_atual = "Grupo A" if u_info.get('offset_dom') == 0 else "Grupo B"
-        novo_grupo = st.radio(f"Grupo Atual: {grupo_atual}", ["Grupo A (Domingos Pares)", "Grupo B (Domingos Ímpares)"])
-        if st.button("Salvar Novo Grupo"):
-            st.session_state['db_users'][idx_user]['offset_dom'] = 0 if "Grupo A" in novo_grupo else 1
-            st.success("Grupo alterado! Clique em 'Gerar Escala' na Aba 2 para aplicar a todos.")
+        # --- NOVO: TROCA DE CATEGORIA ---
+        st.subheader("🏷️ Alterar Categoria")
+        nova_cat = st.text_input("Nova Categoria/Setor:", value=u_info.get('Categoria', 'Geral'))
+        if st.button("Atualizar Categoria"):
+            st.session_state['db_users'][idx_user]['Categoria'] = nova_cat
+            st.success(f"Categoria de {f_ed} atualizada para {nova_cat}!")
 
         st.divider()
         st.subheader("🔄 Mover Folga (Regra 5x2)")
