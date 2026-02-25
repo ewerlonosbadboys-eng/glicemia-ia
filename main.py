@@ -78,7 +78,7 @@ with aba1:
             st.session_state['db_users'].append({"Nome": nome_in, "Categoria": cat_in if cat_in else "Geral", "Entrada": h_ent_padrao.strftime('%H:%M'), "Rod_Sab": f_sab, "Casada": f_cas, "offset_dom": random.randint(0,1)})
             st.success(f"✅ {nome_in} salvo!")
 
-# --- ABA 2: GERAR (MANTIDA) ---
+# --- ABA 2: GERAR (HISTÓRICO VISUAL) ---
 with aba2:
     st.subheader("👥 Funcionários Cadastrados")
     if st.session_state['db_users']:
@@ -92,7 +92,7 @@ with aba2:
     else:
         st.info("Nenhum funcionário cadastrado.")
 
-# --- ABA 3: AJUSTES (CATEGORIA POR SELEÇÃO) ---
+# --- ABA 3: AJUSTES (COM SELEÇÃO DE CATEGORIA E FIX DE ERRO) ---
 with aba3:
     if st.session_state['db_users'] and st.session_state['historico']:
         f_ed = st.selectbox("Escolha quem editar:", list(st.session_state['historico'].keys()))
@@ -101,14 +101,19 @@ with aba3:
         u_info = st.session_state['db_users'][idx_user]
 
         st.subheader("🏷️ Alterar Categoria")
-        # PEGA APENAS AS CATEGORIAS JÁ EXISTENTES NA LISTA DE USUÁRIOS
-        cats_existentes = sorted(list(set([u['Categoria'] for u in st.session_state['db_users']])))
+        # PROTEÇÃO (.get) para evitar o KeyError que deu erro antes
+        cats_existentes = sorted(list(set([u.get('Categoria', 'Geral') for u in st.session_state['db_users']])))
         
-        nova_cat = st.selectbox("Selecione uma Categoria existente:", options=cats_existentes, index=cats_existentes.index(u_info['Categoria']) if u_info['Categoria'] in cats_existentes else 0)
+        # Seleção entre as categorias já criadas
+        cat_atual = u_info.get('Categoria', 'Geral')
+        nova_cat = st.selectbox("Selecione uma Categoria existente:", 
+                               options=cats_existentes, 
+                               index=cats_existentes.index(cat_atual) if cat_atual in cats_existentes else 0)
         
         if st.button("Atualizar Categoria"):
             st.session_state['db_users'][idx_user]['Categoria'] = nova_cat
-            st.success(f"Categoria de {f_ed} atualizada para {nova_cat}!")
+            st.success(f"Categoria atualizada para {nova_cat}!")
+            st.rerun()
 
         st.divider()
         st.subheader("🔄 Mover Folga (Regra 5x2)")
