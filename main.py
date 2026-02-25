@@ -26,16 +26,41 @@ st.title("📅 Gestão de Escala Profissional")
 
 aba1, aba2, aba3, aba4 = st.tabs(["👥 1. Cadastro", "📅 2. Gerar Escala", "⚙️ 3. Ajustes", "📥 4. Baixar Excel"])
 
-# --- ABA 1: CADASTRO COM TEXTO LIVRE ---
+# --- LÓGICA DE GERAÇÃO (FUNÇÃO INTERNA PARA NÃO REPETIR CÓDIGO) ---
+def gerar_escala_func(user_dict):
+    datas = pd.date_range(start='2026-03-01', periods=31)
+    d_pt = {'Monday':'seg','Tuesday':'ter','Wednesday':'qua','Thursday':'qui','Friday':'sex','Saturday':'sáb','Sunday':'dom'}
+    df = pd.DataFrame({'Data': datas, 'Dia': [d_pt[d.day_name()] for d in datas], 'Status': 'Trabalho'})
+    
+    dom_idx = df[df['Dia'] == 'dom'].index.tolist()
+    for i, d_idx in enumerate(dom_idx):
+        if i % 2 == 1:
+            df.loc[d_idx, 'Status'] = 'Folga'
+            if user_dict.get("Casada") and (d_idx + 1) < 31: df.loc[d_idx + 1, 'Status'] = 'Folga'
+
+    for sem in range(0, 31, 7):
+        bloco = df.iloc[sem:min(sem+7, 31)]
+        meta = 1 if any((bloco['Dia'] == 'dom') & (bloco['Status'] == 'Folga')) else 2
+        atuais = len(bloco[(bloco['Status'] == 'Folga') & (bloco['Dia'] != 'dom')])
+        while atuais < meta:
+            pode = [p for p in bloco[bloco['Status'] == 'Trabalho'].index.tolist() if df.loc[p, 'Dia'] != 'dom']
+            if not user_dict.get("Rod_Sab"): pode = [p for p in pode if df.loc[p, 'Dia'] != 'sáb']
+            p_real = [p for p in pode if not ((p > 0 and df.loc[p-1, 'Status'] == 'Folga') or (p < 30 and df.loc[p+1, 'Status'] == 'Folga'))]
+            if not p_real: break
+            df.loc[random.choice(p_real), 'Status'] = 'Folga'
+            atuais += 1
+    
+    df['H_Entrada'] = user_dict.get("Entrada", "06:00")
+    df['H_Saida'] = [(datetime.strptime(e, "%H:%M") + timedelta(hours=9, minutes=58)).strftime("%H:%M") for e in df['H_Entrada']]
+    return df
+
+# --- ABA 1: CADASTRO ---
 with aba1:
     st.subheader("Cadastrar Novo Funcionário")
     c_cad1, c_cad2 = st.columns(2)
     nome = c_cad1.text_input("Nome do Funcionário")
-    # ALTERADO: Agora é text_input para você escrever o que quiser
-    categoria = c_cad2.text_input("Categoria / Alocação (Digite o setor)")
-    
+    categoria = c_cad2.text_input("Categoria / Alocação (Livre)")
     h_ent_padrao = st.time_input("Horário Padrão", value=datetime.strptime("06:00", "%H:%M").time())
-    
     c1, c2 = st.columns(2)
     f_sab = c1.checkbox("Rodízio de Sábado")
     f_cas = c2.checkbox("Folga Casada (Dom + Seg)")
@@ -44,68 +69,49 @@ with aba1:
         if nome:
             st.session_state['db_users'] = [i for i in st.session_state['db_users'] if i.get('Nome') != nome]
             st.session_state['db_users'].append({
-                "Nome": nome, 
-                "Categoria": categoria if categoria else "Geral",
-                "Entrada": h_ent_padrao.strftime('%H:%M'),
-                "Rod_Sab": f_sab, "Casada": f_cas
+                "Nome": nome, "Categoria": categoria if categoria else "Geral",
+                "Entrada": h_ent_padrao.strftime('%H:%M'), "Rod_Sab": f_sab, "Casada": f_cas
             })
-            st.success(f"✅ {nome} salvo em {categoria}!")
+            st.success(f"✅ {nome} salvo!")
 
-# --- ABA 2: GERAR ESCALA ---
+# --- ABA 2: GERAR ESCALA (INDIVIDUAL E GRUPO) ---
 with aba2:
     if st.session_state['db_users']:
-        func_sel = st.selectbox("Selecione o Funcionário", [u.get('Nome') for u in st.session_state['db_users']])
-        user = next((i for i in st.session_state['db_users'] if i.get("Nome") == func_sel), {})
-        st.info(f"Setor: {user.get('Categoria', 'Geral')}")
+        col_g1, col_g2 = st.columns(2)
         
-        if st.button("✨ GERAR ESCALA"):
-            datas = pd.date_range(start='2026-03-01', periods=31)
-            d_pt = {'Monday':'seg','Tuesday':'ter','Wednesday':'qua','Thursday':'qui','Friday':'sex','Saturday':'sáb','Sunday':'dom'}
-            df = pd.DataFrame({'Data': datas, 'Dia': [d_pt[d.day_name()] for d in datas], 'Status': 'Trabalho'})
-            
-            dom_idx = df[df['Dia'] == 'dom'].index.tolist()
-            for i, d_idx in enumerate(dom_idx):
-                if i % 2 == 1:
-                    df.loc[d_idx, 'Status'] = 'Folga'
-                    if user.get("Casada") and (d_idx + 1) < 31: df.loc[d_idx + 1, 'Status'] = 'Folga'
+        with col_g1:
+            st.subheader("Gerar Individual")
+            func_sel = st.selectbox("Selecione o Funcionário", [u.get('Nome') for u in st.session_state['db_users']])
+            if st.button("✨ GERAR APENAS ESTE"):
+                u_data = next(u for u in st.session_state['db_users'] if u['Nome'] == func_sel)
+                st.session_state['historico'][func_sel] = gerar_escala_func(u_data)
+                st.success(f"Escala de {func_sel} gerada!")
+                st.table(st.session_state['historico'][func_sel])
 
-            for sem in range(0, 31, 7):
-                bloco = df.iloc[sem:min(sem+7, 31)]
-                meta = 1 if any((bloco['Dia'] == 'dom') & (bloco['Status'] == 'Folga')) else 2
-                atuais = len(bloco[(bloco['Status'] == 'Folga') & (bloco['Dia'] != 'dom')])
-                while atuais < meta:
-                    pode = [p for p in bloco[bloco['Status'] == 'Trabalho'].index.tolist() if df.loc[p, 'Dia'] != 'dom']
-                    p_real = [p for p in pode if not ((p > 0 and df.loc[p-1, 'Status'] == 'Folga') or (p < 30 and df.loc[p+1, 'Status'] == 'Folga'))]
-                    if not p_real: break
-                    df.loc[random.choice(p_real), 'Status'] = 'Folga'
-                    atuais += 1
-            
-            df['H_Entrada'] = user.get("Entrada", "06:00")
-            df['H_Saida'] = [(datetime.strptime(e, "%H:%M") + timedelta(hours=9, minutes=58)).strftime("%H:%M") for e in df['H_Entrada']]
-            st.session_state['historico'][func_sel] = df
-            st.table(df)
+        with col_g2:
+            st.subheader("Gerar Todo o Grupo")
+            st.write(f"Total de funcionários: {len(st.session_state['db_users'])}")
+            if st.button("🚀 GERAR ESCALA DE TODOS"):
+                for u in st.session_state['db_users']:
+                    st.session_state['historico'][u['Nome']] = gerar_escala_func(u)
+                st.success(f"✅ Escala de TODOS ({len(st.session_state['db_users'])}) gerada com sucesso!")
 
-# --- ABA 3: AJUSTES (EDITAR LIVREMENTE) ---
+# --- ABA 3: AJUSTES (11h 10m) ---
 with aba3:
     if st.session_state['db_users']:
-        st.subheader("Editar Cadastro e Categoria")
         f_edit = st.selectbox("Escolha quem editar:", [u.get('Nome') for u in st.session_state['db_users']])
-        user_idx = next(i for i, u in enumerate(st.session_state['db_users']) if u['Nome'] == f_edit)
-        
-        # ALTERADO: Edição de categoria agora é texto livre
-        nova_cat_input = st.text_input("Nova Categoria para este usuário:", value=st.session_state['db_users'][user_idx].get('Categoria', ''))
-        
+        u_idx = next(i for i, u in enumerate(st.session_state['db_users']) if u['Nome'] == f_edit)
+        nova_cat = st.text_input("Editar Categoria:", value=st.session_state['db_users'][u_idx].get('Categoria', ''))
         if st.button("💾 Atualizar Categoria"):
-            st.session_state['db_users'][user_idx]['Categoria'] = nova_cat_input
-            st.success("Categoria atualizada com sucesso!")
+            st.session_state['db_users'][u_idx]['Categoria'] = nova_cat
+            st.success("Categoria atualizada!")
 
-        st.divider()
         if f_edit in st.session_state['historico']:
-            st.subheader("Ajustar Horário do Dia")
+            st.divider()
             df_e = st.session_state['historico'][f_edit]
             dia = st.number_input("Dia do Mês", 1, 31)
             novo_h = st.time_input("Nova Entrada")
-            if st.button("💾 Aplicar (Descanso 11h10)"):
+            if st.button("💾 Aplicar Horário"):
                 idx = int(dia - 1)
                 df_e.loc[idx, 'H_Entrada'] = novo_h.strftime("%H:%M")
                 df_e.loc[idx, 'H_Saida'] = (datetime.combine(datetime.today(), novo_h) + timedelta(hours=9, minutes=58)).strftime("%H:%M")
@@ -113,21 +119,19 @@ with aba3:
                     if df_e.loc[i-1, 'Status'] == 'Trabalho':
                         saida_ant = datetime.strptime(df_e.loc[i-1, 'H_Saida'], "%H:%M")
                         minimo = (saida_ant + timedelta(hours=11, minutes=10)).time()
-                        base_ent = datetime.strptime(st.session_state['db_users'][user_idx]['Entrada'], "%H:%M").time()
+                        base_ent = datetime.strptime(st.session_state['db_users'][u_idx]['Entrada'], "%H:%M").time()
                         if minimo > base_ent:
                             df_e.loc[i, 'H_Entrada'] = minimo.strftime("%H:%M")
                             df_e.loc[i, 'H_Saida'] = (datetime.combine(datetime.today(), minimo) + timedelta(hours=9, minutes=58)).strftime("%H:%M")
                 st.session_state['historico'][f_edit] = df_e
-                st.success("Pronto!")
+                st.success("Ajustado!")
 
 # --- ABA 4: DOWNLOAD ---
 with aba4:
     if st.session_state['historico']:
         f_nome = st.selectbox("Baixar Escala de:", list(st.session_state['historico'].keys()))
         df_final = st.session_state['historico'][f_nome]
-        u_data = next((u for u in st.session_state['db_users'] if u['Nome'] == f_nome), {})
-        u_cat = u_data.get('Categoria', 'Geral')
-        
+        u_cat = next((u.get('Categoria', 'Geral') for u in st.session_state['db_users'] if u['Nome'] == f_nome), "Geral")
         out = io.BytesIO()
         with pd.ExcelWriter(out, engine='openpyxl') as writer:
             wb = writer.book
