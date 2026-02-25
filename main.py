@@ -5,7 +5,6 @@ import io
 import random
 from openpyxl.styles import PatternFill, Font, Alignment
 
-# Configuração da página
 st.set_page_config(page_title="Gestor Escala 5x2 Pro", layout="wide")
 
 # 1. Login
@@ -19,7 +18,6 @@ if "password_correct" not in st.session_state:
             st.rerun()
     st.stop()
 
-# Inicialização de memória
 if 'db_users' not in st.session_state: st.session_state['db_users'] = []
 if 'historico' not in st.session_state: st.session_state['historico'] = {}
 
@@ -29,11 +27,7 @@ with aba1:
     st.subheader("Cadastro de Funcionário")
     nome = st.text_input("Nome")
     h_entrada = st.time_input("Entrada", value=datetime.strptime("06:00", "%H:%M").time())
-    
-    # Carga 08:48 + Almoço 01:10 = 09:58 total
-    delta = timedelta(hours=9, minutes=58)
-    h_saida = (datetime.combine(datetime.today(), h_entrada) + delta).time()
-    st.info(f"Saída Calculada: {h_saida.strftime('%H:%M')}")
+    h_saida = (datetime.combine(datetime.today(), h_entrada) + timedelta(hours=9, minutes=58)).time()
     
     c1, c2 = st.columns(2)
     f_sab = c1.checkbox("Rodízio de Sábado")
@@ -46,7 +40,7 @@ with aba1:
                 "Nome": nome, "Entrada": h_entrada.strftime('%H:%M'),
                 "Saida": h_saida.strftime('%H:%M'), "Rod_Sab": f_sab, "Casada": f_cas
             })
-            st.success("Cadastrado com sucesso!")
+            st.success("Cadastrado!")
 
 with aba2:
     if st.session_state['db_users']:
@@ -58,48 +52,61 @@ with aba2:
             
             df = pd.DataFrame({'Data': datas, 'Dia': [d_pt[d.day_name()] for d in datas], 'Status': 'Trabalho'})
             
-            # 1. Domingos 1x1
+            # 1. Definir Domingos (Rodízio 1x1)
             dom_idx = df[df['Dia'] == 'dom'].index.tolist()
             for i, d_idx in enumerate(dom_idx):
-                if i % 2 == 1:
+                if i % 2 == 1: # Domingo de Folga
                     df.loc[d_idx, 'Status'] = 'Folga'
-                    if user.get("Casada") and (d_idx + 1) < 31: df.loc[d_idx + 1, 'Status'] = 'Folga'
+                    if user.get("Casada") and (d_idx + 1) < 31:
+                        df.loc[d_idx + 1, 'Status'] = 'Folga'
 
-            # 2. Folgas Semanais (SEM DUPLA)
-            for sem_start in range(0, 31, 7):
-                while len(df.iloc[sem_start:sem_start+7][df['Status'] == 'Folga']) < 2:
-                    pode = df.iloc[sem_start:sem_start+7][(df['Status'] == 'Trabalho')].index.tolist()
+            # 2. Distribuir Folgas Semanais (Segunda a Sábado)
+            # Analisamos cada bloco de Segunda a Domingo
+            for sem_start in range(1, 31, 7): # Começa na primeira segunda do mês
+                bloco_fim = min(sem_start + 7, 31)
+                dias_semana = df.iloc[sem_start:bloco_fim]
+                
+                # Conta quantas folgas já existem no domingo desse bloco
+                folgas_no_domingo = len(dias_semana[(dias_semana['Dia'] == 'dom') & (dias_semana['Status'] == 'Folga')])
+                
+                # Se folgou no domingo, precisa de +1 folga na semana. Se trabalhou no domingo, precisa de +2 folgas.
+                meta_folgas_semana = 2 if folgas_no_domingo == 0 else 1
+                
+                # Se já tem a folga da segunda (casada), desconta da meta
+                folgas_atuais = len(dias_semana[(dias_semana['Status'] == 'Folga') & (dias_semana['Dia'] != 'dom')])
+                
+                while folgas_atuais < meta_folgas_semana:
+                    # Dias possíveis: Segunda a Sexta (Sábado só se marcado rodízio)
+                    pode = dias_semana[(dias_semana['Status'] == 'Trabalho')].index.tolist()
+                    pode = [p for p in pode if df.loc[p, 'Dia'] not in ['dom']]
                     if not user.get("Rod_Sab"):
                         pode = [p for p in pode if df.loc[p, 'Dia'] != 'sáb']
                     
+                    # Regra crucial: Se NÃO é casada, não pode folgar na segunda após domingo de folga
+                    if not user.get("Casada"):
+                        pode = [p for p in pode if not (df.loc[p, 'Dia'] == 'seg' and df.loc[p-1, 'Status'] == 'Folga' if p > 0 else False)]
+
                     if not pode: break
                     escolha = random.choice(pode)
                     
-                    # Checar vizinhos para evitar folga dupla (exceto se for regra de folga casada já definida)
-                    tem_vizinho_folga = False
-                    if escolha > 0 and df.loc[escolha-1, 'Status'] == 'Folga': tem_vizinho_folga = True
-                    if escolha < 30 and df.loc[escolha+1, 'Status'] == 'Folga': tem_vizinho_folga = True
+                    # Trava anti-dupla na semana
+                    vizinhos_folga = False
+                    if escolha > 0 and df.loc[escolha-1, 'Status'] == 'Folga' and df.loc[escolha-1, 'Dia'] != 'dom': vizinhos_folga = True
+                    if escolha < 30 and df.loc[escolha+1, 'Status'] == 'Folga' and df.loc[escolha+1, 'Dia'] != 'dom': vizinhos_folga = True
                     
-                    if not tem_vizinho_folga:
+                    if not vizinhos_folga:
                         df.loc[escolha, 'Status'] = 'Folga'
+                        folgas_atuais += 1
                     else:
                         pode.remove(escolha)
                         if not pode: break
-
-            # 3. Trava Final de 5 dias corridos
-            cont = 0
-            for i in range(31):
-                cont = cont + 1 if df.loc[i, 'Status'] == 'Trabalho' else 0
-                if cont > 5:
-                    df.loc[i, 'Status'] = 'Folga'
-                    cont = 0
 
             st.session_state['historico'][func_sel] = df
             st.table(df)
 
 with aba3:
     if st.session_state['historico']:
-        f_nome = st.selectbox("Baixar Escala de:", list(st.session_state['historico'].keys()))
+        f_nome = st.selectbox("Escala:", list(st.session_state['historico'].keys()))
         df_h = st.session_state['historico'][f_nome]
         u_info = next((i for i in st.session_state['db_users'] if i.get("Nome") == f_nome), None)
         
@@ -114,27 +121,20 @@ with aba3:
             for i in range(31):
                 ws.cell(1, i+2, i+1).alignment = center
                 ws.cell(2, i+2, df_h.iloc[i]['Dia']).alignment = center
-            
-            ws.cell(3, 1, f_nome)
-            ws.cell(4, 1, "Horário")
+            ws.cell(3, 1, f_nome); ws.cell(4, 1, "Horário")
             
             for i, row in df_h.iterrows():
                 col = i + 2
                 is_f = (row['Status'] == 'Folga')
-                
-                # PROTEÇÃO CONTRA ATTRIBUTEERROR: se u_info for None, usa padrão
                 ent = u_info.get("Entrada", "06:00") if u_info else "06:00"
                 sai = u_info.get("Saida", "15:58") if u_info else "15:58"
                 
                 c_t = ws.cell(3, col, "Folga" if is_f else ent)
                 c_b = ws.cell(4, col, "" if is_f else sai)
                 c_t.alignment = c_b.alignment = center
-                
                 if is_f:
                     cor = red if row['Dia'] == 'dom' else yel
                     c_t.fill = c_b.fill = cor
                     if row['Dia'] == 'dom': c_t.font = c_b.font = white
-            
             for col in range(1, 33): ws.column_dimensions[ws.cell(1, col).column_letter].width = 7
-        
-        st.download_button("📥 Baixar Planilha Excel", out.getvalue(), f"escala_{f_nome}.xlsx")
+        st.download_button("📥 Baixar Excel", out.getvalue(), f"escala_{f_nome}.xlsx")
