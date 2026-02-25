@@ -49,14 +49,14 @@ def gerar_escala_inteligente(lista_usuarios):
                                  not (df.loc[j+1, 'Status'] == 'Folga' if j < 30 else False) and
                                  not (df.loc[j, 'Dia'] == 'sáb' and not user.get("Rod_Sab"))]
                     if possiveis:
-                        # NOVA LÓGICA DE DISTRIBUIÇÃO:
-                        # 1. Conta quantas folgas já existem em cada dia para a CATEGORIA
-                        # 2. Escolhe o dia que tem o MENOR número de folgas acumuladas
+                        # 1. ORGANIZA os dias: os que têm MENOS folgas no grupo vêm primeiro
                         possiveis.sort(key=lambda x: mapa_folgas[x])
+                        
+                        # 2. ESCOLHE o dia que está mais "vazio" na semana do grupo
                         escolhido = possiveis[0]
                         
+                        # 3. GRAVA a folga e ATUALIZA o mapa para o próximo colega ver
                         df.loc[escolhido, 'Status'] = 'Folga'
-                        # REGISTRA A FOLGA: Isso avisa o próximo funcionário que este dia está "ocupado"
                         mapa_folgas[escolhido] += 1
                     else:
                         break
