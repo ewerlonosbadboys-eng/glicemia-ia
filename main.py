@@ -49,16 +49,15 @@ def gerar_escala_inteligente(lista_usuarios):
                                  not (df.loc[j+1, 'Status'] == 'Folga' if j < 30 else False) and
                                  not (df.loc[j, 'Dia'] == 'sáb' and not user.get("Rod_Sab"))]
                     if possiveis:
-            # Organiza: dias com 0 folgas no grupo ficam no começo da lista
+            # Pressione TAB no início das linhas abaixo para alinhá-las:
             possiveis.sort(key=lambda x: mapa_folgas[x]) 
-            
-            # Pega o primeiro da lista (o dia mais vazio)
-            escolhido = possiveis[0] 
-            
+            escolhido = possiveis[0]
             df.loc[escolhido, 'Status'] = 'Folga'
             mapa_folgas[escolhido] += 1
+        else:
             
-                    else: break
+            break
+            
             ents, sais = [], []
             hp = user.get("Entrada", "06:00")
             for m in range(len(df)):
