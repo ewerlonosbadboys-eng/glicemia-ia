@@ -63,4 +63,6 @@ with aba2:
                         df.loc[d_idx + 1, 'Status'] = 'Folga'
 
             for sem in range(0, 31, 7):
-                bloco = df.iloc[sem:min(sem+7,
+                bloco = df.iloc[sem:min(sem+7, 31)]
+                meta = 1 if any((bloco['Dia'] == 'dom') & (bloco['Status'] == 'Folga')) else 2
+                atuais = len(bloco[(bloco['Status'] == 'Folga') & (
