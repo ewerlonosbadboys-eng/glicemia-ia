@@ -49,13 +49,15 @@ def gerar_escala_inteligente(lista_usuarios):
                                  not (df.loc[j+1, 'Status'] == 'Folga' if j < 30 else False) and
                                  not (df.loc[j, 'Dia'] == 'sáb' and not user.get("Rod_Sab"))]
                     if possiveis:
-                        # 1. ORGANIZA os dias: os que têm MENOS folgas no grupo vêm primeiro
-                        possiveis.sort(key=lambda x: mapa_folgas[x])
+                        # 1. Primeiro, identifica qual o menor número de folgas que algum dia tem
+                        menor_carga = min(mapa_folgas[d] for d in possiveis)
                         
-                        # 2. ESCOLHE o dia que está mais "vazio" na semana do grupo
-                        escolhido = possiveis[0]
+                        # 2. Filtra apenas os dias que estão com esse menor número (os mais vazios)
+                        melhores_dias = [d for d in possiveis if mapa_folgas[d] == menor_carga]
                         
-                        # 3. GRAVA a folga e ATUALIZA o mapa para o próximo colega ver
+                        # 3. Sorteia um desses melhores dias para não ficar todo mundo igual
+                        escolhido = random.choice(melhores_dias)
+                        
                         df.loc[escolhido, 'Status'] = 'Folga'
                         mapa_folgas[escolhido] += 1
                     else:
