@@ -5,7 +5,7 @@ import io
 import random
 from openpyxl.styles import PatternFill, Font, Alignment
 
-st.set_page_config(page_title="Gestor Escala Profissional 2026", layout="wide")
+st.set_page_config(page_title="Gestor Escala 2026", layout="wide")
 
 # --- 1. LOGIN ---
 if "password_correct" not in st.session_state:
@@ -18,19 +18,23 @@ if "password_correct" not in st.session_state:
             st.rerun()
     st.stop()
 
-# --- 2. MEMÓRIA DO GRUPO ---
+# --- 2. MEMÓRIA ---
 if 'db_users' not in st.session_state: st.session_state['db_users'] = []
 if 'historico' not in st.session_state: st.session_state['historico'] = {}
 
-st.title("📅 Gestão de Escala 5x2")
+st.title("📅 Gestão de Escala por Categoria")
 
 aba1, aba2, aba3, aba4 = st.tabs(["👥 1. Cadastro", "📅 2. Gerar Escala", "⚙️ 3. Ajustes Específicos", "📥 4. Baixar Excel"])
 
-# --- ABA 1: CADASTRO ---
+# --- ABA 1: CADASTRO COM CATEGORIA ---
 with aba1:
-    st.subheader("Cadastrar no Grupo")
-    nome = st.text_input("Nome do Funcionário")
+    st.subheader("Cadastrar Novo Funcionário")
+    c_cad1, c_cad2 = st.columns(2)
+    nome = c_cad1.text_input("Nome do Funcionário")
+    categoria = c_cad2.selectbox("Categoria / Alocação", ["Cozinha", "Salão", "Copa", "Limpeza", "Administrativo", "Outros"])
+    
     h_ent_padrao = st.time_input("Horário Padrão", value=datetime.strptime("06:00", "%H:%M").time())
+    
     c1, c2 = st.columns(2)
     f_sab = c1.checkbox("Rodízio de Sábado")
     f_cas = c2.checkbox("Folga Casada (Dom + Seg)")
@@ -39,23 +43,26 @@ with aba1:
         if nome:
             st.session_state['db_users'] = [i for i in st.session_state['db_users'] if i.get('Nome') != nome]
             st.session_state['db_users'].append({
-                "Nome": nome, "Entrada": h_ent_padrao.strftime('%H:%M'),
-                "Rod_Sab": f_sab, "Casada": f_cas
+                "Nome": nome, 
+                "Categoria": categoria,
+                "Entrada": h_ent_padrao.strftime('%H:%M'),
+                "Rod_Sab": f_sab, 
+                "Casada": f_cas
             })
-            st.success(f"✅ {nome} adicionado ao grupo!")
+            st.success(f"✅ {nome} cadastrado na categoria {categoria}!")
 
 # --- ABA 2: GERAR ESCALA ---
 with aba2:
     if st.session_state['db_users']:
         func_sel = st.selectbox("Selecione o Funcionário", [u.get('Nome') for u in st.session_state['db_users']])
+        user = next((i for i in st.session_state['db_users'] if i.get("Nome") == func_sel), {})
+        st.info(f"Setor: {user.get('Categoria')}")
+        
         if st.button("✨ GERAR ESCALA"):
             datas = pd.date_range(start='2026-03-01', periods=31)
             d_pt = {'Monday':'seg','Tuesday':'ter','Wednesday':'qua','Thursday':'qui','Friday':'sex','Saturday':'sáb','Sunday':'dom'}
-            user = next((i for i in st.session_state['db_users'] if i.get("Nome") == func_sel), {})
-            
             df = pd.DataFrame({'Data': datas, 'Dia': [d_pt[d.day_name()] for d in datas], 'Status': 'Trabalho'})
             
-            # Domingos 1x1
             dom_idx = df[df['Dia'] == 'dom'].index.tolist()
             for i, d_idx in enumerate(dom_idx):
                 if i % 2 == 1:
@@ -63,21 +70,15 @@ with aba2:
                     if user.get("Casada") and (d_idx + 1) < 31:
                         df.loc[d_idx + 1, 'Status'] = 'Folga'
 
-            # Folgas Semanais
             for sem in range(0, 31, 7):
                 bloco = df.iloc[sem:min(sem+7, 31)]
-                tem_dom_folga = any((bloco['Dia'] == 'dom') & (bloco['Status'] == 'Folga'))
-                meta = 1 if tem_dom_folga else 2
+                meta = 1 if any((bloco['Dia'] == 'dom') & (bloco['Status'] == 'Folga')) else 2
                 atuais = len(bloco[(bloco['Status'] == 'Folga') & (bloco['Dia'] != 'dom')])
-                
                 while atuais < meta:
                     pode = [p for p in bloco[bloco['Status'] == 'Trabalho'].index.tolist() if df.loc[p, 'Dia'] != 'dom']
-                    pode_real = []
-                    for p in pode:
-                        vizinho = (p > 0 and df.loc[p-1, 'Status'] == 'Folga') or (p < 30 and df.loc[p+1, 'Status'] == 'Folga')
-                        if not vizinho: pode_real.append(p)
-                    if not pode_real: break
-                    df.loc[random.choice(pode_real), 'Status'] = 'Folga'
+                    p_real = [p for p in pode if not ((p > 0 and df.loc[p-1, 'Status'] == 'Folga') or (p < 30 and df.loc[p+1, 'Status'] == 'Folga'))]
+                    if not p_real: break
+                    df.loc[random.choice(p_real), 'Status'] = 'Folga'
                     atuais += 1
             
             df['H_Entrada'] = user.get("Entrada", "06:00")
@@ -106,28 +107,31 @@ with aba3:
                         df_e.loc[i, 'H_Entrada'] = minimo.strftime("%H:%M")
                         df_e.loc[i, 'H_Saida'] = (datetime.combine(datetime.today(), minimo) + timedelta(hours=9, minutes=58)).strftime("%H:%M")
             st.session_state['historico'][f_edit] = df_e
-            st.success("Ajustado com 11h10 de descanso!")
+            st.success("Ajustado!")
 
 # --- ABA 4: DOWNLOAD ---
 with aba4:
     if st.session_state['historico']:
         f_nome = st.selectbox("Baixar de:", list(st.session_state['historico'].keys()))
         df_final = st.session_state['historico'][f_nome]
+        u_cat = next(u['Categoria'] for u in st.session_state['db_users'] if u['Nome'] == f_nome)
         out = io.BytesIO()
         with pd.ExcelWriter(out, engine='openpyxl') as writer:
             wb = writer.book
             ws = wb.create_sheet("Escala", index=0)
             red, yel = PatternFill(start_color="FF0000", fill_type="solid"), PatternFill(start_color="FFFF00", fill_type="solid")
             center = Alignment(horizontal="center", vertical="center")
-            ws.cell(1, 1, "Nome")
+            ws.cell(1, 1, "Categoria").font = Font(bold=True)
+            ws.cell(1, 2, u_cat)
+            ws.cell(2, 1, "Nome").font = Font(bold=True)
+            ws.cell(2, 2, f_nome)
             for i in range(31):
-                ws.cell(1, i+2, i+1).alignment = center
-                ws.cell(2, i+2, df_final.iloc[i]['Dia']).alignment = center
-            ws.cell(3, 1, f_nome); ws.cell(4, 1, "Horário")
+                ws.cell(3, i+2, i+1).alignment = center
+                ws.cell(4, i+2, df_final.iloc[i]['Dia']).alignment = center
             for i, row in df_final.iterrows():
                 col = i + 2
                 is_f = (row['Status'] == 'Folga')
-                c_e, c_s = ws.cell(3, col, "Folga" if is_f else row['H_Entrada']), ws.cell(4, col, "" if is_f else row['H_Saida'])
+                c_e = ws.cell(5, col, "Folga" if is_f else row['H_Entrada'])
+                c_s = ws.cell(6, col, "" if is_f else row['H_Saida'])
                 if is_f: c_e.fill = c_s.fill = red if row['Dia'] == 'dom' else yel
-            for c in range(1, 33): ws.column_dimensions[ws.cell(1, c).column_letter].width = 10
         st.download_button("📥 BAIXAR EXCEL", out.getvalue(), f"escala_{f_nome}.xlsx")
