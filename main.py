@@ -57,4 +57,55 @@ with aba3:
     st.subheader("Gerar Escala")
     if st.session_state['db_users']:
         funcionario = st.selectbox("Funcionário", [u['Nome'] for u in st.session_state['db_users']])
-        if st.button("
+        if st.button("✨ GERAR ESCALA"):
+            datas = pd.date_range(start='2026-03-01', periods=31)
+            # Tradução manual para evitar inglês
+            dias_map = {'Monday': 'Segunda', 'Tuesday': 'Terça', 'Wednesday': 'Quarta', 
+                        'Thursday': 'Quinta', 'Friday': 'Sexta', 'Saturday': 'Sábado', 'Sunday': 'Domingo'}
+            
+            df = pd.DataFrame({
+                'Data': datas.strftime('%d/%m/%Y'),
+                'Dia': [dias_map[d] for d in datas.day_name()],
+                'Status': 'Trabalho'
+            })
+            
+            # Busca dados do funcionário
+            dados_f = next(item for item in st.session_state['db_users'] if item["Nome"] == funcionario)
+            
+            # Regras de Folga
+            df.loc[df['Dia'] == 'Domingo', 'Status'] = 'Folga'
+            
+            # SÓ APLICA FOLGA CONSECUTIVA SE ESTIVER MARCADO NO CADASTRO
+            if dados_f["Casada"]:
+                for i in range(len(df)-1):
+                    if df.loc[i, 'Dia'] == 'Domingo':
+                        df.loc[i+1, 'Status'] = 'Folga'
+            
+            st.session_state['historico'][f"{funcionario} - Março"] = df
+            st.table(df)
+
+with aba4:
+    st.subheader("📜 Histórico")
+    if st.session_state['historico']:
+        sel = st.selectbox("Ver Escala", list(st.session_state['historico'].keys()))
+        df_h = st.session_state['historico'][sel]
+        st.table(df_h)
+        
+        # Exportação Excel Colorida
+        from openpyxl.styles import PatternFill, Font
+        out = io.BytesIO()
+        with pd.ExcelWriter(out, engine='openpyxl') as writer:
+            df_h.to_excel(writer, index=False, sheet_name='Escala')
+            ws = writer.sheets['Escala']
+            cf = PatternFill(start_color="FFFF00", fill_type="solid") # Amarelo
+            cd = PatternFill(start_color="FF0000", fill_type="solid") # Vermelho
+            for r in range(2, len(df_h) + 2):
+                dia = ws.cell(r, 2).value
+                stt = ws.cell(r, 3).value
+                if dia == 'Domingo':
+                    for c in range(1, 4):
+                        ws.cell(r, c).fill = cd
+                        ws.cell(r, c).font = Font(color="FFFFFF", bold=True)
+                elif stt == 'Folga':
+                    for c in range(1, 4): ws.cell(r, c).fill = cf
+        st.download_button("📥 Baixar Excel", out.getvalue(), "escala.xlsx")
