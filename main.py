@@ -22,11 +22,11 @@ if "password_correct" not in st.session_state:
 if 'db_users' not in st.session_state: st.session_state['db_users'] = []
 if 'historico' not in st.session_state: st.session_state['historico'] = {}
 
-st.title("📅 Gestão de Escala - Sistema Completo")
+st.title("📅 Gestão de Escala - Regra Sábado Útil")
 
 aba1, aba2, aba3, aba4 = st.tabs(["👥 1. Cadastro", "📅 2. Gerar Escala", "⚙️ 3. Ajustes", "📥 4. Baixar Excel"])
 
-# --- LÓGICA DE GERAÇÃO COM TRAVA RÍGIDA 5x1 ---
+# --- LÓGICA DE GERAÇÃO COM BLOQUEIO DE SÁBADO ---
 def gerar_escalas_balanceadas(lista_usuarios):
     datas = pd.date_range(start='2026-03-01', periods=31)
     d_pt = {'Monday':'seg','Tuesday':'ter','Wednesday':'qua','Thursday':'qui','Friday':'sex','Saturday':'sáb','Sunday':'dom'}
@@ -38,7 +38,7 @@ def gerar_escalas_balanceadas(lista_usuarios):
         nome = user['Nome']
         df = pd.DataFrame({'Data': datas, 'Dia': [d_pt[d.day_name()] for d in datas], 'Status': 'Trabalho'})
         
-        # 1. Domingos (1x1)
+        # 1. Domingos (Regra 1x1)
         dom_idx = df[df['Dia'] == 'dom'].index.tolist()
         offset_dom = user.get('offset_dom', idx % 2) 
         for i, d_idx in enumerate(dom_idx):
@@ -47,21 +47,30 @@ def gerar_escalas_balanceadas(lista_usuarios):
                 if user.get("Casada") and (d_idx + 1) < 31:
                     df.loc[d_idx + 1, 'Status'] = 'Folga'
 
-        # 2. Trava de 5 dias (Não pode trabalhar mais que 5 dias direto)
+        # 2. Trava de 5 dias + Bloqueio de Sábado
         contador = 0
         for i in range(len(df)):
             if df.loc[i, 'Status'] == 'Trabalho':
                 contador += 1
             else:
                 contador = 0
+            
             if contador > 5:
-                df.loc[i, 'Status'] = 'Folga'
-                contador = 0
+                # Se cair no Sábado e NÃO tiver rodízio, pula a folga pro próximo dia disponível (Domingo)
+                if df.loc[i, 'Dia'] == 'sáb' and not user.get("Rod_Sab"):
+                    if (i + 1) < len(df):
+                        df.loc[i+1, 'Status'] = 'Folga'
+                        contador = 0
+                else:
+                    df.loc[i, 'Status'] = 'Folga'
+                    contador = 0
 
-        # 3. Escada (Apenas se a semana não tiver folga e trabalhou domingo)
-        dias_possiveis = ['seg', 'ter', 'qua', 'qui', 'sex']
-        if user.get("Rod_Sab"): dias_possiveis.append('sáb')
-        dia_fixo = dias_possiveis[idx % len(dias_possiveis)]
+        # 3. Folga Semanal (Escada) - APENAS SE A SEMANA NÃO TEM FOLGA
+        # Dias permitidos para folga automática
+        dias_permitidos = ['seg', 'ter', 'qua', 'qui', 'sex']
+        if user.get("Rod_Sab"): dias_permitidos.append('sáb')
+        
+        dia_fixo = dias_permitidos[idx % len(dias_permitidos)]
 
         for sem in range(0, len(df), 7):
             semana = df.iloc[sem:sem+7]
@@ -81,11 +90,11 @@ with aba1:
     c1, c2 = st.columns(2)
     n_in = c1.text_input("Nome")
     cat_in = c2.text_input("Categoria")
-    h_in = st.time_input("Entrada Padrão", value=datetime.strptime("06:00", "%H:%M").time())
+    h_in = st.time_input("Entrada", value=datetime.strptime("06:00", "%H:%M").time())
     col1, col2 = st.columns(2)
     s_in = col1.checkbox("Rodízio de Sábado")
-    c_in = col2.checkbox("Folga Casada")
-    if st.button("Salvar Funcionário"):
+    c_in = col2.checkbox("Folga Casada (Dom+Seg)")
+    if st.button("Salvar"):
         st.session_state['db_users'] = [i for i in st.session_state['db_users'] if i.get('Nome') != n_in]
         st.session_state['db_users'].append({"Nome": n_in, "Categoria": cat_in, "Entrada": h_in.strftime('%H:%M'), "Rod_Sab": s_in, "Casada": c_in, "offset_dom": random.randint(0,1)})
         st.success("Salvo!")
@@ -94,20 +103,20 @@ with aba2:
     if st.session_state['db_users']:
         if st.button("🚀 GERAR ESCALA"):
             st.session_state['historico'] = gerar_escalas_balanceadas(st.session_state['db_users'])
-            st.success("Gerado!")
+            st.success("Escala Gerada!")
 
-with aba3: # AJUSTES COMPLETOS RESTAURADOS
+with aba3: # AJUSTES COMPLETOS
     if st.session_state['historico']:
-        f_ed = st.selectbox("Selecione para editar:", list(st.session_state['historico'].keys()))
+        f_ed = st.selectbox("Editar funcionário:", list(st.session_state['historico'].keys()))
         df_e = st.session_state['historico'][f_ed]
         idx_u = next(i for i, u in enumerate(st.session_state['db_users']) if u['Nome'] == f_ed)
         u_info = st.session_state['db_users'][idx_u]
 
-        col_a1, col_a2 = st.columns(2)
-        with col_a1:
+        col_a, col_b = st.columns(2)
+        with col_a:
             st.subheader("🏷️ Categoria")
-            n_cat = st.text_input("Mudar Categoria:", value=u_info['Categoria'])
-            if st.button("Atualizar Categoria"):
+            n_cat = st.text_input("Nova Categoria:", value=u_info['Categoria'])
+            if st.button("Mudar Categoria"):
                 st.session_state['db_users'][idx_u]['Categoria'] = n_cat
                 st.rerun()
 
@@ -115,7 +124,7 @@ with aba3: # AJUSTES COMPLETOS RESTAURADOS
             folgas = df_e[df_e['Status'] == 'Folga'].index.tolist()
             d_v = st.selectbox("Tirar folga do dia:", [d+1 for d in folgas])
             d_n = st.number_input("Colocar no dia:", 1, 31)
-            if st.button("Trocar Folga"):
+            if st.button("Confirmar Troca"):
                 df_e.loc[d_v-1, 'Status'], df_e.loc[d_n-1, 'Status'] = 'Trabalho', 'Folga'
                 df_e.loc[d_v-1, 'H_Entrada'] = u_info['Entrada']
                 df_e.loc[d_v-1, 'H_Saida'] = (datetime.strptime(u_info['Entrada'], "%H:%M") + timedelta(hours=9, minutes=58)).strftime("%H:%M")
@@ -123,18 +132,18 @@ with aba3: # AJUSTES COMPLETOS RESTAURADOS
                 st.session_state['historico'][f_ed] = df_e
                 st.success("Trocado!"); st.rerun()
 
-        with col_a2:
-            st.subheader("🕒 Horário")
+        with col_b:
+            st.subheader("🕒 Horário Individual")
             dia_h = st.number_input("Dia:", 1, 31)
             n_h = st.time_input("Novo Horário:")
-            if st.button("Ajustar Horário"):
+            if st.button("Aplicar Horário"):
                 df_e.loc[dia_h-1, 'H_Entrada'] = n_h.strftime("%H:%M")
                 df_e.loc[dia_h-1, 'H_Saida'] = (datetime.combine(datetime.today(), n_h) + timedelta(hours=9, minutes=58)).strftime("%H:%M")
                 st.session_state['historico'][f_ed] = df_e
                 st.success("Ajustado!")
 
             st.subheader("➕ Folga Extra")
-            dia_ex = st.number_input("Adicionar folga no dia:", 1, 31, key="ex")
+            dia_ex = st.number_input("Dia da folga extra:", 1, 31, key="extra")
             if st.button("Adicionar"):
                 df_e.loc[dia_ex-1, 'Status'] = 'Folga'
                 df_e.loc[dia_ex-1, 'H_Entrada'], df_e.loc[dia_ex-1, 'H_Saida'] = "", ""
@@ -148,8 +157,7 @@ with aba4:
             with pd.ExcelWriter(out, engine='openpyxl') as writer:
                 wb = writer.book
                 ws = wb.create_sheet("Escala")
-                red = PatternFill(start_color="FF0000", end_color="FF0000", patternType="solid")
-                yel = PatternFill(start_color="FFFF00", end_color="FFFF00", patternType="solid")
+                red, yel = PatternFill(start_color="FF0000", end_color="FF0000", patternType="solid"), PatternFill(start_color="FFFF00", end_color="FFFF00", patternType="solid")
                 border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
                 
                 df_ref = list(st.session_state['historico'].values())[0]
@@ -173,4 +181,4 @@ with aba4:
                         c1.alignment = c2.alignment = Alignment(horizontal="center")
                         if is_f: c1.fill = c2.fill = red if row['Dia'] == 'dom' else yel
                     row_idx += 2
-            st.download_button("Salvar Excel", out.getvalue(), "escala_completa.xlsx")
+            st.download_button("Salvar Arquivo Excel", out.getvalue(), "escala_2026.xlsx")
