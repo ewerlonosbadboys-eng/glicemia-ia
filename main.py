@@ -26,7 +26,7 @@ st.title("📅 Gestão de Escala com Troca de Folgas")
 
 aba1, aba2, aba3, aba4 = st.tabs(["👥 1. Cadastro", "📅 2. Gerar Escala", "⚙️ 3. Ajustes", "📥 4. Baixar Excel"])
 
-# --- LÓGICA DE GERAÇÃO (MANTIDA) ---
+# --- LÓGICA DE GERAÇÃO ---
 def gerar_escalas_balanceadas(lista_usuarios):
     datas = pd.date_range(start='2026-03-01', periods=31)
     d_pt = {'Monday':'seg','Tuesday':'ter','Wednesday':'qua','Thursday':'qui','Friday':'sex','Saturday':'sáb','Sunday':'dom'}
@@ -90,7 +90,7 @@ with aba2:
             st.session_state['historico'] = gerar_escalas_balanceadas(st.session_state['db_users'])
             st.success("✅ Escalas geradas!")
 
-# --- ABA 3: AJUSTES (COM REGRA DE DOMINGOS AUTOMÁTICA) ---
+# --- ABA 3: AJUSTES (COM INCLUIR FOLGA) ---
 with aba3:
     if st.session_state['db_users'] and st.session_state['historico']:
         f_ed = st.selectbox("Escolha quem editar:", list(st.session_state['historico'].keys()))
@@ -107,46 +107,61 @@ with aba3:
             st.success("Categoria atualizada!"); st.rerun()
 
         st.divider()
-        st.subheader("🔄 Mover Folga (Regra 5x2 + Domingos)")
-        folgas_atuais = df_e[df_e['Status'] == 'Folga'].index.tolist()
-        dia_folga_velho = st.selectbox("Tirar folga do dia:", [d+1 for d in folgas_atuais])
-        dia_folga_novo = st.number_input("Colocar folga no dia:", 1, 31, value=1)
+        st.subheader("📅 Gestão de Folgas")
         
-        if st.button("Confirmar Troca de Folga"):
-            idx_v, idx_n = dia_folga_velho - 1, dia_folga_novo - 1
+        col_f1, col_f2 = st.columns(2)
+        
+        with col_f1:
+            st.markdown("**🔄 Mover Folga Existente**")
+            folgas_atuais = df_e[df_e['Status'] == 'Folga'].index.tolist()
+            dia_v = st.selectbox("Tirar folga do dia:", [d+1 for d in folgas_atuais], key="mv_v")
+            dia_n = st.number_input("Colocar folga no dia:", 1, 31, value=1, key="mv_n")
             
-            # --- REGRA DE DOMINGO PROPAGADO ---
-            if df_e.loc[idx_n, 'Dia'] == 'dom' or df_e.loc[idx_v, 'Dia'] == 'dom':
-                # Se mudou um domingo, recalcula todos os domingos do mês para esse usuário
-                dom_indices = df_e[df_e['Dia'] == 'dom'].index.tolist()
-                # Define o novo offset baseado no dia que o usuário escolheu colocar folga
-                primeiro_dom_folga = idx_n if df_e.loc[idx_n, 'Dia'] == 'dom' else (dom_indices[1] if dom_indices[0] == idx_v else dom_indices[0])
+            if st.button("Confirmar Troca de Folga"):
+                idx_v, idx_n = dia_v - 1, dia_n - 1
                 
-                for i, d_idx in enumerate(dom_indices):
-                    # Se o índice do domingo atual for o alvo ou seguir o padrão 1x1
-                    is_folga = (d_idx == idx_n) or (abs(d_idx - idx_n) % 14 == 0)
-                    if is_folga:
-                        df_e.loc[d_idx, 'Status'] = 'Folga'
-                        df_e.loc[d_idx, 'H_Entrada'] = ""
-                        df_e.loc[d_idx, 'H_Saida'] = ""
-                    else:
-                        df_e.loc[d_idx, 'Status'] = 'Trabalho'
-                        df_e.loc[d_idx, 'H_Entrada'] = u_info['Entrada']
-                        df_e.loc[d_idx, 'H_Saida'] = (datetime.strptime(u_info['Entrada'], "%H:%M") + timedelta(hours=9, minutes=58)).strftime("%H:%M")
-                st.success("Domingos reorganizados automaticamente!")
-            
-            # --- TROCA PADRÃO PARA DIAS ÚTEIS ---
-            else:
-                df_e.loc[idx_v, 'Status'] = 'Trabalho'
-                df_e.loc[idx_v, 'H_Entrada'] = u_info['Entrada']
-                df_e.loc[idx_v, 'H_Saida'] = (datetime.strptime(u_info['Entrada'], "%H:%M") + timedelta(hours=9, minutes=58)).strftime("%H:%M")
-                df_e.loc[idx_n, 'Status'], df_e.loc[idx_n, 'H_Entrada'], df_e.loc[idx_n, 'H_Saida'] = 'Folga', "", ""
+                # Regra de Domingos (Propagação)
+                if df_e.loc[idx_n, 'Dia'] == 'dom' or df_e.loc[idx_v, 'Dia'] == 'dom':
+                    dom_indices = df_e[df_e['Dia'] == 'dom'].index.tolist()
+                    for d_idx in dom_indices:
+                        is_folga = (d_idx == idx_n) or (abs(d_idx - idx_n) % 14 == 0)
+                        df_e.loc[d_idx, 'Status'] = 'Folga' if is_folga else 'Trabalho'
+                        df_e.loc[d_idx, 'H_Entrada'] = "" if is_folga else u_info['Entrada']
+                        df_e.loc[d_idx, 'H_Saida'] = "" if is_folga else (datetime.strptime(u_info['Entrada'], "%H:%M") + timedelta(hours=9, minutes=58)).strftime("%H:%M")
+                else:
+                    df_e.loc[idx_v, 'Status'] = 'Trabalho'
+                    df_e.loc[idx_v, 'H_Entrada'] = u_info['Entrada']
+                    df_e.loc[idx_v, 'H_Saida'] = (datetime.strptime(u_info['Entrada'], "%H:%M") + timedelta(hours=9, minutes=58)).strftime("%H:%M")
+                    df_e.loc[idx_n, 'Status'], df_e.loc[idx_n, 'H_Entrada'], df_e.loc[idx_n, 'H_Saida'] = 'Folga', "", ""
+                
+                st.session_state['historico'][f_ed] = df_e
+                st.success("Folga movida!"); st.rerun()
 
-            st.session_state['historico'][f_ed] = df_e
-            st.success("Folga movida!"); st.rerun()
+        with col_f2:
+            st.markdown("**➕ Incluir Folga Extra**")
+            dia_extra = st.number_input("Dia para adicionar folga:", 1, 31, value=1, key="inc_f")
+            
+            if st.button("Adicionar Folga Extra"):
+                idx_e = dia_extra - 1
+                
+                # Se for domingo, aplica a regra de propagação 1x1
+                if df_e.loc[idx_e, 'Dia'] == 'dom':
+                    dom_indices = df_e[df_e['Dia'] == 'dom'].index.tolist()
+                    for d_idx in dom_indices:
+                        is_folga = (d_idx == idx_e) or (abs(d_idx - idx_e) % 14 == 0)
+                        df_e.loc[d_idx, 'Status'] = 'Folga' if is_folga else 'Trabalho'
+                        df_e.loc[d_idx, 'H_Entrada'] = "" if is_folga else u_info['Entrada']
+                        df_e.loc[d_idx, 'H_Saida'] = "" if is_folga else (datetime.strptime(u_info['Entrada'], "%H:%M") + timedelta(hours=9, minutes=58)).strftime("%H:%M")
+                else:
+                    df_e.loc[idx_e, 'Status'] = 'Folga'
+                    df_e.loc[idx_e, 'H_Entrada'] = ""
+                    df_e.loc[idx_e, 'H_Saida'] = ""
+                
+                st.session_state['historico'][f_ed] = df_e
+                st.success(f"Folga adicionada no dia {dia_extra}!"); st.rerun()
 
         st.divider()
-        st.subheader("🕒 Ajustar Horário")
+        st.subheader("🕒 Ajustar Horário Individual")
         dia_h = st.number_input("Dia para mudar", 1, 31)
         n_h = st.time_input("Novo Horário")
         if st.button("Aplicar Horário"):
