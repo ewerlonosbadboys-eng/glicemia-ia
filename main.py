@@ -62,7 +62,7 @@ def gerar_escalas_balanceadas(lista_usuarios):
         novo_historico[nome] = df
     return novo_historico
 
-# --- ABA 1: CADASTRO (MANTIDA) ---
+# --- ABA 1: CADASTRO ---
 with aba1:
     st.subheader("Cadastrar Novo Funcionário")
     c_cad1, c_cad2 = st.columns(2)
@@ -78,7 +78,7 @@ with aba1:
             st.session_state['db_users'].append({"Nome": nome_in, "Categoria": cat_in if cat_in else "Geral", "Entrada": h_ent_padrao.strftime('%H:%M'), "Rod_Sab": f_sab, "Casada": f_cas, "offset_dom": random.randint(0,1)})
             st.success(f"✅ {nome_in} salvo!")
 
-# --- ABA 2: GERAR (HISTÓRICO VISUAL) ---
+# --- ABA 2: GERAR ---
 with aba2:
     st.subheader("👥 Funcionários Cadastrados")
     if st.session_state['db_users']:
@@ -89,10 +89,8 @@ with aba2:
         if st.button("🚀 GERAR ESCALA BALANCEADA PARA TODOS"):
             st.session_state['historico'] = gerar_escalas_balanceadas(st.session_state['db_users'])
             st.success("✅ Escalas geradas!")
-    else:
-        st.info("Nenhum funcionário cadastrado.")
 
-# --- ABA 3: AJUSTES (COM SELEÇÃO DE CATEGORIA E FIX DE ERRO) ---
+# --- ABA 3: AJUSTES (COM REGRA DE DOMINGOS AUTOMÁTICA) ---
 with aba3:
     if st.session_state['db_users'] and st.session_state['historico']:
         f_ed = st.selectbox("Escolha quem editar:", list(st.session_state['historico'].keys()))
@@ -101,42 +99,51 @@ with aba3:
         u_info = st.session_state['db_users'][idx_user]
 
         st.subheader("🏷️ Alterar Categoria")
-        # PROTEÇÃO (.get) para evitar o KeyError que deu erro antes
         cats_existentes = sorted(list(set([u.get('Categoria', 'Geral') for u in st.session_state['db_users']])))
-        
-        # Seleção entre as categorias já criadas
         cat_atual = u_info.get('Categoria', 'Geral')
-        nova_cat = st.selectbox("Selecione uma Categoria existente:", 
-                               options=cats_existentes, 
-                               index=cats_existentes.index(cat_atual) if cat_atual in cats_existentes else 0)
-        
+        nova_cat = st.selectbox("Selecione uma Categoria:", cats_existentes, index=cats_existentes.index(cat_atual) if cat_atual in cats_existentes else 0)
         if st.button("Atualizar Categoria"):
             st.session_state['db_users'][idx_user]['Categoria'] = nova_cat
-            st.success(f"Categoria atualizada para {nova_cat}!")
-            st.rerun()
+            st.success("Categoria atualizada!"); st.rerun()
 
         st.divider()
-        st.subheader("🔄 Mover Folga (Regra 5x2)")
+        st.subheader("🔄 Mover Folga (Regra 5x2 + Domingos)")
         folgas_atuais = df_e[df_e['Status'] == 'Folga'].index.tolist()
         dia_folga_velho = st.selectbox("Tirar folga do dia:", [d+1 for d in folgas_atuais])
         dia_folga_novo = st.number_input("Colocar folga no dia:", 1, 31, value=1)
+        
         if st.button("Confirmar Troca de Folga"):
             idx_v, idx_n = dia_folga_velho - 1, dia_folga_novo - 1
-            temp_df = df_e.copy()
-            temp_df.loc[idx_v, 'Status'], temp_df.loc[idx_n, 'Status'] = 'Trabalho', 'Folga'
-            contagem, valido = 0, True
-            for s in temp_df['Status']:
-                contagem = contagem + 1 if s == 'Trabalho' else 0
-                if contagem > 5: valido = False; break
-            if not valido:
-                st.error("⚠️ Erro: Bloco maior que 5 dias detectado!")
+            
+            # --- REGRA DE DOMINGO PROPAGADO ---
+            if df_e.loc[idx_n, 'Dia'] == 'dom' or df_e.loc[idx_v, 'Dia'] == 'dom':
+                # Se mudou um domingo, recalcula todos os domingos do mês para esse usuário
+                dom_indices = df_e[df_e['Dia'] == 'dom'].index.tolist()
+                # Define o novo offset baseado no dia que o usuário escolheu colocar folga
+                primeiro_dom_folga = idx_n if df_e.loc[idx_n, 'Dia'] == 'dom' else (dom_indices[1] if dom_indices[0] == idx_v else dom_indices[0])
+                
+                for i, d_idx in enumerate(dom_indices):
+                    # Se o índice do domingo atual for o alvo ou seguir o padrão 1x1
+                    is_folga = (d_idx == idx_n) or (abs(d_idx - idx_n) % 14 == 0)
+                    if is_folga:
+                        df_e.loc[d_idx, 'Status'] = 'Folga'
+                        df_e.loc[d_idx, 'H_Entrada'] = ""
+                        df_e.loc[d_idx, 'H_Saida'] = ""
+                    else:
+                        df_e.loc[d_idx, 'Status'] = 'Trabalho'
+                        df_e.loc[d_idx, 'H_Entrada'] = u_info['Entrada']
+                        df_e.loc[d_idx, 'H_Saida'] = (datetime.strptime(u_info['Entrada'], "%H:%M") + timedelta(hours=9, minutes=58)).strftime("%H:%M")
+                st.success("Domingos reorganizados automaticamente!")
+            
+            # --- TROCA PADRÃO PARA DIAS ÚTEIS ---
             else:
                 df_e.loc[idx_v, 'Status'] = 'Trabalho'
                 df_e.loc[idx_v, 'H_Entrada'] = u_info['Entrada']
                 df_e.loc[idx_v, 'H_Saida'] = (datetime.strptime(u_info['Entrada'], "%H:%M") + timedelta(hours=9, minutes=58)).strftime("%H:%M")
                 df_e.loc[idx_n, 'Status'], df_e.loc[idx_n, 'H_Entrada'], df_e.loc[idx_n, 'H_Saida'] = 'Folga', "", ""
-                st.session_state['historico'][f_ed] = df_e
-                st.success("Folga movida!"); st.rerun()
+
+            st.session_state['historico'][f_ed] = df_e
+            st.success("Folga movida!"); st.rerun()
 
         st.divider()
         st.subheader("🕒 Ajustar Horário")
@@ -150,7 +157,7 @@ with aba3:
                 st.session_state['historico'][f_ed] = df_e
                 st.success("Horário ajustado!")
 
-# --- ABA 4: DOWNLOAD (MANTIDA) ---
+# --- ABA 4: DOWNLOAD ---
 with aba4:
     if st.session_state['historico']:
         if st.button("📥 BAIXAR EXCEL CONSOLIDADO"):
