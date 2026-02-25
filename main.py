@@ -113,13 +113,12 @@ with aba3:
                 st.session_state['historico'][f_ed] = df_e
                 st.success("Ajustado!")
 
-# --- ABA 4: DOWNLOAD (INDIVIDUAL E GRUPO) ---
+# --- ABA 4: DOWNLOAD ---
 with aba4:
     if st.session_state['historico']:
         c_d1, c_d2 = st.columns(2)
-        
         with c_d1:
-            st.subheader("Download Individual")
+            st.subheader("Individual")
             f_n = st.selectbox("Escolha o funcionário:", list(st.session_state['historico'].keys()))
             if st.button("📥 Baixar Individual"):
                 out = io.BytesIO()
@@ -127,7 +126,9 @@ with aba4:
                 with pd.ExcelWriter(out, engine='openpyxl') as writer:
                     df_f = st.session_state['historico'][f_n]
                     ws = writer.book.create_sheet(f_n[:30], index=0)
-                    red, yel = PatternFill("FF0000", "solid"), PatternFill("FFFF00", "solid")
+                    # CORREÇÃO AQUI: patternType adicionado
+                    red = PatternFill(start_color="FF0000", end_color="FF0000", patternType="solid")
+                    yel = PatternFill(start_color="FFFF00", end_color="FFFF00", patternType="solid")
                     ws.cell(1, 1, "Categoria"); ws.cell(1, 2, u_cat)
                     ws.cell(2, 1, "Nome"); ws.cell(2, 2, f_n)
                     for i in range(31):
@@ -140,14 +141,15 @@ with aba4:
                 st.download_button("Clique para Baixar", out.getvalue(), f"escala_{f_n}.xlsx")
 
         with c_d2:
-            st.subheader("Download de Todo o Grupo")
-            if st.button("📥 BAIXAR GRUPO COMPLETO"):
+            st.subheader("Baixar Grupo Completo")
+            if st.button("📥 BAIXAR TUDO"):
                 out_g = io.BytesIO()
                 with pd.ExcelWriter(out_g, engine='openpyxl') as writer:
                     for nome_f, df_f in st.session_state['historico'].items():
                         u_cat = next((u.get('Categoria', 'Geral') for u in st.session_state['db_users'] if u['Nome'] == nome_f), "Geral")
                         ws = writer.book.create_sheet(nome_f[:30])
-                        red, yel = PatternFill("FF0000", "solid"), PatternFill("FFFF00", "solid")
+                        red = PatternFill(start_color="FF0000", end_color="FF0000", patternType="solid")
+                        yel = PatternFill(start_color="FFFF00", end_color="FFFF00", patternType="solid")
                         ws.cell(1, 1, "Categoria"); ws.cell(1, 2, u_cat)
                         ws.cell(2, 1, "Nome"); ws.cell(2, 2, nome_f)
                         for i in range(31):
