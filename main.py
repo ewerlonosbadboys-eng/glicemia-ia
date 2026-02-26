@@ -1,297 +1,251 @@
-# ============================================
-# SISTEMA PROFISSIONAL DE ESCALA 5x2 - PRO
-# Banco SQLite + Login + Dashboard + Rodízio Anual
-# ============================================
+# ============================================================
+# SISTEMA ESCALA PRO - VERSÃO CORPORATIVA COMPLETA
+# Login + Banco SQLite + Calendário RH + Banco Horas + Excel
+# ============================================================
 
 import streamlit as st
 import pandas as pd
 import sqlite3
-import random
-from datetime import datetime, timedelta
 import calendar
+from datetime import datetime, timedelta
 import plotly.express as px
+from openpyxl import Workbook
+from openpyxl.styles import PatternFill, Alignment, Border, Side
+import io
 
-st.set_page_config(layout="wide", page_title="Sistema Escala PRO")
+st.set_page_config(layout="wide", page_title="Escala PRO Corporativo")
 
-# ============================================
-# CONFIGURAÇÕES
-# ============================================
-
-AS_SISTEMA = {
-    "ESCALA": "5x2",
-    "INTERSTICIO": "11h10",
-    "DOMINGOS": "1x1 alternado",
-    "FOLGA_CASADA": "Domingo + Segunda (Subgrupo)",
-    "RODIZIO_SABADO": "1 pessoa por sábado no grupo",
-    "BALANCEAMENTO": "Máx 50% setor folgando",
-    "LIMITE_CONSECUTIVO": "5 dias"
-}
-
-# ============================================
-# BANCO SQLITE
-# ============================================
+# ============================================================
+# BANCO DE DADOS
+# ============================================================
 
 conn = sqlite3.connect("escala_pro.db", check_same_thread=False)
 c = conn.cursor()
 
 c.execute("""
-CREATE TABLE IF NOT EXISTS usuarios (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    nome TEXT,
-    setor TEXT,
-    categoria TEXT,
-    subgrupo TEXT,
-    entrada TEXT,
-    rod_sab INTEGER,
-    folga_dom_seg INTEGER,
-    ferias_inicio TEXT,
-    ferias_fim TEXT
+CREATE TABLE IF NOT EXISTS setores(
+    setor TEXT PRIMARY KEY,
+    senha TEXT
 )
 """)
 
 c.execute("""
-CREATE TABLE IF NOT EXISTS escalas (
+CREATE TABLE IF NOT EXISTS usuarios(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nome TEXT,
+    setor TEXT,
+    categoria TEXT,
+    carga_diaria REAL
+)
+""")
+
+c.execute("""
+CREATE TABLE IF NOT EXISTS escalas(
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     usuario_id INTEGER,
     data TEXT,
-    status TEXT,
     entrada TEXT,
-    saida TEXT
+    saida TEXT,
+    status TEXT
 )
 """)
 
 conn.commit()
 
-# ============================================
-# LOGIN POR SETOR
-# ============================================
+# ============================================================
+# LOGIN REAL
+# ============================================================
 
-if "setor_logado" not in st.session_state:
-    st.session_state.setor_logado = None
+if "logado" not in st.session_state:
+    st.session_state.logado = False
 
-st.sidebar.title("🔐 Login por Setor")
+st.sidebar.title("🔐 Login Setor")
 
-setor_login = st.sidebar.text_input("Digite seu setor")
+setor = st.sidebar.text_input("Setor")
+senha = st.sidebar.text_input("Senha", type="password")
 
 if st.sidebar.button("Entrar"):
-    if setor_login:
-        st.session_state.setor_logado = setor_login
+    user = c.execute("SELECT * FROM setores WHERE setor=? AND senha=?",
+                     (setor, senha)).fetchone()
+    if user:
+        st.session_state.logado = True
+        st.session_state.setor = setor
+    else:
+        st.sidebar.error("Acesso negado")
 
-if not st.session_state.setor_logado:
+if not st.session_state.logado:
     st.stop()
 
-st.sidebar.success(f"Setor: {st.session_state.setor_logado}")
+st.sidebar.success(f"Logado: {st.session_state.setor}")
 
-# ============================================
-# FUNÇÕES
-# ============================================
-
-def descanso_ok(saida_anterior, entrada):
-    if not saida_anterior:
-        return entrada
-    s = datetime.strptime(saida_anterior,"%H:%M")
-    e = datetime.strptime(entrada,"%H:%M")
-    if (e - s).total_seconds() < 40200:
-        return (s + timedelta(hours=11,minutes=10)).strftime("%H:%M")
-    return entrada
-
-
-def gerar_ano(usuario_id, entrada_padrao, subgrupo, rod_sab, folga_dom_seg):
-
-    ano = datetime.now().year
-    entrada_padrao = entrada_padrao or "06:00"
-
-    for mes in range(1,13):
-
-        dias_mes = calendar.monthrange(ano, mes)[1]
-
-        for dia in range(1,dias_mes+1):
-
-            data = datetime(ano,mes,dia)
-            dia_semana = data.weekday()
-
-            status = "Trabalho"
-
-            # DOMINGO
-            if dia_semana == 6:
-
-                if subgrupo and folga_dom_seg:
-                    status = "Folga"
-                else:
-                    if random.choice([True,False]):
-                        status = "Folga"
-
-            # SE TRABALHOU DOMINGO -> folga segunda a sexta aleatória
-            if dia_semana == 6 and status == "Trabalho":
-                dia_extra = data + timedelta(days=random.randint(1,5))
-                c.execute("""
-                INSERT INTO escalas(usuario_id,data,status,entrada,saida)
-                VALUES(?,?,?,?,?)
-                """,(usuario_id,dia_extra.strftime("%Y-%m-%d"),"Folga","",""))
-
-            # SÁBADO ROTATIVO 1 PESSOA
-            if dia_semana == 5 and subgrupo and rod_sab:
-                # apenas 1 pessoa por sábado
-                c.execute("""
-                SELECT COUNT(*) FROM escalas 
-                WHERE data=? AND status='Folga'
-                """,(data.strftime("%Y-%m-%d"),))
-                total = c.fetchone()[0]
-                if total == 0:
-                    status = "Folga"
-
-            # horário
-            if status == "Trabalho":
-                entrada = entrada_padrao
-                saida = (datetime.strptime(entrada,"%H:%M")+timedelta(hours=9,minutes=58)).strftime("%H:%M")
-            else:
-                entrada = ""
-                saida = ""
-
-            c.execute("""
-            INSERT INTO escalas(usuario_id,data,status,entrada,saida)
-            VALUES(?,?,?,?,?)
-            """,(usuario_id,data.strftime("%Y-%m-%d"),status,entrada,saida))
-
-    conn.commit()
-
-
-# ============================================
+# ============================================================
 # TABS
-# ============================================
+# ============================================================
 
-aba1,aba2,aba3,aba4,aba5 = st.tabs([
+aba1, aba2, aba3, aba4 = st.tabs([
     "Cadastro",
-    "Gerar Escala Ano",
-    "Ajustes",
+    "Calendário RH",
     "Dashboard",
-    "Férias"
+    "Exportar Excel"
 ])
 
-# ============================================
+# ============================================================
 # CADASTRO
-# ============================================
+# ============================================================
 
 with aba1:
 
-    nome = st.text_input("Nome")
+    nome = st.text_input("Nome Funcionário")
     categoria = st.text_input("Categoria")
-    subgrupo = st.text_input("Subgrupo (opcional)")
-    entrada = st.time_input("Entrada padrão")
-    rod_sab = st.checkbox("Subgrupo folga sábado rotativo")
-    folga_dom_seg = st.checkbox("Subgrupo folga Domingo + Segunda")
+    carga = st.number_input("Carga diária padrão (horas)", value=8.0)
 
-    if st.button("Salvar"):
+    if st.button("Salvar Funcionário"):
         c.execute("""
-        INSERT INTO usuarios(nome,setor,categoria,subgrupo,entrada,rod_sab,folga_dom_seg)
-        VALUES(?,?,?,?,?,?,?)
-        """,(nome,
-             st.session_state.setor_logado,
-             categoria,
-             subgrupo,
-             entrada.strftime("%H:%M"),
-             int(rod_sab),
-             int(folga_dom_seg)))
+        INSERT INTO usuarios(nome,setor,categoria,carga_diaria)
+        VALUES(?,?,?,?)
+        """,(nome, st.session_state.setor, categoria, carga))
         conn.commit()
         st.success("Salvo")
 
-
-# ============================================
-# GERAR ESCALA 1 ANO
-# ============================================
+# ============================================================
+# CALENDÁRIO ESTILO RH
+# ============================================================
 
 with aba2:
 
-    usuarios = c.execute("""
+    ano = datetime.now().year
+    mes = datetime.now().month
+
+    dias_mes = calendar.monthrange(ano, mes)[1]
+
+    usuarios = pd.read_sql_query("""
     SELECT * FROM usuarios WHERE setor=?
-    """,(st.session_state.setor_logado,)).fetchall()
+    """, conn, params=(st.session_state.setor,))
 
-    if st.button("Gerar Escala 12 Meses"):
+    if not usuarios.empty:
 
-        for u in usuarios:
-            gerar_ano(u[0],u[5],u[4],u[6],u[7])
+        tabela = []
 
-        st.success("Escala anual gerada!")
+        for _, user in usuarios.iterrows():
 
+            linha = {"Nome": user["nome"]}
 
-# ============================================
-# AJUSTES
-# ============================================
+            for dia in range(1, dias_mes+1):
+                data_str = f"{ano}-{mes:02d}-{dia:02d}"
+
+                escala = c.execute("""
+                SELECT * FROM escalas
+                WHERE usuario_id=? AND data=?
+                """,(user["id"], data_str)).fetchone()
+
+                if escala:
+                    linha[dia] = escala[3] if escala[5]=="Trabalho" else "F"
+                else:
+                    linha[dia] = ""
+
+            tabela.append(linha)
+
+        df_cal = pd.DataFrame(tabela)
+        st.dataframe(df_cal, use_container_width=True)
+
+# ============================================================
+# DASHBOARD + BANCO HORAS
+# ============================================================
 
 with aba3:
 
-    usuarios = c.execute("""
-    SELECT id,nome FROM usuarios WHERE setor=?
-    """,(st.session_state.setor_logado,)).fetchall()
+    df = pd.read_sql_query("""
+    SELECT u.nome, e.data, e.entrada, e.saida, u.carga_diaria
+    FROM escalas e
+    JOIN usuarios u ON u.id=e.usuario_id
+    WHERE u.setor=?
+    """, conn, params=(st.session_state.setor,))
 
-    user_sel = st.selectbox("Usuário",[u[1] for u in usuarios])
+    if not df.empty:
 
-    user_id = [u[0] for u in usuarios if u[1]==user_sel][0]
+        df["data"] = pd.to_datetime(df["data"])
+        df["horas_trabalhadas"] = (
+            pd.to_datetime(df["saida"], format="%H:%M") -
+            pd.to_datetime(df["entrada"], format="%H:%M")
+        ).dt.total_seconds() / 3600
 
-    st.markdown("### Trocar Folga")
+        df["banco_horas"] = df["horas_trabalhadas"] - df["carga_diaria"]
 
-    data_sel = st.date_input("Data")
-    novo_status = st.selectbox("Status",["Trabalho","Folga"])
+        resumo = df.groupby("nome")["banco_horas"].sum().reset_index()
 
-    if st.button("Atualizar Status"):
-        c.execute("""
-        UPDATE escalas SET status=? WHERE usuario_id=? AND data=?
-        """,(novo_status,user_id,data_sel.strftime("%Y-%m-%d")))
-        conn.commit()
-        st.success("Atualizado")
+        fig = px.bar(resumo, x="nome", y="banco_horas",
+                     title="Indicador Banco de Horas")
 
-    st.markdown("### Alterar Categoria")
+        st.plotly_chart(fig, use_container_width=True)
 
-    nova_cat = st.text_input("Nova Categoria")
-    if st.button("Salvar Categoria"):
-        c.execute("""
-        UPDATE usuarios SET categoria=? WHERE id=?
-        """,(nova_cat,user_id))
-        conn.commit()
-        st.success("Categoria alterada")
-
-
-# ============================================
-# DASHBOARD
-# ============================================
+# ============================================================
+# EXPORTAÇÃO EXCEL MODELO RH
+# ============================================================
 
 with aba4:
 
-    df = pd.read_sql_query("""
-    SELECT status,data FROM escalas
-    """,conn)
+    if st.button("Baixar Excel Modelo RH"):
 
-    df["data"] = pd.to_datetime(df["data"])
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Escala"
 
-    resumo = df.groupby("status").count().reset_index()
+        fill_folga = PatternFill(start_color="FFFF00",
+                                 end_color="FFFF00",
+                                 fill_type="solid")
 
-    fig = px.pie(resumo,names="status",values="data",title="Distribuição Trabalho x Folga")
+        center = Alignment(horizontal="center", vertical="center")
+        border = Border(
+            left=Side(style="thin"),
+            right=Side(style="thin"),
+            top=Side(style="thin"),
+            bottom=Side(style="thin")
+        )
 
-    st.plotly_chart(fig,use_container_width=True)
+        usuarios = pd.read_sql_query("""
+        SELECT * FROM usuarios WHERE setor=?
+        """, conn, params=(st.session_state.setor,))
 
+        dias_mes = calendar.monthrange(ano, mes)[1]
 
-# ============================================
-# FÉRIAS
-# ============================================
+        for col in range(1, dias_mes+1):
+            ws.cell(1, col+1, col)
 
-with aba5:
+        row = 2
 
-    usuarios = c.execute("""
-    SELECT id,nome FROM usuarios WHERE setor=?
-    """,(st.session_state.setor_logado,)).fetchall()
+        for _, user in usuarios.iterrows():
 
-    user_sel = st.selectbox("Usuário Férias",[u[1] for u in usuarios])
-    user_id = [u[0] for u in usuarios if u[1]==user_sel][0]
+            ws.cell(row,1,user["nome"])
 
-    inicio = st.date_input("Início férias")
-    fim = st.date_input("Fim férias")
+            for dia in range(1,dias_mes+1):
 
-    if st.button("Aplicar Férias"):
+                data_str=f"{ano}-{mes:02d}-{dia:02d}"
 
-        c.execute("""
-        UPDATE escalas SET status='Férias', entrada='', saida=''
-        WHERE usuario_id=? AND data BETWEEN ? AND ?
-        """,(user_id,inicio.strftime("%Y-%m-%d"),fim.strftime("%Y-%m-%d")))
+                escala=c.execute("""
+                SELECT * FROM escalas
+                WHERE usuario_id=? AND data=?
+                """,(user["id"],data_str)).fetchone()
 
-        conn.commit()
-        st.success("Férias aplicadas")
+                cell=ws.cell(row,dia+1)
+
+                if escala:
+                    if escala[5]=="Folga":
+                        cell.value="F"
+                        cell.fill=fill_folga
+                    else:
+                        cell.value=escala[3]
+
+                cell.alignment=center
+                cell.border=border
+
+            row+=1
+
+        buffer=io.BytesIO()
+        wb.save(buffer)
+
+        st.download_button(
+            "Download Excel",
+            data=buffer.getvalue(),
+            file_name="escala_rh.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
