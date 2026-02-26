@@ -48,6 +48,7 @@ def _dias_mes(ano: int, mes: int):
 
 
 def calcular_entrada_segura(saida_ant: str, ent_padrao: str) -> str:
+    """Garante interstício mínimo 11h10 entre saída anterior e entrada do dia."""
     fmt = "%H:%M"
     try:
         s = datetime.strptime(saida_ant, fmt)
@@ -63,6 +64,7 @@ def calcular_entrada_segura(saida_ant: str, ent_padrao: str) -> str:
 
 
 def _nao_consecutiva(df, idx):
+    """Não permite folgas consecutivas (idx-1 ou idx+1)."""
     if idx > 0 and df.loc[idx - 1, "Status"] == "Folga":
         return False
     if idx < len(df) - 1 and df.loc[idx + 1, "Status"] == "Folga":
@@ -71,6 +73,7 @@ def _nao_consecutiva(df, idx):
 
 
 def _semana_seg_dom(datas, i):
+    """Retorna indices da semana SEG->DOM que contém o índice i."""
     d = datas[i]
     monday = d - timedelta(days=d.weekday())
     sunday = monday + timedelta(days=6)
@@ -82,10 +85,12 @@ def _semana_seg_dom(datas, i):
 
 
 def _monday_of(d: date) -> date:
+    """Segunda-feira da semana (SEG->DOM) de uma data."""
     return d - timedelta(days=d.weekday())
 
 
 def _intervalo_ferias_do_nome(nome: str):
+    """Retorna lista de intervalos (date, date) das férias do colaborador."""
     itens = st.session_state["ferias"].get(nome, [])
     out = []
     for it in itens:
@@ -117,11 +122,11 @@ def _semanas_para_pular_5x2_por_retorno(nome: str) -> set:
 
 
 # =========================================================
-# DOMINGO 1x1 REAL (TRABALHA 1 / FOLGA 1)
-# - Divide a categoria em 2 grupos A/B (metade/metade)
-# - Domingos alternam: no 1º domingo folga A, no 2º folga B, no 3º folga A...
-# - Cada pessoa então alterna: folga 1 domingo e trabalha o outro
-# - Férias: se está de férias no domingo, fica "Férias" e não precisa de folga
+# DOMINGO 1x1 REAL (TRABALHA 1 / FOLGA 1) COM BALANCEAMENTO
+# - Divide cada categoria em 2 grupos A/B
+# - Desde o PRIMEIRO domingo já divide (metade trabalha / metade folga)
+# - Força TRABALHO para quem não é do grupo da folga (evita "todo mundo folga")
+# - Se alguém está de férias no domingo, fica FÉRIAS (não entra no rodízio)
 # =========================================================
 def montar_domingo_1x1_por_categoria(cats, datas):
     domingos = [i for i, d in enumerate(datas) if d.day_name() == "Sunday"]
@@ -130,13 +135,14 @@ def montar_domingo_1x1_por_categoria(cats, datas):
     for cat, membros in cats.items():
         nomes = sorted([u["Nome"] for u in membros])
 
+        # se não tem ninguém
         if not nomes:
             for dom_i in domingos:
                 esquema[cat][dom_i] = set()
             continue
 
+        # se tem 1 pessoa: alterna sim/não
         if len(nomes) == 1:
-            # alterna sim/não
             nome = nomes[0]
             for k, dom_i in enumerate(domingos):
                 data_dom = datas[dom_i].date()
@@ -146,16 +152,21 @@ def montar_domingo_1x1_por_categoria(cats, datas):
                     esquema[cat][dom_i] = {nome} if (k % 2 == 0) else set()
             continue
 
-        # 2+ pessoas -> separa em 2 grupos balanceados
-        meio = (len(nomes) + 1) // 2
-        grupo_a = set(nomes[:meio])
-        grupo_b = set(nomes[meio:])
+        # 2+ pessoas -> dividir em 2 grupos equilibrados
+        # embaralha fixo por mês (para não ficar sempre as mesmas pessoas no grupo A)
+        rng = random.Random(42 + datas[0].month + datas[0].year)
+        nomes_mix = nomes[:]
+        rng.shuffle(nomes_mix)
 
+        meio = (len(nomes_mix) + 1) // 2
+        grupo_a = set(nomes_mix[:meio])
+        grupo_b = set(nomes_mix[meio:])
+
+        # domingos alternam: 1º domingo folga A, 2º folga B, 3º folga A...
         for k, dom_i in enumerate(domingos):
             data_dom = datas[dom_i].date()
             alvo = grupo_a if (k % 2 == 0) else grupo_b
 
-            # remove quem está de férias naquele domingo
             folgam = set()
             for nm in alvo:
                 if not _esta_de_ferias(nm, data_dom):
@@ -179,7 +190,7 @@ def escolher_dia_balanceado(possiveis, cont_semana_cat):
 
 
 # =========================================================
-# GERAR ESCALA
+# GERAR ESCALA (REGRAS + BALANCEAMENTO + DOM 1x1 DESDE O 1º DOM)
 # =========================================================
 def gerar_escala_inteligente(lista_usuarios, ano, mes):
     datas = _dias_mes(ano, mes)
@@ -190,10 +201,10 @@ def gerar_escala_inteligente(lista_usuarios, ano, mes):
         c = u.get("Categoria", "Geral")
         cats.setdefault(c, []).append(u)
 
-    # domingo 1x1 REAL (grupo A/B)
+    # domingo 1x1 real por categoria (grupos A/B)
     dom_1x1 = montar_domingo_1x1_por_categoria(cats, datas)
 
-    # contagem global por dia para regra 50% por categoria/dia
+    # contagem global para limite 50% por dia na categoria
     cont_folga_cat_dia = {cat: {i: 0 for i in range(len(datas))} for cat in cats.keys()}
 
     novo_hist = {}
@@ -219,13 +230,21 @@ def gerar_escala_inteligente(lista_usuarios, ano, mes):
                 if _esta_de_ferias(nome, d.date()):
                     df.loc[i, "Status"] = "Férias"
 
-            # 2) domingo 1x1 (se não for férias)
-            for dom_i, folgam_set in dom_1x1[cat].items():
+            # 2) APLICAR DOMINGO 1x1 DESDE O PRIMEIRO DOMINGO
+            #    - força Folga para quem está no grupo de folga
+            #    - força Trabalho para quem NÃO está no grupo (evita "todo mundo folga")
+            for dom_i, folgam_set in dom_1x1.get(cat, {}).items():
                 if df.loc[dom_i, "Status"] == "Férias":
                     continue
                 if nome in folgam_set:
                     df.loc[dom_i, "Status"] = "Folga"
-                    cont_folga_cat_dia[cat][dom_i] += 1
+                else:
+                    df.loc[dom_i, "Status"] = "Trabalho"
+
+            # pré-contar folgas de domingo no contador global
+            for i in range(len(datas)):
+                if df.loc[i, "Status"] == "Folga":
+                    cont_folga_cat_dia[cat][i] += 1
 
             # 3) lista de semanas únicas (SEG->DOM)
             semanas = []
@@ -236,7 +255,7 @@ def gerar_escala_inteligente(lista_usuarios, ano, mes):
                     seen.add(idxs)
                     semanas.append(list(idxs))
 
-            # 4) aplicar 5x2 por semana (exceto semana de retorno)
+            # 4) aplicar 5x2 por semana SEG->DOM (exceto semana de retorno de férias)
             for idxs in semanas:
                 monday_week = _monday_of(datas[idxs[0]].date())
 
@@ -244,12 +263,12 @@ def gerar_escala_inteligente(lista_usuarios, ano, mes):
                 if monday_week in semanas_skip_5x2:
                     continue
 
-                # somente dias que não são férias
+                # elegíveis: não férias
                 idxs_nao_ferias = [j for j in idxs if df.loc[j, "Status"] != "Férias"]
                 if not idxs_nao_ferias:
                     continue
 
-                # contador semanal dentro da categoria (para balancear)
+                # contador semanal (para balancear dentro da semana)
                 cont_semana_cat = {j: 0 for j in idxs}
                 for j in idxs:
                     if df.loc[j, "Status"] == "Folga":
@@ -257,16 +276,16 @@ def gerar_escala_inteligente(lista_usuarios, ano, mes):
 
                 folgas_semana = int((df.loc[idxs_nao_ferias, "Status"] == "Folga").sum())
 
+                # completar até 2 folgas/semana
                 while folgas_semana < 2:
                     possiveis = []
-
                     for j in idxs_nao_ferias:
                         if df.loc[j, "Status"] != "Trabalho":
                             continue
 
                         dia = df.loc[j, "Dia"]
 
-                        # sábado só se marcado
+                        # sábado só vira folga se marcado
                         if dia == "sáb" and not pode_folgar_sabado:
                             continue
 
@@ -274,7 +293,7 @@ def gerar_escala_inteligente(lista_usuarios, ano, mes):
                         if not _nao_consecutiva(df, j):
                             continue
 
-                        # 50% por categoria/dia
+                        # limite 50% por dia na categoria
                         if total_cat > 1:
                             limite = max(1, total_cat // 2)
                             if cont_folga_cat_dia[cat][j] >= limite:
@@ -282,7 +301,7 @@ def gerar_escala_inteligente(lista_usuarios, ano, mes):
 
                         possiveis.append(j)
 
-                    # relaxa balanceamento 50% se necessário (mantém sábado e não consecutiva)
+                    # relaxa 50% se necessário (mantém sábado e não consecutiva)
                     if not possiveis:
                         for j in idxs_nao_ferias:
                             if df.loc[j, "Status"] != "Trabalho":
@@ -303,7 +322,7 @@ def gerar_escala_inteligente(lista_usuarios, ano, mes):
                     cont_semana_cat[escolhido] = cont_semana_cat.get(escolhido, 0) + 1
                     folgas_semana += 1
 
-                # segurança: não mais de 5 seguidos
+                # segurança: máximo 5 seguidos
                 consec = 0
                 for j in idxs:
                     if df.loc[j, "Status"] == "Trabalho":
@@ -347,7 +366,7 @@ aba1, aba2, aba3, aba4, aba5 = st.tabs(
 )
 
 # ---------------------------------------------------------
-# ABA 1
+# ABA 1 - CADASTRO
 # ---------------------------------------------------------
 with aba1:
     st.subheader("Cadastro")
@@ -373,7 +392,7 @@ with aba1:
         st.dataframe(pd.DataFrame(st.session_state["db_users"]), use_container_width=True)
 
 # ---------------------------------------------------------
-# ABA 2
+# ABA 2 - GERAR
 # ---------------------------------------------------------
 with aba2:
     st.subheader("Gerar escala")
@@ -384,14 +403,14 @@ with aba2:
     st.session_state["cfg_mes"] = int(mes)
     st.session_state["cfg_ano"] = int(ano)
 
-    if st.button("🚀 GERAR ESCALA (Domingo 1x1 REAL)"):
+    if st.button("🚀 GERAR ESCALA (balanceado desde o 1º domingo)"):
         if st.session_state["db_users"]:
             st.session_state["historico"] = gerar_escala_inteligente(
                 st.session_state["db_users"],
                 st.session_state["cfg_ano"],
                 st.session_state["cfg_mes"]
             )
-            st.success("Gerado! Domingo 1x1 (trabalha 1 / folga 1) + 5x2 balanceado na semana.")
+            st.success("Gerado! Domingo 1x1 inicia balanceado no primeiro domingo.")
         else:
             st.warning("Cadastre funcionários na Aba 1.")
 
@@ -419,7 +438,6 @@ with aba3:
             folgas_atuais = df_e[df_e["Status"] == "Folga"].index.tolist()
             d_tira = st.selectbox("Dia que vai TRABALHAR:", [d + 1 for d in folgas_atuais]) if folgas_atuais else None
             d_poe = st.number_input("Novo dia para FOLGAR:", 1, len(df_e), value=1, key="aj_folga_poe")
-
             if st.button("Confirmar troca"):
                 if d_tira is None:
                     st.warning("Sem folgas para trocar.")
