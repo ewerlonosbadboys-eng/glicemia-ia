@@ -1,251 +1,246 @@
 import streamlit as st
 import pandas as pd
-import sqlite3
-from datetime import datetime
-from openpyxl import Workbook
-from openpyxl.styles import PatternFill, Alignment, Font
-from io import BytesIO
-import hashlib
+from datetime import datetime, timedelta
+import io
+import random
+from openpyxl.styles import PatternFill, Alignment, Border, Side
 
-st.set_page_config(layout="wide")
+st.set_page_config(page_title="Projeto Escala 5x2 Oficial", layout="wide")
 
-# =====================================================
-# ESTILO VISUAL RH
-# =====================================================
-st.markdown("""
-<style>
-thead tr th {
-    background-color: #1f4e78 !important;
-    color: white !important;
-    text-align: center !important;
-}
-tbody tr:nth-child(even) {
-    background-color: #e9f1f7 !important;
-}
-tbody tr:nth-child(odd) {
-    background-color: #dbeaf5 !important;
-}
-</style>
-""", unsafe_allow_html=True)
+# --- MEMÓRIA ---
+if 'db_users' not in st.session_state: st.session_state['db_users'] = []
+if 'historico' not in st.session_state: st.session_state['historico'] = {}
 
-# =====================================================
-# BANCO
-# =====================================================
-conn = sqlite3.connect("escala.db", check_same_thread=False)
-cursor = conn.cursor()
+def calcular_entrada_segura(saida_ant, ent_padrao):
+    fmt = "%H:%M"
+    try:
+        s = datetime.strptime(saida_ant, fmt)
+        e = datetime.strptime(ent_padrao, fmt)
+        diff = (e - s).total_seconds() / 3600
+        if diff < 0: diff += 24
+        if diff < 11: 
+            return (s + timedelta(hours=11, minutes=10)).strftime(fmt)
+    except:
+        pass
+    return ent_padrao
 
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS usuarios (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    usuario TEXT,
-    senha TEXT,
-    categoria TEXT
+
+# ==============================
+# 🔥 NOVA LÓGICA DE DOMINGO INTERCALADO
+# ==============================
+
+def gerar_escala_inteligente(lista_usuarios):
+
+    datas = pd.date_range(start='2026-03-01', periods=31)
+    d_pt = {'Monday':'seg','Tuesday':'ter','Wednesday':'qua','Thursday':'qui',
+            'Friday':'sex','Saturday':'sáb','Sunday':'dom'}
+
+    novo_hist = {}
+    cats = {}
+
+    # Agrupar por categoria
+    for u in lista_usuarios:
+        c = u.get('Categoria', 'Geral')
+        cats.setdefault(c, []).append(u)
+
+    for cat_nome, membros in cats.items():
+
+        domingos_indices = [i for i, d in enumerate(datas) if d.day_name() == "Sunday"]
+
+        # Alternância entre funcionários da categoria
+        for idx_membro, user in enumerate(membros):
+
+            nome = user['Nome']
+            df = pd.DataFrame({
+                'Data': datas,
+                'Dia': [d_pt[d.day_name()] for d in datas],
+                'Status': 'Trabalho'
+            })
+
+            # ==============================
+            # 🔁 INTERCALAÇÃO DE DOMINGOS
+            # ==============================
+            for idx_dom, dia_dom in enumerate(domingos_indices):
+
+                # alterna entre funcionários
+                if (idx_dom + idx_membro) % 2 == 0:
+                    df.loc[dia_dom, 'Status'] = 'Folga'
+
+            # ==============================
+            # REGRA 5x2 (segunda folga)
+            # ==============================
+
+            for sem in range(0, 31, 7):
+
+                fim = min(sem + 7, 31)
+                folgas_semana = df.iloc[sem:fim]['Status'].value_counts().get('Folga', 0)
+
+                while folgas_semana < 2:
+
+                    possiveis = [
+                        j for j in range(sem, fim)
+                        if df.loc[j, 'Status'] == 'Trabalho'
+                        and not (df.loc[j-1, 'Status'] == 'Folga' if j > 0 else False)
+                        and not (df.loc[j+1, 'Status'] == 'Folga' if j < 30 else False)
+                        and not (df.loc[j, 'Dia'] == 'sáb' and not user.get("Rod_Sab"))
+                    ]
+
+                    if not possiveis:
+                        break
+
+                    escolhido = random.choice(possiveis)
+                    df.loc[escolhido, 'Status'] = 'Folga'
+                    folgas_semana += 1
+
+            # ==============================
+            # HORÁRIOS
+            # ==============================
+
+            ents, sais = [], []
+            hp = user.get("Entrada", "06:00")
+
+            for m in range(len(df)):
+                if df.loc[m, 'Status'] == 'Folga':
+                    ents.append("")
+                    sais.append("")
+                else:
+                    e = hp
+                    if m > 0 and sais and sais[-1] != "":
+                        e = calcular_entrada_segura(sais[-1], hp)
+                    ents.append(e)
+                    sais.append(
+                        (datetime.strptime(e, "%H:%M") + timedelta(hours=9, minutes=58)).strftime("%H:%M")
+                    )
+
+            df['H_Entrada'], df['H_Saida'] = ents, sais
+            novo_hist[nome] = df
+
+    return novo_hist
+
+
+# ==============================
+# INTERFACE
+# ==============================
+
+aba1, aba2, aba3, aba4 = st.tabs(
+    ["👥 1. Cadastro", "🚀 2. Gerar Escala", "⚙️ 3. Ajustes", "📥 4. Baixar Excel"]
 )
-""")
 
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS funcionarios (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    nome TEXT
-)
-""")
+with aba1:
+    st.subheader("Cadastro")
+    c1, c2 = st.columns(2)
+    n = c1.text_input("Nome")
+    ct = c2.text_input("Categoria")
+    h_in = st.time_input("Entrada Padrão", value=datetime.strptime("06:00", "%H:%M").time())
+    col_check1, col_check2 = st.columns(2)
+    s_rk = col_check1.checkbox("Rodízio Sábado")
+    c_rk = col_check2.checkbox("Folga Casada")
 
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS escala (
-    funcionario_id INTEGER,
-    data TEXT,
-    entrada TEXT,
-    saida TEXT
-)
-""")
-
-conn.commit()
-
-# =====================================================
-# CRIAR ADMIN PADRÃO SE NÃO EXISTIR
-# =====================================================
-def gerar_hash(senha):
-    return hashlib.sha256(senha.encode()).hexdigest()
-
-cursor.execute("SELECT * FROM usuarios WHERE usuario='admin'")
-if not cursor.fetchone():
-    cursor.execute(
-        "INSERT INTO usuarios (usuario, senha, categoria) VALUES (?,?,?)",
-        ("admin", gerar_hash("123"), "admin")
-    )
-    conn.commit()
-
-# =====================================================
-# LOGIN
-# =====================================================
-if "logado" not in st.session_state:
-    st.session_state.logado = False
-
-if not st.session_state.logado:
-    st.title("🔐 Login Sistema RH")
-
-    user = st.text_input("Usuário")
-    senha = st.text_input("Senha", type="password")
-
-    if st.button("Entrar"):
-        cursor.execute("SELECT * FROM usuarios WHERE usuario=?", (user,))
-        dados = cursor.fetchone()
-
-        if dados and dados[2] == gerar_hash(senha):
-            st.session_state.logado = True
-            st.session_state.usuario = dados[1]
-            st.session_state.categoria = dados[3]
-            st.rerun()
+    if st.button("Salvar Funcionário"):
+        if n and ct:
+            st.session_state['db_users'].append({
+                "Nome": n,
+                "Categoria": ct,
+                "Entrada": h_in.strftime('%H:%M'),
+                "Rod_Sab": s_rk,
+                "Casada": c_rk
+            })
+            st.success(f"{n} cadastrado com sucesso!")
         else:
-            st.error("Usuário ou senha inválidos")
-    st.stop()
+            st.error("Preencha Nome e Categoria.")
 
-# =====================================================
-# MENU POR CATEGORIA
-# =====================================================
-st.sidebar.title("Menu")
 
-menus = ["Visualizar Escala"]
+with aba2:
+    if st.button("🚀 GERAR ESCALA (5x2 Inteligente)"):
+        if st.session_state['db_users']:
+            st.session_state['historico'] = gerar_escala_inteligente(
+                st.session_state['db_users']
+            )
+            st.success("Escala Gerada com Domingos Intercalados!")
+        else:
+            st.warning("Cadastre os funcionários na Aba 1.")
 
-if st.session_state.categoria in ["admin", "rh"]:
-    menus.append("Gerar Escala")
-    menus.append("Cadastrar Funcionário")
-    menus.append("Cadastrar Usuário")
+    if st.session_state['historico']:
+        for nome, df in st.session_state['historico'].items():
+            with st.expander(f"Visualizar Escala: {nome}"):
+                st.dataframe(df, use_container_width=True)
 
-menu = st.sidebar.radio("Navegação", menus)
 
-st.sidebar.write("Usuário:", st.session_state.usuario)
-st.sidebar.write("Categoria:", st.session_state.categoria)
+with aba3:
+    st.subheader("⚙️ Ajustes Manuais")
 
-# =====================================================
-# FUNÇÃO GERAR ESCALA 5x2 + DOMINGO 1x1
-# =====================================================
-def gerar_escala(mes, ano):
-    cursor.execute("DELETE FROM escala")
-    conn.commit()
+    if st.session_state['historico']:
 
-    funcionarios = pd.read_sql_query("SELECT * FROM funcionarios", conn)
-
-    datas = pd.date_range(f"{ano}-{mes:02d}-01", periods=31)
-
-    alternador_domingo = 0
-
-    for _, f in funcionarios.iterrows():
-        dias_trabalhados = 0
-
-        for data in datas:
-            if data.month != mes:
-                continue
-
-            weekday = data.weekday()
-            folga = False
-
-            # 5x2
-            if dias_trabalhados == 5:
-                folga = True
-                dias_trabalhados = 0
-
-            # Domingo 1x1
-            if weekday == 6:
-                if alternador_domingo % 2 == 0:
-                    folga = True
-                alternador_domingo += 1
-
-            if folga:
-                cursor.execute(
-                    "INSERT INTO escala VALUES (?,?,?,?)",
-                    (f["id"], data.strftime("%Y-%m-%d"), "FOLGA", "FOLGA")
-                )
-            else:
-                cursor.execute(
-                    "INSERT INTO escala VALUES (?,?,?,?)",
-                    (f["id"], data.strftime("%Y-%m-%d"), "06:00", "15:58")
-                )
-                dias_trabalhados += 1
-
-    conn.commit()
-
-# =====================================================
-# VISUALIZAR ESCALA (FORMATO IGUAL IMAGEM)
-# =====================================================
-if menu == "Visualizar Escala":
-
-    df_func = pd.read_sql_query("SELECT * FROM funcionarios", conn)
-    df_escala = pd.read_sql_query("SELECT * FROM escala", conn)
-
-    if df_escala.empty:
-        st.warning("Gere a escala primeiro.")
-        st.stop()
-
-    dias = sorted(df_escala["data"].unique())
-
-    colunas = ["Nome"]
-    dias_formatados = []
-
-    for d in dias:
-        data_obj = datetime.strptime(d, "%Y-%m-%d")
-        colunas.append(f"{data_obj.day}\n{data_obj.strftime('%a')}")
-
-    tabela = []
-
-    for _, func in df_func.iterrows():
-        linha_entrada = [func["nome"]]
-        linha_saida = [""]
-
-        for d in dias:
-            registro = df_escala[
-                (df_escala["funcionario_id"] == func["id"]) &
-                (df_escala["data"] == d)
-            ]
-
-            if not registro.empty:
-                linha_entrada.append(registro.iloc[0]["entrada"])
-                linha_saida.append(registro.iloc[0]["saida"])
-            else:
-                linha_entrada.append("")
-                linha_saida.append("")
-
-        tabela.append(linha_entrada)
-        tabela.append(linha_saida)
-
-    df_visual = pd.DataFrame(tabela, columns=colunas)
-
-    st.dataframe(df_visual, use_container_width=True)
-
-# =====================================================
-# GERAR ESCALA
-# =====================================================
-if menu == "Gerar Escala":
-    mes = st.selectbox("Mês", range(1,13))
-    ano = st.number_input("Ano", value=2026)
-
-    if st.button("Gerar Automático"):
-        gerar_escala(mes, ano)
-        st.success("Escala gerada com regras automáticas!")
-
-# =====================================================
-# CADASTRAR FUNCIONÁRIO
-# =====================================================
-if menu == "Cadastrar Funcionário":
-    nome = st.text_input("Nome")
-    if st.button("Salvar"):
-        cursor.execute("INSERT INTO funcionarios (nome) VALUES (?)", (nome,))
-        conn.commit()
-        st.success("Salvo")
-
-# =====================================================
-# CADASTRAR USUÁRIO (CATEGORIAS)
-# =====================================================
-if menu == "Cadastrar Usuário":
-
-    usuario = st.text_input("Usuário")
-    senha = st.text_input("Senha", type="password")
-    categoria = st.selectbox("Categoria", ["admin", "rh", "gerente", "profissional"])
-
-    if st.button("Criar Usuário"):
-        cursor.execute(
-            "INSERT INTO usuarios (usuario, senha, categoria) VALUES (?,?,?)",
-            (usuario, gerar_hash(senha), categoria)
+        f_ed = st.selectbox(
+            "Selecione o Funcionário:",
+            list(st.session_state['historico'].keys())
         )
-        conn.commit()
-        st.success("Usuário criado com categoria!")
+
+        df_e = st.session_state['historico'][f_ed]
+
+        st.dataframe(df_e, use_container_width=True)
+
+
+with aba4:
+    st.subheader("📥 Exportar para Excel")
+
+    if st.session_state['historico']:
+
+        if st.button("📊 GERAR ARQUIVO PARA DOWNLOAD"):
+
+            output = io.BytesIO()
+
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                wb = writer.book
+                ws = wb.create_sheet("Escala Mensal", index=0)
+
+                fill_dom = PatternFill(start_color="FF0000",
+                                       end_color="FF0000",
+                                       patternType="solid")
+
+                fill_folga = PatternFill(start_color="FFFF00",
+                                         end_color="FFFF00",
+                                         patternType="solid")
+
+                border = Border(
+                    left=Side(style='thin'),
+                    right=Side(style='thin'),
+                    top=Side(style='thin'),
+                    bottom=Side(style='thin')
+                )
+
+                center = Alignment(horizontal="center", vertical="center")
+
+                df_ref = list(st.session_state['historico'].values())[0]
+
+                for i in range(31):
+                    ws.cell(1, i+2, i+1).alignment = center
+                    ws.cell(2, i+2, df_ref.iloc[i]['Dia']).alignment = center
+
+                row_idx = 3
+
+                for nome, df_f in st.session_state['historico'].items():
+
+                    ws.cell(row_idx, 1, nome)
+
+                    for i, row in df_f.iterrows():
+
+                        is_folga = (row['Status'] == 'Folga')
+
+                        c1 = ws.cell(row_idx, i+2,
+                                     "FOLGA" if is_folga else row['H_Entrada'])
+
+                        if is_folga:
+                            c1.fill = fill_dom if row['Dia'] == 'dom' else fill_folga
+
+                        c1.border = border
+                        c1.alignment = center
+
+                    row_idx += 1
+
+            st.download_button(
+                label="📥 Baixar Escala em Excel",
+                data=output.getvalue(),
+                file_name=f"escala_5x2_{datetime.now().strftime('%d_%m')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
