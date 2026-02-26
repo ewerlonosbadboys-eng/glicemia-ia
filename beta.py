@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime, time
+from datetime import datetime
 import os
 import shutil
 from io import BytesIO
@@ -32,24 +32,18 @@ st.markdown("""
     .metric-box { background: #262730; border: 1px solid #4a4a4a; padding: 15px; border-radius: 12px; text-align: center; }
     .dose-destaque { font-size: 38px; font-weight: 700; color: #4ade80; }
     .alerta-zap { background-color: #25D366; color: white !important; font-weight: bold; border-radius: 10px; padding: 10px; text-align: center; display: block; text-decoration: none; margin-top: 10px; }
-    label, p, span, h1, h2, h3, .stMarkdown { color: white !important; }
 </style>
 """, unsafe_allow_html=True)
 
-# ================= SISTEMA DE BACKUP AUTOMÁTICO (3H) =================
-def realizar_backup():
-    if not os.path.exists(PASTA_BACKUP): os.makedirs(PASTA_BACKUP)
-    hoje = datetime.now(fuso_br).strftime("%Y-%m-%d")
-    for arq in [ARQ_G, ARQ_N, ARQ_R, ARQ_M, "usuarios.db"]:
-        if os.path.exists(arq):
-            shutil.copy(arq, os.path.join(PASTA_BACKUP, f"{hoje}_{arq}"))
+# ================= FUNÇÕES DE BANCO E DADOS =================
+def init_db():
+    conn = sqlite3.connect('usuarios.db')
+    conn.execute('CREATE TABLE IF NOT EXISTS users (nome TEXT, email TEXT PRIMARY KEY, senha TEXT)')
+    if not conn.execute("SELECT 1 FROM users WHERE email='admin'").fetchone():
+        conn.execute("INSERT INTO users VALUES ('Administrador', 'admin', '542820')")
+    conn.commit()
+    conn.close()
 
-if 'ultimo_backup' not in st.session_state:
-    if datetime.now(fuso_br).hour >= 3:
-        realizar_backup()
-        st.session_state.ultimo_backup = True
-
-# ================= FUNÇÕES DE APOIO E DADOS =================
 def carregar_dados_seguro(arq):
     if not os.path.exists(arq): return pd.DataFrame()
     try:
@@ -57,4 +51,9 @@ def carregar_dados_seguro(arq):
         return df[df['Usuario'] == st.session_state.user_email].copy()
     except: return pd.DataFrame()
 
-def init_db():
+init_db()
+
+# ================= LISTA DE NUTRIÇÃO AMPLIADA =================
+ALIMENTOS = {
+    "Pão Francês (1un)": [28, 4, 1], "Pão de Forma (2 fat)": [24, 4, 2], "Tapioca (50g)": [27, 0, 0],
+    "Arroz Branco (1 escum)": [25, 2, 0],
