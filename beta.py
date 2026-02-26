@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 from io import BytesIO
 import plotly.express as px
@@ -41,9 +41,6 @@ def agora_br():
     return datetime.now(fuso_br)
 
 def criar_backup_zip_em_bytes():
-    """
-    Cria backup ZIP em memória e retorna (bytes, filename)
-    """
     ts = agora_br().strftime("%Y-%m-%d_%H-%M-%S")
     nome = f"backup_saude_kids_{ts}.zip"
 
@@ -56,9 +53,6 @@ def criar_backup_zip_em_bytes():
     return out.getvalue(), nome
 
 def criar_backup_zip_em_disco():
-    """
-    Cria backup ZIP no disco (pasta backups/) e retorna caminho
-    """
     ts = agora_br().strftime("%Y-%m-%d_%H-%M-%S")
     nome = f"backup_saude_kids_{ts}.zip"
     caminho = BACKUP_DIR / nome
@@ -70,9 +64,6 @@ def criar_backup_zip_em_disco():
     return caminho
 
 def restaurar_backup_zip_bytes(zip_bytes: bytes):
-    """
-    Restaura apenas arquivos permitidos (ARQUIVOS_BACKUP) a partir de bytes ZIP.
-    """
     tmp_dir = BACKUP_DIR / "_tmp_restore"
     if tmp_dir.exists():
         shutil.rmtree(tmp_dir)
@@ -89,10 +80,6 @@ def restaurar_backup_zip_bytes(zip_bytes: bytes):
     shutil.rmtree(tmp_dir)
 
 def backup_automatico_diario_3h():
-    """
-    Streamlit não roda 24/7. Este backup executa quando o app é acessado.
-    Regra: após 03:00, se ainda não fez backup hoje => faz 1.
-    """
     agora = agora_br()
     hoje = agora.strftime("%Y-%m-%d")
 
@@ -104,6 +91,49 @@ def backup_automatico_diario_3h():
         if ultima != hoje:
             criar_backup_zip_em_disco()
             BACKUP_STATE_FILE.write_text(hoje, encoding="utf-8")
+
+def listar_backups():
+    """
+    Retorna DataFrame com colunas:
+    - arquivo
+    - caminho
+    - data_hora (datetime)
+    - tamanho_mb (float)
+    """
+    backups = []
+    for p in sorted(BACKUP_DIR.glob("backup_saude_kids_*.zip")):
+        stat = p.stat()
+        dt = datetime.fromtimestamp(stat.st_mtime, tz=fuso_br)
+        backups.append({
+            "arquivo": p.name,
+            "caminho": str(p),
+            "data_hora": dt,
+            "tamanho_mb": round(stat.st_size / (1024 * 1024), 2),
+        })
+
+    if not backups:
+        return pd.DataFrame(columns=["arquivo", "caminho", "data_hora", "tamanho_mb"])
+
+    df = pd.DataFrame(backups)
+    df = df.sort_values("data_hora", ascending=False).reset_index(drop=True)
+    return df
+
+def apagar_backups_antigos(dias_manter=7):
+    """
+    Apaga backups mais antigos que (agora - dias_manter).
+    Retorna quantidade apagada.
+    """
+    limite = agora_br() - timedelta(days=dias_manter)
+    apagados = 0
+    for p in BACKUP_DIR.glob("backup_saude_kids_*.zip"):
+        dt = datetime.fromtimestamp(p.stat().st_mtime, tz=fuso_br)
+        if dt < limite:
+            try:
+                p.unlink()
+                apagados += 1
+            except:
+                pass
+    return apagados
 
 backup_automatico_diario_3h()
 
@@ -127,10 +157,8 @@ def gerar_senha_temporaria(tamanho=6):
     return ''.join(random.choice(caracteres) for i in range(tamanho))
 
 def enviar_senha_nova(email_destino, senha_nova):
-    # ✅ Recomendado: usar st.secrets["GMAIL_APP_PASSWORD"]
     meu_email = "ewerlon.osbadboys@gmail.com"
-    minha_senha = st.secrets.get("GMAIL_APP_PASSWORD", "")  # coloque no secrets
-
+    minha_senha = st.secrets.get("GMAIL_APP_PASSWORD", "")
     if not minha_senha:
         return False
 
@@ -245,11 +273,6 @@ def _schema_receita_nova(rec: pd.Series, periodo: str) -> bool:
     return all(k in rec.index for k in need)
 
 def calc_insulina(v, m):
-    """
-    Compatível com:
-    - Receita antiga: manha_f1/manhã_f2/manhã_f3 e noite_f1/noite_f2/noite_f3
-    - Receita nova (editável): *_f1_min/max/dose ... *_f3_min/max/dose
-    """
     df_r = carregar_dados_seguro(ARQ_R)
     if df_r.empty:
         return "0 UI", "Configurar Receita"
@@ -258,23 +281,13 @@ def calc_insulina(v, m):
     periodo = "manha" if m in ["Antes Café", "Após Café", "Antes Almoço", "Após Almoço", "Antes Merenda"] else "noite"
 
     try:
-        # NOVO (faixas editáveis)
         if _schema_receita_nova(rec, periodo):
-            f1_min = float(rec[f"{periodo}_f1_min"])
-            f1_max = float(rec[f"{periodo}_f1_max"])
-            f1_dose = float(rec[f"{periodo}_f1_dose"])
-
-            f2_min = float(rec[f"{periodo}_f2_min"])
-            f2_max = float(rec[f"{periodo}_f2_max"])
-            f2_dose = float(rec[f"{periodo}_f2_dose"])
-
-            f3_min = float(rec[f"{periodo}_f3_min"])
-            f3_max = float(rec[f"{periodo}_f3_max"])
-            f3_dose = float(rec[f"{periodo}_f3_dose"])
+            f1_min = float(rec[f"{periodo}_f1_min"]); f1_max = float(rec[f"{periodo}_f1_max"]); f1_dose = float(rec[f"{periodo}_f1_dose"])
+            f2_min = float(rec[f"{periodo}_f2_min"]); f2_max = float(rec[f"{periodo}_f2_max"]); f2_dose = float(rec[f"{periodo}_f2_dose"])
+            f3_min = float(rec[f"{periodo}_f3_min"]); f3_max = float(rec[f"{periodo}_f3_max"]); f3_dose = float(rec[f"{periodo}_f3_dose"])
 
             if v < 70:
                 return "0 UI", "Hipoglicemia!"
-
             if f1_min <= v <= f1_max:
                 return f"{int(f1_dose)} UI", f"Faixa 1 ({int(f1_min)}-{int(f1_max)})"
             elif f2_min <= v <= f2_max:
@@ -284,7 +297,6 @@ def calc_insulina(v, m):
             else:
                 return "0 UI", "Fora das faixas"
 
-        # ANTIGO (mantém seu comportamento original)
         if v < 70:
             return "0 UI", "Hipoglicemia!"
         elif v <= 200:
@@ -371,9 +383,9 @@ if st.session_state.user_email == "admin":
             st.info("Sem sugestões.")
 
     with t_backup:
-        st.subheader("💾 Backup Manual")
-        st.caption("Gera um arquivo .zip com: usuarios.db + CSVs do app (glicemia/nutrição/receita/sugestões).")
+        st.subheader("💾 Backup Manual / Automático / Restauração")
 
+        st.write("### 📦 Gerar Backup Manual")
         colb1, colb2 = st.columns([1, 2])
         with colb1:
             if st.button("📦 Gerar Backup Agora", use_container_width=True):
@@ -381,9 +393,7 @@ if st.session_state.user_email == "admin":
                 st.download_button("⬇️ Baixar Backup (.zip)", b, file_name=nome, use_container_width=True)
 
         st.markdown("---")
-        st.subheader("♻️ Restauração Manual")
-        st.caption("Envie um backup .zip gerado aqui. Vai sobrescrever os arquivos atuais.")
-
+        st.write("### ♻️ Restauração Manual")
         up = st.file_uploader("Enviar arquivo .zip de backup", type=["zip"])
         if up is not None:
             if st.button("✅ Restaurar Agora", use_container_width=True):
@@ -391,13 +401,49 @@ if st.session_state.user_email == "admin":
                 st.success("Restauração concluída! Recarregue o app (F5) ou reinicie a execução.")
 
         st.markdown("---")
-        st.subheader("⏰ Backup Automático")
-        st.write("✅ Configurado: 1 backup por dia após **03:00** (horário de Brasília).")
-        st.caption("Obs: Como Streamlit não roda 24h, o backup acontece quando o app é acessado após 03:00 e ainda não foi feito naquele dia.")
+        st.write("### ⏰ Backup Automático")
+        st.info("Config: 1 backup por dia após **03:00** (Brasília).")
         if BACKUP_STATE_FILE.exists():
-            st.info(f"Último dia de backup automático registrado: {BACKUP_STATE_FILE.read_text(encoding='utf-8').strip()}")
+            st.caption(f"Último dia registrado: {BACKUP_STATE_FILE.read_text(encoding='utf-8').strip()}")
+
+        st.markdown("---")
+        st.write("### 🗂️ Backups existentes (pasta backups/)")
+        df_bk = listar_backups()
+        if df_bk.empty:
+            st.warning("Nenhum backup encontrado.")
         else:
-            st.info("Ainda não registrou backup automático.")
+            # Mostra tabela com data e tamanho
+            df_show = df_bk.copy()
+            df_show["data_hora"] = df_show["data_hora"].dt.strftime("%d/%m/%Y %H:%M:%S")
+            st.dataframe(df_show[["arquivo", "data_hora", "tamanho_mb"]], use_container_width=True)
+
+            st.markdown("#### Ações")
+            selecionado = st.selectbox("Selecionar backup", df_bk["arquivo"].tolist())
+
+            colx1, colx2, colx3 = st.columns(3)
+
+            with colx1:
+                # Baixar selecionado
+                p_sel = BACKUP_DIR / selecionado
+                if p_sel.exists():
+                    with open(p_sel, "rb") as f:
+                        st.download_button("⬇️ Baixar Selecionado", f.read(), file_name=selecionado, use_container_width=True)
+
+            with colx2:
+                # Apagar selecionado
+                if st.button("🗑️ Apagar Selecionado", use_container_width=True):
+                    p_sel = BACKUP_DIR / selecionado
+                    if p_sel.exists():
+                        p_sel.unlink()
+                        st.success("Backup apagado.")
+                        st.rerun()
+
+            with colx3:
+                # Apagar antigos (mantém 7 dias)
+                if st.button("🧹 Apagar Antigos (7 dias)", use_container_width=True):
+                    apagados = apagar_backups_antigos(dias_manter=7)
+                    st.success(f"Apagados: {apagados}")
+                    st.rerun()
 
 else:
     tab1, tab2, tab3, tab4 = st.tabs(["📊 Glicemia", "🍽️ Nutrição", "⚙️ Receita", "📩 Sugerir Melhoria"])
@@ -411,18 +457,12 @@ else:
             v_gl = st.number_input("Valor Glicemia", 0, 600, 100)
             m_gl = st.selectbox("Momento", MOMENTOS_ORDEM)
             dose, msg_d = calc_insulina(v_gl, m_gl)
-
-            st.markdown(
-                f'<div class="metric-box"><small>{msg_d}</small><br><span class="dose-destaque">{dose}</span></div>',
-                unsafe_allow_html=True
-            )
+            st.markdown(f'<div class="metric-box"><small>{msg_d}</small><br><span class="dose-destaque">{dose}</span></div>', unsafe_allow_html=True)
 
             if st.button("💾 Salvar Glicemia", use_container_width=True):
                 agora = agora_br()
-                novo = pd.DataFrame(
-                    [[st.session_state.user_email, agora.strftime("%d/%m/%Y"), agora.strftime("%H:%M"), v_gl, m_gl, dose]],
-                    columns=["Usuario","Data","Hora","Valor","Momento","Dose"]
-                )
+                novo = pd.DataFrame([[st.session_state.user_email, agora.strftime("%d/%m/%Y"), agora.strftime("%H:%M"), v_gl, m_gl, dose]],
+                                    columns=["Usuario","Data","Hora","Valor","Momento","Dose"])
                 base = pd.read_csv(ARQ_G) if os.path.exists(ARQ_G) else pd.DataFrame()
                 pd.concat([base, novo], ignore_index=True).to_csv(ARQ_G, index=False)
                 st.rerun()
@@ -451,7 +491,7 @@ else:
         dfn = carregar_dados_seguro(ARQ_N)
 
         m_nutri = st.selectbox("Refeição", MOMENTOS_ORDEM, key="n_m")
-        sel = st.multiselect("Alimentos", list(ALIMENTOS.keys()))  # ✅ CORRIGIDO
+        sel = st.multiselect("Alimentos", list(ALIMENTOS.keys()))
 
         c_tot = sum([ALIMENTOS[x][0] for x in sel])
         p_tot = sum([ALIMENTOS[x][1] for x in sel])
@@ -464,10 +504,8 @@ else:
 
         if st.button("💾 Salvar Refeição", use_container_width=True):
             agora = agora_br()
-            novo_n = pd.DataFrame(
-                [[st.session_state.user_email, agora.strftime("%d/%m/%Y"), m_nutri, ", ".join(sel), c_tot, p_tot, g_tot]],
-                columns=["Usuario","Data","Momento","Info","C","P","G"]
-            )
+            novo_n = pd.DataFrame([[st.session_state.user_email, agora.strftime("%d/%m/%Y"), m_nutri, ", ".join(sel), c_tot, p_tot, g_tot]],
+                                  columns=["Usuario","Data","Momento","Info","C","P","G"])
             base = pd.read_csv(ARQ_N) if os.path.exists(ARQ_N) else pd.DataFrame()
             pd.concat([base, novo_n], ignore_index=True).to_csv(ARQ_N, index=False)
             st.rerun()
@@ -483,39 +521,37 @@ else:
         v = r_u.iloc[0] if not r_u.empty else {}
 
         st.subheader("🌞 Receita Manhã (Editável)")
-
         cm1, cm2, cm3 = st.columns(3)
         with cm1:
-            m1_min = st.number_input("Faixa 1 - Mín", value=int(v.get('manha_f1_min', 70)), key="m1_min")
-            m1_max = st.number_input("Faixa 1 - Máx", value=int(v.get('manha_f1_max', 150)), key="m1_max")
-            m1_dose = st.number_input("Dose Faixa 1 (UI)", value=int(v.get('manha_f1_dose', 3)), key="m1_dose")
+            m1_min = st.number_input("Faixa 1 - Mín", value=int(v.get('manha_f1_min', 70)), key="m1_min_u")
+            m1_max = st.number_input("Faixa 1 - Máx", value=int(v.get('manha_f1_max', 150)), key="m1_max_u")
+            m1_dose = st.number_input("Dose Faixa 1 (UI)", value=int(v.get('manha_f1_dose', 3)), key="m1_dose_u")
         with cm2:
-            m2_min = st.number_input("Faixa 2 - Mín", value=int(v.get('manha_f2_min', 151)), key="m2_min")
-            m2_max = st.number_input("Faixa 2 - Máx", value=int(v.get('manha_f2_max', 300)), key="m2_max")
-            m2_dose = st.number_input("Dose Faixa 2 (UI)", value=int(v.get('manha_f2_dose', 5)), key="m2_dose")
+            m2_min = st.number_input("Faixa 2 - Mín", value=int(v.get('manha_f2_min', 151)), key="m2_min_u")
+            m2_max = st.number_input("Faixa 2 - Máx", value=int(v.get('manha_f2_max', 300)), key="m2_max_u")
+            m2_dose = st.number_input("Dose Faixa 2 (UI)", value=int(v.get('manha_f2_dose', 5)), key="m2_dose_u")
         with cm3:
-            m3_min = st.number_input("Faixa 3 - Mín", value=int(v.get('manha_f3_min', 301)), key="m3_min")
-            m3_max = st.number_input("Faixa 3 - Máx", value=int(v.get('manha_f3_max', 600)), key="m3_max")
-            m3_dose = st.number_input("Dose Faixa 3 (UI)", value=int(v.get('manha_f3_dose', 8)), key="m3_dose")
+            m3_min = st.number_input("Faixa 3 - Mín", value=int(v.get('manha_f3_min', 301)), key="m3_min_u")
+            m3_max = st.number_input("Faixa 3 - Máx", value=int(v.get('manha_f3_max', 600)), key="m3_max_u")
+            m3_dose = st.number_input("Dose Faixa 3 (UI)", value=int(v.get('manha_f3_dose', 8)), key="m3_dose_u")
 
         st.markdown("---")
         st.subheader("🌙 Receita Noite (Editável)")
-
         cn1, cn2, cn3 = st.columns(3)
         with cn1:
-            n1_min = st.number_input("Faixa 1 - Mín ", value=int(v.get('noite_f1_min', 70)), key="n1_min")
-            n1_max = st.number_input("Faixa 1 - Máx ", value=int(v.get('noite_f1_max', 150)), key="n1_max")
-            n1_dose = st.number_input("Dose Faixa 1 (UI) ", value=int(v.get('noite_f1_dose', 3)), key="n1_dose")
+            n1_min = st.number_input("Faixa 1 - Mín ", value=int(v.get('noite_f1_min', 70)), key="n1_min_u")
+            n1_max = st.number_input("Faixa 1 - Máx ", value=int(v.get('noite_f1_max', 150)), key="n1_max_u")
+            n1_dose = st.number_input("Dose Faixa 1 (UI) ", value=int(v.get('noite_f1_dose', 3)), key="n1_dose_u")
         with cn2:
-            n2_min = st.number_input("Faixa 2 - Mín  ", value=int(v.get('noite_f2_min', 151)), key="n2_min")
-            n2_max = st.number_input("Faixa 2 - Máx  ", value=int(v.get('noite_f2_max', 300)), key="n2_max")
-            n2_dose = st.number_input("Dose Faixa 2 (UI)  ", value=int(v.get('noite_f2_dose', 5)), key="n2_dose")
+            n2_min = st.number_input("Faixa 2 - Mín  ", value=int(v.get('noite_f2_min', 151)), key="n2_min_u")
+            n2_max = st.number_input("Faixa 2 - Máx  ", value=int(v.get('noite_f2_max', 300)), key="n2_max_u")
+            n2_dose = st.number_input("Dose Faixa 2 (UI)  ", value=int(v.get('noite_f2_dose', 5)), key="n2_dose_u")
         with cn3:
-            n3_min = st.number_input("Faixa 3 - Mín   ", value=int(v.get('noite_f3_min', 301)), key="n3_min")
-            n3_max = st.number_input("Faixa 3 - Máx   ", value=int(v.get('noite_f3_max', 600)), key="n3_max")
-            n3_dose = st.number_input("Dose Faixa 3 (UI)   ", value=int(v.get('noite_f3_dose', 8)), key="n3_dose")
+            n3_min = st.number_input("Faixa 3 - Mín   ", value=int(v.get('noite_f3_min', 301)), key="n3_min_u")
+            n3_max = st.number_input("Faixa 3 - Máx   ", value=int(v.get('noite_f3_max', 600)), key="n3_max_u")
+            n3_dose = st.number_input("Dose Faixa 3 (UI)   ", value=int(v.get('noite_f3_dose', 8)), key="n3_dose_u")
 
-        if st.button("💾 Salvar Receita", use_container_width=True):
+        if st.button("💾 Salvar Receita", use_container_width=True, key="save_receita_user"):
             nova_rec = pd.DataFrame([{
                 'Usuario': st.session_state.user_email,
 
@@ -554,7 +590,6 @@ if st.sidebar.button("📥 Gerar Excel Completo"):
 
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        # Aba Glicemia com Cores
         if not df_e_g.empty:
             pivot = df_e_g.pivot_table(index='Data', columns='Momento', values='Valor', aggfunc='last')
             pivot.to_excel(writer, sheet_name='Glicemia')
@@ -579,7 +614,6 @@ if st.sidebar.button("📥 Gerar Excel Completo"):
                         except:
                             pass
 
-        # Aba Nutrição
         if not df_e_n.empty:
             df_e_n.to_excel(writer, sheet_name='Nutrição', index=False)
             ws2 = writer.sheets['Nutrição']
