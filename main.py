@@ -1,26 +1,47 @@
 import streamlit as st
 import pandas as pd
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime
 from openpyxl import Workbook
-from openpyxl.styles import Alignment
+from openpyxl.styles import PatternFill, Alignment, Font
 from io import BytesIO
 import hashlib
 
 st.set_page_config(layout="wide")
 
 # =====================================================
-# CONFIGURAÇÃO
+# ESTILO VISUAL RH
 # =====================================================
-INTERSTICIO_MINUTOS = 670  # 11h10
-HORARIO_ENTRADA = "06:00"
-HORARIO_SAIDA = "15:58"
+st.markdown("""
+<style>
+thead tr th {
+    background-color: #1f4e78 !important;
+    color: white !important;
+    text-align: center !important;
+}
+tbody tr:nth-child(even) {
+    background-color: #e9f1f7 !important;
+}
+tbody tr:nth-child(odd) {
+    background-color: #dbeaf5 !important;
+}
+</style>
+""", unsafe_allow_html=True)
 
 # =====================================================
-# BANCO DE DADOS
+# BANCO
 # =====================================================
 conn = sqlite3.connect("escala.db", check_same_thread=False)
 cursor = conn.cursor()
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS usuarios (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    usuario TEXT,
+    senha TEXT,
+    categoria TEXT
+)
+""")
 
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS funcionarios (
@@ -34,22 +55,25 @@ CREATE TABLE IF NOT EXISTS escala (
     funcionario_id INTEGER,
     data TEXT,
     entrada TEXT,
-    saida TEXT,
-    FOREIGN KEY(funcionario_id) REFERENCES funcionarios(id)
+    saida TEXT
 )
 """)
 
 conn.commit()
 
 # =====================================================
-# FUNÇÃO HASH LOGIN
+# CRIAR ADMIN PADRÃO SE NÃO EXISTIR
 # =====================================================
 def gerar_hash(senha):
     return hashlib.sha256(senha.encode()).hexdigest()
 
-USUARIOS = {
-    "admin": gerar_hash("123")
-}
+cursor.execute("SELECT * FROM usuarios WHERE usuario='admin'")
+if not cursor.fetchone():
+    cursor.execute(
+        "INSERT INTO usuarios (usuario, senha, categoria) VALUES (?,?,?)",
+        ("admin", gerar_hash("123"), "admin")
+    )
+    conn.commit()
 
 # =====================================================
 # LOGIN
@@ -58,111 +82,93 @@ if "logado" not in st.session_state:
     st.session_state.logado = False
 
 if not st.session_state.logado:
-    st.title("Login Sistema RH")
+    st.title("🔐 Login Sistema RH")
+
     user = st.text_input("Usuário")
     senha = st.text_input("Senha", type="password")
 
     if st.button("Entrar"):
-        if user in USUARIOS and USUARIOS[user] == gerar_hash(senha):
+        cursor.execute("SELECT * FROM usuarios WHERE usuario=?", (user,))
+        dados = cursor.fetchone()
+
+        if dados and dados[2] == gerar_hash(senha):
             st.session_state.logado = True
+            st.session_state.usuario = dados[1]
+            st.session_state.categoria = dados[3]
             st.rerun()
         else:
-            st.error("Login inválido")
+            st.error("Usuário ou senha inválidos")
     st.stop()
 
 # =====================================================
-# FUNÇÃO GERAR ESCALA AUTOMÁTICA
+# MENU POR CATEGORIA
+# =====================================================
+st.sidebar.title("Menu")
+
+menus = ["Visualizar Escala"]
+
+if st.session_state.categoria in ["admin", "rh"]:
+    menus.append("Gerar Escala")
+    menus.append("Cadastrar Funcionário")
+    menus.append("Cadastrar Usuário")
+
+menu = st.sidebar.radio("Navegação", menus)
+
+st.sidebar.write("Usuário:", st.session_state.usuario)
+st.sidebar.write("Categoria:", st.session_state.categoria)
+
+# =====================================================
+# FUNÇÃO GERAR ESCALA 5x2 + DOMINGO 1x1
 # =====================================================
 def gerar_escala(mes, ano):
-
     cursor.execute("DELETE FROM escala")
     conn.commit()
 
-    cursor.execute("SELECT * FROM funcionarios")
-    funcionarios = cursor.fetchall()
+    funcionarios = pd.read_sql_query("SELECT * FROM funcionarios", conn)
 
-    dias_mes = pd.date_range(f"{ano}-{mes:02d}-01", periods=31)
+    datas = pd.date_range(f"{ano}-{mes:02d}-01", periods=31)
 
-    domingo_toggle = 0
+    alternador_domingo = 0
 
-    for f in funcionarios:
+    for _, f in funcionarios.iterrows():
         dias_trabalhados = 0
-        for data in dias_mes:
 
+        for data in datas:
             if data.month != mes:
                 continue
 
-            weekday = data.weekday()  # 6 domingo
-
+            weekday = data.weekday()
             folga = False
 
-            # Regra 5x2
+            # 5x2
             if dias_trabalhados == 5:
                 folga = True
                 dias_trabalhados = 0
 
-            # Regra Domingo 1x1 alternado
+            # Domingo 1x1
             if weekday == 6:
-                if domingo_toggle % 2 == 0:
+                if alternador_domingo % 2 == 0:
                     folga = True
-                domingo_toggle += 1
-
-            # Balanceamento 50% (simples)
-            cursor.execute("""
-            SELECT COUNT(*) FROM escala
-            WHERE data=? AND entrada='FOLGA'
-            """, (data.strftime("%Y-%m-%d"),))
-            folgas_no_dia = cursor.fetchone()[0]
-
-            if folgas_no_dia >= len(funcionarios)/2:
-                folga = False
+                alternador_domingo += 1
 
             if folga:
-                cursor.execute("""
-                INSERT INTO escala VALUES (?,?,?,?)
-                """, (f[0], data.strftime("%Y-%m-%d"), "FOLGA", "FOLGA"))
+                cursor.execute(
+                    "INSERT INTO escala VALUES (?,?,?,?)",
+                    (f["id"], data.strftime("%Y-%m-%d"), "FOLGA", "FOLGA")
+                )
             else:
-                cursor.execute("""
-                INSERT INTO escala VALUES (?,?,?,?)
-                """, (f[0], data.strftime("%Y-%m-%d"), HORARIO_ENTRADA, HORARIO_SAIDA))
+                cursor.execute(
+                    "INSERT INTO escala VALUES (?,?,?,?)",
+                    (f["id"], data.strftime("%Y-%m-%d"), "06:00", "15:58")
+                )
                 dias_trabalhados += 1
 
     conn.commit()
 
 # =====================================================
-# MENU
+# VISUALIZAR ESCALA (FORMATO IGUAL IMAGEM)
 # =====================================================
-st.sidebar.title("Menu")
-menu = st.sidebar.radio("Navegação", ["Cadastrar Funcionário", "Gerar Escala", "Exportar Excel"])
-
-# =====================================================
-# CADASTRO
-# =====================================================
-if menu == "Cadastrar Funcionário":
-    nome = st.text_input("Nome Funcionário")
-    if st.button("Salvar"):
-        cursor.execute("INSERT INTO funcionarios (nome) VALUES (?)", (nome,))
-        conn.commit()
-        st.success("Funcionário cadastrado")
-
-    df = pd.read_sql_query("SELECT * FROM funcionarios", conn)
-    st.dataframe(df, use_container_width=True)
-
-# =====================================================
-# GERAR ESCALA
-# =====================================================
-if menu == "Gerar Escala":
-    mes = st.selectbox("Mês", list(range(1,13)))
-    ano = st.number_input("Ano", value=2026)
-
-    if st.button("Gerar Escala Automática"):
-        gerar_escala(mes, ano)
-        st.success("Escala gerada com regras automáticas!")
-
-# =====================================================
-# EXPORTAR FORMATO IGUAL IMAGEM
-# =====================================================
-if menu == "Exportar Excel":
+if menu == "Visualizar Escala":
 
     df_func = pd.read_sql_query("SELECT * FROM funcionarios", conn)
     df_escala = pd.read_sql_query("SELECT * FROM escala", conn)
@@ -171,13 +177,16 @@ if menu == "Exportar Excel":
         st.warning("Gere a escala primeiro.")
         st.stop()
 
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Escala Mensal"
-
     dias = sorted(df_escala["data"].unique())
-    cabecalho = [""] + [datetime.strptime(d, "%Y-%m-%d").day for d in dias]
-    ws.append(cabecalho)
+
+    colunas = ["Nome"]
+    dias_formatados = []
+
+    for d in dias:
+        data_obj = datetime.strptime(d, "%Y-%m-%d")
+        colunas.append(f"{data_obj.day}\n{data_obj.strftime('%a')}")
+
+    tabela = []
 
     for _, func in df_func.iterrows():
         linha_entrada = [func["nome"]]
@@ -196,16 +205,47 @@ if menu == "Exportar Excel":
                 linha_entrada.append("")
                 linha_saida.append("")
 
-        ws.append(linha_entrada)
-        ws.append(linha_saida)
+        tabela.append(linha_entrada)
+        tabela.append(linha_saida)
 
-    buffer = BytesIO()
-    wb.save(buffer)
-    buffer.seek(0)
+    df_visual = pd.DataFrame(tabela, columns=colunas)
 
-    st.download_button(
-        "Baixar Escala Formato RH",
-        buffer,
-        "escala_mensal_rh.xlsx",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+    st.dataframe(df_visual, use_container_width=True)
+
+# =====================================================
+# GERAR ESCALA
+# =====================================================
+if menu == "Gerar Escala":
+    mes = st.selectbox("Mês", range(1,13))
+    ano = st.number_input("Ano", value=2026)
+
+    if st.button("Gerar Automático"):
+        gerar_escala(mes, ano)
+        st.success("Escala gerada com regras automáticas!")
+
+# =====================================================
+# CADASTRAR FUNCIONÁRIO
+# =====================================================
+if menu == "Cadastrar Funcionário":
+    nome = st.text_input("Nome")
+    if st.button("Salvar"):
+        cursor.execute("INSERT INTO funcionarios (nome) VALUES (?)", (nome,))
+        conn.commit()
+        st.success("Salvo")
+
+# =====================================================
+# CADASTRAR USUÁRIO (CATEGORIAS)
+# =====================================================
+if menu == "Cadastrar Usuário":
+
+    usuario = st.text_input("Usuário")
+    senha = st.text_input("Senha", type="password")
+    categoria = st.selectbox("Categoria", ["admin", "rh", "gerente", "profissional"])
+
+    if st.button("Criar Usuário"):
+        cursor.execute(
+            "INSERT INTO usuarios (usuario, senha, categoria) VALUES (?,?,?)",
+            (usuario, gerar_hash(senha), categoria)
+        )
+        conn.commit()
+        st.success("Usuário criado com categoria!")
