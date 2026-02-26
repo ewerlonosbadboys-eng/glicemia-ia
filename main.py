@@ -1,195 +1,211 @@
 import streamlit as st
 import pandas as pd
-import hashlib
+import sqlite3
 from datetime import datetime, timedelta
-from io import BytesIO
 from openpyxl import Workbook
+from openpyxl.styles import Alignment
+from io import BytesIO
+import hashlib
 
-# ==========================================
+st.set_page_config(layout="wide")
+
+# =====================================================
 # CONFIGURAÇÃO
-# ==========================================
-st.set_page_config(page_title="Sistema RH Escala", layout="wide")
+# =====================================================
+INTERSTICIO_MINUTOS = 670  # 11h10
+HORARIO_ENTRADA = "06:00"
+HORARIO_SAIDA = "15:58"
 
-# ==========================================
-# FUNÇÃO HASH
-# ==========================================
+# =====================================================
+# BANCO DE DADOS
+# =====================================================
+conn = sqlite3.connect("escala.db", check_same_thread=False)
+cursor = conn.cursor()
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS funcionarios (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nome TEXT
+)
+""")
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS escala (
+    funcionario_id INTEGER,
+    data TEXT,
+    entrada TEXT,
+    saida TEXT,
+    FOREIGN KEY(funcionario_id) REFERENCES funcionarios(id)
+)
+""")
+
+conn.commit()
+
+# =====================================================
+# FUNÇÃO HASH LOGIN
+# =====================================================
 def gerar_hash(senha):
     return hashlib.sha256(senha.encode()).hexdigest()
 
-# ==========================================
-# USUÁRIOS
-# ==========================================
 USUARIOS = {
-    "admin": {
-        "senha": gerar_hash("123"),
-        "categoria": "admin"
-    },
-    "profissional": {
-        "senha": gerar_hash("123"),
-        "categoria": "profissional"
-    }
+    "admin": gerar_hash("123")
 }
 
-# ==========================================
-# SESSION STATE
-# ==========================================
+# =====================================================
+# LOGIN
+# =====================================================
 if "logado" not in st.session_state:
     st.session_state.logado = False
-if "usuario" not in st.session_state:
-    st.session_state.usuario = None
-if "categoria" not in st.session_state:
-    st.session_state.categoria = None
 
-# ==========================================
-# FUNÇÃO LOGIN
-# ==========================================
-def login(usuario, senha):
-    if usuario in USUARIOS:
-        if USUARIOS[usuario]["senha"] == gerar_hash(senha):
-            st.session_state.logado = True
-            st.session_state.usuario = usuario
-            st.session_state.categoria = USUARIOS[usuario]["categoria"]
-            return True
-    return False
-
-# ==========================================
-# TELA LOGIN
-# ==========================================
 if not st.session_state.logado:
-    st.title("🔐 Login Sistema RH")
-
-    usuario = st.text_input("Usuário")
+    st.title("Login Sistema RH")
+    user = st.text_input("Usuário")
     senha = st.text_input("Senha", type="password")
 
     if st.button("Entrar"):
-        if login(usuario, senha):
-            st.success("Login realizado!")
+        if user in USUARIOS and USUARIOS[user] == gerar_hash(senha):
+            st.session_state.logado = True
             st.rerun()
         else:
-            st.error("Usuário ou senha incorretos")
+            st.error("Login inválido")
+    st.stop()
 
-# ==========================================
-# SISTEMA
-# ==========================================
-else:
-    st.sidebar.title("Menu")
-    menu = st.sidebar.radio("Navegação", ["Escala", "Ajustes", "Banco de Horas"])
+# =====================================================
+# FUNÇÃO GERAR ESCALA AUTOMÁTICA
+# =====================================================
+def gerar_escala(mes, ano):
 
-    st.sidebar.write(f"Usuário: {st.session_state.usuario}")
-    st.sidebar.write(f"Categoria: {st.session_state.categoria}")
+    cursor.execute("DELETE FROM escala")
+    conn.commit()
 
-    if st.sidebar.button("Logout"):
-        st.session_state.clear()
-        st.rerun()
+    cursor.execute("SELECT * FROM funcionarios")
+    funcionarios = cursor.fetchall()
 
-    # ======================================
-    # BASE ESCALA SIMULADA
-    # ======================================
-    nomes = [
-        "Viviane", "Maria Eduarda", "Tatiane",
-        "Fabiana", "Elizangela", "Disnei",
-        "Marivaldo", "Joao Victor", "Deybson"
-    ]
+    dias_mes = pd.date_range(f"{ano}-{mes:02d}-01", periods=31)
 
-    dias = list(range(1, 32))
-    dados = []
+    domingo_toggle = 0
 
-    for nome in nomes:
-        linha = {"Nome": nome}
-        for dia in dias:
-            linha[str(dia)] = "06:00 - 15:58"
-        dados.append(linha)
+    for f in funcionarios:
+        dias_trabalhados = 0
+        for data in dias_mes:
 
-    df = pd.DataFrame(dados)
+            if data.month != mes:
+                continue
 
-    # ======================================
-    # ABA ESCALA
-    # ======================================
-    if menu == "Escala":
-        st.title("📅 Calendário de Escala")
+            weekday = data.weekday()  # 6 domingo
 
-        st.dataframe(df, use_container_width=True)
+            folga = False
 
-        st.download_button(
-            label="⬇ Baixar Escala Excel",
-            data=df.to_csv(index=False).encode("utf-8"),
-            file_name="escala.csv",
-            mime="text/csv"
-        )
+            # Regra 5x2
+            if dias_trabalhados == 5:
+                folga = True
+                dias_trabalhados = 0
 
-    # ======================================
-    # ABA AJUSTES (ADMIN)
-    # ======================================
-    if menu == "Ajustes":
+            # Regra Domingo 1x1 alternado
+            if weekday == 6:
+                if domingo_toggle % 2 == 0:
+                    folga = True
+                domingo_toggle += 1
 
-        if st.session_state.categoria != "admin":
-            st.warning("Somente ADMIN pode fazer ajustes.")
-        else:
-            st.title("⚙ Ajustes de Escala")
+            # Balanceamento 50% (simples)
+            cursor.execute("""
+            SELECT COUNT(*) FROM escala
+            WHERE data=? AND entrada='FOLGA'
+            """, (data.strftime("%Y-%m-%d"),))
+            folgas_no_dia = cursor.fetchone()[0]
 
-            funcionario = st.selectbox("Selecionar Funcionário", nomes)
-            dia = st.selectbox("Selecionar Dia", dias)
+            if folgas_no_dia >= len(funcionarios)/2:
+                folga = False
 
-            nova_acao = st.radio("Tipo de Ajuste", [
-                "Trocar Horário",
-                "Dar Folga",
-                "Trocar Categoria Usuário"
-            ])
+            if folga:
+                cursor.execute("""
+                INSERT INTO escala VALUES (?,?,?,?)
+                """, (f[0], data.strftime("%Y-%m-%d"), "FOLGA", "FOLGA"))
+            else:
+                cursor.execute("""
+                INSERT INTO escala VALUES (?,?,?,?)
+                """, (f[0], data.strftime("%Y-%m-%d"), HORARIO_ENTRADA, HORARIO_SAIDA))
+                dias_trabalhados += 1
 
-            if nova_acao == "Trocar Horário":
-                novo_horario = st.text_input("Novo Horário (ex: 08:00 - 17:48)")
-                if st.button("Salvar Horário"):
-                    df.loc[df["Nome"] == funcionario, str(dia)] = novo_horario
-                    st.success("Horário atualizado!")
+    conn.commit()
 
-            if nova_acao == "Dar Folga":
-                if st.button("Confirmar Folga"):
-                    df.loc[df["Nome"] == funcionario, str(dia)] = "FOLGA"
-                    st.success("Folga aplicada!")
+# =====================================================
+# MENU
+# =====================================================
+st.sidebar.title("Menu")
+menu = st.sidebar.radio("Navegação", ["Cadastrar Funcionário", "Gerar Escala", "Exportar Excel"])
 
-            if nova_acao == "Trocar Categoria Usuário":
-                usuario_alvo = st.selectbox("Usuário", list(USUARIOS.keys()))
-                nova_categoria = st.selectbox("Nova Categoria", ["admin", "profissional"])
-                if st.button("Alterar Categoria"):
-                    USUARIOS[usuario_alvo]["categoria"] = nova_categoria
-                    st.success("Categoria alterada!")
+# =====================================================
+# CADASTRO
+# =====================================================
+if menu == "Cadastrar Funcionário":
+    nome = st.text_input("Nome Funcionário")
+    if st.button("Salvar"):
+        cursor.execute("INSERT INTO funcionarios (nome) VALUES (?)", (nome,))
+        conn.commit()
+        st.success("Funcionário cadastrado")
 
-    # ======================================
-    # BANCO DE HORAS
-    # ======================================
-    if menu == "Banco de Horas":
-        st.title("📊 Indicador Banco de Horas")
+    df = pd.read_sql_query("SELECT * FROM funcionarios", conn)
+    st.dataframe(df, use_container_width=True)
 
-        col1, col2, col3 = st.columns(3)
+# =====================================================
+# GERAR ESCALA
+# =====================================================
+if menu == "Gerar Escala":
+    mes = st.selectbox("Mês", list(range(1,13)))
+    ano = st.number_input("Ano", value=2026)
 
-        col1.metric("Horas Trabalhadas", "176h")
-        col2.metric("Horas Contratuais", "160h")
-        col3.metric("Saldo", "+16h")
+    if st.button("Gerar Escala Automática"):
+        gerar_escala(mes, ano)
+        st.success("Escala gerada com regras automáticas!")
 
-        st.progress(0.65)
+# =====================================================
+# EXPORTAR FORMATO IGUAL IMAGEM
+# =====================================================
+if menu == "Exportar Excel":
 
-    # ======================================
-    # MODELO EXCEL
-    # ======================================
-    st.sidebar.markdown("---")
-    if st.sidebar.button("Baixar Modelo Excel RH"):
+    df_func = pd.read_sql_query("SELECT * FROM funcionarios", conn)
+    df_escala = pd.read_sql_query("SELECT * FROM escala", conn)
 
-        wb = Workbook()
-        ws = wb.active
-        ws.title = "Modelo Escala"
+    if df_escala.empty:
+        st.warning("Gere a escala primeiro.")
+        st.stop()
 
-        ws.append(["Nome"] + dias)
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Escala Mensal"
 
-        for nome in nomes:
-            ws.append([nome] + ["06:00 - 15:58"] * 31)
+    dias = sorted(df_escala["data"].unique())
+    cabecalho = [""] + [datetime.strptime(d, "%Y-%m-%d").day for d in dias]
+    ws.append(cabecalho)
 
-        buffer = BytesIO()
-        wb.save(buffer)
-        buffer.seek(0)
+    for _, func in df_func.iterrows():
+        linha_entrada = [func["nome"]]
+        linha_saida = [""]
 
-        st.download_button(
-            label="Download Modelo",
-            data=buffer,
-            file_name="modelo_escala_rh.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+        for d in dias:
+            registro = df_escala[
+                (df_escala["funcionario_id"] == func["id"]) &
+                (df_escala["data"] == d)
+            ]
+
+            if not registro.empty:
+                linha_entrada.append(registro.iloc[0]["entrada"])
+                linha_saida.append(registro.iloc[0]["saida"])
+            else:
+                linha_entrada.append("")
+                linha_saida.append("")
+
+        ws.append(linha_entrada)
+        ws.append(linha_saida)
+
+    buffer = BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
+
+    st.download_button(
+        "Baixar Escala Formato RH",
+        buffer,
+        "escala_mensal_rh.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
