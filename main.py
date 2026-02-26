@@ -1,251 +1,195 @@
-# ============================================================
-# SISTEMA ESCALA PRO - VERSÃO CORPORATIVA COMPLETA
-# Login + Banco SQLite + Calendário RH + Banco Horas + Excel
-# ============================================================
-
 import streamlit as st
 import pandas as pd
-import sqlite3
-import calendar
+import hashlib
 from datetime import datetime, timedelta
-import plotly.express as px
+from io import BytesIO
 from openpyxl import Workbook
-from openpyxl.styles import PatternFill, Alignment, Border, Side
-import io
 
-st.set_page_config(layout="wide", page_title="Escala PRO Corporativo")
+# ==========================================
+# CONFIGURAÇÃO
+# ==========================================
+st.set_page_config(page_title="Sistema RH Escala", layout="wide")
 
-# ============================================================
-# BANCO DE DADOS
-# ============================================================
+# ==========================================
+# FUNÇÃO HASH
+# ==========================================
+def gerar_hash(senha):
+    return hashlib.sha256(senha.encode()).hexdigest()
 
-conn = sqlite3.connect("escala_pro.db", check_same_thread=False)
-c = conn.cursor()
+# ==========================================
+# USUÁRIOS
+# ==========================================
+USUARIOS = {
+    "admin": {
+        "senha": gerar_hash("123"),
+        "categoria": "admin"
+    },
+    "profissional": {
+        "senha": gerar_hash("123"),
+        "categoria": "profissional"
+    }
+}
 
-c.execute("""
-CREATE TABLE IF NOT EXISTS setores(
-    setor TEXT PRIMARY KEY,
-    senha TEXT
-)
-""")
-
-c.execute("""
-CREATE TABLE IF NOT EXISTS usuarios(
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    nome TEXT,
-    setor TEXT,
-    categoria TEXT,
-    carga_diaria REAL
-)
-""")
-
-c.execute("""
-CREATE TABLE IF NOT EXISTS escalas(
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    usuario_id INTEGER,
-    data TEXT,
-    entrada TEXT,
-    saida TEXT,
-    status TEXT
-)
-""")
-
-conn.commit()
-
-# ============================================================
-# LOGIN REAL
-# ============================================================
-
+# ==========================================
+# SESSION STATE
+# ==========================================
 if "logado" not in st.session_state:
     st.session_state.logado = False
+if "usuario" not in st.session_state:
+    st.session_state.usuario = None
+if "categoria" not in st.session_state:
+    st.session_state.categoria = None
 
-st.sidebar.title("🔐 Login Setor")
+# ==========================================
+# FUNÇÃO LOGIN
+# ==========================================
+def login(usuario, senha):
+    if usuario in USUARIOS:
+        if USUARIOS[usuario]["senha"] == gerar_hash(senha):
+            st.session_state.logado = True
+            st.session_state.usuario = usuario
+            st.session_state.categoria = USUARIOS[usuario]["categoria"]
+            return True
+    return False
 
-setor = st.sidebar.text_input("Setor")
-senha = st.sidebar.text_input("Senha", type="password")
-
-if st.sidebar.button("Entrar"):
-    user = c.execute("SELECT * FROM setores WHERE setor=? AND senha=?",
-                     (setor, senha)).fetchone()
-    if user:
-        st.session_state.logado = True
-        st.session_state.setor = setor
-    else:
-        st.sidebar.error("Acesso negado")
-
+# ==========================================
+# TELA LOGIN
+# ==========================================
 if not st.session_state.logado:
-    st.stop()
+    st.title("🔐 Login Sistema RH")
 
-st.sidebar.success(f"Logado: {st.session_state.setor}")
+    usuario = st.text_input("Usuário")
+    senha = st.text_input("Senha", type="password")
 
-# ============================================================
-# TABS
-# ============================================================
+    if st.button("Entrar"):
+        if login(usuario, senha):
+            st.success("Login realizado!")
+            st.rerun()
+        else:
+            st.error("Usuário ou senha incorretos")
 
-aba1, aba2, aba3, aba4 = st.tabs([
-    "Cadastro",
-    "Calendário RH",
-    "Dashboard",
-    "Exportar Excel"
-])
+# ==========================================
+# SISTEMA
+# ==========================================
+else:
+    st.sidebar.title("Menu")
+    menu = st.sidebar.radio("Navegação", ["Escala", "Ajustes", "Banco de Horas"])
 
-# ============================================================
-# CADASTRO
-# ============================================================
+    st.sidebar.write(f"Usuário: {st.session_state.usuario}")
+    st.sidebar.write(f"Categoria: {st.session_state.categoria}")
 
-with aba1:
+    if st.sidebar.button("Logout"):
+        st.session_state.clear()
+        st.rerun()
 
-    nome = st.text_input("Nome Funcionário")
-    categoria = st.text_input("Categoria")
-    carga = st.number_input("Carga diária padrão (horas)", value=8.0)
+    # ======================================
+    # BASE ESCALA SIMULADA
+    # ======================================
+    nomes = [
+        "Viviane", "Maria Eduarda", "Tatiane",
+        "Fabiana", "Elizangela", "Disnei",
+        "Marivaldo", "Joao Victor", "Deybson"
+    ]
 
-    if st.button("Salvar Funcionário"):
-        c.execute("""
-        INSERT INTO usuarios(nome,setor,categoria,carga_diaria)
-        VALUES(?,?,?,?)
-        """,(nome, st.session_state.setor, categoria, carga))
-        conn.commit()
-        st.success("Salvo")
+    dias = list(range(1, 32))
+    dados = []
 
-# ============================================================
-# CALENDÁRIO ESTILO RH
-# ============================================================
+    for nome in nomes:
+        linha = {"Nome": nome}
+        for dia in dias:
+            linha[str(dia)] = "06:00 - 15:58"
+        dados.append(linha)
 
-with aba2:
+    df = pd.DataFrame(dados)
 
-    ano = datetime.now().year
-    mes = datetime.now().month
+    # ======================================
+    # ABA ESCALA
+    # ======================================
+    if menu == "Escala":
+        st.title("📅 Calendário de Escala")
 
-    dias_mes = calendar.monthrange(ano, mes)[1]
+        st.dataframe(df, use_container_width=True)
 
-    usuarios = pd.read_sql_query("""
-    SELECT * FROM usuarios WHERE setor=?
-    """, conn, params=(st.session_state.setor,))
+        st.download_button(
+            label="⬇ Baixar Escala Excel",
+            data=df.to_csv(index=False).encode("utf-8"),
+            file_name="escala.csv",
+            mime="text/csv"
+        )
 
-    if not usuarios.empty:
+    # ======================================
+    # ABA AJUSTES (ADMIN)
+    # ======================================
+    if menu == "Ajustes":
 
-        tabela = []
+        if st.session_state.categoria != "admin":
+            st.warning("Somente ADMIN pode fazer ajustes.")
+        else:
+            st.title("⚙ Ajustes de Escala")
 
-        for _, user in usuarios.iterrows():
+            funcionario = st.selectbox("Selecionar Funcionário", nomes)
+            dia = st.selectbox("Selecionar Dia", dias)
 
-            linha = {"Nome": user["nome"]}
+            nova_acao = st.radio("Tipo de Ajuste", [
+                "Trocar Horário",
+                "Dar Folga",
+                "Trocar Categoria Usuário"
+            ])
 
-            for dia in range(1, dias_mes+1):
-                data_str = f"{ano}-{mes:02d}-{dia:02d}"
+            if nova_acao == "Trocar Horário":
+                novo_horario = st.text_input("Novo Horário (ex: 08:00 - 17:48)")
+                if st.button("Salvar Horário"):
+                    df.loc[df["Nome"] == funcionario, str(dia)] = novo_horario
+                    st.success("Horário atualizado!")
 
-                escala = c.execute("""
-                SELECT * FROM escalas
-                WHERE usuario_id=? AND data=?
-                """,(user["id"], data_str)).fetchone()
+            if nova_acao == "Dar Folga":
+                if st.button("Confirmar Folga"):
+                    df.loc[df["Nome"] == funcionario, str(dia)] = "FOLGA"
+                    st.success("Folga aplicada!")
 
-                if escala:
-                    linha[dia] = escala[3] if escala[5]=="Trabalho" else "F"
-                else:
-                    linha[dia] = ""
+            if nova_acao == "Trocar Categoria Usuário":
+                usuario_alvo = st.selectbox("Usuário", list(USUARIOS.keys()))
+                nova_categoria = st.selectbox("Nova Categoria", ["admin", "profissional"])
+                if st.button("Alterar Categoria"):
+                    USUARIOS[usuario_alvo]["categoria"] = nova_categoria
+                    st.success("Categoria alterada!")
 
-            tabela.append(linha)
+    # ======================================
+    # BANCO DE HORAS
+    # ======================================
+    if menu == "Banco de Horas":
+        st.title("📊 Indicador Banco de Horas")
 
-        df_cal = pd.DataFrame(tabela)
-        st.dataframe(df_cal, use_container_width=True)
+        col1, col2, col3 = st.columns(3)
 
-# ============================================================
-# DASHBOARD + BANCO HORAS
-# ============================================================
+        col1.metric("Horas Trabalhadas", "176h")
+        col2.metric("Horas Contratuais", "160h")
+        col3.metric("Saldo", "+16h")
 
-with aba3:
+        st.progress(0.65)
 
-    df = pd.read_sql_query("""
-    SELECT u.nome, e.data, e.entrada, e.saida, u.carga_diaria
-    FROM escalas e
-    JOIN usuarios u ON u.id=e.usuario_id
-    WHERE u.setor=?
-    """, conn, params=(st.session_state.setor,))
-
-    if not df.empty:
-
-        df["data"] = pd.to_datetime(df["data"])
-        df["horas_trabalhadas"] = (
-            pd.to_datetime(df["saida"], format="%H:%M") -
-            pd.to_datetime(df["entrada"], format="%H:%M")
-        ).dt.total_seconds() / 3600
-
-        df["banco_horas"] = df["horas_trabalhadas"] - df["carga_diaria"]
-
-        resumo = df.groupby("nome")["banco_horas"].sum().reset_index()
-
-        fig = px.bar(resumo, x="nome", y="banco_horas",
-                     title="Indicador Banco de Horas")
-
-        st.plotly_chart(fig, use_container_width=True)
-
-# ============================================================
-# EXPORTAÇÃO EXCEL MODELO RH
-# ============================================================
-
-with aba4:
-
-    if st.button("Baixar Excel Modelo RH"):
+    # ======================================
+    # MODELO EXCEL
+    # ======================================
+    st.sidebar.markdown("---")
+    if st.sidebar.button("Baixar Modelo Excel RH"):
 
         wb = Workbook()
         ws = wb.active
-        ws.title = "Escala"
+        ws.title = "Modelo Escala"
 
-        fill_folga = PatternFill(start_color="FFFF00",
-                                 end_color="FFFF00",
-                                 fill_type="solid")
+        ws.append(["Nome"] + dias)
 
-        center = Alignment(horizontal="center", vertical="center")
-        border = Border(
-            left=Side(style="thin"),
-            right=Side(style="thin"),
-            top=Side(style="thin"),
-            bottom=Side(style="thin")
-        )
+        for nome in nomes:
+            ws.append([nome] + ["06:00 - 15:58"] * 31)
 
-        usuarios = pd.read_sql_query("""
-        SELECT * FROM usuarios WHERE setor=?
-        """, conn, params=(st.session_state.setor,))
-
-        dias_mes = calendar.monthrange(ano, mes)[1]
-
-        for col in range(1, dias_mes+1):
-            ws.cell(1, col+1, col)
-
-        row = 2
-
-        for _, user in usuarios.iterrows():
-
-            ws.cell(row,1,user["nome"])
-
-            for dia in range(1,dias_mes+1):
-
-                data_str=f"{ano}-{mes:02d}-{dia:02d}"
-
-                escala=c.execute("""
-                SELECT * FROM escalas
-                WHERE usuario_id=? AND data=?
-                """,(user["id"],data_str)).fetchone()
-
-                cell=ws.cell(row,dia+1)
-
-                if escala:
-                    if escala[5]=="Folga":
-                        cell.value="F"
-                        cell.fill=fill_folga
-                    else:
-                        cell.value=escala[3]
-
-                cell.alignment=center
-                cell.border=border
-
-            row+=1
-
-        buffer=io.BytesIO()
+        buffer = BytesIO()
         wb.save(buffer)
+        buffer.seek(0)
 
         st.download_button(
-            "Download Excel",
-            data=buffer.getvalue(),
-            file_name="escala_rh.xlsx",
+            label="Download Modelo",
+            data=buffer,
+            file_name="modelo_escala_rh.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
