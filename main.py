@@ -201,7 +201,7 @@ with aba4:
                         
                         c1.border = c2.border = border
                         c1.alignment = c2.alignment = center
-                        
+                     
                         if is_folga:
                             c1.fill = fill_dom if row['Dia'] == 'dom' else fill_folga
                             c2.fill = fill_dom if row['Dia'] == 'dom' else fill_folga
