@@ -56,16 +56,7 @@ def gerar_escalas_balanceadas(lista_usuarios):
                 'Sem_Ano': [d.isocalendar()[1] for d in datas]
             })
             
-            # 1. REGRA DOMINGO 1x1
+            # 1. REGRA DOMINGO 1x1 (Trabalha um / Folga outro)
             for i, row in df.iterrows():
                 if row['Dia'] == 'dom':
                     if row['Sem_Ano'] % 2 == user.get('offset_dom', 0):
-                        df.loc[i, 'Status'] = 'Folga'
-                        mapa_folgas_dia[i] += 1
-                        if user.get("Casada") and (i + 1) < 31:
-                            df.loc[i+1, 'Status'] = 'Folga'
-                            mapa_folgas_dia[i+1] += 1
-
-            # 2. COMPLETAR 5x2
-            for sem in range(0, 31, 7):
-                fim =
