@@ -60,3 +60,5 @@ def gerar_escalas_balanceadas(lista_usuarios):
             for i, row in df.iterrows():
                 if row['Dia'] == 'dom':
                     if row['Sem_Ano'] % 2 == user.get('offset_dom', 0):
+                        df.loc[i, 'Status'] = 'Folga'
+                        map
