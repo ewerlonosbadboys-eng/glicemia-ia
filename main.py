@@ -56,11 +56,11 @@ def gerar_escalas_balanceadas(lista_usuarios):
                 fim_sem = min(sem + 7, 31)
                 folgas_alocadas = 0
                 
-                # --- REGRA CORRIGIDA: DOMINGO 1x1 ---
+                # --- REGRA 1x1: TRABALHA UM / FOLGA OUTRO ---
                 doms = [j for j in range(sem, fim_sem) if df.loc[j, 'Dia'] == 'dom']
                 for d_idx in doms:
                     semana_idx = d_idx // 7
-                    # Alternância REAL: Um domingo folga, o outro trabalha
+                    # Alternância baseada na semana e no offset do usuário
                     if semana_idx % 2 == user.get('offset_dom', 0):
                         df.loc[d_idx, 'Status'] = 'Folga'
                         mapa_folgas_dia[d_idx] += 1
@@ -71,7 +71,7 @@ def gerar_escalas_balanceadas(lista_usuarios):
                             mapa_folgas_dia[d_idx+1] += 1
                             folgas_alocadas += 1
 
-                # Completa as folgas da semana para fechar a escala 5x2
+                # Completa as folgas da semana (Escala 5x2)
                 while folgas_alocadas < 2:
                     possiveis = [j for j in range(sem, fim_sem) if df.loc[j, 'Status'] == 'Trabalho' and
                                  not (df.loc[j, 'Dia'] == 'sáb' and not user.get("Rod_Sab"))]
@@ -82,7 +82,7 @@ def gerar_escalas_balanceadas(lista_usuarios):
                     mapa_folgas_dia[escolhido] += 1
                     folgas_alocadas += 1
 
-            # Geração de Horários respeitando Interstício
+            # Geração de Horários
             hp = user.get("Entrada", "06:00")
             ents, sais = [], []
             for i in range(len(df)):
@@ -115,8 +115,13 @@ with aba1:
     c_in = col2.checkbox("Folga Casada (Seguidas)?")
     if st.button("Salvar Funcionário"):
         if n_in and cat_in:
-            off = len([u for u in st.session_state['db_users'] if u['Categoria'] == cat_in]) % 2
-            st.session_state['db_users'].append({"Nome": n_in, "Categoria": cat_in, "Entrada": h_in.strftime('%H:%M'), "Rod_Sab": s_in, "Casada": c_in, "offset_dom": off})
+            # Alterna o offset para garantir o 1x1 balanceado no setor
+            membros_cat = [u for u in st.session_state['db_users'] if u['Categoria'] == cat_in]
+            off = len(membros_cat) % 2 
+            st.session_state['db_users'].append({
+                "Nome": n_in, "Categoria": cat_in, "Entrada": h_in.strftime('%H:%M'), 
+                "Rod_Sab": s_in, "Casada": c_in, "offset_dom": off
+            })
             st.success(f"{n_in} salvo!")
 
 with aba2:
@@ -148,7 +153,10 @@ with aba3:
             if st.button("Confirmar Alteração"):
                 df_e.loc[d_tira-1, 'Status'] = 'Trabalho'
                 df_e.loc[d_tira-1, 'H_Entrada'] = u_info['Entrada']
+                df_e.loc[d_tira-1, 'H_Saida'] = (datetime.strptime(u_info['Entrada'], "%H:%M") + timedelta(hours=9, minutes=58)).strftime("%H:%M")
                 df_e.loc[d_poe-1, 'Status'] = 'Folga'
+                df_e.loc[d_poe-1, 'H_Entrada'] = ""
+                df_e.loc[d_poe-1, 'H_Saida'] = ""
                 st.session_state['historico'][f_ed] = df_e
                 st.success("Alterado!"); st.rerun()
 
