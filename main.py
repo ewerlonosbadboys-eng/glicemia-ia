@@ -114,42 +114,24 @@ def _semanas_para_pular_5x2_por_retorno(nome: str) -> set:
 
 
 # =========================================================
-# FUNÇÕES DE DOMINGO / GRUPOS
+# Construir DOMINGO 1x1 (padrão)
+# - dividido em dois grupos A/B, alterna por domingo (A folga no domingo 1, B folga no domingo 2, ...)
+# - a função retorna um dict: {categoria: {indice_domingo: set(nomes que folgam neste domingo)}}
 # =========================================================
-def build_category_groups(names, datas):
-    """
-    Deterministic grouping for category (A/B) based on stable seed with month+year
-    Returns (grupo_a_set, grupo_b_set)
-    """
-    if not names:
-        return set(), set()
-    # Use deterministic seed so same split each run for same month/yr
-    seed = 1000 + datas[0].month + datas[0].year
-    rng = random.Random(seed)
-    names_sh = names[:]
-    rng.shuffle(names_sh)
-    meio = (len(names_sh) + 1) // 2
-    grupo_a = set(names_sh[:meio])
-    grupo_b = set(names_sh[meio:])
-    return grupo_a, grupo_b
-
-
-def montar_domingo_1x1_por_categoria(cats, datas):
-    """
-    Build base domino mapping (without forcing 'Trabalho' on others).
-    Returns dict: cat -> {dom_index: set_of_names_that_should_folgar_that_dom}
-    Uses deterministic grouping and alternation (A folga 1st, B folga 2nd, etc.)
-    """
+def montar_domingo_1x1_por_categoria(cats, datas, seed_base=None):
     domingos = [i for i, d in enumerate(datas) if d.day_name() == "Sunday"]
     esquema = {cat: {} for cat in cats.keys()}
 
     for cat, membros in cats.items():
         nomes = sorted([u["Nome"] for u in membros])
+
+        # se não tem ninguém
         if not nomes:
             for dom_i in domingos:
                 esquema[cat][dom_i] = set()
             continue
 
+        # se tem 1 pessoa: alterna sim/não
         if len(nomes) == 1:
             nome = nomes[0]
             for k, dom_i in enumerate(domingos):
@@ -160,117 +142,129 @@ def montar_domingo_1x1_por_categoria(cats, datas):
                     esquema[cat][dom_i] = {nome} if (k % 2 == 0) else set()
             continue
 
-        grupo_a, grupo_b = build_category_groups(nomes, datas)
+        # 2+ pessoas -> dividir em 2 grupos equilibrados
+        rng = random.Random(42 + (seed_base or 0) + datas[0].month + datas[0].year)
+        nomes_mix = nomes[:]
+        rng.shuffle(nomes_mix)
+
+        meio = (len(nomes_mix) + 1) // 2
+        grupo_a = set(nomes_mix[:meio])
+        grupo_b = set(nomes_mix[meio:])
+
         for k, dom_i in enumerate(domingos):
             data_dom = datas[dom_i].date()
             alvo = grupo_a if (k % 2 == 0) else grupo_b
-            folgam = {nm for nm in alvo if not _esta_de_ferias(nm, data_dom)}
+            folgam = set(nm for nm in alvo if not _esta_de_ferias(nm, data_dom))
             esquema[cat][dom_i] = folgam
 
     return esquema
 
 
-def enforce_domingos_after_manual(category, datas, st_hist, db_users, changed_dom_index, changed_name, new_status):
+# =========================================================
+# Quando o usuário altera manualmente um domingo para um funcionário,
+# ancoramos a alternância naquele domingo: construímos grupos A/B de forma que
+# o funcionário modificado pertença ao grupo que folga nesse domingo (se marcou folga).
+# Depois aplicamos alternância para todos os domingos do mês (respeitando férias).
+# =========================================================
+def enforce_domingo_1x1_anchor(historico, db_users, nome_modificado, dom_index, ano, mes):
     """
-    Quando um domingo foi alterado manualmente para changed_name em changed_dom_index,
-    ajusta TODOS os domingos da mesma categoria para manter alternância 1x1.
+    historico: dict nome->df (escala atual)
+    db_users: lista de dicts com 'Nome' e 'Categoria'
+    nome_modificado: nome da pessoa que foi alterada manualmente
+    dom_index: índice do dia (0-based) que é domingo e foi alterado
+    ano, mes: para gerar datas consistentes
+    """
+    # datas do mês usado na geração atual (todas escalas usam mesmo mês)
+    datas = _dias_mes(ano, mes)
 
-    Estratégia:
-    - Constrói grupos A/B determinísticos.
-    - Descobre qual grupo o usuário pertence (A ou B).
-    - Decide offset tal que no domingo changed_dom_index o grupo que tem folga corresponda
-      ao fato de changed_name estar em Folga (se user marcou Folga) ou Trabalho (se marcou Trabalho).
-    - Para cada domingo k:
-        desired_group = A if (k+offset) % 2 == 0 else B
-      aplica Folga para membros desse desired_group (exceto férias) e Trabalho para os outros (exceto férias).
-    - Mantém outras marcações de Férias intactas.
-    - Se houver conflitos muito fortes (ex.: todos de desired_group estão de férias), deixa como está.
-    - Atualiza st.session_state['historico'] dfs.
-    """
-    # get category member names
-    membros = [u for u in db_users if u["Categoria"] == category]
-    nomes = sorted([u["Nome"] for u in membros])
-    if not nomes:
+    # identificar categoria do nome_modificado
+    user_info = next((u for u in db_users if u["Nome"] == nome_modificado), None)
+    if not user_info:
+        return
+    cat = user_info["Categoria"]
+
+    # obter membros desta categoria
+    membros = [u["Nome"] for u in db_users if u["Categoria"] == cat]
+    if not membros:
         return
 
-    grupo_a, grupo_b = build_category_groups(nomes, datas)
+    membros = sorted(membros)
 
+    # construir lista de indices dos domingos do mês (na ordem)
     domingos = [i for i, d in enumerate(datas) if d.day_name() == "Sunday"]
-    if changed_dom_index not in domingos:
+    if dom_index not in domingos:
         return
 
-    # find position k of changed_dom_index among domingos
-    k_pos = domingos.index(changed_dom_index)
+    # posição do dom_index na lista de domingos: k_dom
+    k_dom = domingos.index(dom_index)
 
-    # which group is changed_name in?
-    grupo_name = "A" if changed_name in grupo_a else ("B" if changed_name in grupo_b else None)
-    if grupo_name is None:
-        # changed person not in this category; nothing to do
-        return
+    # decidir parity (k) para formar grupos A/B tal que nome_modificado esteja no grupo que folga neste domingo
+    pos = membros.index(nome_modificado) if nome_modificado in membros else 0
+    # We'll choose parity = pos % 2 so that nome_modificado falls into groupA defined by parity.
+    parity = pos % 2
 
-    # Determine offset:
-    # If changed person was set to 'Folga' -> desired_group at k_pos should be group_name
-    # If set to 'Trabalho' -> desired_group at k_pos should be the opposite group
-    wants_folga = (new_status == "Folga")
-    # If wants_folga True => (k_pos + offset) % 2 == 0 => offset %2 == (0 - k_pos)%2
-    # If wants_folga False => desired group must be opposite => (k_pos + offset)%2 == 1
-    if wants_folga:
-        # desired parity = 0 maps to grupo_a; 1 maps to grupo_b
-        # we want desired parity such that desired_group == grupo_name
-        if grupo_name == "A":
-            parity_needed = 0
-        else:
-            parity_needed = 1
-    else:
-        # they are set to Trabalho => opposite group must be folga at this sunday
-        if grupo_name == "A":
-            parity_needed = 1
-        else:
-            parity_needed = 0
+    # definir grupos A/B por parity: grupoA = nomes where (pos % 2) == parity
+    grupo_a = set([nm for idx, nm in enumerate(membros) if (idx % 2) == parity])
+    grupo_b = set([nm for idx, nm in enumerate(membros) if (idx % 2) != parity])
 
-    # compute offset so that (k_pos + offset) %2 == parity_needed
-    offset = (parity_needed - (k_pos % 2)) % 2
+    # Agora aplicar alternância dos domingos: k=0 -> grupoA folga, k=1 -> grupoB folga, etc.
+    for k, dom_i in enumerate(domingos):
+        data_dom = datas[dom_i].date()
+        # folga_atual_para = grupo_a if (k % 2 == 0) else grupo_b
+        folga_para = grupo_a if (k % 2 == 0) else grupo_b
 
-    # Now enforce for all domingos
-    for idx_k, dom_i in enumerate(domingos):
-        desired_parity = (idx_k + offset) % 2
-        desired_group = grupo_a if desired_parity == 0 else grupo_b
-
-        # Apply folgas/trabalhos to all names in category for dom_i
-        # but skip those on Férias
-        for nm in nomes:
-            df = st_hist.get(nm)
-            if df is None:
+        for nm in membros:
+            df_nm = historico.get(nm)
+            if df_nm is None:
                 continue
-            # if is férias in that day, keep
-            if df.loc[dom_i, "Status"] == "Férias":
+            # Respeita férias: se nm estiver de férias, mantém Férias
+            if _esta_de_ferias(nm, data_dom):
+                df_nm.loc[dom_i, "Status"] = "Férias"
                 continue
-
-            if nm in desired_group:
-                # set Folga
-                df.loc[dom_i, "Status"] = "Folga"
-                df.loc[dom_i, "H_Entrada"] = ""
-                df.loc[dom_i, "H_Saida"] = ""
+            # Aplica folga/trabalho conforme folga_para (forçando Trabalho no contrario)
+            if nm in folga_para:
+                df_nm.loc[dom_i, "Status"] = "Folga"
             else:
-                # set Trabalho
-                df.loc[dom_i, "Status"] = "Trabalho"
-                # recompute entry/exit using padrão stored in db_users
-                user_info = next((u for u in db_users if u["Nome"] == nm), None)
-                if user_info:
-                    ent_pad = user_info.get("Entrada", "06:00")
-                    # try to keep previous entry if it exists and not empty, else set default
-                    prev_ent = df.loc[dom_i, "H_Entrada"]
-                    if prev_ent:
-                        df.loc[dom_i, "H_Entrada"] = prev_ent
+                df_nm.loc[dom_i, "Status"] = "Trabalho"
+
+    # atualiza prefira alterar também contagens etc. Depois de enforce, precisamos
+    # recalcular horários H_Entrada/H_Saida para todos os membros da categoria (ou para todos)
+    for nm in membros:
+        df_nm = historico.get(nm)
+        if df_nm is None:
+            continue
+        # recalcular horários simples: se Trabalho -> manter entrada existente se presente,
+        # ou usar db_users entrada padrao; se Folga/Férias -> esvaziar horários.
+        uinfo = next((u for u in db_users if u["Nome"] == nm), None)
+        padrao = uinfo.get("Entrada", "06:00") if uinfo else "06:00"
+        ents, sais = [], []
+        for i in range(len(df_nm)):
+            status = df_nm.loc[i, "Status"]
+            if status in ["Folga", "Férias"]:
+                ents.append("")
+                sais.append("")
+            else:
+                # tentar manter entrada anterior se já havia (não sobrescreve manualmente definidos)
+                prev_ent = df_nm.loc[i, "H_Entrada"] if "H_Entrada" in df_nm.columns else ""
+                if prev_ent and prev_ent != "":
+                    e = prev_ent
+                else:
+                    # garantir intersticio relativo ao dia anterior (usa ultima saida calculada)
+                    if ents and sais and sais[-1] != "":
+                        e = calcular_entrada_segura(sais[-1], padrao)
                     else:
-                        df.loc[dom_i, "H_Entrada"] = ent_pad
-                    df.loc[dom_i, "H_Saida"] = (datetime.strptime(df.loc[dom_i, "H_Entrada"], "%H:%M") + DURACAO_JORNADA).strftime("%H:%M")
-            # update back in historico
-            st.session_state["historico"][nm] = df
+                        e = padrao
+                ents.append(e)
+                sais.append((datetime.strptime(e, "%H:%M") + DURACAO_JORNADA).strftime("%H:%M"))
+        df_nm["H_Entrada"] = ents
+        df_nm["H_Saida"] = sais
+
+    # escreve de volta no historico (mutação in-place suficiente)
+    return
 
 
 # =========================================================
-# BALANCEAMENTO SEMANAL POR CATEGORIA
+# Função auxiliar para escolher dia balanceado (semana)
 # =========================================================
 def escolher_dia_balanceado(possiveis, cont_semana_cat):
     if not possiveis:
@@ -281,7 +275,7 @@ def escolher_dia_balanceado(possiveis, cont_semana_cat):
 
 
 # =========================================================
-# GERAR ESCALA (REGRAS + BALANCEAMENTO + DOM 1x1 DESDE O 1º DOM)
+# Função principal de geração (mantida)
 # =========================================================
 def gerar_escala_inteligente(lista_usuarios, ano, mes):
     datas = _dias_mes(ano, mes)
@@ -292,7 +286,7 @@ def gerar_escala_inteligente(lista_usuarios, ano, mes):
         c = u.get("Categoria", "Geral")
         cats.setdefault(c, []).append(u)
 
-    # domingo 1x1 real por categoria (grupos A/B)
+    # Domingo 1x1 padrão
     dom_1x1 = montar_domingo_1x1_por_categoria(cats, datas)
 
     # contagem global para limite 50% por dia na categoria
@@ -321,7 +315,7 @@ def gerar_escala_inteligente(lista_usuarios, ano, mes):
                 if _esta_de_ferias(nome, d.date()):
                     df.loc[i, "Status"] = "Férias"
 
-            # 2) APLICAR DOMINGO 1x1 DESDE O PRIMEIRO DOMINGO
+            # 2) Aplicar dom 1x1 padrão (forçando Trabalho para quem não é do grupo de folga)
             for dom_i, folgam_set in dom_1x1.get(cat, {}).items():
                 if df.loc[dom_i, "Status"] == "Férias":
                     continue
@@ -335,7 +329,7 @@ def gerar_escala_inteligente(lista_usuarios, ano, mes):
                 if df.loc[i, "Status"] == "Folga":
                     cont_folga_cat_dia[cat][i] += 1
 
-            # 3) lista de semanas únicas (SEG->DOM)
+            # 3) semanas do mês
             semanas = []
             seen = set()
             for i in range(len(datas)):
@@ -344,20 +338,17 @@ def gerar_escala_inteligente(lista_usuarios, ano, mes):
                     seen.add(idxs)
                     semanas.append(list(idxs))
 
-            # 4) aplicar 5x2 por semana SEG->DOM (exceto semana de retorno de férias)
+            # 4) aplicar 5x2 por semana (exceto semana de retorno)
             for idxs in semanas:
                 monday_week = _monday_of(datas[idxs[0]].date())
 
-                # semana de retorno: só domingo 1x1
                 if monday_week in semanas_skip_5x2:
                     continue
 
-                # elegíveis: não férias
                 idxs_nao_ferias = [j for j in idxs if df.loc[j, "Status"] != "Férias"]
                 if not idxs_nao_ferias:
                     continue
 
-                # contador semanal (para balancear dentro da semana)
                 cont_semana_cat = {j: 0 for j in idxs}
                 for j in idxs:
                     if df.loc[j, "Status"] == "Folga":
@@ -365,7 +356,6 @@ def gerar_escala_inteligente(lista_usuarios, ano, mes):
 
                 folgas_semana = int((df.loc[idxs_nao_ferias, "Status"] == "Folga").sum())
 
-                # completar até 2 folgas/semana
                 while folgas_semana < 2:
                     possiveis = []
                     for j in idxs_nao_ferias:
@@ -373,24 +363,16 @@ def gerar_escala_inteligente(lista_usuarios, ano, mes):
                             continue
 
                         dia = df.loc[j, "Dia"]
-
-                        # sábado só vira folga se marcado
                         if dia == "sáb" and not pode_folgar_sabado:
                             continue
-
-                        # sem folgas consecutivas
                         if not _nao_consecutiva(df, j):
                             continue
-
-                        # limite 50% por dia na categoria
                         if total_cat > 1:
                             limite = max(1, total_cat // 2)
                             if cont_folga_cat_dia[cat][j] >= limite:
                                 continue
-
                         possiveis.append(j)
 
-                    # relaxa 50% se necessário (mantém sábado e não consecutiva)
                     if not possiveis:
                         for j in idxs_nao_ferias:
                             if df.loc[j, "Status"] != "Trabalho":
@@ -411,7 +393,7 @@ def gerar_escala_inteligente(lista_usuarios, ano, mes):
                     cont_semana_cat[escolhido] = cont_semana_cat.get(escolhido, 0) + 1
                     folgas_semana += 1
 
-                # segurança: máximo 5 seguidos
+                # segurança: max 5 dias seguidos
                 consec = 0
                 for j in idxs:
                     if df.loc[j, "Status"] == "Trabalho":
@@ -426,7 +408,7 @@ def gerar_escala_inteligente(lista_usuarios, ano, mes):
                     else:
                         consec = 0
 
-            # 5) horários com interstício
+            # 5) horários
             ents, sais = [], []
             for i in range(len(df)):
                 if df.loc[i, "Status"] in ["Folga", "Férias"]:
@@ -509,11 +491,10 @@ with aba2:
                 st.dataframe(df, use_container_width=True)
 
 # ---------------------------------------------------------
-# ABA 3 - AJUSTES (AGORA COM ENFORCE DE DOMINGOS)
+# ABA 3 - AJUSTES (inclui enforce DOM manual)
 # ---------------------------------------------------------
 with aba3:
     st.subheader("⚙️ Ajustes Manuais")
-
     if not st.session_state["historico"]:
         st.info("Gere a escala na Aba 2.")
     else:
@@ -524,88 +505,60 @@ with aba3:
         col_a, col_b, col_c, col_d = st.columns(4)
 
         with col_a:
-            st.markdown("#### 🔄 Trocar Folga (ou Dia)")
+            st.markdown("#### 🔄 Trocar Folga")
             folgas_atuais = df_e[df_e["Status"] == "Folga"].index.tolist()
-            d_tira = st.selectbox("Dia que vai TRABALHAR (remover folga):", [d + 1 for d in folgas_atuais]) if folgas_atuais else None
-            d_poe = st.number_input("Novo dia para FOLGAR:", 1, len(df_e), value=1, key="troca_folga_dpoe")
+            d_tira = st.selectbox("Dia para TRABALHAR (remover folga):", [d + 1 for d in folgas_atuais]) if folgas_atuais else None
+            d_poe = st.number_input("Novo dia para FOLGAR:", 1, len(df_e), value=1, key="aj_folga_poe")
 
             if st.button("Confirmar troca", key="btn_troca_folga"):
                 if d_tira is None:
-                    st.warning("Sem folgas para remover.")
+                    st.warning("Sem folgas para trocar.")
                 elif df_e.loc[d_poe - 1, "Status"] == "Férias" or df_e.loc[d_tira - 1, "Status"] == "Férias":
-                    st.error("Não é permitido trocar dias marcados como FÉRIAS.")
+                    st.error("Não pode trocar dias de FÉRIAS.")
                 else:
+                    # aplica troca simples
                     df_e.loc[d_tira - 1, "Status"] = "Trabalho"
-                    df_e.loc[d_tira - 1, "H_Entrada"] = next((u["Entrada"] for u in st.session_state["db_users"] if u["Nome"] == f_ed), "06:00")
-                    df_e.loc[d_tira - 1, "H_Saida"] = (datetime.strptime(df_e.loc[d_tira - 1, "H_Entrada"], "%H:%M") + DURACAO_JORNADA).strftime("%H:%M")
                     df_e.loc[d_poe - 1, "Status"] = "Folga"
                     df_e.loc[d_poe - 1, "H_Entrada"] = ""
                     df_e.loc[d_poe - 1, "H_Saida"] = ""
                     st.session_state["historico"][f_ed] = df_e
-                    st.success("Troca aplicada!")
+
+                    # se o dia alterado é DOMINGO, força regra 1x1 ancorada nesse domingo
+                    if df_e.loc[d_poe - 1, "Dia"] == "dom":
+                        # dom_index é 0-based
+                        dom_index = d_poe - 1
+                        enforce_domingo_1x1_anchor(
+                            st.session_state["historico"],
+                            st.session_state["db_users"],
+                            f_ed,
+                            dom_index,
+                            st.session_state["cfg_ano"],
+                            st.session_state["cfg_mes"]
+                        )
+                    st.success("Troca aplicada! (Se domingo, apliquei regra 1x1 ancorada.)")
                     st.rerun()
 
         with col_b:
-            st.markdown("#### 🕒 Alterar Status/Horário Específico")
-            dia_sel = st.number_input("Dia do mês:", 1, len(df_e), value=1, key="aj_dia_sel")
-            opc = st.selectbox("Ação:", ["Marcar Trabalho", "Marcar Folga", "Marcar Férias", "Alterar Entrada"], key="aj_opc")
-            nova_hora = st.time_input("Nova Entrada (se aplicável):", key="aj_nova_hora")
-
-            if st.button("Aplicar ação"):
-                idx = dia_sel - 1
-                antigo = df_e.loc[idx, "Status"]
-                if opc == "Marcar Férias":
-                    df_e.loc[idx, "Status"] = "Férias"
-                    df_e.loc[idx, "H_Entrada"] = ""
-                    df_e.loc[idx, "H_Saida"] = ""
-                    st.success("Dia marcado como FÉRIAS (manual).")
-                elif opc == "Marcar Folga":
-                    # prevent overwriting férias
-                    if antigo == "Férias":
-                        st.error("Não pode marcar folga sobre férias.")
-                    else:
-                        df_e.loc[idx, "Status"] = "Folga"
-                        df_e.loc[idx, "H_Entrada"] = ""
-                        df_e.loc[idx, "H_Saida"] = ""
-                        st.success("Folga marcada manualmente.")
-                elif opc == "Marcar Trabalho":
-                    if antigo == "Férias":
-                        st.error("Não pode marcar trabalho sobre férias.")
-                    else:
-                        df_e.loc[idx, "Status"] = "Trabalho"
-                        ent = nova_hora.strftime("%H:%M")
-                        df_e.loc[idx, "H_Entrada"] = ent
-                        df_e.loc[idx, "H_Saida"] = (datetime.strptime(ent, "%H:%M") + DURACAO_JORNADA).strftime("%H:%M")
-                        st.success("Dia marcado como TRABALHO.")
-                else:  # Alterar Entrada
-                    if df_e.loc[idx, "Status"] != "Trabalho":
-                        st.error("Só é possível alterar entrada em dias de TRABALHO.")
-                    else:
-                        ent = nova_hora.strftime("%H:%M")
-                        df_e.loc[idx, "H_Entrada"] = ent
-                        df_e.loc[idx, "H_Saida"] = (datetime.strptime(ent, "%H:%M") + DURACAO_JORNADA).strftime("%H:%M")
-                        st.success("Entrada atualizada.")
-
-                # save change
-                st.session_state["historico"][f_ed] = df_e
-
-                # If changed day is a Sunday, enforce category alternation
-                datas = df_e["Data"].tolist()
-                if df_e.loc[idx, "Data"].day_name() == "Sunday":
-                    # find category
-                    categoria = user_info["Categoria"]
-                    changed_dom_index = idx
-                    changed_name = f_ed
-                    new_status = df_e.loc[idx, "Status"]
-                    enforce_domingos_after_manual(categoria, pd.Series(datas), st.session_state["historico"], st.session_state["db_users"], changed_dom_index, changed_name, new_status)
-                    st.success("Regra de domingos aplicada na categoria em função da alteração manual.")
-                st.rerun()
+            st.markdown("#### 🕒 Trocar Horário")
+            dia_h = st.number_input("Dia:", 1, len(df_e), value=1, key="aj_dia_h")
+            hora_h = st.time_input("Nova entrada:", key="aj_hora_h")
+            if st.button("Salvar horário", key="btn_salvar_hora"):
+                if df_e.loc[dia_h - 1, "Status"] != "Trabalho":
+                    st.warning("Dia não está como TRABALHO.")
+                else:
+                    ent = hora_h.strftime("%H:%M")
+                    sai = (datetime.strptime(ent, "%H:%M") + DURACAO_JORNADA).strftime("%H:%M")
+                    df_e.loc[dia_h - 1, "H_Entrada"] = ent
+                    df_e.loc[dia_h - 1, "H_Saida"] = sai
+                    st.session_state["historico"][f_ed] = df_e
+                    st.success("Horário alterado!")
+                    st.rerun()
 
         with col_c:
             st.markdown("#### 🧩 Trocar Categoria")
             categorias = sorted(list(set(u["Categoria"] for u in st.session_state["db_users"])))
-            idx_cat = categorias.index(user_info["Categoria"]) if user_info["Categoria"] in categorias else 0
-            nova_cat = st.selectbox("Nova categoria:", categorias, index=idx_cat)
+            idx = categorias.index(user_info["Categoria"]) if user_info["Categoria"] in categorias else 0
+            nova_cat = st.selectbox("Nova categoria:", categorias, index=idx)
             if st.button("Salvar categoria"):
                 user_info["Categoria"] = nova_cat
                 st.success("Categoria alterada! Gere novamente para refletir.")
