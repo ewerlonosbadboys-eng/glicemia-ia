@@ -57,12 +57,15 @@ def gerar_escalas_balanceadas(lista_usuarios):
                 folgas_alocadas = 0
                 
                 # Linha 58: Localiza os domingos no bloco de 7 dias
-                doms = [j for j in range(sem, fim_sem) if df.loc[j, 'Dia'] == 'dom']
-                        
-                        for d_idx in doms:
-                            semana_idx = d_idx // 7
-                            # LINHA 61: ESTA É A REGRA DE ALTERNÂNCIA
-                            if semana_idx % 2 == user.get('offset_dom', 0):
+............# --- REGRA DO DOMINGO 1x1 ---
+............doms = [j for j in range(sem, fim_sem) if df.loc[j, 'Dia'] == 'dom']
+............for d_idx in doms:
+................semana_idx = d_idx // 7
+................# PARA MUDAR A REGRA: Altere o teste abaixo
+................if semana_idx % 2 == user.get('offset_dom', 0):
+....................df.loc[d_idx, 'Status'] = 'Folga'
+....................mapa_folgas_dia[d_idx] += 1
+....................folgas_alocadas += 1
         # ... define a folga
                         df.loc[d_idx, 'Status'] = 'Folga'
                         mapa_folgas_dia[d_idx] += 1
