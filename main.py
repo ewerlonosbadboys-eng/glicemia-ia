@@ -57,14 +57,20 @@ def gerar_escalas_balanceadas(lista_usuarios):
                 folgas_alocadas = 0
                 
 # --- REGRA DO DOMINGO 1x1 ---
+                # Localiza o domingo dentro da semana atual
                 doms = [j for j in range(sem, fim_sem) if df.loc[j, 'Dia'] == 'dom']
                 for d_idx in doms:
+                    # O cálculo % 2 alterna entre as semanas (0, 1, 2, 3...)
                     semana_idx = d_idx // 7
-                    # Mude o == para != se quiser inverter quem folga primeiro
                     if semana_idx % 2 == user.get('offset_dom', 0):
                         df.loc[d_idx, 'Status'] = 'Folga'
                         mapa_folgas_dia[d_idx] += 1
                         folgas_alocadas += 1
+                        # Se a folga casada estiver ativa, folga a segunda seguinte
+                        if user.get("Casada") and (d_idx + 1) < 31:
+                            df.loc[d_idx+1, 'Status'] = 'Folga'
+                            mapa_folgas_dia[d_idx+1] += 1
+                            folgas_alocadas += 1
                         if user.get("Casada") and (d_idx + 1) < 31:
                             df.loc[d_idx+1, 'Status'] = 'Folga'
                             mapa_folgas_dia[d_idx+1] += 1
