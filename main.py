@@ -106,6 +106,22 @@ def _set_ferias(df, idx):
     df.loc[idx, "H_Saida"] = ""
 
 
+def recompute_hours_with_intersticio(df, ent_padrao):
+    ents, sais = [], []
+    for i in range(len(df)):
+        if df.loc[i, "Status"] != "Trabalho":
+            ents.append("")
+            sais.append("")
+        else:
+            e = df.loc[i, "H_Entrada"] if df.loc[i, "H_Entrada"] else ent_padrao
+            if i > 0 and sais and sais[-1]:
+                e = calcular_entrada_segura(sais[-1], e)
+            ents.append(e)
+            sais.append(_saida_from_entrada(e))
+    df["H_Entrada"] = ents
+    df["H_Saida"] = sais
+
+
 def _semana_seg_dom_indices(datas: pd.DatetimeIndex, idx_any: int):
     d = datas[idx_any]
     monday = d - timedelta(days=d.weekday())
@@ -128,24 +144,8 @@ def _all_weeks_seg_dom(datas: pd.DatetimeIndex):
     return weeks
 
 
-def recompute_hours_with_intersticio(df, ent_padrao):
-    ents, sais = [], []
-    for i in range(len(df)):
-        if df.loc[i, "Status"] != "Trabalho":
-            ents.append("")
-            sais.append("")
-        else:
-            e = df.loc[i, "H_Entrada"] if df.loc[i, "H_Entrada"] else ent_padrao
-            if i > 0 and sais and sais[-1]:
-                e = calcular_entrada_segura(sais[-1], e)
-            ents.append(e)
-            sais.append(_saida_from_entrada(e))
-    df["H_Entrada"] = ents
-    df["H_Saida"] = sais
-
-
 # =========================================================
-# REGRA: DOMINGO 1x1 POR COLABORADOR (APÓS ALTERAÇÃO MANUAL)
+# REGRA: DOMINGO 1x1 (APÓS AJUSTE MANUAL)
 # =========================================================
 def enforce_sundays_alternating_for_employee(df, ent_padrao, start_dom_idx):
     domingos = [i for i in range(len(df)) if df.loc[i, "Data"].day_name() == "Sunday"]
@@ -168,7 +168,7 @@ def enforce_sundays_alternating_for_employee(df, ent_padrao, start_dom_idx):
 
 
 # =========================================================
-# REGRA: NÃO TRABALHAR > 5 DIAS SEGUIDOS
+# REGRA: MÁXIMO 5 DIAS SEGUIDOS
 # =========================================================
 def enforce_max_5_consecutive_work(df, ent_padrao, pode_folgar_sabado: bool):
     def can_make_folga(i):
@@ -216,9 +216,21 @@ def enforce_max_5_consecutive_work(df, ent_padrao, pode_folgar_sabado: bool):
 
 
 # =========================================================
-# REBALANCEAMENTO GLOBAL POR CATEGORIA
+# BALANCEAMENTO - CONTAGEM DE FOLGAS POR DIA NA SEMANA (CATEGORIA)
 # =========================================================
-def rebalance_folgas_categoria(historico, users_by_name, nomes_cat, weeks, max_iters=400):
+def _counts_folgas_cat(novo_hist, nomes_cat, idxs_semana, ignore_dom=True):
+    counts = {i: 0 for i in idxs_semana}
+    for nm in nomes_cat:
+        df = novo_hist[nm]
+        for i in idxs_semana:
+            if ignore_dom and df.loc[i, "Dia"] == "dom":
+                continue
+            if df.loc[i, "Status"] == "Folga":
+                counts[i] += 1
+    return counts
+
+
+def rebalance_folgas_categoria(historico, users_by_name, nomes_cat, weeks, max_iters=800):
     if not nomes_cat:
         return
 
@@ -227,21 +239,12 @@ def rebalance_folgas_categoria(historico, users_by_name, nomes_cat, weeks, max_i
     def is_dom(i):
         return df_ref.loc[i, "Dia"] == "dom"
 
-    def week_counts(week_idxs):
-        counts = {i: 0 for i in week_idxs if not is_dom(i)}
-        for nm in nomes_cat:
-            df = historico[nm]
-            for i in counts.keys():
-                if df.loc[i, "Status"] == "Folga":
-                    counts[i] += 1
-        return counts
-
     def can_swap(nm, i_from, i_to):
         df = historico[nm]
         u = users_by_name[nm]
         pode_sab = bool(u.get("Folga_Sab", False))
 
-        if df.loc[i_from, "Dia"] == "dom" or df.loc[i_to, "Dia"] == "dom":
+        if is_dom(i_from) or is_dom(i_to):
             return False
         if df.loc[i_from, "Status"] == "Férias" or df.loc[i_to, "Status"] == "Férias":
             return False
@@ -269,17 +272,16 @@ def rebalance_folgas_categoria(historico, users_by_name, nomes_cat, weeks, max_i
 
     iters = 0
     for week in weeks:
-        week_idxs = [i for i in week if df_ref.loc[i, "Dia"] != "dom"]
+        week_idxs = [i for i in week if not is_dom(i)]
         if not week_idxs:
             continue
 
         while iters < max_iters:
             iters += 1
-            counts = week_counts(week_idxs)
-            if not counts:
-                break
+            counts = _counts_folgas_cat(historico, nomes_cat, week_idxs, ignore_dom=True)
             max_i = max(counts, key=lambda x: counts[x])
             min_i = min(counts, key=lambda x: counts[x])
+
             if counts[max_i] - counts[min_i] <= 1:
                 break
 
@@ -296,13 +298,12 @@ def rebalance_folgas_categoria(historico, users_by_name, nomes_cat, weeks, max_i
                     do_swap(nm, max_i, min_i)
                     moved = True
                     break
-
             if not moved:
                 break
 
 
 # =========================================================
-# GERAR ESCALA (BASE + REBALANCEAMENTO)
+# GERAR ESCALA (BASE + MAX BALANCEAMENTO)
 # =========================================================
 def gerar_escala_inteligente(lista_usuarios, ano, mes):
     datas = _dias_mes(ano, mes)
@@ -325,12 +326,10 @@ def gerar_escala_inteligente(lista_usuarios, ano, mes):
 
     novo_hist = {}
 
+    # criar vazio primeiro (para contagem por categoria funcionar)
     for cat, membros in cats.items():
         for user in membros:
             nome = user["Nome"]
-            ent_padrao = user.get("Entrada", "06:00")
-            pode_folgar_sabado = bool(user.get("Folga_Sab", False))
-
             df = pd.DataFrame({
                 "Data": datas,
                 "Dia": [D_PT[d.day_name()] for d in datas],
@@ -338,13 +337,28 @@ def gerar_escala_inteligente(lista_usuarios, ano, mes):
                 "H_Entrada": "",
                 "H_Saida": ""
             })
+            novo_hist[nome] = df
 
+    weeks = _all_weeks_seg_dom(datas)
+
+    # gerar categoria por categoria para balancear melhor
+    for cat, membros in cats.items():
+        nomes_cat = [m["Nome"] for m in membros]
+        grupo_a = dom_map[cat]["A"]
+        grupo_b = dom_map[cat]["B"]
+
+        # 1) aplicar férias + domingos 1x1 (balanceado desde o 1º domingo)
+        for user in membros:
+            nome = user["Nome"]
+            df = novo_hist[nome]
+            ent_padrao = user.get("Entrada", "06:00")
+
+            # férias
             for i, d in enumerate(datas):
                 if _esta_de_ferias(nome, d.date()):
                     _set_ferias(df, i)
 
-            grupo_a = dom_map[cat]["A"]
-            grupo_b = dom_map[cat]["B"]
+            # domingos 1x1
             for k, dom_i in enumerate(domingos_idx):
                 if df.loc[dom_i, "Status"] == "Férias":
                     continue
@@ -354,45 +368,66 @@ def gerar_escala_inteligente(lista_usuarios, ano, mes):
                 else:
                     _set_trabalho(df, dom_i, ent_padrao)
 
-            weeks = _all_weeks_seg_dom(datas)
-            for week in weeks:
-                folgas = 0
+            novo_hist[nome] = df
+
+        # 2) agora completar 5x2 por semana (SEG->DOM) usando contagem por dia para nivelar
+        for week in weeks:
+            # usar só seg..sáb como candidatos (domingo já definido)
+            cand_days = [i for i in week if novo_hist[nomes_cat[0]].loc[i, "Dia"] != "dom"]
+
+            for user in membros:
+                nome = user["Nome"]
+                df = novo_hist[nome]
+                ent_padrao = user.get("Entrada", "06:00")
+                pode_sab = bool(user.get("Folga_Sab", False))
+
+                # conta folgas atuais nessa semana (folga real)
+                folgas_sem = 0
                 for j in week:
                     if df.loc[j, "Status"] == "Folga":
-                        folgas += 1
+                        folgas_sem += 1
 
-                tries = 0
-                while folgas < 2 and tries < 200:
-                    tries += 1
-                    cands = []
-                    for j in week:
+                # completar até 2 folgas
+                while folgas_sem < 2:
+                    counts = _counts_folgas_cat(novo_hist, nomes_cat, cand_days, ignore_dom=True)
+
+                    possiveis = []
+                    for j in cand_days:
                         if df.loc[j, "Status"] != "Trabalho":
                             continue
                         dia = df.loc[j, "Dia"]
-                        if dia == "dom":
-                            continue
-                        if dia == "sáb" and not pode_folgar_sabado:
+                        if dia == "sáb" and not pode_sab:
                             continue
                         if not _nao_consecutiva_folga(df, j):
                             continue
-                        cands.append(j)
-                    if not cands:
+                        possiveis.append(j)
+
+                    if not possiveis:
                         break
-                    random.shuffle(cands)
-                    cands.sort(key=lambda x: 0 if df.loc[x, "Dia"] in ["seg", "ter", "qua", "qui", "sex"] else 1)
-                    pick = cands[0]
+
+                    # escolhe o dia com MENOS folgas na categoria (max balanceamento)
+                    random.shuffle(possiveis)
+                    possiveis.sort(key=lambda x: (counts.get(x, 0), 0 if df.loc[x, "Dia"] in ["seg", "ter", "qua", "qui", "sex"] else 1))
+                    pick = possiveis[0]
+
                     _set_folga(df, pick)
-                    folgas += 1
+                    folgas_sem += 1
 
-            enforce_max_5_consecutive_work(df, ent_padrao, pode_folgar_sabado)
+                    novo_hist[nome] = df
+
+        # 3) aplicar limite 5 seguidos + interstício por usuário
+        for user in membros:
+            nome = user["Nome"]
+            df = novo_hist[nome]
+            ent_padrao = user.get("Entrada", "06:00")
+            pode_sab = bool(user.get("Folga_Sab", False))
+
+            enforce_max_5_consecutive_work(df, ent_padrao, pode_sab)
             recompute_hours_with_intersticio(df, ent_padrao)
-
             novo_hist[nome] = df
 
-    weeks = _all_weeks_seg_dom(datas)
-    for cat, membros in cats.items():
-        nomes_cat = [m["Nome"] for m in membros if m["Nome"] in novo_hist]
-        rebalance_folgas_categoria(novo_hist, users_by_name, nomes_cat, weeks, max_iters=600)
+        # 4) rebalanceamento final (trocas) para reduzir max-min por dia
+        rebalance_folgas_categoria(novo_hist, users_by_name, nomes_cat, weeks, max_iters=1200)
 
     return novo_hist
 
@@ -405,7 +440,7 @@ aba1, aba2, aba3, aba4, aba5 = st.tabs(
 )
 
 # ---------------------------------------------------------
-# ABA 1
+# ABA 1 - CADASTRO
 # ---------------------------------------------------------
 with aba1:
     st.subheader("Cadastro")
@@ -431,7 +466,7 @@ with aba1:
         st.dataframe(pd.DataFrame(st.session_state["db_users"]), use_container_width=True)
 
 # ---------------------------------------------------------
-# ABA 2
+# ABA 2 - GERAR
 # ---------------------------------------------------------
 with aba2:
     st.subheader("Gerar escala")
@@ -442,14 +477,14 @@ with aba2:
     st.session_state["cfg_mes"] = int(mes)
     st.session_state["cfg_ano"] = int(ano)
 
-    if st.button("🚀 GERAR ESCALA (balanceada)", key="gen_btn"):
+    if st.button("🚀 GERAR ESCALA (máximo balanceamento)", key="gen_btn"):
         if st.session_state["db_users"]:
             st.session_state["historico"] = gerar_escala_inteligente(
                 st.session_state["db_users"],
                 st.session_state["cfg_ano"],
                 st.session_state["cfg_mes"]
             )
-            st.success("Gerado! Balanceamento aplicado.")
+            st.success("Gerado! Balanceamento máximo aplicado por categoria/semana.")
         else:
             st.warning("Cadastre funcionários na Aba 1.")
 
@@ -459,76 +494,98 @@ with aba2:
                 st.dataframe(df, use_container_width=True)
 
 # ---------------------------------------------------------
-# ABA 3
+# ABA 3 - AJUSTES COMPLETA
 # ---------------------------------------------------------
 with aba3:
-    st.subheader("⚙️ Ajustes Manuais")
+    st.subheader("⚙️ Ajustes Manuais (com regras automáticas)")
+
     if not st.session_state["historico"]:
         st.info("Gere a escala na Aba 2.")
     else:
-        f_ed = st.selectbox("Funcionário:", list(st.session_state["historico"].keys()), key="aj_func")
-        df_e = st.session_state["historico"][f_ed].copy()
-        user_info = next(u for u in st.session_state["db_users"] if u["Nome"] == f_ed)
+        nomes_hist = list(st.session_state["historico"].keys())
+        f_ed = st.selectbox("Funcionário:", nomes_hist, key="aj_func")
+
+        user_idx = next(i for i, u in enumerate(st.session_state["db_users"]) if u["Nome"] == f_ed)
+        user_info = st.session_state["db_users"][user_idx]
         ent_padrao = user_info.get("Entrada", "06:00")
         pode_folgar_sabado = bool(user_info.get("Folga_Sab", False))
 
-        st.markdown("### Alterar dia específico")
-        col1, col2, col3 = st.columns(3)
-        dia_sel = col1.number_input("Dia do mês:", 1, len(df_e), value=1, key="aj_dia")
-        acao = col2.selectbox("Ação:", ["Marcar Trabalho", "Marcar Folga", "Marcar Férias", "Alterar Entrada"], key="aj_acao")
-        nova_hora = col3.time_input("Nova entrada (se aplicável):", value=datetime.strptime(ent_padrao, "%H:%M").time(), key="aj_hora")
+        df_e = st.session_state["historico"][f_ed].copy()
 
-        if st.button("Aplicar", key="aj_aplicar"):
-            idx = int(dia_sel) - 1
-            dia_sem = df_e.loc[idx, "Dia"]
-            old_status = df_e.loc[idx, "Status"]
+        st.markdown("### 🔁 1) Trocar folga (Dia A vira TRABALHO, Dia B vira FOLGA)")
+        cA, cB = st.columns(2)
+        dia_A = cA.number_input("Dia A (remover folga):", 1, len(df_e), value=1, key="swap_A")
+        dia_B = cB.number_input("Dia B (colocar folga):", 1, len(df_e), value=2, key="swap_B")
 
-            if acao == "Marcar Férias":
-                _set_ferias(df_e, idx)
+        if st.button("Confirmar troca de folga", key="swap_btn"):
+            a = int(dia_A) - 1
+            b = int(dia_B) - 1
 
-            elif acao == "Marcar Folga":
-                if old_status == "Férias":
-                    st.error("Não pode marcar folga sobre férias.")
+            if df_e.loc[a, "Status"] == "Férias" or df_e.loc[b, "Status"] == "Férias":
+                st.error("Não pode trocar em dia de férias.")
+            else:
+                # A precisa virar trabalho
+                _set_trabalho(df_e, a, ent_padrao)
+                # B virar folga (respeita sábado)
+                if df_e.loc[b, "Dia"] == "sáb" and not pode_folgar_sabado:
+                    st.error("Sábado só pode ser folga se permitir no cadastro.")
                 else:
-                    if dia_sem == "sáb" and not pode_folgar_sabado:
-                        st.error("Sábado só pode ser folga se permitir no cadastro.")
-                    else:
-                        _set_folga(df_e, idx)
+                    _set_folga(df_e, b)
 
-            elif acao == "Marcar Trabalho":
-                if old_status == "Férias":
-                    st.error("Não pode marcar trabalho sobre férias.")
-                else:
-                    ent = nova_hora.strftime("%H:%M")
-                    df_e.loc[idx, "H_Entrada"] = ent
-                    _set_trabalho(df_e, idx, ent)
+                # domingo 1x1 se mexeu em domingo
+                if df_e.loc[a, "Data"].day_name() == "Sunday":
+                    enforce_sundays_alternating_for_employee(df_e, ent_padrao, a)
+                if df_e.loc[b, "Data"].day_name() == "Sunday":
+                    enforce_sundays_alternating_for_employee(df_e, ent_padrao, b)
 
-            else:  # Alterar Entrada
-                if df_e.loc[idx, "Status"] != "Trabalho":
-                    st.error("Só altera entrada em dia de TRABALHO.")
-                else:
-                    ent = nova_hora.strftime("%H:%M")
-                    df_e.loc[idx, "H_Entrada"] = ent
-                    df_e.loc[idx, "H_Saida"] = _saida_from_entrada(ent)
+                # regras finais
+                enforce_max_5_consecutive_work(df_e, ent_padrao, pode_folgar_sabado)
+                recompute_hours_with_intersticio(df_e, ent_padrao)
 
-            if df_e.loc[idx, "Data"].day_name() == "Sunday":
-                enforce_sundays_alternating_for_employee(df_e, ent_padrao, idx)
+                st.session_state["historico"][f_ed] = df_e
+                st.success("Troca realizada com regras aplicadas!")
+                st.rerun()
 
-            enforce_max_5_consecutive_work(df_e, ent_padrao, pode_folgar_sabado)
-            recompute_hours_with_intersticio(df_e, ent_padrao)
+        st.markdown("### 🕒 2) Trocar horário (Entrada e saída recalcula)")
+        cH1, cH2 = st.columns(2)
+        dia_h = cH1.number_input("Dia para alterar horário:", 1, len(df_e), value=1, key="hora_dia")
+        nova_hora = cH2.time_input("Nova entrada:", value=datetime.strptime(ent_padrao, "%H:%M").time(), key="hora_ent")
 
-            st.session_state["historico"][f_ed] = df_e
-            st.success("Aplicado!")
-            st.rerun()
+        if st.button("Salvar horário", key="hora_btn"):
+            idx = int(dia_h) - 1
+            if df_e.loc[idx, "Status"] != "Trabalho":
+                st.error("Só altera horário em dia de TRABALHO.")
+            else:
+                ent = nova_hora.strftime("%H:%M")
+                df_e.loc[idx, "H_Entrada"] = ent
+                df_e.loc[idx, "H_Saida"] = _saida_from_entrada(ent)
+
+                enforce_max_5_consecutive_work(df_e, ent_padrao, pode_folgar_sabado)
+                recompute_hours_with_intersticio(df_e, ent_padrao)
+
+                st.session_state["historico"][f_ed] = df_e
+                st.success("Horário atualizado!")
+                st.rerun()
+
+        st.markdown("### 🏷️ 3) Trocar categoria / permitir folga sábado")
+        cC1, cC2 = st.columns(2)
+        nova_cat = cC1.text_input("Nova categoria:", value=user_info.get("Categoria", ""), key="cat_new")
+        novo_sab = cC2.checkbox("Permitir folga no sábado", value=pode_folgar_sabado, key="cat_sab")
+
+        if st.button("Salvar categoria", key="cat_btn"):
+            st.session_state["db_users"][user_idx]["Categoria"] = nova_cat.strip() if nova_cat.strip() else "Geral"
+            st.session_state["db_users"][user_idx]["Folga_Sab"] = bool(novo_sab)
+            st.success("Categoria atualizada! (Para refletir na escala geral, gere a escala novamente.)")
 
         st.markdown("---")
         st.dataframe(df_e, use_container_width=True)
 
 # ---------------------------------------------------------
-# ABA 4
+# ABA 4 - EXCEL MODELO RH
 # ---------------------------------------------------------
 with aba4:
     st.subheader("📥 Excel modelo RH")
+
     if not st.session_state["historico"]:
         st.warning("Gere a escala na Aba 2.")
     else:
@@ -637,7 +694,7 @@ with aba4:
             )
 
 # ---------------------------------------------------------
-# ABA 5
+# ABA 5 - FÉRIAS
 # ---------------------------------------------------------
 with aba5:
     st.subheader("🏖️ Férias")
