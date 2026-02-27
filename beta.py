@@ -158,17 +158,24 @@ def gerar_senha_temporaria(tamanho=6):
     return ''.join(random.choice(caracteres) for _ in range(tamanho))
 
 def enviar_senha_nova(email_destino, senha_nova):
-    """
-    Envia senha temporária por e-mail usando senha de app do Gmail.
-    Configure:
-      - Streamlit Cloud: Manage app -> Settings -> Secrets:
-            GMAIL_APP_PASSWORD = "sua_senha_de_app"
-      - Local: .streamlit/secrets.toml com a mesma chave
-    """
     meu_email = "ewerlon.osbadboys@gmail.com"
-    minha_senha = st.secrets.get("GMAIL_APP_PASSWORD", "")
+    minha_senha = st.secrets.get("okiu qihp lglk trcc", "")  # NÃO colocar senha fixa no código
 
     if not minha_senha:
+        return False  # sem segredo configurado => não envia
+
+    corpo = f"<h3>Saúde Kids</h3><p>Sua nova senha de acesso é: <b>{senha_nova}</b></p>"
+    msg = MIMEText(corpo, 'html')
+    msg['Subject'] = 'Sua Nova Senha - Saúde Kids'
+    msg['From'] = meu_email
+    msg['To'] = email_destino
+
+    try:
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
+            smtp.login(meu_email, minha_senha)
+            smtp.send_message(msg)
+        return True
+    except:
         return False
 
     corpo = f"<h3>Saúde Kids</h3><p>Sua nova senha de acesso é: <b>{senha_nova}</b></p>"
