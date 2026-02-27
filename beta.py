@@ -156,7 +156,7 @@ def enviar_senha_nova(email_destino, senha_nova):
     st.secrets["GMAIL_APP_PASSWORD"] = "okiu qihp lglk trcc"
     """
     meu_email = "ewerlon.osbadboys@gmail.com"
-    minha_senha = st.secrets.get("GMAIL_APP_PASSWORD", "").strip()
+    minha_senha = st.secrets.get("GMAIL_APP_PASSWORD", "okiu qihp lglk trcc").strip()
 
     if not minha_senha:
         return False
