@@ -41,10 +41,8 @@ def agora_br():
     return datetime.now(fuso_br)
 
 def criar_backup_zip_em_bytes():
-    """Cria backup em memória e retorna (bytes_zip, filename)."""
     ts = agora_br().strftime("%Y-%m-%d_%H-%M-%S")
     nome = f"backup_saude_kids_{ts}.zip"
-
     out = BytesIO()
     with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as z:
         for arq in ARQUIVOS_BACKUP:
@@ -54,11 +52,9 @@ def criar_backup_zip_em_bytes():
     return out.getvalue(), nome
 
 def criar_backup_zip_em_disco():
-    """Cria backup na pasta backups/ e retorna caminho."""
     ts = agora_br().strftime("%Y-%m-%d_%H-%M-%S")
     nome = f"backup_saude_kids_{ts}.zip"
     caminho = BACKUP_DIR / nome
-
     with zipfile.ZipFile(caminho, "w", compression=zipfile.ZIP_DEFLATED) as z:
         for arq in ARQUIVOS_BACKUP:
             if os.path.exists(arq):
@@ -66,7 +62,6 @@ def criar_backup_zip_em_disco():
     return caminho
 
 def restaurar_backup_zip_bytes(zip_bytes: bytes):
-    """Restaura somente arquivos permitidos (ARQUIVOS_BACKUP)."""
     tmp_dir = BACKUP_DIR / "_tmp_restore"
     if tmp_dir.exists():
         shutil.rmtree(tmp_dir)
@@ -83,27 +78,18 @@ def restaurar_backup_zip_bytes(zip_bytes: bytes):
     shutil.rmtree(tmp_dir)
 
 def backup_automatico_diario_3h():
-    """
-    Streamlit não roda 24/7: roda quando o app é acessado.
-    Regra: após 03:00, se ainda não fez backup hoje => faz 1.
-    """
+    # Streamlit roda quando acessa; regra: após 03:00, se não fez backup hoje => faz 1.
     agora = agora_br()
     hoje = agora.strftime("%Y-%m-%d")
-
     if agora.hour >= 3:
         ultima = ""
         if BACKUP_STATE_FILE.exists():
             ultima = BACKUP_STATE_FILE.read_text(encoding="utf-8").strip()
-
         if ultima != hoje:
             criar_backup_zip_em_disco()
             BACKUP_STATE_FILE.write_text(hoje, encoding="utf-8")
 
 def listar_backups():
-    """
-    Retorna DataFrame com:
-    arquivo, caminho, data_hora (datetime tz), tamanho_mb
-    """
     backups = []
     for p in sorted(BACKUP_DIR.glob("backup_saude_kids_*.zip")):
         stat = p.stat()
@@ -114,16 +100,12 @@ def listar_backups():
             "data_hora": dt,
             "tamanho_mb": round(stat.st_size / (1024 * 1024), 2),
         })
-
     if not backups:
         return pd.DataFrame(columns=["arquivo", "caminho", "data_hora", "tamanho_mb"])
-
-    df = pd.DataFrame(backups)
-    df = df.sort_values("data_hora", ascending=False).reset_index(drop=True)
+    df = pd.DataFrame(backups).sort_values("data_hora", ascending=False).reset_index(drop=True)
     return df
 
 def apagar_backups_antigos(dias_manter=7):
-    """Apaga backups mais antigos que (agora - dias_manter). Retorna quantidade apagada."""
     limite = agora_br() - timedelta(days=dias_manter)
     apagados = 0
     for p in BACKUP_DIR.glob("backup_saude_kids_*.zip"):
@@ -159,23 +141,9 @@ def gerar_senha_temporaria(tamanho=6):
 
 def enviar_senha_nova(email_destino, senha_nova):
     meu_email = "ewerlon.osbadboys@gmail.com"
-    minha_senha = st.secrets.get("okiu qihp lglk trcc", "")  # NÃO colocar senha fixa no código
+    minha_senha = st.secrets.get("GMAIL_APP_PASSWORD", "")
 
     if not minha_senha:
-        return False  # sem segredo configurado => não envia
-
-    corpo = f"<h3>Saúde Kids</h3><p>Sua nova senha de acesso é: <b>{senha_nova}</b></p>"
-    msg = MIMEText(corpo, 'html')
-    msg['Subject'] = 'Sua Nova Senha - Saúde Kids'
-    msg['From'] = meu_email
-    msg['To'] = email_destino
-
-    try:
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
-            smtp.login(meu_email, minha_senha)
-            smtp.send_message(msg)
-        return True
-    except:
         return False
 
     corpo = f"<h3>Saúde Kids</h3><p>Sua nova senha de acesso é: <b>{senha_nova}</b></p>"
@@ -248,10 +216,13 @@ if not st.session_state.logado:
                 nova = gerar_senha_temporaria()
                 c.execute("UPDATE users SET senha=? WHERE email=?", (nova, email_alvo))
                 conn.commit()
+
                 if enviar_senha_nova(email_alvo, nova):
                     st.success("Nova senha enviada para seu e-mail!")
                 else:
-                    st.error("Erro ao enviar e-mail. Configure GMAIL_APP_PASSWORD em st.secrets.")
+                    st.warning("E-mail não configurado no app.")
+                    st.info("Use a senha temporária abaixo para entrar e depois altere sua senha:")
+                    st.code(nova)
             else:
                 st.error("E-mail não encontrado.")
             conn.close()
@@ -290,11 +261,6 @@ def _schema_receita_nova(rec: pd.Series, periodo: str) -> bool:
     return all(k in rec.index for k in need)
 
 def calc_insulina(v, m):
-    """
-    Compatível com:
-    - Receita antiga: manha_f1/manhã_f2/manhã_f3 e noite_f1/noite_f2/noite_f3
-    - Receita nova: *_f1_min/max/dose ... *_f3_min/max/dose
-    """
     df_r = carregar_dados_seguro(ARQ_R)
     if df_r.empty:
         return "0 UI", "Configurar Receita"
@@ -328,6 +294,7 @@ def calc_insulina(v, m):
             d = rec.get(f"{periodo}_f2", 0)
         else:
             d = rec.get(f"{periodo}_f3", 0)
+
         return f"{int(d)} UI", f"Tabela {periodo.capitalize()}"
 
     except:
@@ -419,7 +386,7 @@ if st.session_state.user_email == "admin":
         if up is not None:
             if st.button("✅ Restaurar Agora", use_container_width=True):
                 restaurar_backup_zip_bytes(up.getvalue())
-                st.success("Restauração concluída! Recarregue o app (F5) ou reinicie a execução.")
+                st.success("Restauração concluída! Recarregue o app (F5).")
 
         st.markdown("---")
         st.write("### ⏰ Backup Automático")
@@ -442,19 +409,16 @@ if st.session_state.user_email == "admin":
             p_sel = BACKUP_DIR / selecionado
 
             colx1, colx2, colx3 = st.columns(3)
-
             with colx1:
                 if p_sel.exists():
                     with open(p_sel, "rb") as f:
                         st.download_button("⬇️ Baixar Selecionado", f.read(), file_name=selecionado, use_container_width=True)
-
             with colx2:
                 if st.button("🗑️ Apagar Selecionado", use_container_width=True):
                     if p_sel.exists():
                         p_sel.unlink()
                         st.success("Backup apagado.")
                         st.rerun()
-
             with colx3:
                 if st.button("🧹 Apagar Antigos (7 dias)", use_container_width=True):
                     apagados = apagar_backups_antigos(dias_manter=7)
@@ -479,7 +443,7 @@ else:
             if st.button("💾 Salvar Glicemia", use_container_width=True):
                 agora = agora_br()
                 novo = pd.DataFrame([[st.session_state.user_email, agora.strftime("%d/%m/%Y"), agora.strftime("%H:%M"), v_gl, m_gl, dose]],
-                                    columns=["Usuario","Data","Hora","Valor","Momento","Dose"])
+                                    columns=["Usuario", "Data", "Hora", "Valor", "Momento", "Dose"])
                 base = pd.read_csv(ARQ_G) if os.path.exists(ARQ_G) else pd.DataFrame()
                 pd.concat([base, novo], ignore_index=True).to_csv(ARQ_G, index=False)
                 st.rerun()
@@ -494,9 +458,12 @@ else:
             def cor_gl(v):
                 try:
                     n = int(v)
-                    if n < 70: return 'background-color: #8B8000'
-                    elif n > 180: return 'background-color: #8B0000'
-                    else: return 'background-color: #006400'
+                    if n < 70:
+                        return 'background-color: #8B8000'
+                    elif n > 180:
+                        return 'background-color: #8B0000'
+                    else:
+                        return 'background-color: #006400'
                 except:
                     return ''
             st.dataframe(dfg.tail(15).style.applymap(cor_gl, subset=['Valor']), use_container_width=True)
@@ -522,7 +489,7 @@ else:
         if st.button("💾 Salvar Refeição", use_container_width=True):
             agora = agora_br()
             novo_n = pd.DataFrame([[st.session_state.user_email, agora.strftime("%d/%m/%Y"), m_nutri, ", ".join(sel), c_tot, p_tot, g_tot]],
-                                  columns=["Usuario","Data","Momento","Info","C","P","G"])
+                                  columns=["Usuario", "Data", "Momento", "Info", "C", "P", "G"])
             base = pd.read_csv(ARQ_N) if os.path.exists(ARQ_N) else pd.DataFrame()
             pd.concat([base, novo_n], ignore_index=True).to_csv(ARQ_N, index=False)
             st.rerun()
@@ -556,26 +523,24 @@ else:
         st.subheader("🌙 Receita Noite (Editável)")
         cn1, cn2, cn3 = st.columns(3)
         with cn1:
-            n1_min = st.number_input("Faixa 1 - Mín ", value=int(v.get('noite_f1_min', 70)), key="n1_min_u")
-            n1_max = st.number_input("Faixa 1 - Máx ", value=int(v.get('noite_f1_max', 150)), key="n1_max_u")
-            n1_dose = st.number_input("Dose Faixa 1 (UI) ", value=int(v.get('noite_f1_dose', 3)), key="n1_dose_u")
+            n1_min = st.number_input("Faixa 1 - Mín", value=int(v.get('noite_f1_min', 70)), key="n1_min_u")
+            n1_max = st.number_input("Faixa 1 - Máx", value=int(v.get('noite_f1_max', 150)), key="n1_max_u")
+            n1_dose = st.number_input("Dose Faixa 1 (UI)", value=int(v.get('noite_f1_dose', 3)), key="n1_dose_u")
         with cn2:
-            n2_min = st.number_input("Faixa 2 - Mín  ", value=int(v.get('noite_f2_min', 151)), key="n2_min_u")
-            n2_max = st.number_input("Faixa 2 - Máx  ", value=int(v.get('noite_f2_max', 300)), key="n2_max_u")
-            n2_dose = st.number_input("Dose Faixa 2 (UI)  ", value=int(v.get('noite_f2_dose', 5)), key="n2_dose_u")
+            n2_min = st.number_input("Faixa 2 - Mín", value=int(v.get('noite_f2_min', 151)), key="n2_min_u")
+            n2_max = st.number_input("Faixa 2 - Máx", value=int(v.get('noite_f2_max', 300)), key="n2_max_u")
+            n2_dose = st.number_input("Dose Faixa 2 (UI)", value=int(v.get('noite_f2_dose', 5)), key="n2_dose_u")
         with cn3:
-            n3_min = st.number_input("Faixa 3 - Mín   ", value=int(v.get('noite_f3_min', 301)), key="n3_min_u")
-            n3_max = st.number_input("Faixa 3 - Máx   ", value=int(v.get('noite_f3_max', 600)), key="n3_max_u")
-            n3_dose = st.number_input("Dose Faixa 3 (UI)   ", value=int(v.get('noite_f3_dose', 8)), key="n3_dose_u")
+            n3_min = st.number_input("Faixa 3 - Mín", value=int(v.get('noite_f3_min', 301)), key="n3_min_u")
+            n3_max = st.number_input("Faixa 3 - Máx", value=int(v.get('noite_f3_max', 600)), key="n3_max_u")
+            n3_dose = st.number_input("Dose Faixa 3 (UI)", value=int(v.get('noite_f3_dose', 8)), key="n3_dose_u")
 
-        if st.button("💾 Salvar Receita", use_container_width=True, key="save_receita_user"):
+        if st.button("💾 Salvar Receita", use_container_width=True):
             nova_rec = pd.DataFrame([{
                 'Usuario': st.session_state.user_email,
-
                 'manha_f1_min': m1_min, 'manha_f1_max': m1_max, 'manha_f1_dose': m1_dose,
                 'manha_f2_min': m2_min, 'manha_f2_max': m2_max, 'manha_f2_dose': m2_dose,
                 'manha_f3_min': m3_min, 'manha_f3_max': m3_max, 'manha_f3_dose': m3_dose,
-
                 'noite_f1_min': n1_min, 'noite_f1_max': n1_max, 'noite_f1_dose': n1_dose,
                 'noite_f2_min': n2_min, 'noite_f2_max': n2_max, 'noite_f2_dose': n2_dose,
                 'noite_f3_min': n3_min, 'noite_f3_max': n3_max, 'noite_f3_dose': n3_dose,
@@ -593,7 +558,8 @@ else:
         if st.button("Enviar Sugestão"):
             if txt:
                 agora = agora_br().strftime("%d/%m/%Y %H:%M")
-                novo_m = pd.DataFrame([[st.session_state.user_email, agora, txt]], columns=["Usuario", "Data", "Sugestão"])
+                novo_m = pd.DataFrame([[st.session_state.user_email, agora, txt]],
+                                      columns=["Usuario", "Data", "Sugestão"])
                 base_m = pd.read_csv(ARQ_M) if os.path.exists(ARQ_M) else pd.DataFrame()
                 pd.concat([base_m, novo_m], ignore_index=True).to_csv(ARQ_M, index=False)
                 st.success("Enviado com sucesso!")
@@ -607,7 +573,6 @@ if st.sidebar.button("📥 Gerar Excel Completo"):
 
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        # Aba Glicemia com Cores
         if not df_e_g.empty:
             pivot = df_e_g.pivot_table(index='Data', columns='Momento', values='Valor', aggfunc='last')
             pivot.to_excel(writer, sheet_name='Glicemia')
@@ -632,7 +597,6 @@ if st.sidebar.button("📥 Gerar Excel Completo"):
                         except:
                             pass
 
-        # Aba Nutrição (C, P, G)
         if not df_e_n.empty:
             df_e_n.to_excel(writer, sheet_name='Nutrição', index=False)
             ws2 = writer.sheets['Nutrição']
