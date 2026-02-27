@@ -14,6 +14,10 @@ import string
 import zipfile
 import shutil
 from pathlib import Path
+from reportlab.lib.pagesizes import A4
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib import colors
 
 # =========================================================
 # (OPCIONAL) LOGIN PERSISTENTE POR COOKIE (NÃO BUGA SE NÃO TIVER)
@@ -773,7 +777,87 @@ if st.sidebar.button("📥 Gerar Excel Completo"):
                 cell.alignment = Alignment(horizontal="center")
 
     st.sidebar.download_button("Baixar Agora", output.getvalue(), file_name="Relatorio_Saude_Kids.xlsx")
+    
+def gerar_pdf_completo_bytes(df_g: pd.DataFrame, df_n: pd.DataFrame) -> bytes:
+    """
+    Gera PDF com:
+      - Tabela pivot de glicemia (Data x Momento)
+      - Tabela de nutrição (últimos registros)
+    Retorna bytes do PDF.
+    """
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=18, leftMargin=18, topMargin=18, bottomMargin=18)
+    styles = getSampleStyleSheet()
+    story = []
 
+    titulo = Paragraph("Relatório Saúde Kids", styles["Title"])
+    story.append(titulo)
+    story.append(Spacer(1, 12))
+
+    # ---------- GLICEMIA ----------
+    story.append(Paragraph("Glicemia", styles["Heading2"]))
+    story.append(Spacer(1, 6))
+
+    if df_g is None or df_g.empty:
+        story.append(Paragraph("Sem dados de glicemia.", styles["Normal"]))
+        story.append(Spacer(1, 12))
+    else:
+        pivot = df_g.pivot_table(index="Data", columns="Momento", values="Valor", aggfunc="last")
+        pivot = pivot.reset_index()
+
+        # limita para não estourar página
+        pivot = pivot.tail(30)
+
+        data = [pivot.columns.tolist()] + pivot.fillna("").astype(str).values.tolist()
+        tbl = Table(data, repeatRows=1)
+
+        tbl.setStyle(TableStyle([
+            ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#262730")),
+            ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+            ("GRID", (0,0), (-1,-1), 0.25, colors.grey),
+            ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
+            ("ALIGN", (0,0), (-1,-1), "CENTER"),
+            ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+            ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.whitesmoke, colors.lightgrey]),
+        ]))
+
+        story.append(tbl)
+        story.append(Spacer(1, 14))
+
+    # ---------- NUTRIÇÃO ----------
+    story.append(Paragraph("Nutrição", styles["Heading2"]))
+    story.append(Spacer(1, 6))
+
+    if df_n is None or df_n.empty:
+        story.append(Paragraph("Sem dados de nutrição.", styles["Normal"]))
+    else:
+        df_n_show = df_n.tail(30).copy()
+
+        # garante colunas esperadas (se faltar, mantém o que tiver)
+        cols = [c for c in ["Data", "Momento", "Info", "C", "P", "G"] if c in df_n_show.columns]
+        if cols:
+            df_n_show = df_n_show[cols]
+
+        data = [df_n_show.columns.tolist()] + df_n_show.fillna("").astype(str).values.tolist()
+        tbl2 = Table(data, repeatRows=1)
+
+        tbl2.setStyle(TableStyle([
+            ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#262730")),
+            ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+            ("GRID", (0,0), (-1,-1), 0.25, colors.grey),
+            ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
+            ("ALIGN", (0,0), (-1,-1), "LEFT"),
+            ("VALIGN", (0,0), (-1,-1), "TOP"),
+            ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.whitesmoke, colors.lightgrey]),
+        ]))
+
+        story.append(tbl2)
+
+    doc.build(story)
+    pdf_bytes = buffer.getvalue()
+    buffer.close()
+    return pdf_bytes
+    
 # ================= SAIR (SÓ SAI QUANDO CLICAR) =================
 if st.sidebar.button("🚪 Sair"):
     st.session_state.logado = False
