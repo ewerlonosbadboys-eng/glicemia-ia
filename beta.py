@@ -153,7 +153,7 @@ def gerar_senha_temporaria(tamanho=6):
 def enviar_senha_nova(email_destino, senha_nova):
     """
     Para enviar e-mail, configure no Streamlit Cloud:
-    st.secrets["GMAIL_APP_PASSWORD"] = "sua_senha_de_app"
+    st.secrets["GMAIL_APP_PASSWORD"] = "okiu qihp lglk trcc"
     """
     meu_email = "ewerlon.osbadboys@gmail.com"
     minha_senha = st.secrets.get("GMAIL_APP_PASSWORD", "").strip()
