@@ -1,5 +1,4 @@
-# beta.py (CÓDIGO COMPLETO com LOGIN PERSISTENTE + SAIR APENAS NO BOTÃO)
-# Requer: extra-streamlit-components==0.1.60 no requirements.txt
+# beta.py (CÓDIGO COMPLETO com: LOGIN PERSISTENTE (cookie se tiver pacote) + BACKUP + RECEITA RÁPIDA + RECEITA GLARGINA)
 
 import streamlit as st
 import pandas as pd
@@ -18,7 +17,13 @@ import zipfile
 import shutil
 from pathlib import Path
 
-import extra_streamlit_components as stx
+# --- tenta importar cookie manager (se não tiver, não quebra) ---
+HAS_COOKIE = True
+try:
+    import extra_streamlit_components as stx
+except Exception:
+    HAS_COOKIE = False
+    stx = None
 
 # ================= CONFIGURAÇÕES INICIAIS =================
 fuso_br = pytz.timezone("America/Sao_Paulo")
@@ -38,9 +43,8 @@ def norm_senha(x: str) -> str:
 
 # ================= LOGIN PERSISTENTE (COOKIE) =================
 COOKIE_NAME = "saude_kids_session"
-COOKIE_MAX_AGE_DIAS = 3650  # ~10 anos (praticamente "indeterminado")
-
-cookie_manager = stx.CookieManager()
+COOKIE_MAX_AGE_DIAS = 3650  # ~10 anos
+cookie_manager = stx.CookieManager() if HAS_COOKIE else None
 
 def _db():
     return sqlite3.connect("usuarios.db", check_same_thread=False)
@@ -61,11 +65,8 @@ def init_db():
             created_at TEXT
         )
     """)
-
-    # admin fixo
     if not conn.execute("SELECT 1 FROM users WHERE email='admin'").fetchone():
         conn.execute("INSERT INTO users VALUES ('Administrador', 'admin', '542820')")
-
     conn.commit()
     conn.close()
 
@@ -90,9 +91,7 @@ def validar_token(token: str):
     conn = _db()
     row = conn.execute("SELECT email FROM sessions WHERE token=?", (token,)).fetchone()
     conn.close()
-    if row:
-        return row[0]
-    return None
+    return row[0] if row else None
 
 def encerrar_sessao(token: str):
     if not token:
@@ -103,7 +102,8 @@ def encerrar_sessao(token: str):
     conn.close()
 
 def tentar_login_por_cookie():
-    # tenta recuperar token do cookie e validar no banco
+    if not HAS_COOKIE:
+        return
     token = cookie_manager.get(COOKIE_NAME)
     email = validar_token(token)
     if email:
@@ -165,10 +165,6 @@ def restaurar_backup_zip_bytes(zip_bytes: bytes):
     shutil.rmtree(tmp_dir)
 
 def backup_automatico_diario_3h():
-    """
-    Streamlit não roda 24/7 (roda quando alguém acessa).
-    Regra: após 03:00, se ainda não fez backup HOJE => faz 1.
-    """
     agora = agora_br()
     hoje = agora.strftime("%Y-%m-%d")
     if agora.hour >= 3:
@@ -229,15 +225,8 @@ def gerar_senha_temporaria(tamanho=6):
     return "".join(random.choice(caracteres) for _ in range(tamanho))
 
 def enviar_senha_nova(email_destino, senha_nova):
-    """
-    Para enviar e-mail no Streamlit Cloud:
-    - Settings -> Secrets:
-      GMAIL_APP_PASSWORD = "SUA SENHA DE APP DO GMAIL"
-    """
     meu_email = "ewerlon.osbadboys@gmail.com"
     minha_senha = (st.secrets.get("GMAIL_APP_PASSWORD", "") or "").strip()
-
-    # Se não tiver configurado, não envia (o app mostra a senha temporária na tela)
     if not minha_senha:
         return False
 
@@ -266,7 +255,6 @@ if "user_email" not in st.session_state:
 if "session_token" not in st.session_state:
     st.session_state.session_token = ""
 
-# tenta login persistente (cookie) só se não estiver logado
 if not st.session_state.logado:
     tentar_login_por_cookie()
 
@@ -279,7 +267,7 @@ def carregar_dados_seguro(arq):
         df["Usuario"] = st.session_state.user_email
     return df[df["Usuario"] == st.session_state.user_email].copy()
 
-def _schema_receita_nova(rec: pd.Series, periodo: str) -> bool:
+def _schema_receita_rapida(rec: pd.Series, periodo: str) -> bool:
     need = [
         f"{periodo}_f1_min", f"{periodo}_f1_max", f"{periodo}_f1_dose",
         f"{periodo}_f2_min", f"{periodo}_f2_max", f"{periodo}_f2_dose",
@@ -287,11 +275,9 @@ def _schema_receita_nova(rec: pd.Series, periodo: str) -> bool:
     ]
     return all(k in rec.index for k in need)
 
-def calc_insulina(v, m):
+def calc_insulina_rapida(v, m):
     """
-    Receita nova (editável):
-      manha_f1_min/max/dose ... manha_f3_min/max/dose
-      noite_f1_min/max/dose ... noite_f3_min/max/dose
+    Insulina RÁPIDA: depende da glicemia, usando faixas manhã/noite.
     """
     df_r = carregar_dados_seguro(ARQ_R)
     if df_r.empty:
@@ -301,7 +287,7 @@ def calc_insulina(v, m):
     periodo = "manha" if m in ["Antes Café", "Após Café", "Antes Almoço", "Após Almoço", "Antes Merenda"] else "noite"
 
     try:
-        if _schema_receita_nova(rec, periodo):
+        if _schema_receita_rapida(rec, periodo):
             f1_min = float(rec[f"{periodo}_f1_min"]); f1_max = float(rec[f"{periodo}_f1_max"]); f1_dose = float(rec[f"{periodo}_f1_dose"])
             f2_min = float(rec[f"{periodo}_f2_min"]); f2_max = float(rec[f"{periodo}_f2_max"]); f2_dose = float(rec[f"{periodo}_f2_dose"])
             f3_min = float(rec[f"{periodo}_f3_min"]); f3_max = float(rec[f"{periodo}_f3_max"]); f3_dose = float(rec[f"{periodo}_f3_dose"])
@@ -321,6 +307,31 @@ def calc_insulina(v, m):
         return "0 UI", "Receita inválida"
     except:
         return "0 UI", "Erro na Receita"
+
+def calc_glargina(momento: str):
+    """
+    Insulina LONGA (GLARGINA):
+    - só antes do café e antes da janta
+    - não depende da glicemia, só mostra a dose configurada
+    """
+    df_r = carregar_dados_seguro(ARQ_R)
+    if df_r.empty:
+        return "0 UI", "Configurar Glargina"
+
+    rec = df_r.iloc[0]
+    cafe = int(float(rec.get("glargina_cafe_ui", 0) or 0))
+    janta = int(float(rec.get("glargina_janta_ui", 0) or 0))
+
+    if momento == "Antes Café":
+        if cafe <= 0:
+            return "0 UI", "Glargina (café) não configurada"
+        return f"{cafe} UI", "Glargina - Antes Café"
+    if momento == "Antes Janta":
+        if janta <= 0:
+            return "0 UI", "Glargina (janta) não configurada"
+        return f"{janta} UI", "Glargina - Antes Janta"
+
+    return "—", "Glargina só: Antes Café / Antes Janta"
 
 MOMENTOS_ORDEM = [
     "Antes Café", "Após Café", "Antes Almoço", "Após Almoço",
@@ -345,12 +356,15 @@ ALIMENTOS = {
     "Maçã (1un)": [15, 0, 0],
 }
 
-# ================= TELA DE LOGIN (SE NÃO LOGADO) =================
+# ================= TELA DE LOGIN =================
 if not st.session_state.logado:
     st.title("🧪 Saúde Kids - Acesso")
+
+    if not HAS_COOKIE:
+        st.warning("Login persistente DESATIVADO: instale extra-streamlit-components==0.1.60 no requirements.txt.")
+
     abas_login = st.tabs(["🔐 Entrar", "📝 Criar Conta", "❓ Esqueci Senha", "🔄 Alterar Senha"])
 
-    # -------- ENTRAR --------
     with abas_login[0]:
         u = norm_email(st.text_input("E-mail", key="l_email"))
         s = norm_senha(st.text_input("Senha", type="password", key="l_pass"))
@@ -362,7 +376,8 @@ if not st.session_state.logado:
 
             if ok:
                 token = criar_sessao(u)
-                cookie_manager.set(COOKIE_NAME, token, max_age=COOKIE_MAX_AGE_DIAS * 24 * 3600)
+                if HAS_COOKIE:
+                    cookie_manager.set(COOKIE_NAME, token, max_age=COOKIE_MAX_AGE_DIAS * 24 * 3600)
 
                 st.session_state.logado = True
                 st.session_state.user_email = u
@@ -371,7 +386,6 @@ if not st.session_state.logado:
             else:
                 st.error("E-mail ou senha incorretos.")
 
-    # -------- CRIAR CONTA --------
     with abas_login[1]:
         n_cad = (st.text_input("Nome Completo") or "").strip()
         e_cad = norm_email(st.text_input("E-mail para Cadastro"))
@@ -390,7 +404,6 @@ if not st.session_state.logado:
                 except:
                     st.error("Este e-mail já está cadastrado.")
 
-    # -------- ESQUECI SENHA --------
     with abas_login[2]:
         email_alvo = norm_email(st.text_input("Digite seu e-mail cadastrado"))
 
@@ -415,7 +428,6 @@ if not st.session_state.logado:
                 conn.close()
                 st.error("E-mail não encontrado.")
 
-    # -------- ALTERAR SENHA --------
     with abas_login[3]:
         alt_em = norm_email(st.text_input("Confirme seu E-mail", key="alt_em"))
         alt_at = norm_senha(st.text_input("Senha Atual", type="password", key="alt_at"))
@@ -558,16 +570,24 @@ else:
         with c1:
             v_gl = st.number_input("Valor Glicemia", 0, 600, 100)
             m_gl = st.selectbox("Momento", MOMENTOS_ORDEM)
-            dose, msg_d = calc_insulina(v_gl, m_gl)
 
+            # Caixa 1: Insulina Rápida (por glicemia)
+            dose_r, msg_r = calc_insulina_rapida(v_gl, m_gl)
             st.markdown(
-                f'<div class="metric-box"><small>{msg_d}</small><br><span class="dose-destaque">{dose}</span></div>',
+                f'<div class="metric-box"><small>Rápida: {msg_r}</small><br><span class="dose-destaque">{dose_r}</span></div>',
+                unsafe_allow_html=True
+            )
+
+            # Caixa 2: Glargina (dose fixa, sem glicemia)
+            dose_g, msg_g = calc_glargina(m_gl)
+            st.markdown(
+                f'<div class="metric-box" style="margin-top:10px;"><small>{msg_g}</small><br><span class="dose-destaque">{dose_g}</span></div>',
                 unsafe_allow_html=True
             )
 
             if st.button("💾 Salvar Glicemia", use_container_width=True):
                 agora = agora_br()
-                novo = pd.DataFrame([[st.session_state.user_email, agora.strftime("%d/%m/%Y"), agora.strftime("%H:%M"), v_gl, m_gl, dose]],
+                novo = pd.DataFrame([[st.session_state.user_email, agora.strftime("%d/%m/%Y"), agora.strftime("%H:%M"), v_gl, m_gl, dose_r]],
                                     columns=["Usuario", "Data", "Hora", "Valor", "Momento", "Dose"])
                 base = pd.read_csv(ARQ_G) if os.path.exists(ARQ_G) else pd.DataFrame(columns=novo.columns)
                 pd.concat([base, novo], ignore_index=True).to_csv(ARQ_G, index=False)
@@ -584,11 +604,11 @@ else:
                 try:
                     n = int(v)
                     if n < 70:
-                        return "background-color: #8B8000"   # amarelo/alerta
+                        return "background-color: #8B8000"
                     elif n > 180:
-                        return "background-color: #8B0000"   # vermelho
+                        return "background-color: #8B0000"
                     else:
-                        return "background-color: #006400"   # verde
+                        return "background-color: #006400"
                 except:
                     return ""
             st.dataframe(dfg.tail(15).style.applymap(cor_gl, subset=["Valor"]), use_container_width=True)
@@ -623,7 +643,7 @@ else:
         st.dataframe(dfn.tail(10), use_container_width=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
-    # ====== RECEITA (EDITÁVEL) ======
+    # ====== RECEITA (AGORA COM 2 RECEITAS) ======
     with tab3:
         st.markdown('<div class="card">', unsafe_allow_html=True)
 
@@ -631,51 +651,103 @@ else:
         r_u = df_r_all[df_r_all["Usuario"] == st.session_state.user_email] if not df_r_all.empty else pd.DataFrame()
         v = r_u.iloc[0] if not r_u.empty else {}
 
-        st.subheader("🌞 Receita Manhã (Editável)")
-        cm1, cm2, cm3 = st.columns(3)
-        with cm1:
-            m1_min = st.number_input("Faixa 1 - Mín", value=int(v.get("manha_f1_min", 70)), key="m1_min_u")
-            m1_max = st.number_input("Faixa 1 - Máx", value=int(v.get("manha_f1_max", 150)), key="m1_max_u")
-            m1_dose = st.number_input("Dose Faixa 1 (UI)", value=int(v.get("manha_f1_dose", 3)), key="m1_dose_u")
-        with cm2:
-            m2_min = st.number_input("Faixa 2 - Mín", value=int(v.get("manha_f2_min", 151)), key="m2_min_u")
-            m2_max = st.number_input("Faixa 2 - Máx", value=int(v.get("manha_f2_max", 300)), key="m2_max_u")
-            m2_dose = st.number_input("Dose Faixa 2 (UI)", value=int(v.get("manha_f2_dose", 5)), key="m2_dose_u")
-        with cm3:
-            m3_min = st.number_input("Faixa 3 - Mín", value=int(v.get("manha_f3_min", 301)), key="m3_min_u")
-            m3_max = st.number_input("Faixa 3 - Máx", value=int(v.get("manha_f3_max", 600)), key="m3_max_u")
-            m3_dose = st.number_input("Dose Faixa 3 (UI)", value=int(v.get("manha_f3_dose", 8)), key="m3_dose_u")
+        sub1, sub2 = st.tabs(["⚡ Insulina Rápida", "🕒 Insulina Longa (Glargina)"])
+
+        # --- Receita 1: RÁPIDA ---
+        with sub1:
+            st.subheader("⚡ Insulina Rápida (por glicemia)")
+
+            st.caption("Manhã e Noite com 3 faixas (mín/máx/dose).")
+
+            st.subheader("🌞 Manhã")
+            cm1, cm2, cm3 = st.columns(3)
+            with cm1:
+                m1_min = st.number_input("Faixa 1 - Mín", value=int(v.get("manha_f1_min", 70)), key="m1_min_u")
+                m1_max = st.number_input("Faixa 1 - Máx", value=int(v.get("manha_f1_max", 150)), key="m1_max_u")
+                m1_dose = st.number_input("Dose Faixa 1 (UI)", value=int(v.get("manha_f1_dose", 3)), key="m1_dose_u")
+            with cm2:
+                m2_min = st.number_input("Faixa 2 - Mín", value=int(v.get("manha_f2_min", 151)), key="m2_min_u")
+                m2_max = st.number_input("Faixa 2 - Máx", value=int(v.get("manha_f2_max", 300)), key="m2_max_u")
+                m2_dose = st.number_input("Dose Faixa 2 (UI)", value=int(v.get("manha_f2_dose", 5)), key="m2_dose_u")
+            with cm3:
+                m3_min = st.number_input("Faixa 3 - Mín", value=int(v.get("manha_f3_min", 301)), key="m3_min_u")
+                m3_max = st.number_input("Faixa 3 - Máx", value=int(v.get("manha_f3_max", 600)), key="m3_max_u")
+                m3_dose = st.number_input("Dose Faixa 3 (UI)", value=int(v.get("manha_f3_dose", 8)), key="m3_dose_u")
+
+            st.markdown("---")
+            st.subheader("🌙 Noite")
+            cn1, cn2, cn3 = st.columns(3)
+            with cn1:
+                n1_min = st.number_input("Faixa 1 - Mín", value=int(v.get("noite_f1_min", 70)), key="n1_min_u")
+                n1_max = st.number_input("Faixa 1 - Máx", value=int(v.get("noite_f1_max", 150)), key="n1_max_u")
+                n1_dose = st.number_input("Dose Faixa 1 (UI)", value=int(v.get("noite_f1_dose", 3)), key="n1_dose_u")
+            with cn2:
+                n2_min = st.number_input("Faixa 2 - Mín", value=int(v.get("noite_f2_min", 151)), key="n2_min_u")
+                n2_max = st.number_input("Faixa 2 - Máx", value=int(v.get("noite_f2_max", 300)), key="n2_max_u")
+                n2_dose = st.number_input("Dose Faixa 2 (UI)", value=int(v.get("noite_f2_dose", 5)), key="n2_dose_u")
+            with cn3:
+                n3_min = st.number_input("Faixa 3 - Mín", value=int(v.get("noite_f3_min", 301)), key="n3_min_u")
+                n3_max = st.number_input("Faixa 3 - Máx", value=int(v.get("noite_f3_max", 600)), key="n3_max_u")
+                n3_dose = st.number_input("Dose Faixa 3 (UI)", value=int(v.get("noite_f3_dose", 8)), key="n3_dose_u")
+
+        # --- Receita 2: GLARGINA (dose fixa) ---
+        with sub2:
+            st.subheader("🕒 Insulina Longa (Glargina)")
+            st.caption("Dose fixa (não precisa digitar glicemia). Só para: Antes Café e Antes Janta.")
+
+            colg1, colg2 = st.columns(2)
+            with colg1:
+                glargina_cafe_ui = st.number_input(
+                    "Glargina - Antes Café (UI)",
+                    min_value=0, max_value=200,
+                    value=int(float(v.get("glargina_cafe_ui", 0) or 0)),
+                    key="glargina_cafe_ui"
+                )
+            with colg2:
+                glargina_janta_ui = st.number_input(
+                    "Glargina - Antes Janta (UI)",
+                    min_value=0, max_value=200,
+                    value=int(float(v.get("glargina_janta_ui", 0) or 0)),
+                    key="glargina_janta_ui"
+                )
+
+            st.markdown("---")
+            # Preview rápido das duas caixas (como aparece na Glicemia)
+            cprev1, cprev2 = st.columns(2)
+            with cprev1:
+                st.markdown(
+                    f'<div class="metric-box"><small>Glargina - Antes Café</small><br><span class="dose-destaque">{glargina_cafe_ui} UI</span></div>',
+                    unsafe_allow_html=True
+                )
+            with cprev2:
+                st.markdown(
+                    f'<div class="metric-box"><small>Glargina - Antes Janta</small><br><span class="dose-destaque">{glargina_janta_ui} UI</span></div>',
+                    unsafe_allow_html=True
+                )
 
         st.markdown("---")
-        st.subheader("🌙 Receita Noite (Editável)")
-        cn1, cn2, cn3 = st.columns(3)
-        with cn1:
-            n1_min = st.number_input("Faixa 1 - Mín", value=int(v.get("noite_f1_min", 70)), key="n1_min_u")
-            n1_max = st.number_input("Faixa 1 - Máx", value=int(v.get("noite_f1_max", 150)), key="n1_max_u")
-            n1_dose = st.number_input("Dose Faixa 1 (UI)", value=int(v.get("noite_f1_dose", 3)), key="n1_dose_u")
-        with cn2:
-            n2_min = st.number_input("Faixa 2 - Mín", value=int(v.get("noite_f2_min", 151)), key="n2_min_u")
-            n2_max = st.number_input("Faixa 2 - Máx", value=int(v.get("noite_f2_max", 300)), key="n2_max_u")
-            n2_dose = st.number_input("Dose Faixa 2 (UI)", value=int(v.get("noite_f2_dose", 5)), key="n2_dose_u")
-        with cn3:
-            n3_min = st.number_input("Faixa 3 - Mín", value=int(v.get("noite_f3_min", 301)), key="n3_min_u")
-            n3_max = st.number_input("Faixa 3 - Máx", value=int(v.get("noite_f3_max", 600)), key="n3_max_u")
-            n3_dose = st.number_input("Dose Faixa 3 (UI)", value=int(v.get("noite_f3_dose", 8)), key="n3_dose_u")
-
-        if st.button("💾 Salvar Receita", use_container_width=True):
+        if st.button("💾 Salvar Receita (Rápida + Glargina)", use_container_width=True):
+            # garante que colunas novas existam
             nova_rec = pd.DataFrame([{
                 "Usuario": st.session_state.user_email,
+
+                # RÁPIDA
                 "manha_f1_min": m1_min, "manha_f1_max": m1_max, "manha_f1_dose": m1_dose,
                 "manha_f2_min": m2_min, "manha_f2_max": m2_max, "manha_f2_dose": m2_dose,
                 "manha_f3_min": m3_min, "manha_f3_max": m3_max, "manha_f3_dose": m3_dose,
+
                 "noite_f1_min": n1_min, "noite_f1_max": n1_max, "noite_f1_dose": n1_dose,
                 "noite_f2_min": n2_min, "noite_f2_max": n2_max, "noite_f2_dose": n2_dose,
                 "noite_f3_min": n3_min, "noite_f3_max": n3_max, "noite_f3_dose": n3_dose,
+
+                # GLARGINA (LONGA)
+                "glargina_cafe_ui": int(glargina_cafe_ui),
+                "glargina_janta_ui": int(glargina_janta_ui),
             }])
 
             df_r_all = df_r_all[df_r_all["Usuario"] != st.session_state.user_email] if not df_r_all.empty else pd.DataFrame()
             pd.concat([df_r_all, nova_rec], ignore_index=True).to_csv(ARQ_R, index=False)
-            st.success("Receita salva com sucesso!")
+            st.success("Receitas salvas com sucesso!")
 
         st.markdown("</div>", unsafe_allow_html=True)
 
@@ -692,7 +764,7 @@ else:
                 st.success("Enviado com sucesso!")
         st.markdown("</div>", unsafe_allow_html=True)
 
-# ================= EXCEL COM DUAS ABAS (GLICEMIA E NUTRIÇÃO) =================
+# ================= EXCEL =================
 st.sidebar.markdown("---")
 if st.sidebar.button("📥 Gerar Excel Completo"):
     df_e_g = carregar_dados_seguro(ARQ_G)
@@ -700,15 +772,14 @@ if st.sidebar.button("📥 Gerar Excel Completo"):
 
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        # Aba Glicemia com Cores
         if not df_e_g.empty:
             pivot = df_e_g.pivot_table(index="Data", columns="Momento", values="Valor", aggfunc="last")
             pivot.to_excel(writer, sheet_name="Glicemia")
             ws1 = writer.sheets["Glicemia"]
 
-            f_ok = PatternFill("solid", fgColor="C8E6C9")   # verde claro
-            f_hi = PatternFill("solid", fgColor="FFB6C1")   # vermelho claro
-            f_lo = PatternFill("solid", fgColor="FFFFE0")   # amarelo claro
+            f_ok = PatternFill("solid", fgColor="C8E6C9")
+            f_hi = PatternFill("solid", fgColor="FFB6C1")
+            f_lo = PatternFill("solid", fgColor="FFFFE0")
 
             for row in ws1.iter_rows(min_row=2, min_col=2):
                 for cell in row:
@@ -725,7 +796,6 @@ if st.sidebar.button("📥 Gerar Excel Completo"):
                         except:
                             pass
 
-        # Aba Nutrição
         if not df_e_n.empty:
             df_e_n.to_excel(writer, sheet_name="Nutrição", index=False)
             ws2 = writer.sheets["Nutrição"]
@@ -734,14 +804,14 @@ if st.sidebar.button("📥 Gerar Excel Completo"):
 
     st.sidebar.download_button("Baixar Agora", output.getvalue(), file_name="Relatorio_Saude_Kids.xlsx")
 
-# ================= SAIR (LOGOUT) - ÚNICO JEITO DE DESLOGAR =================
+# ================= SAIR (ÚNICO JEITO DE DESLOGAR) =================
 if st.sidebar.button("🚪 Sair"):
-    # apaga sessão no banco + cookie + estado
     encerrar_sessao(st.session_state.get("session_token", ""))
-    try:
-        cookie_manager.delete(COOKIE_NAME)
-    except:
-        pass
+    if HAS_COOKIE:
+        try:
+            cookie_manager.delete(COOKIE_NAME)
+        except:
+            pass
 
     st.session_state.logado = False
     st.session_state.user_email = ""
