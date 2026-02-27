@@ -1,3 +1,6 @@
+# beta.py (CÓDIGO COMPLETO com LOGIN PERSISTENTE + SAIR APENAS NO BOTÃO)
+# Requer: extra-streamlit-components==0.1.60 no requirements.txt
+
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
@@ -15,13 +18,7 @@ import zipfile
 import shutil
 from pathlib import Path
 
-# Cookies (login persistente)
-try:
-    import extra_streamlit_components as stx
-    HAS_COOKIES = True
-except Exception:
-    HAS_COOKIES = False
-
+import extra_streamlit_components as stx
 
 # ================= CONFIGURAÇÕES INICIAIS =================
 fuso_br = pytz.timezone("America/Sao_Paulo")
@@ -32,9 +29,6 @@ ARQ_N = "dados_nutricao_BETA.csv"
 ARQ_R = "config_receita_BETA.csv"
 ARQ_M = "mensagens_admin_BETA.csv"
 
-COOKIE_NAME = "saude_kids_token"  # cookie do login persistente
-
-
 # ================= NORMALIZAÇÃO (EMAIL CASE-INSENSITIVE) =================
 def norm_email(x: str) -> str:
     return (x or "").strip().lower()
@@ -42,6 +36,80 @@ def norm_email(x: str) -> str:
 def norm_senha(x: str) -> str:
     return (x or "").strip()
 
+# ================= LOGIN PERSISTENTE (COOKIE) =================
+COOKIE_NAME = "saude_kids_session"
+COOKIE_MAX_AGE_DIAS = 3650  # ~10 anos (praticamente "indeterminado")
+
+cookie_manager = stx.CookieManager()
+
+def _db():
+    return sqlite3.connect("usuarios.db", check_same_thread=False)
+
+def init_db():
+    conn = _db()
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            nome TEXT,
+            email TEXT PRIMARY KEY,
+            senha TEXT
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS sessions (
+            email TEXT,
+            token TEXT PRIMARY KEY,
+            created_at TEXT
+        )
+    """)
+
+    # admin fixo
+    if not conn.execute("SELECT 1 FROM users WHERE email='admin'").fetchone():
+        conn.execute("INSERT INTO users VALUES ('Administrador', 'admin', '542820')")
+
+    conn.commit()
+    conn.close()
+
+def gerar_token(tamanho=32):
+    chars = string.ascii_letters + string.digits
+    return "".join(random.choice(chars) for _ in range(tamanho))
+
+def criar_sessao(email: str) -> str:
+    token = gerar_token()
+    conn = _db()
+    conn.execute(
+        "INSERT INTO sessions (email, token, created_at) VALUES (?,?,?)",
+        (email, token, datetime.now(fuso_br).strftime("%Y-%m-%d %H:%M:%S"))
+    )
+    conn.commit()
+    conn.close()
+    return token
+
+def validar_token(token: str):
+    if not token:
+        return None
+    conn = _db()
+    row = conn.execute("SELECT email FROM sessions WHERE token=?", (token,)).fetchone()
+    conn.close()
+    if row:
+        return row[0]
+    return None
+
+def encerrar_sessao(token: str):
+    if not token:
+        return
+    conn = _db()
+    conn.execute("DELETE FROM sessions WHERE token=?", (token,))
+    conn.commit()
+    conn.close()
+
+def tentar_login_por_cookie():
+    # tenta recuperar token do cookie e validar no banco
+    token = cookie_manager.get(COOKIE_NAME)
+    email = validar_token(token)
+    if email:
+        st.session_state.logado = True
+        st.session_state.user_email = email
+        st.session_state.session_token = token
 
 # ================= BACKUP / RESTORE =================
 BACKUP_DIR = Path("backups")
@@ -98,7 +166,7 @@ def restaurar_backup_zip_bytes(zip_bytes: bytes):
 
 def backup_automatico_diario_3h():
     """
-    Streamlit não roda 24/7.
+    Streamlit não roda 24/7 (roda quando alguém acessa).
     Regra: após 03:00, se ainda não fez backup HOJE => faz 1.
     """
     agora = agora_br()
@@ -139,9 +207,6 @@ def apagar_backups_antigos(dias_manter=7):
                 pass
     return apagados
 
-backup_automatico_diario_3h()
-
-
 # ================= DESIGN DARK MODE =================
 st.markdown("""
 <style>
@@ -158,51 +223,21 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-
-# ================= BANCO (USUÁRIOS + SESSÕES) =================
-def get_conn():
-    return sqlite3.connect("usuarios.db")
-
-def init_db():
-    conn = get_conn()
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            nome TEXT,
-            email TEXT PRIMARY KEY,
-            senha TEXT
-        )
-    """)
-    # sessões persistentes
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS sessions (
-            token TEXT PRIMARY KEY,
-            email TEXT,
-            created_at TEXT,
-            last_seen TEXT,
-            revoked INTEGER DEFAULT 0
-        )
-    """)
-    # admin fixo
-    if not conn.execute("SELECT 1 FROM users WHERE email='admin'").fetchone():
-        conn.execute("INSERT INTO users VALUES ('Administrador', 'admin', '542820')")
-    conn.commit()
-    conn.close()
-
-init_db()
-
-
-# ================= E-MAIL (RECUPERAÇÃO) =================
+# ================= SEGURANÇA E E-MAIL =================
 def gerar_senha_temporaria(tamanho=6):
     caracteres = string.ascii_letters + string.digits
     return "".join(random.choice(caracteres) for _ in range(tamanho))
 
 def enviar_senha_nova(email_destino, senha_nova):
     """
-    Configure no Streamlit Cloud (Secrets):
-      GMAIL_APP_PASSWORD="SUA_SENHA_DE_APP_DO_GMAIL"
+    Para enviar e-mail no Streamlit Cloud:
+    - Settings -> Secrets:
+      GMAIL_APP_PASSWORD = "SUA SENHA DE APP DO GMAIL"
     """
     meu_email = "ewerlon.osbadboys@gmail.com"
     minha_senha = (st.secrets.get("GMAIL_APP_PASSWORD", "") or "").strip()
+
+    # Se não tiver configurado, não envia (o app mostra a senha temporária na tela)
     if not minha_senha:
         return False
 
@@ -220,57 +255,10 @@ def enviar_senha_nova(email_destino, senha_nova):
     except:
         return False
 
+# ================= INICIALIZAÇÃO =================
+init_db()
+backup_automatico_diario_3h()
 
-# ================= LOGIN PERSISTENTE (COOKIE + TOKEN) =================
-def criar_token():
-    return "".join(random.choice(string.ascii_letters + string.digits) for _ in range(48))
-
-def salvar_sessao(token: str, email: str):
-    agora = agora_br().strftime("%Y-%m-%d %H:%M:%S")
-    conn = get_conn()
-    conn.execute(
-        "INSERT OR REPLACE INTO sessions(token,email,created_at,last_seen,revoked) VALUES (?,?,?,?,0)",
-        (token, email, agora, agora)
-    )
-    conn.commit()
-    conn.close()
-
-def validar_token(token: str):
-    if not token:
-        return None
-    conn = get_conn()
-    row = conn.execute(
-        "SELECT email, revoked FROM sessions WHERE token=?",
-        (token,)
-    ).fetchone()
-    if row:
-        email, revoked = row[0], row[1]
-        if int(revoked) == 0:
-            agora = agora_br().strftime("%Y-%m-%d %H:%M:%S")
-            conn.execute("UPDATE sessions SET last_seen=? WHERE token=?", (agora, token))
-            conn.commit()
-            conn.close()
-            return email
-    conn.close()
-    return None
-
-def revogar_token(token: str):
-    if not token:
-        return
-    conn = get_conn()
-    conn.execute("UPDATE sessions SET revoked=1 WHERE token=?", (token,))
-    conn.commit()
-    conn.close()
-
-def cookie_manager():
-    if not HAS_COOKIES:
-        return None
-    if "cookie_mgr" not in st.session_state:
-        st.session_state.cookie_mgr = stx.CookieManager()
-    return st.session_state.cookie_mgr
-
-
-# ================= STATE BASE =================
 if "logado" not in st.session_state:
     st.session_state.logado = False
 if "user_email" not in st.session_state:
@@ -278,119 +266,9 @@ if "user_email" not in st.session_state:
 if "session_token" not in st.session_state:
     st.session_state.session_token = ""
 
-
-# ================= AUTO-LOGIN (SE TIVER COOKIE) =================
-cm = cookie_manager()
+# tenta login persistente (cookie) só se não estiver logado
 if not st.session_state.logado:
-    if HAS_COOKIES and cm is not None:
-        token = cm.get(COOKIE_NAME)
-        email_ok = validar_token(token)
-        if email_ok:
-            st.session_state.logado = True
-            st.session_state.user_email = email_ok
-            st.session_state.session_token = token
-
-
-# ================= TELA LOGIN =================
-if not st.session_state.logado:
-    st.title("🧪 Saúde Kids - Acesso")
-
-    if not HAS_COOKIES:
-        st.warning("Login persistente precisa do pacote: extra-streamlit-components.")
-        st.info("Adicione no requirements.txt: extra-streamlit-components==0.1.60")
-
-    abas_login = st.tabs(["🔐 Entrar", "📝 Criar Conta", "❓ Esqueci Senha", "🔄 Alterar Senha"])
-
-    # -------- ENTRAR --------
-    with abas_login[0]:
-        u = norm_email(st.text_input("E-mail", key="l_email"))
-        s = norm_senha(st.text_input("Senha", type="password", key="l_pass"))
-
-        if st.button("Acessar Aplicativo", use_container_width=True):
-            conn = get_conn()
-            ok = conn.execute("SELECT * FROM users WHERE email=? AND senha=?", (u, s)).fetchone()
-            conn.close()
-            if ok:
-                st.session_state.logado = True
-                st.session_state.user_email = u
-
-                # cria token persistente
-                tok = criar_token()
-                salvar_sessao(tok, u)
-                st.session_state.session_token = tok
-
-                # seta cookie
-                if HAS_COOKIES and cm is not None:
-                    cm.set(COOKIE_NAME, tok, key="set_cookie_login")
-
-                st.rerun()
-            else:
-                st.error("E-mail ou senha incorretos.")
-
-    # -------- CRIAR CONTA --------
-    with abas_login[1]:
-        n_cad = (st.text_input("Nome Completo") or "").strip()
-        e_cad = norm_email(st.text_input("E-mail para Cadastro"))
-        s_cad = norm_senha(st.text_input("Senha para Cadastro", type="password"))
-
-        if st.button("Realizar Cadastro", use_container_width=True):
-            if not n_cad or not e_cad or not s_cad:
-                st.warning("Preencha nome, e-mail e senha.")
-            else:
-                try:
-                    conn = get_conn()
-                    conn.execute("INSERT INTO users VALUES (?,?,?)", (n_cad, e_cad, s_cad))
-                    conn.commit()
-                    conn.close()
-                    st.success("Conta criada com sucesso!")
-                except:
-                    st.error("Este e-mail já está cadastrado.")
-
-    # -------- ESQUECI SENHA --------
-    with abas_login[2]:
-        email_alvo = norm_email(st.text_input("Digite seu e-mail cadastrado"))
-
-        if st.button("Recuperar Acesso", use_container_width=True):
-            conn = get_conn()
-            c = conn.cursor()
-            user = c.execute("SELECT email FROM users WHERE email=?", (email_alvo,)).fetchone()
-
-            if user:
-                nova = gerar_senha_temporaria()
-                c.execute("UPDATE users SET senha=? WHERE email=?", (nova, email_alvo))
-                conn.commit()
-                conn.close()
-
-                if enviar_senha_nova(email_alvo, nova):
-                    st.success("Nova senha enviada para seu e-mail!")
-                else:
-                    st.warning("E-mail não configurado no app (sem GMAIL_APP_PASSWORD).")
-                    st.info("Use a senha temporária abaixo para entrar e depois altere sua senha:")
-                    st.code(nova)
-            else:
-                conn.close()
-                st.error("E-mail não encontrado.")
-
-    # -------- ALTERAR SENHA --------
-    with abas_login[3]:
-        alt_em = norm_email(st.text_input("Confirme seu E-mail", key="alt_em"))
-        alt_at = norm_senha(st.text_input("Senha Atual", type="password", key="alt_at"))
-        alt_n1 = norm_senha(st.text_input("Nova Senha", type="password", key="alt_n1"))
-
-        if st.button("Confirmar Alteração", use_container_width=True):
-            conn = get_conn()
-            ok = conn.execute("SELECT * FROM users WHERE email=? AND senha=?", (alt_em, alt_at)).fetchone()
-            if ok:
-                conn.execute("UPDATE users SET senha=? WHERE email=?", (alt_n1, alt_em))
-                conn.commit()
-                conn.close()
-                st.success("Senha alterada com sucesso!")
-            else:
-                conn.close()
-                st.error("Dados atual incorretos.")
-
-    st.stop()
-
+    tentar_login_por_cookie()
 
 # ================= FUNÇÕES DE APOIO =================
 def carregar_dados_seguro(arq):
@@ -410,6 +288,11 @@ def _schema_receita_nova(rec: pd.Series, periodo: str) -> bool:
     return all(k in rec.index for k in need)
 
 def calc_insulina(v, m):
+    """
+    Receita nova (editável):
+      manha_f1_min/max/dose ... manha_f3_min/max/dose
+      noite_f1_min/max/dose ... noite_f3_min/max/dose
+    """
     df_r = carregar_dados_seguro(ARQ_R)
     if df_r.empty:
         return "0 UI", "Configurar Receita"
@@ -439,7 +322,6 @@ def calc_insulina(v, m):
     except:
         return "0 UI", "Erro na Receita"
 
-
 MOMENTOS_ORDEM = [
     "Antes Café", "Após Café", "Antes Almoço", "Após Almoço",
     "Antes Merenda", "Antes Janta", "Após Janta", "Madrugada"
@@ -463,6 +345,95 @@ ALIMENTOS = {
     "Maçã (1un)": [15, 0, 0],
 }
 
+# ================= TELA DE LOGIN (SE NÃO LOGADO) =================
+if not st.session_state.logado:
+    st.title("🧪 Saúde Kids - Acesso")
+    abas_login = st.tabs(["🔐 Entrar", "📝 Criar Conta", "❓ Esqueci Senha", "🔄 Alterar Senha"])
+
+    # -------- ENTRAR --------
+    with abas_login[0]:
+        u = norm_email(st.text_input("E-mail", key="l_email"))
+        s = norm_senha(st.text_input("Senha", type="password", key="l_pass"))
+
+        if st.button("Acessar Aplicativo", use_container_width=True):
+            conn = _db()
+            ok = conn.execute("SELECT 1 FROM users WHERE email=? AND senha=?", (u, s)).fetchone()
+            conn.close()
+
+            if ok:
+                token = criar_sessao(u)
+                cookie_manager.set(COOKIE_NAME, token, max_age=COOKIE_MAX_AGE_DIAS * 24 * 3600)
+
+                st.session_state.logado = True
+                st.session_state.user_email = u
+                st.session_state.session_token = token
+                st.rerun()
+            else:
+                st.error("E-mail ou senha incorretos.")
+
+    # -------- CRIAR CONTA --------
+    with abas_login[1]:
+        n_cad = (st.text_input("Nome Completo") or "").strip()
+        e_cad = norm_email(st.text_input("E-mail para Cadastro"))
+        s_cad = norm_senha(st.text_input("Senha para Cadastro", type="password"))
+
+        if st.button("Realizar Cadastro", use_container_width=True):
+            if not n_cad or not e_cad or not s_cad:
+                st.warning("Preencha nome, e-mail e senha.")
+            else:
+                try:
+                    conn = _db()
+                    conn.execute("INSERT INTO users VALUES (?,?,?)", (n_cad, e_cad, s_cad))
+                    conn.commit()
+                    conn.close()
+                    st.success("Conta criada com sucesso!")
+                except:
+                    st.error("Este e-mail já está cadastrado.")
+
+    # -------- ESQUECI SENHA --------
+    with abas_login[2]:
+        email_alvo = norm_email(st.text_input("Digite seu e-mail cadastrado"))
+
+        if st.button("Recuperar Acesso", use_container_width=True):
+            conn = _db()
+            c = conn.cursor()
+            user = c.execute("SELECT 1 FROM users WHERE email=?", (email_alvo,)).fetchone()
+
+            if user:
+                nova = gerar_senha_temporaria()
+                c.execute("UPDATE users SET senha=? WHERE email=?", (nova, email_alvo))
+                conn.commit()
+                conn.close()
+
+                if enviar_senha_nova(email_alvo, nova):
+                    st.success("Nova senha enviada para seu e-mail!")
+                else:
+                    st.warning("E-mail não configurado no app (sem GMAIL_APP_PASSWORD).")
+                    st.info("Use a senha temporária abaixo para entrar e depois altere sua senha:")
+                    st.code(nova)
+            else:
+                conn.close()
+                st.error("E-mail não encontrado.")
+
+    # -------- ALTERAR SENHA --------
+    with abas_login[3]:
+        alt_em = norm_email(st.text_input("Confirme seu E-mail", key="alt_em"))
+        alt_at = norm_senha(st.text_input("Senha Atual", type="password", key="alt_at"))
+        alt_n1 = norm_senha(st.text_input("Nova Senha", type="password", key="alt_n1"))
+
+        if st.button("Confirmar Alteração", use_container_width=True):
+            conn = _db()
+            ok = conn.execute("SELECT 1 FROM users WHERE email=? AND senha=?", (alt_em, alt_at)).fetchone()
+            if ok:
+                conn.execute("UPDATE users SET senha=? WHERE email=?", (alt_n1, alt_em))
+                conn.commit()
+                conn.close()
+                st.success("Senha alterada com sucesso!")
+            else:
+                conn.close()
+                st.error("Dados atual incorretos.")
+
+    st.stop()
 
 # ================= INTERFACE PRINCIPAL =================
 if st.session_state.user_email == "admin":
@@ -471,7 +442,7 @@ if st.session_state.user_email == "admin":
         ["👥 Pessoas Cadastradas", "📈 Crescimento e App", "📩 Sugestões", "💾 Backup & Restauração"]
     )
 
-    conn = get_conn()
+    conn = _db()
     df_users = pd.read_sql_query("SELECT nome, email FROM users", conn)
     conn.close()
 
@@ -485,7 +456,7 @@ if st.session_state.user_email == "admin":
         nova_senha_admin = norm_senha(st.text_input("Digite a Nova Senha para este usuário", type="password"))
         if st.button("Confirmar Alteração de Senha", use_container_width=True):
             if nova_senha_admin:
-                conn = get_conn()
+                conn = _db()
                 conn.execute("UPDATE users SET senha=? WHERE email=?", (nova_senha_admin, user_selecionado))
                 conn.commit()
                 conn.close()
@@ -578,6 +549,7 @@ if st.session_state.user_email == "admin":
 else:
     tab1, tab2, tab3, tab4 = st.tabs(["📊 Glicemia", "🍽️ Nutrição", "⚙️ Receita", "📩 Sugerir Melhoria"])
 
+    # ====== GLICEMIA ======
     with tab1:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         dfg = carregar_dados_seguro(ARQ_G)
@@ -612,17 +584,18 @@ else:
                 try:
                     n = int(v)
                     if n < 70:
-                        return "background-color: #8B8000"
+                        return "background-color: #8B8000"   # amarelo/alerta
                     elif n > 180:
-                        return "background-color: #8B0000"
+                        return "background-color: #8B0000"   # vermelho
                     else:
-                        return "background-color: #006400"
+                        return "background-color: #006400"   # verde
                 except:
                     return ""
             st.dataframe(dfg.tail(15).style.applymap(cor_gl, subset=["Valor"]), use_container_width=True)
 
         st.markdown("</div>", unsafe_allow_html=True)
 
+    # ====== NUTRIÇÃO ======
     with tab2:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         dfn = carregar_dados_seguro(ARQ_N)
@@ -650,6 +623,7 @@ else:
         st.dataframe(dfn.tail(10), use_container_width=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
+    # ====== RECEITA (EDITÁVEL) ======
     with tab3:
         st.markdown('<div class="card">', unsafe_allow_html=True)
 
@@ -705,6 +679,7 @@ else:
 
         st.markdown("</div>", unsafe_allow_html=True)
 
+    # ====== SUGESTÃO ======
     with tab4:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         txt = st.text_area("Sugestão de Melhoria:")
@@ -717,7 +692,6 @@ else:
                 st.success("Enviado com sucesso!")
         st.markdown("</div>", unsafe_allow_html=True)
 
-
 # ================= EXCEL COM DUAS ABAS (GLICEMIA E NUTRIÇÃO) =================
 st.sidebar.markdown("---")
 if st.sidebar.button("📥 Gerar Excel Completo"):
@@ -726,14 +700,15 @@ if st.sidebar.button("📥 Gerar Excel Completo"):
 
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        # Aba Glicemia com Cores
         if not df_e_g.empty:
             pivot = df_e_g.pivot_table(index="Data", columns="Momento", values="Valor", aggfunc="last")
             pivot.to_excel(writer, sheet_name="Glicemia")
             ws1 = writer.sheets["Glicemia"]
 
-            f_ok = PatternFill("solid", fgColor="C8E6C9")
-            f_hi = PatternFill("solid", fgColor="FFB6C1")
-            f_lo = PatternFill("solid", fgColor="FFFFE0")
+            f_ok = PatternFill("solid", fgColor="C8E6C9")   # verde claro
+            f_hi = PatternFill("solid", fgColor="FFB6C1")   # vermelho claro
+            f_lo = PatternFill("solid", fgColor="FFFFE0")   # amarelo claro
 
             for row in ws1.iter_rows(min_row=2, min_col=2):
                 for cell in row:
@@ -750,6 +725,7 @@ if st.sidebar.button("📥 Gerar Excel Completo"):
                         except:
                             pass
 
+        # Aba Nutrição
         if not df_e_n.empty:
             df_e_n.to_excel(writer, sheet_name="Nutrição", index=False)
             ws2 = writer.sheets["Nutrição"]
@@ -758,18 +734,14 @@ if st.sidebar.button("📥 Gerar Excel Completo"):
 
     st.sidebar.download_button("Baixar Agora", output.getvalue(), file_name="Relatorio_Saude_Kids.xlsx")
 
-
-# ================= SAIR (LOGOUT SOMENTE NO BOTÃO) =================
+# ================= SAIR (LOGOUT) - ÚNICO JEITO DE DESLOGAR =================
 if st.sidebar.button("🚪 Sair"):
-    # revoga sessão persistente no banco + apaga cookie
-    tok = st.session_state.get("session_token", "")
-    if tok:
-        revogar_token(tok)
-    if HAS_COOKIES and cm is not None:
-        try:
-            cm.delete(COOKIE_NAME, key="del_cookie_logout")
-        except:
-            pass
+    # apaga sessão no banco + cookie + estado
+    encerrar_sessao(st.session_state.get("session_token", ""))
+    try:
+        cookie_manager.delete(COOKIE_NAME)
+    except:
+        pass
 
     st.session_state.logado = False
     st.session_state.user_email = ""
