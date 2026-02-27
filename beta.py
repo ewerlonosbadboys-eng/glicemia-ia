@@ -41,6 +41,7 @@ def agora_br():
     return datetime.now(fuso_br)
 
 def criar_backup_zip_em_bytes():
+    """Cria backup em memória e retorna (bytes_zip, filename)."""
     ts = agora_br().strftime("%Y-%m-%d_%H-%M-%S")
     nome = f"backup_saude_kids_{ts}.zip"
 
@@ -53,6 +54,7 @@ def criar_backup_zip_em_bytes():
     return out.getvalue(), nome
 
 def criar_backup_zip_em_disco():
+    """Cria backup na pasta backups/ e retorna caminho."""
     ts = agora_br().strftime("%Y-%m-%d_%H-%M-%S")
     nome = f"backup_saude_kids_{ts}.zip"
     caminho = BACKUP_DIR / nome
@@ -64,6 +66,7 @@ def criar_backup_zip_em_disco():
     return caminho
 
 def restaurar_backup_zip_bytes(zip_bytes: bytes):
+    """Restaura somente arquivos permitidos (ARQUIVOS_BACKUP)."""
     tmp_dir = BACKUP_DIR / "_tmp_restore"
     if tmp_dir.exists():
         shutil.rmtree(tmp_dir)
@@ -80,6 +83,10 @@ def restaurar_backup_zip_bytes(zip_bytes: bytes):
     shutil.rmtree(tmp_dir)
 
 def backup_automatico_diario_3h():
+    """
+    Streamlit não roda 24/7: roda quando o app é acessado.
+    Regra: após 03:00, se ainda não fez backup hoje => faz 1.
+    """
     agora = agora_br()
     hoje = agora.strftime("%Y-%m-%d")
 
@@ -94,11 +101,8 @@ def backup_automatico_diario_3h():
 
 def listar_backups():
     """
-    Retorna DataFrame com colunas:
-    - arquivo
-    - caminho
-    - data_hora (datetime)
-    - tamanho_mb (float)
+    Retorna DataFrame com:
+    arquivo, caminho, data_hora (datetime tz), tamanho_mb
     """
     backups = []
     for p in sorted(BACKUP_DIR.glob("backup_saude_kids_*.zip")):
@@ -119,10 +123,7 @@ def listar_backups():
     return df
 
 def apagar_backups_antigos(dias_manter=7):
-    """
-    Apaga backups mais antigos que (agora - dias_manter).
-    Retorna quantidade apagada.
-    """
+    """Apaga backups mais antigos que (agora - dias_manter). Retorna quantidade apagada."""
     limite = agora_br() - timedelta(days=dias_manter)
     apagados = 0
     for p in BACKUP_DIR.glob("backup_saude_kids_*.zip"):
@@ -154,11 +155,19 @@ st.markdown("""
 # ================= SEGURANÇA E LOGIN =================
 def gerar_senha_temporaria(tamanho=6):
     caracteres = string.ascii_letters + string.digits
-    return ''.join(random.choice(caracteres) for i in range(tamanho))
+    return ''.join(random.choice(caracteres) for _ in range(tamanho))
 
 def enviar_senha_nova(email_destino, senha_nova):
+    """
+    Envia senha temporária por e-mail usando senha de app do Gmail.
+    Configure:
+      - Streamlit Cloud: Manage app -> Settings -> Secrets:
+            GMAIL_APP_PASSWORD = "sua_senha_de_app"
+      - Local: .streamlit/secrets.toml com a mesma chave
+    """
     meu_email = "ewerlon.osbadboys@gmail.com"
     minha_senha = st.secrets.get("GMAIL_APP_PASSWORD", "")
+
     if not minha_senha:
         return False
 
@@ -167,6 +176,7 @@ def enviar_senha_nova(email_destino, senha_nova):
     msg['Subject'] = 'Sua Nova Senha - Saúde Kids'
     msg['From'] = meu_email
     msg['To'] = email_destino
+
     try:
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
             smtp.login(meu_email, minha_senha)
@@ -273,6 +283,11 @@ def _schema_receita_nova(rec: pd.Series, periodo: str) -> bool:
     return all(k in rec.index for k in need)
 
 def calc_insulina(v, m):
+    """
+    Compatível com:
+    - Receita antiga: manha_f1/manhã_f2/manhã_f3 e noite_f1/noite_f2/noite_f3
+    - Receita nova: *_f1_min/max/dose ... *_f3_min/max/dose
+    """
     df_r = carregar_dados_seguro(ARQ_R)
     if df_r.empty:
         return "0 UI", "Configurar Receita"
@@ -288,6 +303,7 @@ def calc_insulina(v, m):
 
             if v < 70:
                 return "0 UI", "Hipoglicemia!"
+
             if f1_min <= v <= f1_max:
                 return f"{int(f1_dose)} UI", f"Faixa 1 ({int(f1_min)}-{int(f1_max)})"
             elif f2_min <= v <= f2_max:
@@ -386,11 +402,9 @@ if st.session_state.user_email == "admin":
         st.subheader("💾 Backup Manual / Automático / Restauração")
 
         st.write("### 📦 Gerar Backup Manual")
-        colb1, colb2 = st.columns([1, 2])
-        with colb1:
-            if st.button("📦 Gerar Backup Agora", use_container_width=True):
-                b, nome = criar_backup_zip_em_bytes()
-                st.download_button("⬇️ Baixar Backup (.zip)", b, file_name=nome, use_container_width=True)
+        if st.button("📦 Gerar Backup Agora", use_container_width=True):
+            b, nome = criar_backup_zip_em_bytes()
+            st.download_button("⬇️ Baixar Backup (.zip)", b, file_name=nome, use_container_width=True)
 
         st.markdown("---")
         st.write("### ♻️ Restauração Manual")
@@ -412,40 +426,36 @@ if st.session_state.user_email == "admin":
         if df_bk.empty:
             st.warning("Nenhum backup encontrado.")
         else:
-            # Mostra tabela com data e tamanho
             df_show = df_bk.copy()
             df_show["data_hora"] = df_show["data_hora"].dt.strftime("%d/%m/%Y %H:%M:%S")
             st.dataframe(df_show[["arquivo", "data_hora", "tamanho_mb"]], use_container_width=True)
 
             st.markdown("#### Ações")
             selecionado = st.selectbox("Selecionar backup", df_bk["arquivo"].tolist())
+            p_sel = BACKUP_DIR / selecionado
 
             colx1, colx2, colx3 = st.columns(3)
 
             with colx1:
-                # Baixar selecionado
-                p_sel = BACKUP_DIR / selecionado
                 if p_sel.exists():
                     with open(p_sel, "rb") as f:
                         st.download_button("⬇️ Baixar Selecionado", f.read(), file_name=selecionado, use_container_width=True)
 
             with colx2:
-                # Apagar selecionado
                 if st.button("🗑️ Apagar Selecionado", use_container_width=True):
-                    p_sel = BACKUP_DIR / selecionado
                     if p_sel.exists():
                         p_sel.unlink()
                         st.success("Backup apagado.")
                         st.rerun()
 
             with colx3:
-                # Apagar antigos (mantém 7 dias)
                 if st.button("🧹 Apagar Antigos (7 dias)", use_container_width=True):
                     apagados = apagar_backups_antigos(dias_manter=7)
                     st.success(f"Apagados: {apagados}")
                     st.rerun()
 
 else:
+    # --- INTERFACE USUÁRIO ---
     tab1, tab2, tab3, tab4 = st.tabs(["📊 Glicemia", "🍽️ Nutrição", "⚙️ Receita", "📩 Sugerir Melhoria"])
 
     with tab1:
@@ -590,6 +600,7 @@ if st.sidebar.button("📥 Gerar Excel Completo"):
 
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        # Aba Glicemia com Cores
         if not df_e_g.empty:
             pivot = df_e_g.pivot_table(index='Data', columns='Momento', values='Valor', aggfunc='last')
             pivot.to_excel(writer, sheet_name='Glicemia')
@@ -614,6 +625,7 @@ if st.sidebar.button("📥 Gerar Excel Completo"):
                         except:
                             pass
 
+        # Aba Nutrição (C, P, G)
         if not df_e_n.empty:
             df_e_n.to_excel(writer, sheet_name='Nutrição', index=False)
             ws2 = writer.sheets['Nutrição']
