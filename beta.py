@@ -14,7 +14,7 @@ import string
 import zipfile
 import shutil
 from pathlib import Path
-import urllib.parse
+from urllib.parse import quote
 
 # =========================================================
 # (OPCIONAL) LOGIN PERSISTENTE POR COOKIE (NÃO BUGA SE NÃO TIVER)
@@ -265,7 +265,7 @@ if not st.session_state.logado:
             if ok:
                 st.session_state.logado = True
                 st.session_state.user_email = u
-                cookie_set_email(u)
+                cookie_set_email(u)  # persistente (se tiver cookies)
                 st.rerun()
             else:
                 st.error("E-mail ou senha incorretos.")
@@ -410,6 +410,36 @@ def calc_glargina(momento: str):
     except:
         return "0 UI", "Longa: erro"
 
+# ================= WHATSAPP (wa.me) =================
+def link_whatsapp_lembrete(momento: str, valor_glicemia: int, dose_rapida: str, dose_longa: str) -> str:
+    """
+    Gera link wa.me com mensagem e lembrete de 2 horas (horário calculado).
+    Não envia sozinho: abre o WhatsApp com a mensagem pronta.
+    """
+    agora = agora_br()
+    hora_apos = (agora + timedelta(hours=2)).strftime("%H:%M")
+
+    linhas = [
+        "🧪 Saúde Kids",
+        "",
+        f"✅ Medida AGORA: {momento}",
+        f"📍 Glicemia: {int(valor_glicemia)}",
+    ]
+
+    # Se tiver doses calculadas, inclui
+    if dose_rapida and dose_rapida != "—":
+        linhas.append(f"⚡ Rápida: {dose_rapida}")
+    if dose_longa and dose_longa != "—":
+        linhas.append(f"🩸 Longa: {dose_longa}")
+
+    linhas += [
+        "",
+        f"⏰ Lembrete: fazer a medida APÓS em 2 horas às {hora_apos}",
+    ]
+
+    msg = "\n".join(linhas)
+    return "https://wa.me/?text=" + quote(msg)
+
 MOMENTOS_ORDEM = [
     "Antes Café", "Após Café", "Antes Almoço", "Após Almoço",
     "Antes Merenda", "Antes Janta", "Após Janta", "Madrugada"
@@ -432,56 +462,6 @@ ALIMENTOS = {
     "Banana (1un)": [22, 1, 0],
     "Maçã (1un)": [15, 0, 0],
 }
-
-# =========================================================
-# WHATSAPP (LINK wa.me + texto pronto)  ✅ (SEM API / SEM CUSTO)
-# =========================================================
-def limpar_numero_br(num: str) -> str:
-    """Mantém só dígitos. Aceita +55, (16), espaços etc."""
-    return "".join([c for c in (num or "") if c.isdigit()])
-
-def montar_msg_glicemia(df_user: pd.DataFrame, max_linhas: int = 10) -> str:
-    agora = agora_br().strftime("%d/%m/%Y %H:%M")
-    if df_user is None or df_user.empty:
-        return f"📌 Saúde Kids\nSem registros de glicemia.\n\nAtualizado: {agora}"
-
-    df = df_user.copy()
-    # tenta garantir colunas
-    for col in ["Data", "Hora", "Valor", "Momento", "Dose"]:
-        if col not in df.columns:
-            df[col] = ""
-
-    # pega últimos registros
-    ult = df.tail(max_linhas)
-    linhas = []
-    for _, r in ult.iterrows():
-        data = str(r.get("Data", "")).strip()
-        hora = str(r.get("Hora", "")).strip()
-        valor = str(r.get("Valor", "")).strip()
-        momento = str(r.get("Momento", "")).strip()
-        dose = str(r.get("Dose", "")).strip()
-
-        dose_txt = f" | Dose: {dose}" if dose else ""
-        linhas.append(f"• {data} {hora} — {momento}: {valor}{dose_txt}")
-
-    texto = (
-        "📌 *Saúde Kids — Glicemias*\n"
-        + "\n".join(linhas)
-        + f"\n\nAtualizado: {agora}"
-    )
-    return texto
-
-def link_whatsapp_numero(numero: str, texto: str) -> str:
-    """Link oficial para abrir chat com número e mensagem pronta."""
-    n = limpar_numero_br(numero)
-    msg = urllib.parse.quote(texto)
-    # formato: https://wa.me/<numero>?text=<msg>
-    return f"https://wa.me/{n}?text={msg}"
-
-def link_whatsapp_apenas_texto(texto: str) -> str:
-    """Link que abre WhatsApp (sem número) com texto pronto (funciona melhor no celular)."""
-    msg = urllib.parse.quote(texto)
-    return f"https://wa.me/?text={msg}"
 
 # ================= INTERFACE PRINCIPAL =================
 if st.session_state.user_email == "admin":
@@ -612,6 +592,9 @@ else:
             MOMENTOS_RAPIDA = ["Antes Café", "Antes Almoço", "Antes Janta"]
             MOMENTOS_LONGA = ["Antes Café", "Antes Janta"]
 
+            dose_r, msg_r = "—", "Rápida não aplicável neste momento"
+            dose_l, msg_l = "—", "Longa só: Antes Café / Antes Janta"
+
             # RÁPIDA: só aparece quando for aplicar
             if m_gl in MOMENTOS_RAPIDA:
                 dose_r, msg_r = calc_insulina_rapida(v_gl, m_gl)
@@ -619,18 +602,26 @@ else:
                     f'<div class="metric-box"><small>Rápida: {msg_r}</small><br><span class="dose-destaque">{dose_r}</span></div>',
                     unsafe_allow_html=True
                 )
-            else:
-                dose_r, msg_r = "—", "Rápida não aplicável neste momento"
 
             # LONGA: renomeada e só aparece quando for aplicar
             if m_gl in MOMENTOS_LONGA:
-                dose_l, msg_l = calc_glargina(m_gl)
+                dose_l, msg_l = calc_glargina(m_gl)  # dose fixa
                 st.markdown(
                     f'<div class="metric-box" style="margin-top:10px;"><small>{msg_l}</small><br><span class="dose-destaque">{dose_l}</span></div>',
                     unsafe_allow_html=True
                 )
-            else:
-                dose_l, msg_l = "—", "Longa só: Antes Café / Antes Janta"
+
+            # ===== WHATSAPP (wa.me) com lembrete +2h =====
+            # Você pediu: quando for medida "Antes Café / Antes Almoço / Antes Janta" mandar mensagem com lembrete 2h após
+            if m_gl in ["Antes Café", "Antes Almoço", "Antes Janta"]:
+                link = link_whatsapp_lembrete(m_gl, int(v_gl), dose_r if m_gl in MOMENTOS_RAPIDA else "—", dose_l if m_gl in MOMENTOS_LONGA else "—")
+
+                try:
+                    st.link_button("📲 Abrir WhatsApp com mensagem (lembrete +2h)", link, use_container_width=True)
+                except Exception:
+                    st.markdown(f"[📲 Abrir WhatsApp com mensagem (lembrete +2h)]({link})")
+
+                st.caption("Obs: o link abre o WhatsApp com a mensagem pronta. Você escolhe o grupo/contato e clica em ENVIAR.")
 
             if st.button("💾 Salvar Glicemia", use_container_width=True):
                 agora = agora_br()
@@ -646,51 +637,6 @@ else:
                 pd.concat([base, novo], ignore_index=True).to_csv(ARQ_G, index=False)
                 st.rerun()
 
-            # =========================
-            # ✅ WHATSAPP LINK (wa.me/?text=) — NOVO
-            # =========================
-            st.markdown("---")
-            st.subheader("📲 Enviar no WhatsApp (texto pronto)")
-
-            # monta mensagem com os últimos registros do usuário
-            msg = montar_msg_glicemia(dfg, max_linhas=10)
-
-            destino = st.radio(
-                "Destino",
-                ["📱 Número (recomendado)", "🔗 Só texto (você escolhe o contato/grupo no WhatsApp)", "👥 Grupo por link de convite"],
-                horizontal=False
-            )
-
-            if destino == "📱 Número (recomendado)":
-                numero = st.text_input("Número (com DDD). Ex: 5516999999999 ou 16 99999-9999")
-                if st.button("📤 Gerar link WhatsApp", use_container_width=True):
-                    if not limpar_numero_br(numero):
-                        st.error("Digite um número válido.")
-                    else:
-                        link = link_whatsapp_numero(numero, msg)
-                        st.success("Link gerado. Clique abaixo:")
-                        st.link_button("✅ Abrir WhatsApp com mensagem pronta", link, use_container_width=True)
-
-            elif destino == "🔗 Só texto (você escolhe o contato/grupo no WhatsApp)":
-                if st.button("📤 Gerar link WhatsApp", use_container_width=True):
-                    link = link_whatsapp_apenas_texto(msg)
-                    st.success("Link gerado. Clique abaixo (abre WhatsApp com o texto pronto):")
-                    st.link_button("✅ Abrir WhatsApp com texto pronto", link, use_container_width=True)
-                    st.caption("No WhatsApp, escolha o contato/grupo e cole/envie (o texto já vai pronto).")
-
-            else:  # grupo por link de convite
-                link_convite = st.text_input("Cole o link de convite do grupo (chat.whatsapp.com/...)")
-                if st.button("📤 Gerar texto para o grupo", use_container_width=True):
-                    if "chat.whatsapp.com" not in (link_convite or ""):
-                        st.error("Cole um link válido de convite do grupo (chat.whatsapp.com/...).")
-                    else:
-                        st.success("1) Abra o link do grupo e entre. 2) Depois use o link abaixo para abrir o WhatsApp com o texto pronto.")
-                        st.link_button("👥 Abrir convite do grupo", link_convite, use_container_width=True)
-
-                        link_texto = link_whatsapp_apenas_texto(msg)
-                        st.link_button("✅ Abrir WhatsApp com texto pronto", link_texto, use_container_width=True)
-                        st.caption("Observação: link oficial não abre direto no grupo por nome; só por convite.")
-
         with c2:
             if not dfg.empty:
                 fig = px.line(dfg.tail(10), x="Hora", y="Valor", markers=True, title="Tendência")
@@ -702,11 +648,11 @@ else:
                 try:
                     n = int(v)
                     if n < 70:
-                        return "background-color: #8B8000"
+                        return "background-color: #8B8000"   # amarelo/alerta
                     elif n > 180:
-                        return "background-color: #8B0000"
+                        return "background-color: #8B0000"   # vermelho
                     else:
-                        return "background-color: #006400"
+                        return "background-color: #006400"   # verde
                 except:
                     return ""
             st.dataframe(dfg.tail(15).style.applymap(cor_gl, subset=["Valor"]), use_container_width=True)
@@ -841,9 +787,9 @@ if st.sidebar.button("📥 Gerar Excel Completo"):
             pivot.to_excel(writer, sheet_name="Glicemia")
             ws1 = writer.sheets["Glicemia"]
 
-            f_ok = PatternFill("solid", fgColor="C8E6C9")
-            f_hi = PatternFill("solid", fgColor="FFB6C1")
-            f_lo = PatternFill("solid", fgColor="FFFFE0")
+            f_ok = PatternFill("solid", fgColor="C8E6C9")   # verde claro
+            f_hi = PatternFill("solid", fgColor="FFB6C1")   # vermelho claro
+            f_lo = PatternFill("solid", fgColor="FFFFE0")   # amarelo claro
 
             for row in ws1.iter_rows(min_row=2, min_col=2):
                 for cell in row:
@@ -873,5 +819,5 @@ if st.sidebar.button("📥 Gerar Excel Completo"):
 if st.sidebar.button("🚪 Sair"):
     st.session_state.logado = False
     st.session_state.user_email = ""
-    cookie_clear()
+    cookie_clear()  # se tiver cookies
     st.rerun()
