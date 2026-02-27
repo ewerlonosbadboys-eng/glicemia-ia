@@ -410,14 +410,34 @@ def calc_glargina(momento: str):
     except:
         return "0 UI", "Longa: erro"
 
-# ================= WHATSAPP (wa.me) =================
+# =========================================================
+# ✅ NOVO: PRÓXIMA MEDIDA (+2h) e LINK WHATSAPP (wa.me/?text=)
+# =========================================================
+def proxima_medida_apos(momento: str, dt_base: datetime):
+    """
+    Se a medida for 'Antes ...', retorna:
+      - momento_apos correspondente
+      - horário (dt_base + 2h) formatado
+    Caso contrário, retorna ("", "").
+    """
+    mapa = {
+        "Antes Café": "Após Café",
+        "Antes Almoço": "Após Almoço",
+        "Antes Janta": "Após Janta",
+    }
+    if momento not in mapa:
+        return "", ""
+
+    dt_apos = dt_base + timedelta(hours=2)
+    return mapa[momento], dt_apos.strftime("%H:%M")
+
 def link_whatsapp_lembrete(momento: str, valor_glicemia: int, dose_rapida: str, dose_longa: str) -> str:
     """
     Gera link wa.me com mensagem e lembrete de 2 horas (horário calculado).
     Não envia sozinho: abre o WhatsApp com a mensagem pronta.
     """
-    agora = agora_br()
-    hora_apos = (agora + timedelta(hours=2)).strftime("%H:%M")
+    dt_agora = agora_br()
+    momento_apos, hora_apos = proxima_medida_apos(momento, dt_agora)
 
     linhas = [
         "🧪 Saúde Kids",
@@ -426,16 +446,16 @@ def link_whatsapp_lembrete(momento: str, valor_glicemia: int, dose_rapida: str, 
         f"📍 Glicemia: {int(valor_glicemia)}",
     ]
 
-    # Se tiver doses calculadas, inclui
     if dose_rapida and dose_rapida != "—":
         linhas.append(f"⚡ Rápida: {dose_rapida}")
     if dose_longa and dose_longa != "—":
         linhas.append(f"🩸 Longa: {dose_longa}")
 
-    linhas += [
-        "",
-        f"⏰ Lembrete: fazer a medida APÓS em 2 horas às {hora_apos}",
-    ]
+    if momento_apos and hora_apos:
+        linhas += [
+            "",
+            f"⏰ Próxima medida: {momento_apos} às {hora_apos} (2h após)",
+        ]
 
     msg = "\n".join(linhas)
     return "https://wa.me/?text=" + quote(msg)
@@ -592,8 +612,11 @@ else:
             MOMENTOS_RAPIDA = ["Antes Café", "Antes Almoço", "Antes Janta"]
             MOMENTOS_LONGA = ["Antes Café", "Antes Janta"]
 
-            dose_r, msg_r = "—", "Rápida não aplicável neste momento"
-            dose_l, msg_l = "—", "Longa só: Antes Café / Antes Janta"
+            # ✅ NOVO: mostrar horário exato do "APÓS" quando for "ANTES"
+            dt_agora = agora_br()
+            momento_apos, hora_apos = proxima_medida_apos(m_gl, dt_agora)
+            if momento_apos and hora_apos:
+                st.info(f"⏰ Próxima medida: **{momento_apos}** às **{hora_apos}** (2 horas após)")
 
             # RÁPIDA: só aparece quando for aplicar
             if m_gl in MOMENTOS_RAPIDA:
@@ -602,6 +625,8 @@ else:
                     f'<div class="metric-box"><small>Rápida: {msg_r}</small><br><span class="dose-destaque">{dose_r}</span></div>',
                     unsafe_allow_html=True
                 )
+            else:
+                dose_r, msg_r = "—", "Rápida não aplicável neste momento"
 
             # LONGA: renomeada e só aparece quando for aplicar
             if m_gl in MOMENTOS_LONGA:
@@ -610,18 +635,17 @@ else:
                     f'<div class="metric-box" style="margin-top:10px;"><small>{msg_l}</small><br><span class="dose-destaque">{dose_l}</span></div>',
                     unsafe_allow_html=True
                 )
+            else:
+                dose_l, msg_l = "—", "Longa só: Antes Café / Antes Janta"
 
-            # ===== WHATSAPP (wa.me) com lembrete +2h =====
-            # Você pediu: quando for medida "Antes Café / Antes Almoço / Antes Janta" mandar mensagem com lembrete 2h após
-            if m_gl in ["Antes Café", "Antes Almoço", "Antes Janta"]:
-                link = link_whatsapp_lembrete(m_gl, int(v_gl), dose_r if m_gl in MOMENTOS_RAPIDA else "—", dose_l if m_gl in MOMENTOS_LONGA else "—")
-
-                try:
-                    st.link_button("📲 Abrir WhatsApp com mensagem (lembrete +2h)", link, use_container_width=True)
-                except Exception:
-                    st.markdown(f"[📲 Abrir WhatsApp com mensagem (lembrete +2h)]({link})")
-
-                st.caption("Obs: o link abre o WhatsApp com a mensagem pronta. Você escolhe o grupo/contato e clica em ENVIAR.")
+            # ✅ NOVO: botão do WhatsApp (wa.me) com lembrete +2h
+            link_wpp = link_whatsapp_lembrete(
+                momento=m_gl,
+                valor_glicemia=int(v_gl),
+                dose_rapida=dose_r if dose_r else "—",
+                dose_longa=dose_l if dose_l else "—"
+            )
+            st.link_button("📲 Abrir WhatsApp com mensagem pronta", link_wpp, use_container_width=True)
 
             if st.button("💾 Salvar Glicemia", use_container_width=True):
                 agora = agora_br()
