@@ -1,9 +1,8 @@
-# app.py
+# main.py (arquivo único)
 # =========================================================
-# ESCALA 5x2 OFICIAL — COMPLETO
-# ✅ Login real (Admin/Líder) + Esqueci senha (chapa líder)
-# ✅ Usuários novos (não-admin) agora VEEM: Colaboradores/Escala/Ajustes/Férias/Excel
-# ✅ Somente funções ADMIN ficam restritas no setor ADMIN
+# ESCALA 5x2 OFICIAL — COMPLETO + ADMIN
+# - Usuários comuns VEEM tudo do setor
+# - Painel ADMIN restrito (somente setor ADMIN e is_admin=1)
 # =========================================================
 
 import streamlit as st
@@ -22,10 +21,9 @@ st.set_page_config(page_title="Escala 5x2 Oficial", layout="wide")
 
 DB_PATH = "escala.db"
 
-# ---- Regras fixas
 INTERSTICIO_MIN = timedelta(hours=11, minutes=10)
 DURACAO_JORNADA = timedelta(hours=9, minutes=58)
-PREF_EVITAR_PENALTY = 1000  # penalidade forte
+PREF_EVITAR_PENALTY = 1000
 
 D_PT = {
     "Monday": "seg",
@@ -38,7 +36,7 @@ D_PT = {
 }
 
 # =========================================================
-# DB + AUTH
+# DB
 # =========================================================
 def db_conn():
     return sqlite3.connect(DB_PATH, check_same_thread=False)
@@ -171,6 +169,9 @@ def db_init():
 
     con.close()
 
+# =========================================================
+# AUTH
+# =========================================================
 def system_user_exists(setor: str, chapa: str) -> bool:
     con = db_conn()
     cur = con.cursor()
@@ -227,7 +228,9 @@ def update_password(setor: str, chapa: str, nova_senha: str):
     con.commit()
     con.close()
 
-# ---- ADMIN: listar/editar usuários
+# =========================================================
+# ADMIN users
+# =========================================================
 def admin_list_users():
     con = db_conn()
     df = pd.read_sql_query("""
@@ -258,7 +261,7 @@ def admin_delete_user(user_id: int):
     con.close()
 
 # =========================================================
-# COLABORADORES (sem senha) + subgrupo
+# COLABORADORES
 # =========================================================
 def colaborador_exists(setor: str, chapa: str) -> bool:
     con = db_conn()
@@ -308,7 +311,7 @@ def load_colaboradores_setor(setor: str):
     } for r in rows]
 
 # =========================================================
-# SUBGRUPOS + Preferência (evitar folga)
+# SUBGRUPOS + Preferência
 # =========================================================
 def list_subgrupos(setor: str):
     con = db_conn()
@@ -375,7 +378,52 @@ def set_subgrupo_regras(setor: str, subgrupo: str, regras: dict):
     con.close()
 
 # =========================================================
-# UI PÁGINAS
+# FÉRIAS (corrige seu NameError)
+# =========================================================
+def add_ferias(setor: str, chapa: str, inicio: date, fim: date):
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute("INSERT INTO ferias(setor, chapa, inicio, fim) VALUES (?, ?, ?, ?)",
+                (setor, chapa, inicio.strftime("%Y-%m-%d"), fim.strftime("%Y-%m-%d")))
+    con.commit()
+    con.close()
+
+def delete_ferias_row(setor: str, chapa: str, inicio: str, fim: str):
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute("""
+        DELETE FROM ferias
+        WHERE setor=? AND chapa=? AND inicio=? AND fim=?
+    """, (setor, chapa, inicio, fim))
+    con.commit()
+    con.close()
+
+def list_ferias(setor: str):
+    con = db_conn()
+    df = pd.read_sql_query("""
+        SELECT chapa, inicio, fim
+        FROM ferias
+        WHERE setor=?
+        ORDER BY date(inicio) ASC
+    """, con, params=(setor,))
+    con.close()
+    return df
+
+def is_de_ferias(setor: str, chapa: str, data_obj: date) -> bool:
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute("""
+        SELECT 1 FROM ferias
+        WHERE setor=? AND chapa=?
+          AND date(inicio) <= date(?) AND date(fim) >= date(?)
+        LIMIT 1
+    """, (setor, chapa, data_obj.strftime("%Y-%m-%d"), data_obj.strftime("%Y-%m-%d")))
+    ok = cur.fetchone() is not None
+    con.close()
+    return ok
+
+# =========================================================
+# UI
 # =========================================================
 db_init()
 
@@ -383,7 +431,7 @@ if "auth" not in st.session_state:
     st.session_state["auth"] = None
 
 def page_login():
-    st.title("🔐 Login por Setor (Líder/Admin)")
+    st.title("🔐 Login por Setor (Usuário/Líder/Admin)")
 
     tab_login, tab_cadastrar, tab_esqueci = st.tabs(["Entrar", "Cadastrar Usuário", "Esqueci a senha"])
 
@@ -408,16 +456,12 @@ def page_login():
         st.caption("Admin padrão: setor ADMIN | chapa admin | senha 123")
 
     with tab_cadastrar:
-        st.subheader("Cadastrar usuário do sistema (pode ser Líder ou Usuário)")
-        st.info("Somente usuários do sistema têm senha. Colaborador NÃO tem senha.")
-
+        st.subheader("Cadastrar usuário do sistema")
         nome = st.text_input("Nome:", key="cl_nome")
         setor = st.text_input("Setor:", key="cl_setor").strip().upper()
         chapa = st.text_input("Chapa:", key="cl_chapa")
         senha = st.text_input("Senha:", type="password", key="cl_senha")
         senha2 = st.text_input("Confirmar senha:", type="password", key="cl_senha2")
-
-        # por padrão, não-admin e não-líder
         is_admin = st.checkbox("Admin?", value=False, key="cl_admin")
         is_lider = st.checkbox("Líder?", value=False, key="cl_lider")
 
@@ -464,9 +508,9 @@ def page_admin_panel():
     df_users = admin_list_users()
     st.dataframe(df_users, use_container_width=True)
 
-    st.markdown("### ✏️ Editar usuário do sistema")
+    st.markdown("### ✏️ Editar usuário")
     if df_users.empty:
-        st.info("Sem usuários no banco.")
+        st.info("Sem usuários.")
         return
 
     user_id = st.selectbox("Selecionar ID:", df_users["id"].tolist(), key="adm_user_id")
@@ -480,53 +524,50 @@ def page_admin_panel():
     c4, c5, c6 = st.columns(3)
     is_admin = c4.checkbox("Admin?", value=bool(urow["is_admin"]), key="adm_isadmin")
     is_lider = c5.checkbox("Líder?", value=bool(urow["is_lider"]), key="adm_islider")
-    reset_senha = c6.checkbox("Resetar senha agora", key="adm_resetsenha")
+    reset_senha = c6.checkbox("Resetar senha", key="adm_resetsenha")
 
     nova_senha = ""
     if reset_senha:
         nova_senha = st.text_input("Nova senha:", type="password", key="adm_nova_senha")
 
     colx1, colx2 = st.columns(2)
-    if colx1.button("Salvar alterações", key="adm_save"):
-        try:
-            admin_update_user(user_id, nome.strip(), setor_new, chapa_new.strip(), is_admin, is_lider)
-            if reset_senha and nova_senha:
-                update_password(setor_new, chapa_new.strip(), nova_senha)
-            st.success("Atualizado!")
-            st.rerun()
-        except Exception as e:
-            st.error(f"Erro: {e}")
+    if colx1.button("Salvar", key="adm_save"):
+        admin_update_user(user_id, nome.strip(), setor_new, chapa_new.strip(), is_admin, is_lider)
+        if reset_senha and nova_senha:
+            update_password(setor_new, chapa_new.strip(), nova_senha)
+        st.success("Atualizado!")
+        st.rerun()
 
-    if colx2.button("Excluir usuário", key="adm_del"):
+    if colx2.button("Excluir", key="adm_del"):
         if int(user_id) == 1:
-            st.error("Bloqueado: não pode excluir o admin principal.")
+            st.error("Não pode excluir admin principal.")
         else:
             admin_delete_user(user_id)
-            st.warning("Usuário removido.")
+            st.warning("Removido!")
             st.rerun()
 
 def page_setor_full(setor: str):
-    st.title(f"📅 Escala 5x2 — Setor: {setor}")
-
-    # tabs do setor (liberado para TODOS usuários do setor)
-    aba1, aba2, aba3, aba4, aba5 = st.tabs(["👥 Colaboradores", "🚀 Gerar Escala", "⚙️ Ajustes", "🏖️ Férias", "📥 Excel"])
+    st.title(f"📌 Sistema — Setor: {setor}")
+    aba1, aba2, aba3, aba4, aba5 = st.tabs(
+        ["👥 Colaboradores", "🚀 Gerar Escala", "⚙️ Ajustes", "🏖️ Férias", "📥 Excel"]
+    )
 
     with aba1:
-        colaboradores = load_colaboradores_setor(setor)
         st.subheader("Colaboradores (sem senha)")
+        colaboradores = load_colaboradores_setor(setor)
         if colaboradores:
             st.dataframe(pd.DataFrame([{
                 "Nome": c["Nome"],
                 "Chapa": c["Chapa"],
                 "Subgrupo": c["Subgrupo"] or "SEM SUBGRUPO",
                 "Entrada": c["Entrada"],
-                "Folga Sábado": "Sim" if c["Folga_Sab"] else "Não",
+                "Folga sábado": "Sim" if c["Folga_Sab"] else "Não",
             } for c in colaboradores]), use_container_width=True)
         else:
             st.info("Sem colaboradores.")
 
         st.markdown("---")
-        st.markdown("## 📌 Subgrupos + Preferência (evitar folga)")
+        st.markdown("## Subgrupos + Preferência (evitar folga)")
         subgrupos = list_subgrupos(setor)
 
         cA, cB = st.columns(2)
@@ -543,7 +584,7 @@ def page_setor_full(setor: str):
                     st.rerun()
 
         if subgrupos:
-            sg_sel = st.selectbox("Preferência do subgrupo:", subgrupos, key="pref_sg_sel")
+            sg_sel = st.selectbox("Escolha o subgrupo:", subgrupos, key="pref_sg_sel")
             regras = get_subgrupo_regras(setor, sg_sel)
 
             p1, p2, p3 = st.columns(3)
@@ -559,7 +600,7 @@ def page_setor_full(setor: str):
                     "seg": int(ev_seg), "ter": int(ev_ter), "qua": int(ev_qua),
                     "qui": int(ev_qui), "sex": int(ev_sex), "sáb": int(ev_sab)
                 })
-                st.success("Preferência salva!")
+                st.success("Salvo!")
                 st.rerun()
 
         st.markdown("---")
@@ -567,11 +608,11 @@ def page_setor_full(setor: str):
         c1, c2 = st.columns(2)
         nome_n = c1.text_input("Nome:", key="col_nome")
         chapa_n = c2.text_input("Chapa:", key="col_chapa")
-        if st.button("Cadastrar colaborador", key="col_add"):
+        if st.button("Cadastrar", key="col_add"):
             if not nome_n or not chapa_n:
-                st.error("Preencha nome e chapa.")
+                st.error("Preencha.")
             elif colaborador_exists(setor, chapa_n.strip()):
-                st.error("Já existe essa chapa.")
+                st.error("Já existe.")
             else:
                 create_colaborador(nome_n.strip(), setor, chapa_n.strip())
                 st.success("Cadastrado!")
@@ -597,20 +638,24 @@ def page_setor_full(setor: str):
                 st.success("Salvo!")
                 st.rerun()
 
-    # As abas 2/3/4/5 ficam liberadas aqui (você pode colar o restante do motor depois)
     with aba2:
-        st.info("Aqui entra o GERADOR completo (motor de escala). Está liberado para todos usuários do setor.")
+        st.info("Motor completo de escala entra aqui (você já tem a versão grande).")
+
     with aba3:
-        st.info("Aqui entram os AJUSTES completos (troca dia/horário/mês). Liberado para todos do setor.")
+        st.info("Ajustes completos entram aqui (troca dia/horário/mês).")
+
     with aba4:
         st.subheader("Férias")
         colaboradores = load_colaboradores_setor(setor)
-        if colaboradores:
+        if not colaboradores:
+            st.warning("Cadastre colaboradores.")
+        else:
             chapas = [c["Chapa"] for c in colaboradores]
             ch = st.selectbox("Chapa:", chapas, key="fer_ch")
             c1, c2 = st.columns(2)
             ini = c1.date_input("Início:", key="fer_ini")
             fim = c2.date_input("Fim:", key="fer_fim")
+
             if st.button("Adicionar férias", key="fer_add"):
                 if fim < ini:
                     st.error("Fim menor que início.")
@@ -618,13 +663,22 @@ def page_setor_full(setor: str):
                     add_ferias(setor, ch, ini, fim)
                     st.success("Férias adicionadas.")
                     st.rerun()
+
             df_f = list_ferias(setor)
             if not df_f.empty:
                 st.dataframe(df_f, use_container_width=True)
-        else:
-            st.warning("Sem colaboradores.")
+                st.markdown("### Remover férias")
+                idx = st.number_input("Linha para remover (1..N):", min_value=1, max_value=len(df_f), value=1, key="fer_rm_idx")
+                if st.button("Remover", key="fer_rm_btn"):
+                    r = df_f.iloc[int(idx) - 1]
+                    delete_ferias_row(setor, r["chapa"], r["inicio"], r["fim"])
+                    st.success("Removido!")
+                    st.rerun()
+            else:
+                st.info("Sem férias cadastradas.")
+
     with aba5:
-        st.info("Aqui entra o Excel (modelo RH). Liberado para todos do setor.")
+        st.info("Excel modelo RH entra aqui (você já tem a versão completa).")
 
 def page_app():
     auth = st.session_state["auth"] or {}
@@ -640,10 +694,10 @@ def page_app():
         st.session_state["auth"] = None
         st.rerun()
 
-    # ✅ TODOS usuários agora veem o sistema completo do setor
+    # ✅ Agora TODO usuário vê o sistema completo do setor
     page_setor_full(setor)
 
-    # ✅ Painel ADMIN restrito (somente admin no setor ADMIN)
+    # ✅ Painel ADMIN restrito
     if auth.get("is_admin", False) and setor == "ADMIN":
         st.markdown("---")
         page_admin_panel()
@@ -651,6 +705,8 @@ def page_app():
 # =========================================================
 # MAIN
 # =========================================================
+db_init()
+
 if st.session_state["auth"] is None:
     page_login()
 else:
