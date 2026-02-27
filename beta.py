@@ -141,7 +141,7 @@ def gerar_senha_temporaria(tamanho=6):
 
 def enviar_senha_nova(email_destino, senha_nova):
     meu_email = "ewerlon.osbadboys@gmail.com"
-    minha_senha = st.secrets.get("okiu qihp lglk trcc", "")
+    minha_senha = st.secrets.get("GMAIL_APP_PASSWORD = okiu qihp lglk trcc", "")
 
     if not minha_senha:
         return False
