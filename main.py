@@ -1,6 +1,6 @@
 # app.py
 # =========================================================
-# PROJETO ESCALA 5x2 OFICIAL — VERSÃO COMPLETA
+# PROJETO ESCALA 5x2 OFICIAL — VERSÃO COMPLETA (CORRIGIDA)
 # =========================================================
 # ✅ Login por setor (somente LÍDER/ADMIN tem senha)
 # ✅ Colaboradores do setor (SEM senha) — cadastro dentro do setor logado
@@ -13,6 +13,7 @@
 # ✅ Aba Férias: cadastra férias e lança automaticamente na escala
 # ✅ Excel modelo RH (azul/verde + domingos vermelho + folga + férias)
 # ✅ Escala corrida: mês seguinte lê estado do mês anterior
+# ✅ Correção KeyError (auth.get)
 # =========================================================
 
 import streamlit as st
@@ -63,7 +64,6 @@ def db_init():
     con = db_conn()
     cur = con.cursor()
 
-    # Setores
     cur.execute("""
     CREATE TABLE IF NOT EXISTS setores (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -71,7 +71,6 @@ def db_init():
     )
     """)
 
-    # Usuários do SISTEMA (somente quem loga: líder/admin)
     cur.execute("""
     CREATE TABLE IF NOT EXISTS usuarios_sistema (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -87,7 +86,6 @@ def db_init():
     )
     """)
 
-    # Colaboradores (SEM senha) — entram na escala
     cur.execute("""
     CREATE TABLE IF NOT EXISTS colaboradores (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -102,7 +100,6 @@ def db_init():
     )
     """)
 
-    # Subgrupos editáveis por setor
     cur.execute("""
     CREATE TABLE IF NOT EXISTS subgrupos_setor (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -112,7 +109,6 @@ def db_init():
     )
     """)
 
-    # Férias
     cur.execute("""
     CREATE TABLE IF NOT EXISTS ferias (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -123,7 +119,6 @@ def db_init():
     )
     """)
 
-    # Estado mês anterior (escala corrida)
     cur.execute("""
     CREATE TABLE IF NOT EXISTS estado_mes_anterior (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -138,7 +133,6 @@ def db_init():
     )
     """)
 
-    # Escala do mês (salva por dia)
     cur.execute("""
     CREATE TABLE IF NOT EXISTS escala_mes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -158,12 +152,11 @@ def db_init():
 
     con.commit()
 
-    # setores básicos
     cur.execute("INSERT OR IGNORE INTO setores(nome) VALUES (?)", ("GERAL",))
     cur.execute("INSERT OR IGNORE INTO setores(nome) VALUES (?)", ("ADMIN",))
     con.commit()
 
-    # Admin padrão: setor ADMIN | chapa admin | senha 123
+    # admin padrão
     cur.execute("SELECT 1 FROM usuarios_sistema WHERE setor=? AND chapa=? LIMIT 1", ("ADMIN", "admin"))
     if cur.fetchone() is None:
         salt = secrets.token_hex(16)
@@ -178,7 +171,7 @@ def db_init():
 
 
 # =========================================================
-# AUTH (só líderes/admin)
+# AUTH
 # =========================================================
 def system_user_exists(setor: str, chapa: str) -> bool:
     con = db_conn()
@@ -307,12 +300,12 @@ def load_colaboradores_setor(setor: str):
         "Entrada": r[3] or "06:00",
         "Folga_Sab": bool(r[4]),
         "Setor": setor,
-        "Categoria": setor,  # compatibilidade com motor (categoria= setor)
+        "Categoria": setor,
     } for r in rows]
 
 
 # =========================================================
-# SUBGRUPOS (editável)
+# SUBGRUPOS
 # =========================================================
 def list_subgrupos(setor: str):
     con = db_conn()
@@ -338,7 +331,6 @@ def delete_subgrupo(setor: str, nome: str):
     con = db_conn()
     cur = con.cursor()
     cur.execute("DELETE FROM subgrupos_setor WHERE setor=? AND nome=?", (setor, nome))
-    # remove vínculo no perfil
     cur.execute("UPDATE colaboradores SET subgrupo='' WHERE setor=? AND subgrupo=?", (setor, nome))
     con.commit()
     con.close()
@@ -387,7 +379,7 @@ def is_de_ferias(setor: str, chapa: str, data_obj: date) -> bool:
 
 
 # =========================================================
-# ESTADO (escala corrida)
+# ESTADO
 # =========================================================
 def save_estado_mes(setor: str, ano: int, mes: int, estado: dict):
     con = db_conn()
@@ -482,7 +474,7 @@ def load_escala_mes_db(setor: str, ano: int, mes: int):
 
 
 # =========================================================
-# MOTOR DE REGRAS
+# MOTOR
 # =========================================================
 def _dias_mes(ano: int, mes: int):
     qtd = calendar.monthrange(ano, mes)[1]
@@ -712,7 +704,6 @@ def gerar_escala_setor(setor: str, colaboradores: list[dict], ano: int, mes: int
 
     estado_prev = load_estado_prev(setor, ano, mes)
 
-    # Domingo 1x1: divide setor em dois grupos estáveis no mês
     chapas_sorted = sorted(chapas)
     rng = random.Random(9000 + ano + mes + len(chapas_sorted))
     chapas_sh = chapas_sorted[:]
@@ -721,7 +712,6 @@ def gerar_escala_setor(setor: str, colaboradores: list[dict], ano: int, mes: int
     grupo_a = set(chapas_sh[:meio])
     grupo_b = set(chapas_sh[meio:])
 
-    # dfs base
     df_ref = pd.DataFrame({"Data": datas, "Dia": [D_PT[d.day_name()] for d in datas]})
     hist = {}
     for ch in chapas:
@@ -731,7 +721,7 @@ def gerar_escala_setor(setor: str, colaboradores: list[dict], ano: int, mes: int
         df["H_Saida"] = ""
         hist[ch] = df
 
-    # férias + domingos
+    # férias + domingos 1x1
     for ch in chapas:
         df = hist[ch]
         ent = colab_by_chapa[ch].get("Entrada", "06:00")
@@ -749,7 +739,7 @@ def gerar_escala_setor(setor: str, colaboradores: list[dict], ano: int, mes: int
             else:
                 _set_trabalho(df, dom_i, ent)
 
-        # escala corrida: ajusta 1º domingo conforme mês anterior
+        # escala corrida: ajusta o 1º domingo com base no mês anterior
         if ch in estado_prev and estado_prev[ch].get("ultimo_domingo_status") in ["Trabalho", "Folga"] and domingos_idx:
             primeiro_dom = domingos_idx[0]
             if df.loc[primeiro_dom, "Status"] != "Férias":
@@ -761,7 +751,7 @@ def gerar_escala_setor(setor: str, colaboradores: list[dict], ano: int, mes: int
 
         hist[ch] = df
 
-    # 5x2 por semana SEG->DOM, escolhendo folgas seg..sáb (sábado só se permitido)
+    # 5x2: completar 2 folgas semana (seg..sáb), sem folga consecutiva
     for week in weeks:
         cand_days = [i for i in week if df_ref.loc[i, "Dia"] != "dom"]
         for ch in chapas:
@@ -790,11 +780,7 @@ def gerar_escala_setor(setor: str, colaboradores: list[dict], ano: int, mes: int
 
                 def score(j):
                     weekday_prio = 0 if df_ref.loc[j, "Dia"] in ["seg", "ter", "qua", "qui", "sex"] else 1
-                    return (
-                        counts_day.get(j, 0),
-                        counts_day_hour.get((j, bucket), 0),
-                        weekday_prio
-                    )
+                    return (counts_day.get(j, 0), counts_day_hour.get((j, bucket), 0), weekday_prio)
 
                 possiveis.sort(key=score)
                 pick = possiveis[0]
@@ -802,13 +788,12 @@ def gerar_escala_setor(setor: str, colaboradores: list[dict], ano: int, mes: int
                 folgas_sem += 1
                 hist[ch] = df
 
-    # limite 5 dias seguidos + interstício
+    # limite 5 seguidos + interstício
     for ch in chapas:
         df = hist[ch]
         ent = colab_by_chapa[ch].get("Entrada", "06:00")
         pode_sab = bool(colab_by_chapa[ch].get("Folga_Sab", False))
 
-        # corrida: se mês anterior terminou com 5 dias seguidos, força 1 folga no primeiro dia útil
         if ch in estado_prev and int(estado_prev[ch].get("consec_trab_final", 0)) >= 5:
             for i in range(len(df)):
                 if df.loc[i, "Status"] == "Trabalho" and df_ref.loc[i, "Dia"] in ["seg", "ter", "qua", "qui", "sex"]:
@@ -816,16 +801,12 @@ def gerar_escala_setor(setor: str, colaboradores: list[dict], ano: int, mes: int
                     break
 
         enforce_max_5_consecutive_work(df, ent, pode_sab)
-
         ultima_saida_prev = estado_prev.get(ch, {}).get("ultima_saida", "")
         recompute_hours_with_intersticio(df, ent, ultima_saida_prev=ultima_saida_prev)
-
         hist[ch] = df
 
-    # rebalance final
     rebalance_folgas_dia(hist, colab_by_chapa, chapas, weeks, df_ref, max_iters=1800)
 
-    # estado para próximo mês
     estado_out = {}
     for ch in chapas:
         df = hist[ch]
@@ -849,26 +830,22 @@ def gerar_escala_setor(setor: str, colaboradores: list[dict], ano: int, mes: int
                 ultimo_dom = df.loc[i, "Status"]
                 break
 
-        estado_out[ch] = {
-            "consec_trab_final": consec,
-            "ultima_saida": ultima_saida,
-            "ultimo_domingo_status": ultimo_dom
-        }
+        estado_out[ch] = {"consec_trab_final": consec, "ultima_saida": ultima_saida, "ultimo_domingo_status": ultimo_dom}
 
     return hist, estado_out
 
 
 # =========================================================
-# UI
+# UI ROUTER
 # =========================================================
-if "auth" not in st.session_state:
+if "auth" not in st.session_state or not isinstance(st.session_state["auth"], dict):
     st.session_state["auth"] = None
 
 db_init()
 
 
 def page_login():
-    st.title("🔐 Login por Setor (somente Líder/Admin)")
+    st.title("🔐 Login por Setor (Líder/Admin)")
 
     tab_login, tab_cadastrar_lider, tab_esqueci = st.tabs(["Entrar", "Cadastrar Líder", "Esqueci a senha"])
 
@@ -889,12 +866,11 @@ def page_login():
                 st.rerun()
             else:
                 st.error("Usuário ou senha inválidos.")
-
         st.caption("Admin padrão: setor ADMIN | chapa admin | senha 123")
 
     with tab_cadastrar_lider:
         st.subheader("Cadastrar usuário do sistema (Líder)")
-        st.info("⚠️ Aqui cria usuário que FAZ LOGIN (líder/admin). Colaborador comum é cadastrado dentro do setor SEM senha.")
+        st.info("Aqui cria usuário que FAZ LOGIN. Colaborador comum é cadastrado no setor SEM senha.")
         nome = st.text_input("Nome:", key="cl_nome")
         setor = st.text_input("Setor:", key="cl_setor").strip().upper()
         chapa = st.text_input("Chapa:", key="cl_chapa")
@@ -943,14 +919,16 @@ def page_login():
 
 
 def page_app():
-    auth = st.session_state["auth"]
-    setor = auth["setor"]
+    auth = st.session_state["auth"] or {}
+    setor = auth.get("setor", "GERAL")
 
     st.sidebar.title("👤 Sessão")
-    st.sidebar.write(f"**Nome:** {auth['nome']}")
+    st.sidebar.write(f"**Nome:** {auth.get('nome', '-')}")
     st.sidebar.write(f"**Setor:** {setor}")
-    st.sidebar.write(f"**Chapa:** {auth['chapa']}")
-    st.sidebar.write(f"**Perfil:** {'ADMIN' if auth['is_admin'] else ('LÍDER' if auth['is_lider'] else 'USUÁRIO')}")
+    st.sidebar.write(f"**Chapa:** {auth.get('chapa', '-')}")
+    st.sidebar.write(
+        f"**Perfil:** {'ADMIN' if auth.get('is_admin', False) else ('LÍDER' if auth.get('is_lider', False) else 'USUÁRIO')}"
+    )
 
     if st.sidebar.button("Sair", key="logout_btn"):
         st.session_state["auth"] = None
@@ -962,11 +940,12 @@ def page_app():
         st.session_state["cfg_ano"] = datetime.now().year
 
     st.title(f"📅 Escala 5x2 — Setor: {setor}")
-    st.caption("Regras: 5x2 SEG→DOM | Domingo 1x1 | Sábado só folga se permitido | Interstício 11h10 | Máx 5 dias seguidos | Balanceamento dia+horário | Escala corrida mês anterior.")
 
     aba1, aba2, aba3, aba4, aba5 = st.tabs(["👥 Colaboradores", "🚀 Gerar Escala", "⚙️ Ajustes", "🏖️ Férias", "📥 Excel"])
 
-    # ---------------- ABA 1: COLABORADORES ----------------
+    # =====================================================
+    # ABA 1
+    # =====================================================
     with aba1:
         st.subheader("Colaboradores do setor (SEM senha)")
 
@@ -1014,7 +993,7 @@ def page_app():
                 st.rerun()
 
         st.markdown("---")
-        st.markdown("### ✏️ Editar perfil do colaborador (entrada / subgrupo / folga sábado)")
+        st.markdown("### ✏️ Editar perfil do colaborador")
         if colaboradores:
             chapas = [c["Chapa"] for c in colaboradores]
             ch_sel = st.selectbox("Chapa:", chapas, key="pf_chapa")
@@ -1032,27 +1011,9 @@ def page_app():
                 st.success("Perfil atualizado!")
                 st.rerun()
 
-        if auth["is_lider"] or auth["is_admin"]:
-            st.markdown("---")
-            st.markdown("### 🛡️ (Líder/Admin) Criar usuário do sistema no setor (com senha)")
-            colL1, colL2, colL3 = st.columns(3)
-            nome_l = colL1.text_input("Nome:", key="l_nome")
-            chapa_l = colL2.text_input("Chapa:", key="l_chapa")
-            senha_l = colL3.text_input("Senha:", type="password", key="l_senha")
-            is_admin = st.checkbox("Admin?", key="l_admin")
-            is_lider = st.checkbox("Líder?", value=True, key="l_lider")
-
-            if st.button("Criar usuário do sistema", key="l_create"):
-                if not nome_l or not chapa_l or not senha_l:
-                    st.error("Preencha tudo.")
-                elif system_user_exists(setor, chapa_l.strip()):
-                    st.error("Já existe essa chapa no setor.")
-                else:
-                    create_system_user(nome_l.strip(), setor, chapa_l.strip(), senha_l, is_lider=1 if is_lider else 0, is_admin=1 if is_admin else 0)
-                    st.success("Usuário do sistema criado!")
-                    st.rerun()
-
-    # ---------------- ABA 2: GERAR ----------------
+    # =====================================================
+    # ABA 2: GERAR
+    # =====================================================
     with aba2:
         st.subheader("Gerar escala do mês")
         c1, c2 = st.columns(2)
@@ -1080,7 +1041,9 @@ def page_app():
             else:
                 st.info("Ainda não existe escala salva neste mês.")
 
-    # ---------------- ABA 3: AJUSTES ----------------
+    # =====================================================
+    # ABA 3: AJUSTES
+    # =====================================================
     with aba3:
         st.subheader("Ajustes")
         ano = int(st.session_state["cfg_ano"])
@@ -1133,7 +1096,6 @@ def page_app():
                             df.loc[idx, "H_Entrada"] = e
                             df.loc[idx, "H_Saida"] = _saida_from_entrada(e)
 
-                    # se mexer no domingo, propaga alternância
                     if df.loc[idx, "Data"].day_name() == "Sunday":
                         enforce_sundays_alternating_for_employee(df, ent_pad, idx)
 
@@ -1153,7 +1115,6 @@ def page_app():
                 pode_sab2 = bool(colab_by.get(ch2, {}).get("Folga_Sab", False))
 
                 nova_ent_mes = st.time_input("Nova entrada do mês:", value=datetime.strptime(ent_pad2, "%H:%M").time(), key="adjm_ent")
-
                 if st.button("Aplicar mês inteiro", key="adjm_apply"):
                     e = nova_ent_mes.strftime("%H:%M")
                     for i in range(len(dfm)):
@@ -1170,7 +1131,9 @@ def page_app():
 
                 st.dataframe(dfm, use_container_width=True)
 
-    # ---------------- ABA 4: FÉRIAS ----------------
+    # =====================================================
+    # ABA 4: FÉRIAS
+    # =====================================================
     with aba4:
         st.subheader("Férias")
         colaboradores = load_colaboradores_setor(setor)
@@ -1197,7 +1160,9 @@ def page_app():
             else:
                 st.info("Sem férias cadastradas.")
 
-    # ---------------- ABA 5: EXCEL ----------------
+    # =====================================================
+    # ABA 5: EXCEL
+    # =====================================================
     with aba5:
         st.subheader("Excel modelo RH")
         ano = int(st.session_state["cfg_ano"])
@@ -1261,7 +1226,6 @@ def page_app():
                     ws.column_dimensions["A"].width = 36
 
                     chapas_sorted = sorted(hist_db.keys(), key=lambda ch: colab_by.get(ch, {}).get("Nome", ch))
-
                     row_idx = 3
                     for ch in chapas_sorted:
                         df_f = hist_db[ch]
@@ -1317,7 +1281,7 @@ def page_app():
 
 
 # =========================================================
-# ROUTER
+# MAIN
 # =========================================================
 if st.session_state["auth"] is None:
     page_login()
