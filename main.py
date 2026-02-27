@@ -1,847 +1,1440 @@
+# app.py
+# =========================================================
+# ESCALA 5x2 OFICIAL — COMPLETO (SUBGRUPO = REGRAS)
+# + Preferência "Evitar folga" por subgrupo
+# =========================================================
+
 import streamlit as st
 import pandas as pd
-from datetime import datetime, timedelta
-import os
-from io import BytesIO
-import plotly.express as px
-import pytz
-from openpyxl.styles import PatternFill, Alignment
-import sqlite3
-import smtplib
-from email.mime.text import MIMEText
+from datetime import datetime, timedelta, date
+import io
 import random
-import string
-import zipfile
-import shutil
-from pathlib import Path
-from urllib.parse import quote
-
-# =========================================================
-# (OPCIONAL) LOGIN PERSISTENTE POR COOKIE (NÃO BUGA SE NÃO TIVER)
-#   - Se o pacote não estiver instalado, o app roda normal (sem persistência).
-#   - Para ativar: requirements.txt -> extra-streamlit-components==0.1.60
-# =========================================================
-try:
-    import extra_streamlit_components as stx  # type: ignore
-    _cookie_manager = stx.CookieManager()
-    HAS_COOKIES = True
-except Exception:
-    _cookie_manager = None
-    HAS_COOKIES = False
-
-COOKIE_KEY = "SK_LOGIN_EMAIL"
-COOKIE_DIAS = 30
-
-# ================= CONFIGURAÇÕES INICIAIS =================
-fuso_br = pytz.timezone("America/Sao_Paulo")
-st.set_page_config(page_title="Saúde Kids BETA", page_icon="🧪", layout="wide")
-
-ARQ_G = "dados_glicemia_BETA.csv"
-ARQ_N = "dados_nutricao_BETA.csv"
-ARQ_R = "config_receita_BETA.csv"
-ARQ_M = "mensagens_admin_BETA.csv"
-
-# ================= NORMALIZAÇÃO (EMAIL CASE-INSENSITIVE) =================
-def norm_email(x: str) -> str:
-    return (x or "").strip().lower()
-
-def norm_senha(x: str) -> str:
-    return (x or "").strip()
-
-# ================= BACKUP / RESTORE =================
-BACKUP_DIR = Path("backups")
-BACKUP_DIR.mkdir(exist_ok=True)
-BACKUP_STATE_FILE = BACKUP_DIR / "last_auto_backup.txt"
-
-ARQUIVOS_BACKUP = [
-    "usuarios.db",
-    ARQ_G,
-    ARQ_N,
-    ARQ_R,
-    ARQ_M,
-]
-
-def agora_br():
-    return datetime.now(fuso_br)
-
-def criar_backup_zip_em_bytes():
-    ts = agora_br().strftime("%Y-%m-%d_%H-%M-%S")
-    nome = f"backup_saude_kids_{ts}.zip"
-    out = BytesIO()
-    with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as z:
-        for arq in ARQUIVOS_BACKUP:
-            if os.path.exists(arq):
-                z.write(arq)
-    out.seek(0)
-    return out.getvalue(), nome
-
-def criar_backup_zip_em_disco():
-    ts = agora_br().strftime("%Y-%m-%d_%H-%M-%S")
-    nome = f"backup_saude_kids_{ts}.zip"
-    caminho = BACKUP_DIR / nome
-    with zipfile.ZipFile(caminho, "w", compression=zipfile.ZIP_DEFLATED) as z:
-        for arq in ARQUIVOS_BACKUP:
-            if os.path.exists(arq):
-                z.write(arq)
-    return caminho
-
-def restaurar_backup_zip_bytes(zip_bytes: bytes):
-    tmp_dir = BACKUP_DIR / "_tmp_restore"
-    if tmp_dir.exists():
-        shutil.rmtree(tmp_dir)
-    tmp_dir.mkdir(parents=True, exist_ok=True)
-
-    with zipfile.ZipFile(BytesIO(zip_bytes), "r") as z:
-        z.extractall(tmp_dir)
-
-    for arq in ARQUIVOS_BACKUP:
-        src = tmp_dir / arq
-        if src.exists():
-            shutil.copy(src, arq)
-
-    shutil.rmtree(tmp_dir)
-
-def backup_automatico_diario_3h():
-    """
-    Streamlit não roda 24/7 (roda quando alguém acessa).
-    Regra: após 03:00, se ainda não fez backup HOJE => faz 1.
-    """
-    agora = agora_br()
-    hoje = agora.strftime("%Y-%m-%d")
-    if agora.hour >= 3:
-        ultima = ""
-        if BACKUP_STATE_FILE.exists():
-            ultima = BACKUP_STATE_FILE.read_text(encoding="utf-8").strip()
-        if ultima != hoje:
-            criar_backup_zip_em_disco()
-            BACKUP_STATE_FILE.write_text(hoje, encoding="utf-8")
-
-def listar_backups():
-    backups = []
-    for p in sorted(BACKUP_DIR.glob("backup_saude_kids_*.zip")):
-        stat = p.stat()
-        dt = datetime.fromtimestamp(stat.st_mtime, tz=fuso_br)
-        backups.append({
-            "arquivo": p.name,
-            "caminho": str(p),
-            "data_hora": dt,
-            "tamanho_mb": round(stat.st_size / (1024 * 1024), 2),
-        })
-    if not backups:
-        return pd.DataFrame(columns=["arquivo", "caminho", "data_hora", "tamanho_mb"])
-    return pd.DataFrame(backups).sort_values("data_hora", ascending=False).reset_index(drop=True)
-
-def apagar_backups_antigos(dias_manter=7):
-    limite = agora_br() - timedelta(days=dias_manter)
-    apagados = 0
-    for p in BACKUP_DIR.glob("backup_saude_kids_*.zip"):
-        dt = datetime.fromtimestamp(p.stat().st_mtime, tz=fuso_br)
-        if dt < limite:
-            try:
-                p.unlink()
-                apagados += 1
-            except:
-                pass
-    return apagados
-
-backup_automatico_diario_3h()
-
-# ================= DESIGN DARK MODE =================
-st.markdown("""
-<style>
-    .stApp { background-color: #0e1117; color: #ffffff; }
-    .card { background-color: #1a1c24; padding: 25px; border-radius: 20px; border: 1px solid #30363d; margin-bottom: 25px; }
-    .metric-box { background: #262730; border: 1px solid #4a4a4a; padding: 15px; border-radius: 12px; text-align: center; }
-    .dose-destaque { font-size: 38px; font-weight: 700; color: #4ade80; }
-    label, p, span, h1, h2, h3, .stMarkdown { color: white !important; }
-    .stTextInput>div>div>input, .stNumberInput>div>div>input {
-        background-color: #262730 !important; color: white !important; border: 1px solid #4a4a4a !important;
-    }
-    .stTabs [data-baseweb="tab-list"] { background-color: #0e1117; }
-    .stTabs [data-baseweb="tab"] { color: white; }
-</style>
-""", unsafe_allow_html=True)
-
-# ================= SEGURANÇA E LOGIN =================
-def gerar_senha_temporaria(tamanho=6):
-    caracteres = string.ascii_letters + string.digits
-    return "".join(random.choice(caracteres) for _ in range(tamanho))
-
-def enviar_senha_nova(email_destino, senha_nova):
-    """
-    RECOMENDADO (seguro):
-      - No Streamlit Cloud: st.secrets["GMAIL_APP_PASSWORD"] = "SUA_SENHA_DE_APP"
-    """
-    meu_email = "ewerlon.osbadboys@gmail.com"
-    minha_senha = (st.secrets.get("GMAIL_APP_PASSWORD", "") or "").strip()
-
-    if not minha_senha:
-        return False
-
-    corpo = f"<h3>Saúde Kids</h3><p>Sua nova senha de acesso é: <b>{senha_nova}</b></p>"
-    msg = MIMEText(corpo, "html")
-    msg["Subject"] = "Sua Nova Senha - Saúde Kids"
-    msg["From"] = meu_email
-    msg["To"] = email_destino
-
-    try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
-            smtp.login(meu_email, minha_senha)
-            smtp.send_message(msg)
-        return True
-    except:
-        return False
-
-def init_db():
-    conn = sqlite3.connect("usuarios.db")
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            nome TEXT,
-            email TEXT PRIMARY KEY,
-            senha TEXT
-        )
-    """)
-    if not conn.execute("SELECT 1 FROM users WHERE email='admin'").fetchone():
-        conn.execute("INSERT INTO users VALUES ('Administrador', 'admin', '542820')")
-    conn.commit()
-    conn.close()
-
-init_db()
-
-if "logado" not in st.session_state:
-    st.session_state.logado = False
-if "user_email" not in st.session_state:
-    st.session_state.user_email = ""
-
-# ====== AUTO-LOGIN POR COOKIE (SE DISPONÍVEL) ======
-def cookie_get_email():
-    if not HAS_COOKIES or _cookie_manager is None:
-        return ""
-    try:
-        v = _cookie_manager.get(COOKIE_KEY)
-        return norm_email(v)
-    except Exception:
-        return ""
-
-def cookie_set_email(email: str):
-    if not HAS_COOKIES or _cookie_manager is None:
-        return
-    try:
-        _cookie_manager.set(COOKIE_KEY, norm_email(email), expires_at=timedelta(days=COOKIE_DIAS))
-    except Exception:
-        pass
-
-def cookie_clear():
-    if not HAS_COOKIES or _cookie_manager is None:
-        return
-    try:
-        _cookie_manager.delete(COOKIE_KEY)
-    except Exception:
-        pass
-
-if not st.session_state.logado:
-    ck = cookie_get_email()
-    if ck:
-        st.session_state.logado = True
-        st.session_state.user_email = ck
-
-if not st.session_state.logado:
-    st.title("🧪 Saúde Kids - Acesso")
-
-    if not HAS_COOKIES:
-        st.caption("ℹ️ Login persistente desativado (pacote extra-streamlit-components não instalado).")
-
-    abas_login = st.tabs(["🔐 Entrar", "📝 Criar Conta", "❓ Esqueci Senha", "🔄 Alterar Senha"])
-
-    # -------- ENTRAR --------
-    with abas_login[0]:
-        u = norm_email(st.text_input("E-mail", key="l_email"))
-        s = norm_senha(st.text_input("Senha", type="password", key="l_pass"))
-
-        if st.button("Acessar Aplicativo", use_container_width=True):
-            conn = sqlite3.connect("usuarios.db")
-            ok = conn.execute("SELECT * FROM users WHERE email=? AND senha=?", (u, s)).fetchone()
-            conn.close()
-            if ok:
-                st.session_state.logado = True
-                st.session_state.user_email = u
-                cookie_set_email(u)  # persistente (se tiver cookies)
-                st.rerun()
-            else:
-                st.error("E-mail ou senha incorretos.")
-
-    # -------- CRIAR CONTA --------
-    with abas_login[1]:
-        n_cad = (st.text_input("Nome Completo") or "").strip()
-        e_cad = norm_email(st.text_input("E-mail para Cadastro"))
-        s_cad = norm_senha(st.text_input("Senha para Cadastro", type="password"))
-
-        if st.button("Realizar Cadastro", use_container_width=True):
-            if not n_cad or not e_cad or not s_cad:
-                st.warning("Preencha nome, e-mail e senha.")
-            else:
-                try:
-                    conn = sqlite3.connect("usuarios.db")
-                    conn.execute("INSERT INTO users VALUES (?,?,?)", (n_cad, e_cad, s_cad))
-                    conn.commit()
-                    conn.close()
-                    st.success("Conta criada com sucesso!")
-                except:
-                    st.error("Este e-mail já está cadastrado.")
-
-    # -------- ESQUECI SENHA --------
-    with abas_login[2]:
-        email_alvo = norm_email(st.text_input("Digite seu e-mail cadastrado"))
-
-        if st.button("Recuperar Acesso", use_container_width=True):
-            conn = sqlite3.connect("usuarios.db")
-            c = conn.cursor()
-            user = c.execute("SELECT email FROM users WHERE email=?", (email_alvo,)).fetchone()
-
-            if user:
-                nova = gerar_senha_temporaria()
-                c.execute("UPDATE users SET senha=? WHERE email=?", (nova, email_alvo))
-                conn.commit()
-                conn.close()
-
-                if enviar_senha_nova(email_alvo, nova):
-                    st.success("Nova senha enviada para seu e-mail!")
-                else:
-                    st.warning("E-mail não configurado no app (sem GMAIL_APP_PASSWORD).")
-                    st.info("Use a senha temporária abaixo para entrar e depois altere sua senha:")
-                    st.code(nova)
-            else:
-                conn.close()
-                st.error("E-mail não encontrado.")
-
-    # -------- ALTERAR SENHA --------
-    with abas_login[3]:
-        alt_em = norm_email(st.text_input("Confirme seu E-mail", key="alt_em"))
-        alt_at = norm_senha(st.text_input("Senha Atual", type="password", key="alt_at"))
-        alt_n1 = norm_senha(st.text_input("Nova Senha", type="password", key="alt_n1"))
-
-        if st.button("Confirmar Alteração", use_container_width=True):
-            conn = sqlite3.connect("usuarios.db")
-            ok = conn.execute("SELECT * FROM users WHERE email=? AND senha=?", (alt_em, alt_at)).fetchone()
-            if ok:
-                conn.execute("UPDATE users SET senha=? WHERE email=?", (alt_n1, alt_em))
-                conn.commit()
-                conn.close()
-                st.success("Senha alterada com sucesso!")
-            else:
-                conn.close()
-                st.error("Dados atual incorretos.")
-
-    st.stop()
-
-# ================= FUNÇÕES DE APOIO =================
-def carregar_dados_seguro(arq):
-    if not os.path.exists(arq):
-        return pd.DataFrame()
-    df = pd.read_csv(arq)
-    if "Usuario" not in df.columns:
-        df["Usuario"] = st.session_state.user_email
-    return df[df["Usuario"] == st.session_state.user_email].copy()
-
-def _schema_receita_nova(rec: pd.Series, periodo: str) -> bool:
-    need = [
-        f"{periodo}_f1_min", f"{periodo}_f1_max", f"{periodo}_f1_dose",
-        f"{periodo}_f2_min", f"{periodo}_f2_max", f"{periodo}_f2_dose",
-        f"{periodo}_f3_min", f"{periodo}_f3_max", f"{periodo}_f3_dose",
-    ]
-    return all(k in rec.index for k in need)
-
-def calc_insulina(v, m):
-    """
-    Receita rápida (por faixa e período: manhã/noite).
-    """
-    df_r = carregar_dados_seguro(ARQ_R)
-    if df_r.empty:
-        return "0 UI", "Configurar Receita"
-
-    rec = df_r.iloc[0]
-    periodo = "manha" if m in ["Antes Café", "Após Café", "Antes Almoço", "Após Almoço", "Antes Merenda"] else "noite"
-
-    try:
-        if not _schema_receita_nova(rec, periodo):
-            return "0 UI", "Receita inválida"
-
-        f1_min = float(rec[f"{periodo}_f1_min"]); f1_max = float(rec[f"{periodo}_f1_max"]); f1_dose = float(rec[f"{periodo}_f1_dose"])
-        f2_min = float(rec[f"{periodo}_f2_min"]); f2_max = float(rec[f"{periodo}_f2_max"]); f2_dose = float(rec[f"{periodo}_f2_dose"])
-        f3_min = float(rec[f"{periodo}_f3_min"]); f3_max = float(rec[f"{periodo}_f3_max"]); f3_dose = float(rec[f"{periodo}_f3_dose"])
-
-        if v < 70:
-            return "0 UI", "Hipoglicemia!"
-
-        if f1_min <= v <= f1_max:
-            return f"{int(f1_dose)} UI", f"Faixa 1 ({int(f1_min)}-{int(f1_max)})"
-        elif f2_min <= v <= f2_max:
-            return f"{int(f2_dose)} UI", f"Faixa 2 ({int(f2_min)}-{int(f2_max)})"
-        elif f3_min <= v <= f3_max:
-            return f"{int(f3_dose)} UI", f"Faixa 3 ({int(f3_min)}-{int(f3_max)})"
-        else:
-            return "0 UI", "Fora das faixas"
-
-    except:
-        return "0 UI", "Erro na Receita"
-
-def calc_insulina_rapida(v, m):
-    return calc_insulina(v, m)
-
-def calc_glargina(momento: str):
-    """
-    LONGA (glargina): dose fixa só por momento (Antes Café / Antes Janta).
-    """
-    df_r = carregar_dados_seguro(ARQ_R)
-    if df_r.empty:
-        return "0 UI", "Longa: Configurar"
-
-    rec = df_r.iloc[0]
-    try:
-        cafe = float(rec.get("glargina_cafe_ui", 0))
-        janta = float(rec.get("glargina_janta_ui", 0))
-
-        if momento == "Antes Café":
-            return f"{int(cafe)} UI", "Longa (Antes Café)"
-        elif momento == "Antes Janta":
-            return f"{int(janta)} UI", "Longa (Antes Janta)"
-        else:
-            return "—", "Longa: não aplicável"
-    except:
-        return "0 UI", "Longa: erro"
-
-# =========================================================
-# ✅ NOVO: PRÓXIMA MEDIDA (+2h) e LINK WHATSAPP (wa.me/?text=)
-# =========================================================
-def proxima_medida_apos(momento: str, dt_base: datetime):
-    """
-    Se a medida for 'Antes ...', retorna:
-      - momento_apos correspondente
-      - horário (dt_base + 2h) formatado
-    Caso contrário, retorna ("", "").
-    """
-    mapa = {
-        "Antes Café": "Após Café",
-        "Antes Almoço": "Após Almoço",
-        "Antes Janta": "Após Janta",
-    }
-    if momento not in mapa:
-        return "", ""
-
-    dt_apos = dt_base + timedelta(hours=2)
-    return mapa[momento], dt_apos.strftime("%H:%M")
-
-def link_whatsapp_lembrete(momento: str, valor_glicemia: int, dose_rapida: str, dose_longa: str) -> str:
-    """
-    Gera link wa.me com mensagem e lembrete de 2 horas (horário calculado).
-    Não envia sozinho: abre o WhatsApp com a mensagem pronta.
-    """
-    dt_agora = agora_br()
-    momento_apos, hora_apos = proxima_medida_apos(momento, dt_agora)
-
-    linhas = [
-        "🧪 Saúde Kids",
-        "",
-        f"✅ Medida AGORA: {momento}",
-        f"📍 Glicemia: {int(valor_glicemia)}",
-    ]
-
-    if dose_rapida and dose_rapida != "—":
-        linhas.append(f"⚡ Rápida: {dose_rapida}")
-    if dose_longa and dose_longa != "—":
-        linhas.append(f"🩸 Longa: {dose_longa}")
-
-    if momento_apos and hora_apos:
-        linhas += [
-            "",
-            f"⏰ Próxima medida: {momento_apos} às {hora_apos} (2h após)",
-        ]
-
-    msg = "\n".join(linhas)
-    return "https://wa.me/?text=" + quote(msg)
-
-MOMENTOS_ORDEM = [
-    "Antes Café", "Após Café", "Antes Almoço", "Após Almoço",
-    "Antes Merenda", "Antes Janta", "Após Janta", "Madrugada"
-]
-
-ALIMENTOS = {
-    "Pão Francês (1un)": [28, 4, 1],
-    "Pão de Forma (2 fatias)": [24, 4, 2],
-    "Pão Integral (2 fatias)": [22, 5, 2],
-    "Tapioca (50g)": [27, 0, 0],
-    "Arroz Branco (servir)": [10, 2, 0],
-    "Arroz Integral (servir)": [8, 2, 1],
-    "Feijão (concha)": [14, 5, 1],
-    "Carne Boi (100g)": [0, 26, 12],
-    "Frango (100g)": [0, 31, 4],
-    "Peixe (100g)": [0, 20, 5],
-    "Ovo Cozido (1un)": [1, 6, 5],
-    "Macarrão (pegador)": [30, 5, 1],
-    "Batata Doce (100g)": [20, 2, 0],
-    "Banana (1un)": [22, 1, 0],
-    "Maçã (1un)": [15, 0, 0],
+import calendar
+import sqlite3
+import hashlib
+import secrets
+from openpyxl.styles import PatternFill, Alignment, Border, Side, Font
+from openpyxl.utils import get_column_letter
+
+st.set_page_config(page_title="Escala 5x2 Oficial", layout="wide")
+
+DB_PATH = "escala.db"
+
+# ---- Regras fixas
+INTERSTICIO_MIN = timedelta(hours=11, minutes=10)
+DURACAO_JORNADA = timedelta(hours=9, minutes=58)
+
+# Penalidade forte para "evitar folga" (não proíbe, só evita)
+PREF_EVITAR_PENALTY = 1000
+
+D_PT = {
+    "Monday": "seg",
+    "Tuesday": "ter",
+    "Wednesday": "qua",
+    "Thursday": "qui",
+    "Friday": "sex",
+    "Saturday": "sáb",
+    "Sunday": "dom",
 }
 
-# ================= INTERFACE PRINCIPAL =================
-if st.session_state.user_email == "admin":
-    st.title("🛡️ Painel Admin - Gestão Estratégica")
-    t_usuarios, t_metricas, t_sugestoes, t_backup = st.tabs(
-        ["👥 Pessoas Cadastradas", "📈 Crescimento e App", "📩 Sugestões", "💾 Backup & Restauração"]
+# =========================================================
+# DB
+# =========================================================
+def db_conn():
+    return sqlite3.connect(DB_PATH, check_same_thread=False)
+
+def hash_password(password: str, salt: str) -> str:
+    return hashlib.sha256((salt + password).encode("utf-8")).hexdigest()
+
+def db_init():
+    con = db_conn()
+    cur = con.cursor()
+
+    # setores
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS setores (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome TEXT UNIQUE NOT NULL
     )
+    """)
 
-    conn = sqlite3.connect("usuarios.db")
-    df_users = pd.read_sql_query("SELECT nome, email FROM users", conn)
-    conn.close()
+    # usuários do sistema (lider/admin)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS usuarios_sistema (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome TEXT NOT NULL,
+        setor TEXT NOT NULL,
+        chapa TEXT NOT NULL,
+        senha_hash TEXT NOT NULL,
+        salt TEXT NOT NULL,
+        is_admin INTEGER NOT NULL DEFAULT 0,
+        is_lider INTEGER NOT NULL DEFAULT 0,
+        criado_em TEXT NOT NULL,
+        UNIQUE(setor, chapa)
+    )
+    """)
 
-    with t_usuarios:
-        st.subheader("Lista de Usuários")
-        st.dataframe(df_users, use_container_width=True)
-        st.metric("Total de Cadastros", len(df_users))
-        st.markdown("---")
-        st.subheader("🔑 Alterar Senha de Usuário (Poder Admin)")
-        user_selecionado = st.selectbox("Selecione o E-mail do Usuário", df_users["email"].tolist())
-        nova_senha_admin = norm_senha(st.text_input("Digite a Nova Senha para este usuário", type="password"))
-        if st.button("Confirmar Alteração de Senha", use_container_width=True):
-            if nova_senha_admin:
-                conn = sqlite3.connect("usuarios.db")
-                conn.execute("UPDATE users SET senha=? WHERE email=?", (nova_senha_admin, user_selecionado))
-                conn.commit()
-                conn.close()
-                st.success(f"Senha de {user_selecionado} alterada com sucesso!")
-            else:
-                st.warning("Digite uma senha antes de confirmar.")
+    # colaboradores (sem senha)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS colaboradores (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome TEXT NOT NULL,
+        setor TEXT NOT NULL,
+        chapa TEXT NOT NULL,
+        subgrupo TEXT DEFAULT '',
+        entrada TEXT DEFAULT '06:00',
+        folga_sab INTEGER DEFAULT 0,
+        criado_em TEXT NOT NULL,
+        UNIQUE(setor, chapa)
+    )
+    """)
 
-    with t_metricas:
-        c1, c2 = st.columns(2)
-        with c1:
-            st.write("### Distribuição de Acessos")
-            if os.path.exists(ARQ_G):
-                df_uso = pd.read_csv(ARQ_G)
-                if "Usuario" in df_uso.columns and not df_uso.empty:
-                    uso_por_user = df_uso["Usuario"].value_counts().reset_index()
-                    uso_por_user.columns = ["Usuario", "Registros"]
-                    fig_pizza = px.pie(uso_por_user, values="Registros", names="Usuario", hole=.3)
-                    st.plotly_chart(fig_pizza, use_container_width=True)
+    # subgrupos disponíveis por setor
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS subgrupos_setor (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        setor TEXT NOT NULL,
+        nome TEXT NOT NULL,
+        UNIQUE(setor, nome)
+    )
+    """)
+
+    # preferências por subgrupo (evitar folga)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS subgrupo_regras (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        setor TEXT NOT NULL,
+        subgrupo TEXT NOT NULL,
+        evitar_seg INTEGER NOT NULL DEFAULT 0,
+        evitar_ter INTEGER NOT NULL DEFAULT 0,
+        evitar_qua INTEGER NOT NULL DEFAULT 0,
+        evitar_qui INTEGER NOT NULL DEFAULT 0,
+        evitar_sex INTEGER NOT NULL DEFAULT 0,
+        evitar_sab INTEGER NOT NULL DEFAULT 0,
+        UNIQUE(setor, subgrupo)
+    )
+    """)
+
+    # férias
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS ferias (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        setor TEXT NOT NULL,
+        chapa TEXT NOT NULL,
+        inicio TEXT NOT NULL,
+        fim TEXT NOT NULL
+    )
+    """)
+
+    # estado mês anterior (escala corrida)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS estado_mes_anterior (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        setor TEXT NOT NULL,
+        chapa TEXT NOT NULL,
+        consec_trab_final INTEGER NOT NULL,
+        ultima_saida TEXT NOT NULL,
+        ultimo_domingo_status TEXT,
+        ano INTEGER NOT NULL,
+        mes INTEGER NOT NULL,
+        UNIQUE(setor, chapa, ano, mes)
+    )
+    """)
+
+    # escala do mês (persistida)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS escala_mes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        setor TEXT NOT NULL,
+        ano INTEGER NOT NULL,
+        mes INTEGER NOT NULL,
+        chapa TEXT NOT NULL,
+        dia INTEGER NOT NULL,
+        data TEXT NOT NULL,
+        dia_sem TEXT NOT NULL,
+        status TEXT NOT NULL,
+        h_entrada TEXT,
+        h_saida TEXT,
+        UNIQUE(setor, ano, mes, chapa, dia)
+    )
+    """)
+
+    con.commit()
+
+    # setores padrão
+    cur.execute("INSERT OR IGNORE INTO setores(nome) VALUES (?)", ("GERAL",))
+    cur.execute("INSERT OR IGNORE INTO setores(nome) VALUES (?)", ("ADMIN",))
+    con.commit()
+
+    # admin padrão
+    cur.execute("SELECT 1 FROM usuarios_sistema WHERE setor=? AND chapa=? LIMIT 1", ("ADMIN", "admin"))
+    if cur.fetchone() is None:
+        salt = secrets.token_hex(16)
+        senha_hash = hash_password("123", salt)
+        cur.execute("""
+            INSERT INTO usuarios_sistema(nome, setor, chapa, senha_hash, salt, is_admin, is_lider, criado_em)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, ("Administrador", "ADMIN", "admin", senha_hash, salt, 1, 1, datetime.now().isoformat()))
+        con.commit()
+
+    con.close()
+
+# =========================================================
+# AUTH
+# =========================================================
+def system_user_exists(setor: str, chapa: str) -> bool:
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute("SELECT 1 FROM usuarios_sistema WHERE setor=? AND chapa=? LIMIT 1", (setor, chapa))
+    ok = cur.fetchone() is not None
+    con.close()
+    return ok
+
+def create_system_user(nome: str, setor: str, chapa: str, senha: str, is_lider: int = 0, is_admin: int = 0):
+    salt = secrets.token_hex(16)
+    senha_hash = hash_password(senha, salt)
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute("INSERT OR IGNORE INTO setores(nome) VALUES (?)", (setor,))
+    cur.execute("""
+        INSERT INTO usuarios_sistema(nome, setor, chapa, senha_hash, salt, is_admin, is_lider, criado_em)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (nome, setor, chapa, senha_hash, salt, int(is_admin), int(is_lider), datetime.now().isoformat()))
+    con.commit()
+    con.close()
+
+def verify_login(setor: str, chapa: str, senha: str):
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute("""
+        SELECT nome, senha_hash, salt, is_admin, is_lider
+        FROM usuarios_sistema
+        WHERE setor=? AND chapa=?
+        LIMIT 1
+    """, (setor, chapa))
+    row = cur.fetchone()
+    con.close()
+    if not row:
+        return None
+    nome, senha_hash, salt, is_admin, is_lider = row
+    if hash_password(senha, salt) == senha_hash:
+        return {"nome": nome, "setor": setor, "chapa": chapa, "is_admin": bool(is_admin), "is_lider": bool(is_lider)}
+    return None
+
+def is_lider_chapa(setor: str, chapa_lider: str) -> bool:
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute("SELECT is_lider FROM usuarios_sistema WHERE setor=? AND chapa=? LIMIT 1", (setor, chapa_lider))
+    row = cur.fetchone()
+    con.close()
+    return bool(row and row[0] == 1)
+
+def update_password(setor: str, chapa: str, nova_senha: str):
+    salt = secrets.token_hex(16)
+    senha_hash = hash_password(nova_senha, salt)
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute("UPDATE usuarios_sistema SET senha_hash=?, salt=? WHERE setor=? AND chapa=?", (senha_hash, salt, setor, chapa))
+    con.commit()
+    con.close()
+
+# =========================================================
+# COLABORADORES (SEM senha)
+# =========================================================
+def colaborador_exists(setor: str, chapa: str) -> bool:
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute("SELECT 1 FROM colaboradores WHERE setor=? AND chapa=? LIMIT 1", (setor, chapa))
+    ok = cur.fetchone() is not None
+    con.close()
+    return ok
+
+def create_colaborador(nome: str, setor: str, chapa: str):
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute("INSERT OR IGNORE INTO colaboradores(nome, setor, chapa, criado_em) VALUES (?, ?, ?, ?)",
+                (nome, setor, chapa, datetime.now().isoformat()))
+    con.commit()
+    con.close()
+
+def update_colaborador_perfil(setor: str, chapa: str, subgrupo: str, entrada: str, folga_sab: bool):
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute("""
+        UPDATE colaboradores
+        SET subgrupo=?, entrada=?, folga_sab=?
+        WHERE setor=? AND chapa=?
+    """, (subgrupo or "", entrada, 1 if folga_sab else 0, setor, chapa))
+    con.commit()
+    con.close()
+
+def load_colaboradores_setor(setor: str):
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute("""
+        SELECT nome, chapa, subgrupo, entrada, folga_sab
+        FROM colaboradores
+        WHERE setor=?
+        ORDER BY nome ASC
+    """, (setor,))
+    rows = cur.fetchall()
+    con.close()
+    return [{
+        "Nome": r[0],
+        "Chapa": r[1],
+        "Subgrupo": (r[2] or "").strip(),
+        "Entrada": (r[3] or "06:00").strip(),
+        "Folga_Sab": bool(r[4]),
+        "Setor": setor,
+    } for r in rows]
+
+# =========================================================
+# SUBGRUPOS + REGRAS (Preferência)
+# =========================================================
+def list_subgrupos(setor: str):
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute("SELECT nome FROM subgrupos_setor WHERE setor=? ORDER BY nome ASC", (setor,))
+    rows = [r[0] for r in cur.fetchall()]
+    con.close()
+    return rows
+
+def add_subgrupo(setor: str, nome: str):
+    nome = (nome or "").strip()
+    if not nome:
+        return
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute("INSERT OR IGNORE INTO subgrupos_setor(setor, nome) VALUES (?, ?)", (setor, nome))
+    # cria linha padrão de regra
+    cur.execute("""
+        INSERT OR IGNORE INTO subgrupo_regras(setor, subgrupo, evitar_seg, evitar_ter, evitar_qua, evitar_qui, evitar_sex, evitar_sab)
+        VALUES (?, ?, 0,0,0,0,0,0)
+    """, (setor, nome))
+    con.commit()
+    con.close()
+
+def delete_subgrupo(setor: str, nome: str):
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute("DELETE FROM subgrupos_setor WHERE setor=? AND nome=?", (setor, nome))
+    cur.execute("DELETE FROM subgrupo_regras WHERE setor=? AND subgrupo=?", (setor, nome))
+    cur.execute("UPDATE colaboradores SET subgrupo='' WHERE setor=? AND subgrupo=?", (setor, nome))
+    con.commit()
+    con.close()
+
+def get_subgrupo_regras(setor: str, subgrupo: str):
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute("""
+        SELECT evitar_seg, evitar_ter, evitar_qua, evitar_qui, evitar_sex, evitar_sab
+        FROM subgrupo_regras
+        WHERE setor=? AND subgrupo=?
+        LIMIT 1
+    """, (setor, subgrupo))
+    row = cur.fetchone()
+    con.close()
+    if not row:
+        return {"seg": 0, "ter": 0, "qua": 0, "qui": 0, "sex": 0, "sáb": 0}
+    return {"seg": row[0], "ter": row[1], "qua": row[2], "qui": row[3], "sex": row[4], "sáb": row[5]}
+
+def set_subgrupo_regras(setor: str, subgrupo: str, regras: dict):
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute("""
+        INSERT OR REPLACE INTO subgrupo_regras(setor, subgrupo, evitar_seg, evitar_ter, evitar_qua, evitar_qui, evitar_sex, evitar_sab)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        setor, subgrupo,
+        int(regras.get("seg", 0)),
+        int(regras.get("ter", 0)),
+        int(regras.get("qua", 0)),
+        int(regras.get("qui", 0)),
+        int(regras.get("sex", 0)),
+        int(regras.get("sáb", 0)),
+    ))
+    con.commit()
+    con.close()
+
+# =========================================================
+# FÉRIAS
+# =========================================================
+def add_ferias(setor: str, chapa: str, inicio: date, fim: date):
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute("INSERT INTO ferias(setor, chapa, inicio, fim) VALUES (?, ?, ?, ?)",
+                (setor, chapa, inicio.strftime("%Y-%m-%d"), fim.strftime("%Y-%m-%d")))
+    con.commit()
+    con.close()
+
+def delete_ferias_row(setor: str, chapa: str, inicio: str, fim: str):
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute("""
+        DELETE FROM ferias
+        WHERE setor=? AND chapa=? AND inicio=? AND fim=?
+    """, (setor, chapa, inicio, fim))
+    con.commit()
+    con.close()
+
+def list_ferias(setor: str):
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute("SELECT chapa, inicio, fim FROM ferias WHERE setor=? ORDER BY date(inicio) ASC", (setor,))
+    rows = cur.fetchall()
+    con.close()
+    return rows
+
+def is_de_ferias(setor: str, chapa: str, data_obj: date) -> bool:
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute("""
+        SELECT 1 FROM ferias
+        WHERE setor=? AND chapa=?
+          AND date(inicio) <= date(?) AND date(fim) >= date(?)
+        LIMIT 1
+    """, (setor, chapa, data_obj.strftime("%Y-%m-%d"), data_obj.strftime("%Y-%m-%d")))
+    ok = cur.fetchone() is not None
+    con.close()
+    return ok
+
+def data_retorno_ferias(setor: str, chapa: str, data_obj: date):
+    # se estiver em férias, retorno = dia seguinte ao fim do período que cobre data_obj
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute("""
+        SELECT fim FROM ferias
+        WHERE setor=? AND chapa=?
+          AND date(inicio) <= date(?) AND date(fim) >= date(?)
+        LIMIT 1
+    """, (setor, chapa, data_obj.strftime("%Y-%m-%d"), data_obj.strftime("%Y-%m-%d")))
+    row = cur.fetchone()
+    con.close()
+    if not row:
+        return None
+    fim = datetime.strptime(row[0], "%Y-%m-%d").date()
+    return fim + timedelta(days=1)
+
+# =========================================================
+# ESTADO (escala corrida)
+# =========================================================
+def save_estado_mes(setor: str, ano: int, mes: int, estado: dict):
+    con = db_conn()
+    cur = con.cursor()
+    for chapa, stt in estado.items():
+        cur.execute("""
+            INSERT OR REPLACE INTO estado_mes_anterior(setor, chapa, consec_trab_final, ultima_saida, ultimo_domingo_status, ano, mes)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (
+            setor, chapa,
+            int(stt.get("consec_trab_final", 0)),
+            stt.get("ultima_saida", "") or "",
+            stt.get("ultimo_domingo_status", None),
+            int(ano), int(mes)
+        ))
+    con.commit()
+    con.close()
+
+def load_estado_prev(setor: str, ano: int, mes: int):
+    prev_ano, prev_mes = ano, mes - 1
+    if prev_mes == 0:
+        prev_mes = 12
+        prev_ano -= 1
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute("""
+        SELECT chapa, consec_trab_final, ultima_saida, ultimo_domingo_status
+        FROM estado_mes_anterior
+        WHERE setor=? AND ano=? AND mes=?
+    """, (setor, prev_ano, prev_mes))
+    rows = cur.fetchall()
+    con.close()
+    estado = {}
+    for chapa, consec, ultima_saida, ultimo_dom in rows:
+        estado[chapa] = {"consec_trab_final": int(consec), "ultima_saida": ultima_saida or "", "ultimo_domingo_status": ultimo_dom}
+    return estado
+
+# =========================================================
+# ESCALA DB
+# =========================================================
+def save_escala_mes_db(setor: str, ano: int, mes: int, historico_df_por_chapa: dict[str, pd.DataFrame]):
+    con = db_conn()
+    cur = con.cursor()
+    for chapa, df in historico_df_por_chapa.items():
+        for _, row in df.iterrows():
+            dia = int(row["Data"].day)
+            cur.execute("""
+                INSERT OR REPLACE INTO escala_mes(setor, ano, mes, chapa, dia, data, dia_sem, status, h_entrada, h_saida)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                setor, int(ano), int(mes), chapa, dia,
+                row["Data"].strftime("%Y-%m-%d"),
+                row["Dia"],
+                row["Status"],
+                row.get("H_Entrada", "") or "",
+                row.get("H_Saida", "") or "",
+            ))
+    con.commit()
+    con.close()
+
+def load_escala_mes_db(setor: str, ano: int, mes: int):
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute("""
+        SELECT chapa, data, dia_sem, status, h_entrada, h_saida
+        FROM escala_mes
+        WHERE setor=? AND ano=? AND mes=?
+        ORDER BY chapa, date(data) ASC
+    """, (setor, int(ano), int(mes)))
+    rows = cur.fetchall()
+    con.close()
+    if not rows:
+        return {}
+    hist = {}
+    for chapa, data_s, dia_sem, status, h_ent, h_sai in rows:
+        dt = pd.to_datetime(data_s)
+        hist.setdefault(chapa, []).append({
+            "Data": dt, "Dia": dia_sem, "Status": status,
+            "H_Entrada": h_ent or "", "H_Saida": h_sai or ""
+        })
+    return {ch: pd.DataFrame(items) for ch, items in hist.items()}
+
+# =========================================================
+# MOTOR REGRAS
+# =========================================================
+def _dias_mes(ano: int, mes: int):
+    qtd = calendar.monthrange(ano, mes)[1]
+    return pd.date_range(start=f"{ano}-{mes:02d}-01", periods=qtd, freq="D")
+
+def _saida_from_entrada(ent: str) -> str:
+    return (datetime.strptime(ent, "%H:%M") + DURACAO_JORNADA).strftime("%H:%M")
+
+def calcular_entrada_segura(saida_ant: str, ent_padrao: str) -> str:
+    fmt = "%H:%M"
+    try:
+        s = datetime.strptime(saida_ant, fmt)
+        e = datetime.strptime(ent_padrao, fmt)
+        diff = e - s
+        if diff.total_seconds() < 0:
+            diff += timedelta(days=1)
+        if diff < INTERSTICIO_MIN:
+            return (s + INTERSTICIO_MIN).strftime(fmt)
+    except:
+        pass
+    return ent_padrao
+
+def _nao_consecutiva_folga(df, idx):
+    if idx > 0 and df.loc[idx - 1, "Status"] == "Folga":
+        return False
+    if idx < len(df) - 1 and df.loc[idx + 1, "Status"] == "Folga":
+        return False
+    return True
+
+def _set_trabalho(df, idx, ent_padrao):
+    df.loc[idx, "Status"] = "Trabalho"
+    if not df.loc[idx, "H_Entrada"]:
+        df.loc[idx, "H_Entrada"] = ent_padrao
+    df.loc[idx, "H_Saida"] = _saida_from_entrada(df.loc[idx, "H_Entrada"])
+
+def _set_folga(df, idx):
+    df.loc[idx, "Status"] = "Folga"
+    df.loc[idx, "H_Entrada"] = ""
+    df.loc[idx, "H_Saida"] = ""
+
+def _set_ferias(df, idx):
+    df.loc[idx, "Status"] = "Férias"
+    df.loc[idx, "H_Entrada"] = ""
+    df.loc[idx, "H_Saida"] = ""
+
+def recompute_hours_with_intersticio(df, ent_padrao, ultima_saida_prev: str | None = None):
+    ents, sais = [], []
+    first_work_done = False
+    for i in range(len(df)):
+        if df.loc[i, "Status"] != "Trabalho":
+            ents.append("")
+            sais.append("")
+        else:
+            e = df.loc[i, "H_Entrada"] if df.loc[i, "H_Entrada"] else ent_padrao
+            if (not first_work_done) and ultima_saida_prev:
+                e = calcular_entrada_segura(ultima_saida_prev, e)
+                first_work_done = True
+            if i > 0 and sais and sais[-1]:
+                e = calcular_entrada_segura(sais[-1], e)
+            ents.append(e)
+            sais.append(_saida_from_entrada(e))
+    df["H_Entrada"] = ents
+    df["H_Saida"] = sais
+
+def _semana_seg_dom_indices(datas: pd.DatetimeIndex, idx_any: int):
+    d = datas[idx_any]
+    monday = d - timedelta(days=d.weekday())
+    sunday = monday + timedelta(days=6)
+    return [i for i, dd in enumerate(datas) if monday.date() <= dd.date() <= sunday.date()]
+
+def _all_weeks_seg_dom(datas: pd.DatetimeIndex):
+    weeks, seen = [], set()
+    for i in range(len(datas)):
+        w = tuple(_semana_seg_dom_indices(datas, i))
+        if w and w not in seen:
+            seen.add(w)
+            weeks.append(list(w))
+    return weeks
+
+def enforce_sundays_alternating_for_employee(df, ent_padrao, start_dom_idx):
+    domingos = [i for i in range(len(df)) if df.loc[i, "Data"].day_name() == "Sunday"]
+    if start_dom_idx not in domingos:
+        return
+    base_status = df.loc[start_dom_idx, "Status"]
+    if base_status not in ["Trabalho", "Folga"]:
+        return
+    pos = domingos.index(start_dom_idx)
+    current = base_status
+    for k in range(pos + 1, len(domingos)):
+        idx = domingos[k]
+        if df.loc[idx, "Status"] == "Férias":
+            continue
+        current = "Folga" if current == "Trabalho" else "Trabalho"
+        if current == "Folga":
+            _set_folga(df, idx)
+        else:
+            _set_trabalho(df, idx, ent_padrao)
+
+def enforce_max_5_consecutive_work(df, ent_padrao, pode_folgar_sabado: bool):
+    def can_make_folga(i):
+        if df.loc[i, "Status"] != "Trabalho":
+            return False
+        dia = df.loc[i, "Dia"]
+        if dia == "dom":
+            return False
+        if dia == "sáb" and not pode_folgar_sabado:
+            return False
+        if not _nao_consecutiva_folga(df, i):
+            return False
+        return True
+
+    consec, i = 0, 0
+    while i < len(df):
+        if df.loc[i, "Status"] == "Trabalho":
+            consec += 1
+            if consec > 5:
+                block_start = i - (consec - 1)
+                block_end = i
+                candidatos = []
+                for j in range(block_start, block_end + 1):
+                    if can_make_folga(j):
+                        dia = df.loc[j, "Dia"]
+                        weekday_prio = 0 if dia in ["seg", "ter", "qua", "qui", "sex"] else 1
+                        mid = (block_start + block_end) / 2
+                        dist = abs(j - mid)
+                        candidatos.append((weekday_prio, dist, j))
+                if candidatos:
+                    candidatos.sort()
+                    escolhido = candidatos[0][2]
+                    _set_folga(df, escolhido)
+                    consec = 0
+                    i = max(0, escolhido - 2)
+                    continue
                 else:
-                    st.info("Sem dados.")
-            else:
-                st.info("Sem dados.")
-        with c2:
-            st.write("### Crescimento")
-            dados_c = pd.DataFrame({
-                "Mês": ["Jan", "Fev", "Mar"],
-                "Usuários": [max(1, len(df_users)//2), max(1, int(len(df_users)/1.1)), len(df_users)]
-            })
-            st.plotly_chart(px.line(dados_c, x="Mês", y="Usuários", markers=True), use_container_width=True)
-
-    with t_sugestoes:
-        if os.path.exists(ARQ_M):
-            st.dataframe(pd.read_csv(ARQ_M), use_container_width=True)
+                    consec = 0
         else:
-            st.info("Sem sugestões.")
+            consec = 0
+        i += 1
 
-    with t_backup:
-        st.subheader("💾 Backup Manual / Automático / Restauração")
+def _counts_folgas_day_and_hour(hist_by_chapa: dict, colab_by_chapa: dict, chapas_grupo: list, idxs_semana: list, df_ref):
+    counts_day = {i: 0 for i in idxs_semana}
+    counts_day_hour = {}
+    for ch in chapas_grupo:
+        df = hist_by_chapa[ch]
+        bucket = colab_by_chapa[ch].get("Entrada", "06:00")
+        for i in idxs_semana:
+            if df_ref.loc[i, "Dia"] == "dom":
+                continue
+            if df.loc[i, "Status"] == "Folga":
+                counts_day[i] += 1
+                counts_day_hour[(i, bucket)] = counts_day_hour.get((i, bucket), 0) + 1
+    return counts_day, counts_day_hour
 
-        st.write("### 📦 Gerar Backup Manual")
-        if st.button("📦 Gerar Backup Agora", use_container_width=True):
-            b, nome = criar_backup_zip_em_bytes()
-            st.download_button("⬇️ Baixar Backup (.zip)", b, file_name=nome, use_container_width=True)
+def rebalance_folgas_dia(hist_by_chapa: dict, colab_by_chapa: dict, chapas_grupo: list, weeks: list, df_ref, max_iters=2200):
+    def is_dom(i): return df_ref.loc[i, "Dia"] == "dom"
 
-        st.markdown("---")
-        st.write("### ♻️ Restauração Manual")
-        up = st.file_uploader("Enviar arquivo .zip de backup", type=["zip"])
-        if up is not None:
-            if st.button("✅ Restaurar Agora", use_container_width=True):
-                restaurar_backup_zip_bytes(up.getvalue())
-                st.success("Restauração concluída! Recarregue o app (F5).")
+    def can_swap(ch, i_from, i_to):
+        df = hist_by_chapa[ch]
+        pode_sab = bool(colab_by_chapa[ch].get("Folga_Sab", False))
+        if is_dom(i_from) or is_dom(i_to): return False
+        if df.loc[i_from, "Status"] == "Férias" or df.loc[i_to, "Status"] == "Férias": return False
+        if df.loc[i_from, "Status"] != "Folga": return False
+        if df.loc[i_to, "Status"] != "Trabalho": return False
+        if df_ref.loc[i_to, "Dia"] == "sáb" and not pode_sab: return False
+        if (i_to > 0 and df.loc[i_to - 1, "Status"] == "Folga") or (i_to < len(df)-1 and df.loc[i_to + 1, "Status"] == "Folga"):
+            return False
+        return True
 
-        st.markdown("---")
-        st.write("### ⏰ Backup Automático")
-        st.info("Config: 1 backup por dia após **03:00** (Brasília).")
-        if BACKUP_STATE_FILE.exists():
-            st.caption(f"Último dia registrado: {BACKUP_STATE_FILE.read_text(encoding='utf-8').strip()}")
+    def do_swap(ch, i_from, i_to):
+        df = hist_by_chapa[ch]
+        ent = colab_by_chapa[ch].get("Entrada", "06:00")
+        pode_sab = bool(colab_by_chapa[ch].get("Folga_Sab", False))
+        _set_trabalho(df, i_from, ent)
+        _set_folga(df, i_to)
+        enforce_max_5_consecutive_work(df, ent, pode_sab)
+        hist_by_chapa[ch] = df
 
-        st.markdown("---")
-        st.write("### 🗂️ Backups existentes (pasta backups/)")
-        df_bk = listar_backups()
-        if df_bk.empty:
-            st.warning("Nenhum backup encontrado.")
+    it = 0
+    for week in weeks:
+        week_idxs = [i for i in week if not is_dom(i)]
+        if not week_idxs:
+            continue
+        while it < max_iters:
+            it += 1
+            counts = {i: 0 for i in week_idxs}
+            for ch in chapas_grupo:
+                df = hist_by_chapa[ch]
+                for i in week_idxs:
+                    if df.loc[i, "Status"] == "Folga":
+                        counts[i] += 1
+            mx = max(counts, key=lambda x: counts[x])
+            mn = min(counts, key=lambda x: counts[x])
+            if counts[mx] - counts[mn] <= 1:
+                break
+            candidates = [ch for ch in chapas_grupo if hist_by_chapa[ch].loc[mx, "Status"] == "Folga" and hist_by_chapa[ch].loc[mn, "Status"] == "Trabalho"]
+            random.shuffle(candidates)
+            moved = False
+            for ch in candidates:
+                if can_swap(ch, mx, mn):
+                    do_swap(ch, mx, mn)
+                    moved = True
+                    break
+            if not moved:
+                break
+
+# ---- regra “volta de férias”: desconsidera a primeira semana para 5x2 (mas domingo 1x1 continua)
+def is_first_week_after_return(setor: str, chapa: str, data_obj: date) -> bool:
+    # se data_obj está entre retorno e retorno+6 (inclusive), é primeira semana pós-férias
+    # retorna None se não tiver férias relacionadas
+    # achamos retorno olhando se ontem estava em férias e hoje não.
+    # forma simples: se ontem estava de férias e hoje não => hoje é retorno.
+    ontem = data_obj - timedelta(days=1)
+    if is_de_ferias(setor, chapa, data_obj):
+        return False
+    if is_de_ferias(setor, chapa, ontem):
+        # retorno hoje
+        return True
+    # se retorno foi em dias anteriores, checa janela 7 dias
+    # buscarmos o fim mais recente <= data_obj
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute("""
+        SELECT fim FROM ferias
+        WHERE setor=? AND chapa=? AND date(fim) < date(?)
+        ORDER BY date(fim) DESC
+        LIMIT 1
+    """, (setor, chapa, data_obj.strftime("%Y-%m-%d")))
+    row = cur.fetchone()
+    con.close()
+    if not row:
+        return False
+    fim = datetime.strptime(row[0], "%Y-%m-%d").date()
+    retorno = fim + timedelta(days=1)
+    return retorno <= data_obj <= (retorno + timedelta(days=6))
+
+# =========================================================
+# GERAR ESCALA — POR SUBGRUPO (com preferências)
+# =========================================================
+def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: int, mes: int):
+    datas = _dias_mes(ano, mes)
+    weeks = _all_weeks_seg_dom(datas)
+    domingos_idx = [i for i, d in enumerate(datas) if d.day_name() == "Sunday"]
+
+    df_ref = pd.DataFrame({"Data": datas, "Dia": [D_PT[d.day_name()] for d in datas]})
+    estado_prev = load_estado_prev(setor, ano, mes)
+
+    # --- agrupa colaboradores por subgrupo
+    grupos = {}
+    for c in colaboradores:
+        sg = (c.get("Subgrupo") or "").strip() or "SEM SUBGRUPO"
+        grupos.setdefault(sg, []).append(c)
+
+    # cache regras de subgrupo (preferência)
+    regras_cache = {}
+    for sg in grupos.keys():
+        if sg == "SEM SUBGRUPO":
+            regras_cache[sg] = {"seg": 0, "ter": 0, "qua": 0, "qui": 0, "sex": 0, "sáb": 0}
         else:
-            df_show = df_bk.copy()
-            df_show["data_hora"] = df_show["data_hora"].dt.strftime("%d/%m/%Y %H:%M:%S")
-            st.dataframe(df_show[["arquivo", "data_hora", "tamanho_mb"]], use_container_width=True)
+            regras_cache[sg] = get_subgrupo_regras(setor, sg)
 
-            st.markdown("#### Ações")
-            selecionado = st.selectbox("Selecionar backup", df_bk["arquivo"].tolist())
-            p_sel = BACKUP_DIR / selecionado
+    hist_all = {}
+    colab_by_chapa = {c["Chapa"]: c for c in colaboradores}
 
-            colx1, colx2, colx3 = st.columns(3)
-            with colx1:
-                if p_sel.exists():
-                    with open(p_sel, "rb") as f:
-                        st.download_button("⬇️ Baixar Selecionado", f.read(), file_name=selecionado, use_container_width=True)
-            with colx2:
-                if st.button("🗑️ Apagar Selecionado", use_container_width=True):
-                    if p_sel.exists():
-                        p_sel.unlink()
-                        st.success("Backup apagado.")
-                        st.rerun()
-            with colx3:
-                if st.button("🧹 Apagar Antigos (7 dias)", use_container_width=True):
-                    apagados = apagar_backups_antigos(dias_manter=7)
-                    st.success(f"Apagados: {apagados}")
-                    st.rerun()
+    # df base
+    for c in colaboradores:
+        ch = c["Chapa"]
+        df = df_ref.copy()
+        df["Status"] = "Trabalho"
+        df["H_Entrada"] = ""
+        df["H_Saida"] = ""
+        hist_all[ch] = df
 
-else:
-    # --- INTERFACE USUÁRIO ---
-    tab1, tab2, tab3, tab4 = st.tabs(["📊 Glicemia", "🍽️ Nutrição", "⚙️ Receita", "📩 Sugerir Melhoria"])
+    # por subgrupo roda regras
+    for sg, membros in grupos.items():
+        chapas = [m["Chapa"] for m in membros]
+        if not chapas:
+            continue
 
-    # ====== GLICEMIA ======
-    with tab1:
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        dfg = carregar_dados_seguro(ARQ_G)
+        # domingo 1x1: balanceado desde primeiro domingo (metade folga)
+        chapas_sorted = sorted(chapas)
+        rng = random.Random(9000 + ano + mes + len(chapas_sorted) + (hash(sg) % 9999))
+        chapas_sh = chapas_sorted[:]
+        rng.shuffle(chapas_sh)
+        meio = (len(chapas_sh) + 1) // 2
+        grupo_a = set(chapas_sh[:meio])
+        grupo_b = set(chapas_sh[meio:])
 
-        c1, c2 = st.columns([1, 2])
-        with c1:
-            v_gl = st.number_input("Valor Glicemia", 0, 600, 100)
-            m_gl = st.selectbox("Momento", MOMENTOS_ORDEM)
+        # aplica férias + domingo 1x1
+        for ch in chapas:
+            df = hist_all[ch]
+            ent = colab_by_chapa[ch].get("Entrada", "06:00")
 
-            # Regras de exibição (como você pediu)
-            MOMENTOS_RAPIDA = ["Antes Café", "Antes Almoço", "Antes Janta"]
-            MOMENTOS_LONGA = ["Antes Café", "Antes Janta"]
+            for i, d in enumerate(datas):
+                if is_de_ferias(setor, ch, d.date()):
+                    _set_ferias(df, i)
 
-            # ✅ NOVO: mostrar horário exato do "APÓS" quando for "ANTES"
-            dt_agora = agora_br()
-            momento_apos, hora_apos = proxima_medida_apos(m_gl, dt_agora)
-            if momento_apos and hora_apos:
-                st.info(f"⏰ Próxima medida: **{momento_apos}** às **{hora_apos}** (2 horas após)")
+            for k, dom_i in enumerate(domingos_idx):
+                if df.loc[dom_i, "Status"] == "Férias":
+                    continue
+                alvo_folga = grupo_a if (k % 2 == 0) else grupo_b
+                if ch in alvo_folga:
+                    _set_folga(df, dom_i)
+                else:
+                    _set_trabalho(df, dom_i, ent)
 
-            # RÁPIDA: só aparece quando for aplicar
-            if m_gl in MOMENTOS_RAPIDA:
-                dose_r, msg_r = calc_insulina_rapida(v_gl, m_gl)
-                st.markdown(
-                    f'<div class="metric-box"><small>Rápida: {msg_r}</small><br><span class="dose-destaque">{dose_r}</span></div>',
-                    unsafe_allow_html=True
-                )
+            # escala corrida: garante alternância do primeiro domingo
+            if ch in estado_prev and estado_prev[ch].get("ultimo_domingo_status") in ["Trabalho", "Folga"] and domingos_idx:
+                primeiro_dom = domingos_idx[0]
+                if df.loc[primeiro_dom, "Status"] != "Férias":
+                    if estado_prev[ch]["ultimo_domingo_status"] == "Trabalho":
+                        _set_folga(df, primeiro_dom)
+                    else:
+                        _set_trabalho(df, primeiro_dom, ent)
+                    enforce_sundays_alternating_for_employee(df, ent, primeiro_dom)
+
+            hist_all[ch] = df
+
+        # 5x2 por semana seg→dom, com preferência de subgrupo “evitar folga”
+        pref = regras_cache.get(sg, {"seg": 0, "ter": 0, "qua": 0, "qui": 0, "sex": 0, "sáb": 0})
+
+        for week in weeks:
+            # cand: seg..sáb (domingo não entra na 2ª folga; domingo já é 1x1)
+            cand_days = [i for i in week if df_ref.loc[i, "Dia"] != "dom"]
+
+            for ch in chapas:
+                df = hist_all[ch]
+                pode_sab = bool(colab_by_chapa[ch].get("Folga_Sab", False))
+                ent_bucket = colab_by_chapa[ch].get("Entrada", "06:00")
+
+                # se está na 1ª semana após retorno de férias, não força 5x2 (mas mantém domingo já feito)
+                # define pela data de segunda daquela semana
+                segunda_idx = min(week, key=lambda i: df_ref.loc[i, "Data"])
+                segunda_date = df_ref.loc[segunda_idx, "Data"].date()
+                ignore_5x2 = is_first_week_after_return(setor, ch, segunda_date)
+
+                if ignore_5x2:
+                    continue
+
+                folgas_sem = int((df.loc[week, "Status"] == "Folga").sum())
+                # precisamos de 2 folgas por semana, contando domingo quando folga
+                # (domingo já pode ser folga 1x1, então aqui completa até 2)
+                while folgas_sem < 2:
+                    counts_day, counts_day_hour = _counts_folgas_day_and_hour(hist_all, colab_by_chapa, chapas, cand_days, df_ref)
+
+                    possiveis = []
+                    for j in cand_days:
+                        dia = df_ref.loc[j, "Dia"]
+
+                        if df.loc[j, "Status"] != "Trabalho":
+                            continue
+                        # sábado só se permitir
+                        if dia == "sáb" and not pode_sab:
+                            continue
+                        # sem folga consecutiva
+                        if not _nao_consecutiva_folga(df, j):
+                            continue
+
+                        possiveis.append(j)
+
+                    if not possiveis:
+                        break
+
+                    random.shuffle(possiveis)
+
+                    def score(j):
+                        dia = df_ref.loc[j, "Dia"]
+                        weekday_prio = 0 if dia in ["seg", "ter", "qua", "qui", "sex"] else 1
+                        pref_pen = PREF_EVITAR_PENALTY if pref.get(dia, 0) == 1 else 0
+                        # 1) menos folga no dia dentro do subgrupo
+                        # 2) menos folga no dia+horário (misturar horários)
+                        # 3) preferência (evitar)
+                        # 4) prioridade dia útil
+                        return (
+                            counts_day.get(j, 0),
+                            counts_day_hour.get((j, ent_bucket), 0),
+                            pref_pen,
+                            weekday_prio,
+                            random.random()
+                        )
+
+                    possiveis.sort(key=score)
+                    pick = possiveis[0]
+                    _set_folga(df, pick)
+                    folgas_sem += 1
+                    hist_all[ch] = df
+
+        # limite 5 seguidos + interstício + “escala corrida” no começo do mês
+        for ch in chapas:
+            df = hist_all[ch]
+            ent = colab_by_chapa[ch].get("Entrada", "06:00")
+            pode_sab = bool(colab_by_chapa[ch].get("Folga_Sab", False))
+
+            # se veio do mês anterior com 5 seguidos, força uma folga no início em dia útil se possível
+            if ch in estado_prev and int(estado_prev[ch].get("consec_trab_final", 0)) >= 5:
+                for i in range(len(df)):
+                    if df.loc[i, "Status"] == "Trabalho" and df_ref.loc[i, "Dia"] in ["seg", "ter", "qua", "qui", "sex"]:
+                        _set_folga(df, i)
+                        break
+
+            enforce_max_5_consecutive_work(df, ent, pode_sab)
+            ultima_saida_prev = estado_prev.get(ch, {}).get("ultima_saida", "")
+            recompute_hours_with_intersticio(df, ent, ultima_saida_prev=ultima_saida_prev)
+            hist_all[ch] = df
+
+        # rebalance folgas por dia dentro do subgrupo (mais equilibrado)
+        rebalance_folgas_dia(hist_all, colab_by_chapa, chapas, weeks, df_ref, max_iters=2200)
+
+    # estado final para o próximo mês
+    estado_out = {}
+    for ch, df in hist_all.items():
+        consec = 0
+        for i in range(len(df)-1, -1, -1):
+            if df.loc[i, "Status"] == "Trabalho":
+                consec += 1
             else:
-                dose_r, msg_r = "—", "Rápida não aplicável neste momento"
+                break
 
-            # LONGA: renomeada e só aparece quando for aplicar
-            if m_gl in MOMENTOS_LONGA:
-                dose_l, msg_l = calc_glargina(m_gl)  # dose fixa
-                st.markdown(
-                    f'<div class="metric-box" style="margin-top:10px;"><small>{msg_l}</small><br><span class="dose-destaque">{dose_l}</span></div>',
-                    unsafe_allow_html=True
-                )
+        ultima_saida = ""
+        for i in range(len(df)-1, -1, -1):
+            if df.loc[i, "Status"] == "Trabalho" and df.loc[i, "H_Saida"]:
+                ultima_saida = df.loc[i, "H_Saida"]
+                break
+
+        ultimo_dom = None
+        for i in range(len(df)-1, -1, -1):
+            if df.loc[i, "Dia"] == "dom" and df.loc[i, "Status"] in ["Trabalho", "Folga"]:
+                ultimo_dom = df.loc[i, "Status"]
+                break
+
+        estado_out[ch] = {"consec_trab_final": consec, "ultima_saida": ultima_saida, "ultimo_domingo_status": ultimo_dom}
+
+    return hist_all, estado_out
+
+
+# =========================================================
+# UI
+# =========================================================
+if "auth" not in st.session_state:
+    st.session_state["auth"] = None
+
+if "cfg_mes" not in st.session_state:
+    st.session_state["cfg_mes"] = datetime.now().month
+if "cfg_ano" not in st.session_state:
+    st.session_state["cfg_ano"] = datetime.now().year
+
+db_init()
+
+def page_login():
+    st.title("🔐 Login por Setor (Líder/Admin)")
+
+    tab_login, tab_cadastrar, tab_esqueci = st.tabs(["Entrar", "Cadastrar Líder", "Esqueci a senha"])
+
+    with tab_login:
+        con = db_conn()
+        setores = pd.read_sql_query("SELECT nome FROM setores ORDER BY nome ASC", con)["nome"].tolist()
+        con.close()
+
+        setor = st.selectbox("Setor:", setores, key="lg_setor")
+        chapa = st.text_input("Chapa:", key="lg_chapa")
+        senha = st.text_input("Senha:", type="password", key="lg_senha")
+
+        if st.button("Entrar", key="lg_btn"):
+            u = verify_login(setor, chapa, senha)
+            if u:
+                st.session_state["auth"] = u
+                st.success("Login efetuado!")
+                st.rerun()
             else:
-                dose_l, msg_l = "—", "Longa só: Antes Café / Antes Janta"
+                st.error("Usuário ou senha inválidos.")
 
-            # ✅ NOVO: botão do WhatsApp (wa.me) com lembrete +2h
-            link_wpp = link_whatsapp_lembrete(
-                momento=m_gl,
-                valor_glicemia=int(v_gl),
-                dose_rapida=dose_r if dose_r else "—",
-                dose_longa=dose_l if dose_l else "—"
-            )
-            st.link_button("📲 Abrir WhatsApp com mensagem pronta", link_wpp, use_container_width=True)
+        st.caption("Admin padrão: setor ADMIN | chapa admin | senha 123")
 
-            if st.button("💾 Salvar Glicemia", use_container_width=True):
-                agora = agora_br()
+    with tab_cadastrar:
+        st.subheader("Cadastrar usuário do sistema (Líder/Admin)")
+        st.info("Somente líder/admin precisa senha. Colaborador é SEM senha.")
+        nome = st.text_input("Nome:", key="cl_nome")
+        setor = st.text_input("Setor:", key="cl_setor").strip().upper()
+        chapa = st.text_input("Chapa:", key="cl_chapa")
+        senha = st.text_input("Senha:", type="password", key="cl_senha")
+        senha2 = st.text_input("Confirmar senha:", type="password", key="cl_senha2")
+        is_admin = st.checkbox("Admin?", key="cl_admin")
+        is_lider = st.checkbox("Líder?", value=True, key="cl_lider")
 
-                # salva a dose rápida somente quando for aplicável
-                dose_para_salvar = dose_r if m_gl in MOMENTOS_RAPIDA else ""
-
-                novo = pd.DataFrame(
-                    [[st.session_state.user_email, agora.strftime("%d/%m/%Y"), agora.strftime("%H:%M"), v_gl, m_gl, dose_para_salvar]],
-                    columns=["Usuario", "Data", "Hora", "Valor", "Momento", "Dose"]
-                )
-                base = pd.read_csv(ARQ_G) if os.path.exists(ARQ_G) else pd.DataFrame(columns=novo.columns)
-                pd.concat([base, novo], ignore_index=True).to_csv(ARQ_G, index=False)
+        if st.button("Criar usuário", key="cl_btn"):
+            if not nome or not setor or not chapa or not senha:
+                st.error("Preencha tudo.")
+            elif senha != senha2:
+                st.error("Senhas não conferem.")
+            elif system_user_exists(setor, chapa):
+                st.error("Já existe.")
+            else:
+                create_system_user(nome.strip(), setor, chapa.strip(), senha, is_lider=1 if is_lider else 0, is_admin=1 if is_admin else 0)
+                st.success("Criado! Faça login.")
                 st.rerun()
 
-        with c2:
-            if not dfg.empty:
-                fig = px.line(dfg.tail(10), x="Hora", y="Valor", markers=True, title="Tendência")
-                fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font_color="white")
-                st.plotly_chart(fig, use_container_width=True)
+    with tab_esqueci:
+        st.subheader("Redefinir senha (com chapa do líder do setor)")
+        con = db_conn()
+        setores = pd.read_sql_query("SELECT nome FROM setores ORDER BY nome ASC", con)["nome"].tolist()
+        con.close()
 
-        if not dfg.empty:
-            def cor_gl(v):
-                try:
-                    n = int(v)
-                    if n < 70:
-                        return "background-color: #8B8000"   # amarelo/alerta
-                    elif n > 180:
-                        return "background-color: #8B0000"   # vermelho
+        setor = st.selectbox("Setor:", setores, key="fp_setor")
+        chapa = st.text_input("Sua chapa (usuário do sistema):", key="fp_chapa")
+        chapa_lider = st.text_input("Chapa do líder:", key="fp_lider")
+        nova = st.text_input("Nova senha:", type="password", key="fp_nova")
+        nova2 = st.text_input("Confirmar:", type="password", key="fp_nova2")
+
+        if st.button("Redefinir", key="fp_btn"):
+            if not chapa or not chapa_lider or not nova:
+                st.error("Preencha.")
+            elif nova != nova2:
+                st.error("Senhas não conferem.")
+            elif not system_user_exists(setor, chapa):
+                st.error("Usuário não encontrado.")
+            elif not is_lider_chapa(setor, chapa_lider):
+                st.error("Chapa do líder inválida.")
+            else:
+                update_password(setor, chapa, nova)
+                st.success("Senha alterada.")
+                st.rerun()
+
+def page_app():
+    auth = st.session_state["auth"] or {}
+    setor = auth.get("setor", "GERAL")
+
+    st.sidebar.title("👤 Sessão")
+    st.sidebar.write(f"**Nome:** {auth.get('nome','-')}")
+    st.sidebar.write(f"**Setor:** {setor}")
+    st.sidebar.write(f"**Chapa:** {auth.get('chapa','-')}")
+    st.sidebar.write(f"**Perfil:** {'ADMIN' if auth.get('is_admin', False) else ('LÍDER' if auth.get('is_lider', False) else 'USUÁRIO')}")
+
+    if st.sidebar.button("Sair", key="logout_btn"):
+        st.session_state["auth"] = None
+        st.rerun()
+
+    st.title(f"📅 Escala 5x2 — Setor: {setor}")
+    st.caption("📌 Regras por SUBGRUPO + Preferência 'Evitar folga' por subgrupo (seg/ter/qua/qui/sex/sáb).")
+
+    aba1, aba2, aba3, aba4, aba5 = st.tabs(["👥 Colaboradores", "🚀 Gerar Escala", "⚙️ Ajustes", "🏖️ Férias", "📥 Excel"])
+
+    # ------------------------------------------------------
+    # ABA 1: Colaboradores + Subgrupos + Preferências
+    # ------------------------------------------------------
+    with aba1:
+        colaboradores = load_colaboradores_setor(setor)
+        st.subheader("Colaboradores (SEM senha)")
+
+        if colaboradores:
+            st.dataframe(pd.DataFrame([{
+                "Nome": c["Nome"],
+                "Chapa": c["Chapa"],
+                "Subgrupo": c["Subgrupo"] or "SEM SUBGRUPO",
+                "Entrada": c["Entrada"],
+                "Folga Sábado": "Sim" if c["Folga_Sab"] else "Não",
+            } for c in colaboradores]), use_container_width=True)
+        else:
+            st.info("Sem colaboradores.")
+
+        st.markdown("---")
+        st.markdown("## 📌 Subgrupos (editável) + Preferência de dias com menos folga")
+
+        subgrupos = list_subgrupos(setor)
+
+        cA, cB = st.columns([1, 1])
+        with cA:
+            novo_sub = st.text_input("Novo subgrupo:", key="sg_new")
+            if st.button("Adicionar subgrupo", key="sg_add"):
+                add_subgrupo(setor, novo_sub)
+                st.rerun()
+
+        with cB:
+            if subgrupos:
+                del_sel = st.selectbox("Remover subgrupo:", ["(nenhum)"] + subgrupos, key="sg_del")
+                if del_sel != "(nenhum)" and st.button("Remover", key="sg_del_btn"):
+                    delete_subgrupo(setor, del_sel)
+                    st.rerun()
+            else:
+                st.caption("Nenhum subgrupo cadastrado.")
+
+        st.markdown("### ✅ Preferência por subgrupo (Evitar folga se possível)")
+        if subgrupos:
+            sg_sel = st.selectbox("Escolha o subgrupo:", subgrupos, key="pref_sg_sel")
+            regras = get_subgrupo_regras(setor, sg_sel)
+
+            p1, p2, p3 = st.columns(3)
+            ev_seg = p1.checkbox("Evitar SEG", value=bool(regras["seg"]), key=f"ev_seg_{sg_sel}")
+            ev_ter = p1.checkbox("Evitar TER", value=bool(regras["ter"]), key=f"ev_ter_{sg_sel}")
+            ev_qua = p2.checkbox("Evitar QUA", value=bool(regras["qua"]), key=f"ev_qua_{sg_sel}")
+            ev_qui = p2.checkbox("Evitar QUI", value=bool(regras["qui"]), key=f"ev_qui_{sg_sel}")
+            ev_sex = p3.checkbox("Evitar SEX", value=bool(regras["sex"]), key=f"ev_sex_{sg_sel}")
+            ev_sab = p3.checkbox("Evitar SÁB", value=bool(regras["sáb"]), key=f"ev_sab_{sg_sel}")
+
+            if st.button("Salvar preferência do subgrupo", key="pref_save"):
+                set_subgrupo_regras(setor, sg_sel, {
+                    "seg": int(ev_seg), "ter": int(ev_ter), "qua": int(ev_qua),
+                    "qui": int(ev_qui), "sex": int(ev_sex), "sáb": int(ev_sab)
+                })
+                st.success("Preferência salva!")
+                st.rerun()
+        else:
+            st.info("Crie pelo menos 1 subgrupo para configurar preferência.")
+
+        st.markdown("---")
+        st.markdown("## ➕ Cadastrar colaborador (SEM senha — setor vem do login)")
+        c1, c2 = st.columns(2)
+        nome_n = c1.text_input("Nome:", key="col_nome")
+        chapa_n = c2.text_input("Chapa:", key="col_chapa")
+
+        if st.button("Cadastrar colaborador", key="col_add"):
+            if not nome_n or not chapa_n:
+                st.error("Preencha nome e chapa.")
+            elif colaborador_exists(setor, chapa_n.strip()):
+                st.error("Já existe essa chapa.")
+            else:
+                create_colaborador(nome_n.strip(), setor, chapa_n.strip())
+                st.success("Cadastrado!")
+                st.rerun()
+
+        st.markdown("---")
+        st.markdown("## ✏️ Editar perfil do colaborador")
+        if colaboradores:
+            chapas = [c["Chapa"] for c in colaboradores]
+            ch_sel = st.selectbox("Chapa:", chapas, key="pf_chapa")
+            csel = next(x for x in colaboradores if x["Chapa"] == ch_sel)
+
+            colp1, colp2, colp3 = st.columns(3)
+            ent = colp1.time_input("Entrada:", value=datetime.strptime(csel["Entrada"], "%H:%M").time(), key="pf_ent")
+            sg_opts = [""] + list_subgrupos(setor)
+            idx_default = sg_opts.index(csel["Subgrupo"]) if csel["Subgrupo"] in sg_opts else 0
+            sg = colp2.selectbox("Subgrupo:", sg_opts, index=idx_default, key="pf_sg")
+            sab = colp3.checkbox("Permitir folga sábado", value=bool(csel["Folga_Sab"]), key="pf_sab")
+
+            if st.button("Salvar perfil", key="pf_save"):
+                update_colaborador_perfil(setor, ch_sel, sg, ent.strftime("%H:%M"), sab)
+                st.success("Salvo!")
+                st.rerun()
+
+    # ------------------------------------------------------
+    # ABA 2: Gerar Escala
+    # ------------------------------------------------------
+    with aba2:
+        st.subheader("Gerar escala")
+        c1, c2 = st.columns(2)
+        mes = c1.selectbox("Mês:", list(range(1, 13)), index=st.session_state["cfg_mes"] - 1, key="gen_mes")
+        ano = c2.number_input("Ano:", value=st.session_state["cfg_ano"], step=1, key="gen_ano")
+        st.session_state["cfg_mes"] = int(mes)
+        st.session_state["cfg_ano"] = int(ano)
+
+        colaboradores = load_colaboradores_setor(setor)
+        if not colaboradores:
+            st.warning("Cadastre colaboradores.")
+        else:
+            if st.button("🚀 Gerar agora", key="gen_btn"):
+                hist, estado_out = gerar_escala_setor_por_subgrupo(setor, colaboradores, int(ano), int(mes))
+                save_escala_mes_db(setor, int(ano), int(mes), hist)
+                save_estado_mes(setor, int(ano), int(mes), estado_out)
+                st.success("Escala gerada!")
+                st.rerun()
+
+            hist_db = load_escala_mes_db(setor, int(ano), int(mes))
+            if hist_db:
+                st.markdown("### Visualizar colaborador")
+                ch_view = st.selectbox("Chapa:", list(hist_db.keys()), key="view_ch")
+                st.dataframe(hist_db[ch_view], use_container_width=True)
+
+    # ------------------------------------------------------
+    # ABA 3: Ajustes
+    # ------------------------------------------------------
+    with aba3:
+        st.subheader("Ajustes")
+        ano = int(st.session_state["cfg_ano"])
+        mes = int(st.session_state["cfg_mes"])
+        hist_db = load_escala_mes_db(setor, ano, mes)
+        colaboradores = load_colaboradores_setor(setor)
+        colab_by = {c["Chapa"]: c for c in colaboradores}
+
+        if not hist_db:
+            st.info("Gere a escala.")
+        else:
+            t1, t2 = st.tabs(["🔧 Ajuste por dia", "📅 Trocar horário mês inteiro"])
+
+            with t1:
+                ch = st.selectbox("Chapa:", list(hist_db.keys()), key="adj_ch")
+                df = hist_db[ch].copy()
+                ent_pad = colab_by.get(ch, {}).get("Entrada", "06:00")
+                pode_sab = bool(colab_by.get(ch, {}).get("Folga_Sab", False))
+
+                col1, col2, col3 = st.columns(3)
+                dia_sel = col1.number_input("Dia:", 1, len(df), value=1, key="adj_dia")
+                acao = col2.selectbox("Ação:", ["Marcar Trabalho", "Marcar Folga", "Marcar Férias", "Alterar Entrada"], key="adj_acao")
+                nova_ent = col3.time_input("Entrada:", value=datetime.strptime(ent_pad, "%H:%M").time(), key="adj_ent")
+
+                if st.button("Aplicar", key="adj_apply"):
+                    idx = int(dia_sel) - 1
+                    dia_sem = df.loc[idx, "Dia"]
+
+                    if acao == "Marcar Férias":
+                        _set_ferias(df, idx)
+                    elif acao == "Marcar Folga":
+                        if df.loc[idx, "Status"] == "Férias":
+                            st.error("Não pode.")
+                        elif dia_sem == "sáb" and not pode_sab:
+                            st.error("Sábado só se permitir.")
+                        else:
+                            _set_folga(df, idx)
+                    elif acao == "Marcar Trabalho":
+                        if df.loc[idx, "Status"] == "Férias":
+                            st.error("Não pode.")
+                        else:
+                            e = nova_ent.strftime("%H:%M")
+                            df.loc[idx, "H_Entrada"] = e
+                            _set_trabalho(df, idx, e)
                     else:
-                        return "background-color: #006400"   # verde
-                except:
-                    return ""
-            st.dataframe(dfg.tail(15).style.applymap(cor_gl, subset=["Valor"]), use_container_width=True)
+                        if df.loc[idx, "Status"] != "Trabalho":
+                            st.error("Só em trabalho.")
+                        else:
+                            e = nova_ent.strftime("%H:%M")
+                            df.loc[idx, "H_Entrada"] = e
+                            df.loc[idx, "H_Saida"] = _saida_from_entrada(e)
 
-        st.markdown("</div>", unsafe_allow_html=True)
+                    # mexeu no domingo => propaga alternância para próximos domingos automaticamente
+                    if df.loc[idx, "Data"].day_name() == "Sunday":
+                        enforce_sundays_alternating_for_employee(df, ent_pad, idx)
 
-    # ====== NUTRIÇÃO ======
-    with tab2:
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        dfn = carregar_dados_seguro(ARQ_N)
+                    enforce_max_5_consecutive_work(df, ent_pad, pode_sab)
+                    recompute_hours_with_intersticio(df, ent_pad)
 
-        m_nutri = st.selectbox("Refeição", MOMENTOS_ORDEM, key="n_m")
-        sel = st.multiselect("Alimentos", options=list(ALIMENTOS.keys()))
+                    save_escala_mes_db(setor, ano, mes, {ch: df})
+                    st.success("Salvo!")
+                    st.rerun()
 
-        c_tot = sum(ALIMENTOS[x][0] for x in sel)
-        p_tot = sum(ALIMENTOS[x][1] for x in sel)
-        g_tot = sum(ALIMENTOS[x][2] for x in sel)
+                st.dataframe(df, use_container_width=True)
 
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Carbos", f"{c_tot}g")
-        col2.metric("Proteínas", f"{p_tot}g")
-        col3.metric("Gorduras", f"{g_tot}g")
+            with t2:
+                ch2 = st.selectbox("Chapa:", list(hist_db.keys()), key="adjm_ch")
+                dfm = hist_db[ch2].copy()
+                ent_pad2 = colab_by.get(ch2, {}).get("Entrada", "06:00")
+                pode_sab2 = bool(colab_by.get(ch2, {}).get("Folga_Sab", False))
 
-        if st.button("💾 Salvar Refeição", use_container_width=True):
-            agora = agora_br()
-            novo_n = pd.DataFrame(
-                [[st.session_state.user_email, agora.strftime("%d/%m/%Y"), m_nutri, ", ".join(sel), c_tot, p_tot, g_tot]],
-                columns=["Usuario", "Data", "Momento", "Info", "C", "P", "G"]
-            )
-            base = pd.read_csv(ARQ_N) if os.path.exists(ARQ_N) else pd.DataFrame(columns=novo_n.columns)
-            pd.concat([base, novo_n], ignore_index=True).to_csv(ARQ_N, index=False)
-            st.rerun()
+                nova_ent_mes = st.time_input("Nova entrada:", value=datetime.strptime(ent_pad2, "%H:%M").time(), key="adjm_ent")
+                if st.button("Aplicar mês inteiro", key="adjm_apply"):
+                    e = nova_ent_mes.strftime("%H:%M")
+                    for i in range(len(dfm)):
+                        if dfm.loc[i, "Status"] == "Trabalho":
+                            dfm.loc[i, "H_Entrada"] = e
+                            dfm.loc[i, "H_Saida"] = _saida_from_entrada(e)
 
-        st.dataframe(dfn.tail(10), use_container_width=True)
-        st.markdown("</div>", unsafe_allow_html=True)
+                    enforce_max_5_consecutive_work(dfm, e, pode_sab2)
+                    recompute_hours_with_intersticio(dfm, e)
 
-    # ====== RECEITA (EDITÁVEL) ======
-    with tab3:
-        st.markdown('<div class="card">', unsafe_allow_html=True)
+                    save_escala_mes_db(setor, ano, mes, {ch2: dfm})
+                    st.success("Salvo!")
+                    st.rerun()
 
-        df_r_all = pd.read_csv(ARQ_R) if os.path.exists(ARQ_R) else pd.DataFrame()
-        r_u = df_r_all[df_r_all["Usuario"] == st.session_state.user_email] if not df_r_all.empty else pd.DataFrame()
-        v = r_u.iloc[0] if not r_u.empty else {}
+                st.dataframe(dfm, use_container_width=True)
 
-        st.subheader("⚡ Receita Rápida (por faixas)")
+    # ------------------------------------------------------
+    # ABA 4: Férias
+    # ------------------------------------------------------
+    with aba4:
+        st.subheader("Férias")
+        colaboradores = load_colaboradores_setor(setor)
+        if not colaboradores:
+            st.warning("Sem colaboradores.")
+        else:
+            chapas = [c["Chapa"] for c in colaboradores]
+            ch = st.selectbox("Chapa:", chapas, key="fer_ch")
+            c1, c2 = st.columns(2)
+            ini = c1.date_input("Início:", key="fer_ini")
+            fim = c2.date_input("Fim:", key="fer_fim")
 
-        st.markdown("**🌞 Manhã**")
-        cm1, cm2, cm3 = st.columns(3)
-        with cm1:
-            m1_min = st.number_input("Faixa 1 - Mín", value=int(v.get("manha_f1_min", 70)), key="m1_min_u")
-            m1_max = st.number_input("Faixa 1 - Máx", value=int(v.get("manha_f1_max", 150)), key="m1_max_u")
-            m1_dose = st.number_input("Dose Faixa 1 (UI)", value=int(v.get("manha_f1_dose", 3)), key="m1_dose_u")
-        with cm2:
-            m2_min = st.number_input("Faixa 2 - Mín", value=int(v.get("manha_f2_min", 151)), key="m2_min_u")
-            m2_max = st.number_input("Faixa 2 - Máx", value=int(v.get("manha_f2_max", 300)), key="m2_max_u")
-            m2_dose = st.number_input("Dose Faixa 2 (UI)", value=int(v.get("manha_f2_dose", 5)), key="m2_dose_u")
-        with cm3:
-            m3_min = st.number_input("Faixa 3 - Mín", value=int(v.get("manha_f3_min", 301)), key="m3_min_u")
-            m3_max = st.number_input("Faixa 3 - Máx", value=int(v.get("manha_f3_max", 600)), key="m3_max_u")
-            m3_dose = st.number_input("Dose Faixa 3 (UI)", value=int(v.get("manha_f3_dose", 8)), key="m3_dose_u")
+            if st.button("Adicionar férias", key="fer_add"):
+                if fim < ini:
+                    st.error("Fim menor que início.")
+                else:
+                    add_ferias(setor, ch, ini, fim)
+                    st.success("Férias adicionadas.")
+                    st.rerun()
 
-        st.markdown("---")
-        st.markdown("**🌙 Noite**")
-        cn1, cn2, cn3 = st.columns(3)
-        with cn1:
-            n1_min = st.number_input("Faixa 1 - Mín", value=int(v.get("noite_f1_min", 70)), key="n1_min_u")
-            n1_max = st.number_input("Faixa 1 - Máx", value=int(v.get("noite_f1_max", 150)), key="n1_max_u")
-            n1_dose = st.number_input("Dose Faixa 1 (UI)", value=int(v.get("noite_f1_dose", 3)), key="n1_dose_u")
-        with cn2:
-            n2_min = st.number_input("Faixa 2 - Mín", value=int(v.get("noite_f2_min", 151)), key="n2_min_u")
-            n2_max = st.number_input("Faixa 2 - Máx", value=int(v.get("noite_f2_max", 300)), key="n2_max_u")
-            n2_dose = st.number_input("Dose Faixa 2 (UI)", value=int(v.get("noite_f2_dose", 5)), key="n2_dose_u")
-        with cn3:
-            n3_min = st.number_input("Faixa 3 - Mín", value=int(v.get("noite_f3_min", 301)), key="n3_min_u")
-            n3_max = st.number_input("Faixa 3 - Máx", value=int(v.get("noite_f3_max", 600)), key="n3_max_u")
-            n3_dose = st.number_input("Dose Faixa 3 (UI)", value=int(v.get("noite_f3_dose", 8)), key="n3_dose_u")
+            rows = list_ferias(setor)
+            if rows:
+                df_f = pd.DataFrame(rows, columns=["Chapa", "Início", "Fim"])
+                st.dataframe(df_f, use_container_width=True)
 
-        st.markdown("---")
-        st.subheader("🩸 Longa (dose fixa)")
-        gl1, gl2 = st.columns(2)
-        with gl1:
-            glargina_cafe_ui = st.number_input("Longa - Antes Café (UI)", value=int(float(v.get("glargina_cafe_ui", 0) or 0)), key="gl_cafe")
-        with gl2:
-            glargina_janta_ui = st.number_input("Longa - Antes Janta (UI)", value=int(float(v.get("glargina_janta_ui", 0) or 0)), key="gl_janta")
+                st.markdown("### Remover férias")
+                rem_idx = st.number_input("Linha (1,2,3...)", min_value=1, max_value=len(df_f), value=1, key="fer_rem_idx")
+                if st.button("Remover linha", key="fer_rem_btn"):
+                    r = df_f.iloc[int(rem_idx)-1]
+                    delete_ferias_row(setor, r["Chapa"], r["Início"], r["Fim"])
+                    st.success("Removido!")
+                    st.rerun()
+            else:
+                st.info("Sem férias.")
 
-        if st.button("💾 Salvar Receita", use_container_width=True):
-            nova_rec = pd.DataFrame([{
-                "Usuario": st.session_state.user_email,
+    # ------------------------------------------------------
+    # ABA 5: Excel (separado por subgrupo)
+    # ------------------------------------------------------
+    with aba5:
+        st.subheader("Excel modelo RH (separado por subgrupo)")
+        ano = int(st.session_state["cfg_ano"])
+        mes = int(st.session_state["cfg_mes"])
+        hist_db = load_escala_mes_db(setor, ano, mes)
+        colaboradores = load_colaboradores_setor(setor)
+        colab_by = {c["Chapa"]: c for c in colaboradores}
 
-                "manha_f1_min": m1_min, "manha_f1_max": m1_max, "manha_f1_dose": m1_dose,
-                "manha_f2_min": m2_min, "manha_f2_max": m2_max, "manha_f2_dose": m2_dose,
-                "manha_f3_min": m3_min, "manha_f3_max": m3_max, "manha_f3_dose": m3_dose,
+        if not hist_db:
+            st.info("Gere a escala.")
+        else:
+            if st.button("📊 Gerar Excel", key="xls_btn"):
+                output = io.BytesIO()
+                with pd.ExcelWriter(output, engine="openpyxl") as writer:
+                    wb = writer.book
+                    ws = wb.create_sheet("Escala Mensal", index=0)
 
-                "noite_f1_min": n1_min, "noite_f1_max": n1_max, "noite_f1_dose": n1_dose,
-                "noite_f2_min": n2_min, "noite_f2_max": n2_max, "noite_f2_dose": n2_dose,
-                "noite_f3_min": n3_min, "noite_f3_max": n3_max, "noite_f3_dose": n3_dose,
+                    # Cores estilo RH (azul/verde)
+                    fill_header = PatternFill(start_color="1F4E78", end_color="1F4E78", patternType="solid")
+                    fill_dom = PatternFill(start_color="C00000", end_color="C00000", patternType="solid")
+                    fill_folga = PatternFill(start_color="FFF2CC", end_color="FFF2CC", patternType="solid")
+                    fill_nome = PatternFill(start_color="D9E1F2", end_color="D9E1F2", patternType="solid")
+                    fill_ferias = PatternFill(start_color="92D050", end_color="92D050", patternType="solid")
+                    fill_group = PatternFill(start_color="BDD7EE", end_color="BDD7EE", patternType="solid")
 
-                "glargina_cafe_ui": glargina_cafe_ui,
-                "glargina_janta_ui": glargina_janta_ui,
-            }])
+                    font_header = Font(color="FFFFFF", bold=True)
+                    font_dom = Font(color="FFFFFF", bold=True)
 
-            df_r_all = df_r_all[df_r_all["Usuario"] != st.session_state.user_email] if not df_r_all.empty else pd.DataFrame()
-            pd.concat([df_r_all, nova_rec], ignore_index=True).to_csv(ARQ_R, index=False)
-            st.success("Receita salva com sucesso!")
+                    border = Border(left=Side(style="thin"), right=Side(style="thin"),
+                                    top=Side(style="thin"), bottom=Side(style="thin"))
+                    center = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
-        st.markdown("</div>", unsafe_allow_html=True)
+                    ch0 = list(hist_db.keys())[0]
+                    df_ref = hist_db[ch0]
+                    total_dias = len(df_ref)
 
-    # ====== SUGESTÃO ======
-    with tab4:
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        txt = st.text_area("Sugestão de Melhoria:")
-        if st.button("Enviar Sugestão"):
-            if txt:
-                agora = agora_br().strftime("%d/%m/%Y %H:%M")
-                novo_m = pd.DataFrame([[st.session_state.user_email, agora, txt]], columns=["Usuario", "Data", "Sugestão"])
-                base_m = pd.read_csv(ARQ_M) if os.path.exists(ARQ_M) else pd.DataFrame(columns=novo_m.columns)
-                pd.concat([base_m, novo_m], ignore_index=True).to_csv(ARQ_M, index=False)
-                st.success("Enviado com sucesso!")
-        st.markdown("</div>", unsafe_allow_html=True)
+                    # Cabeçalho
+                    ws.cell(1, 1, "COLABORADOR").fill = fill_header
+                    ws.cell(1, 1).font = font_header
+                    ws.cell(1, 1).alignment = center
+                    ws.cell(1, 1).border = border
+                    ws.cell(2, 1, "").fill = fill_header
+                    ws.cell(2, 1).alignment = center
+                    ws.cell(2, 1).border = border
 
-# ================= EXCEL COM DUAS ABAS (GLICEMIA E NUTRIÇÃO) =================
-st.sidebar.markdown("---")
-if st.sidebar.button("📥 Gerar Excel Completo"):
-    df_e_g = carregar_dados_seguro(ARQ_G)
-    df_e_n = carregar_dados_seguro(ARQ_N)
+                    for i in range(total_dias):
+                        dia_num = df_ref.iloc[i]["Data"].day
+                        dia_sem = df_ref.iloc[i]["Dia"]
+                        c1 = ws.cell(1, i + 2, dia_num)
+                        c2 = ws.cell(2, i + 2, dia_sem)
 
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        # Aba Glicemia com Cores
-        if not df_e_g.empty:
-            pivot = df_e_g.pivot_table(index="Data", columns="Momento", values="Valor", aggfunc="last")
-            pivot.to_excel(writer, sheet_name="Glicemia")
-            ws1 = writer.sheets["Glicemia"]
+                        if dia_sem == "dom":
+                            c1.fill = fill_dom; c2.fill = fill_dom
+                            c1.font = font_dom; c2.font = font_dom
+                        else:
+                            c1.fill = fill_header; c2.fill = fill_header
+                            c1.font = font_header; c2.font = font_header
 
-            f_ok = PatternFill("solid", fgColor="C8E6C9")   # verde claro
-            f_hi = PatternFill("solid", fgColor="FFB6C1")   # vermelho claro
-            f_lo = PatternFill("solid", fgColor="FFFFE0")   # amarelo claro
+                        c1.alignment = center; c2.alignment = center
+                        c1.border = border; c2.border = border
+                        ws.column_dimensions[get_column_letter(i + 2)].width = 7
 
-            for row in ws1.iter_rows(min_row=2, min_col=2):
-                for cell in row:
-                    if cell.value is not None and str(cell.value) != "nan":
-                        try:
-                            val = int(cell.value)
-                            cell.alignment = Alignment(horizontal="center")
-                            if val < 70:
-                                cell.fill = f_lo
-                            elif val > 180:
-                                cell.fill = f_hi
-                            else:
-                                cell.fill = f_ok
-                        except:
-                            pass
+                    ws.column_dimensions["A"].width = 36
 
-        # Aba Nutrição
-        if not df_e_n.empty:
-            df_e_n.to_excel(writer, sheet_name="Nutrição", index=False)
-            ws2 = writer.sheets["Nutrição"]
-            for cell in ws2[1]:
-                cell.alignment = Alignment(horizontal="center")
+                    # Agrupar por subgrupo
+                    subgrupo_map = {}
+                    for ch in hist_db.keys():
+                        sg = (colab_by.get(ch, {}).get("Subgrupo", "") or "").strip() or "SEM SUBGRUPO"
+                        subgrupo_map.setdefault(sg, []).append(ch)
 
-    st.sidebar.download_button("Baixar Agora", output.getvalue(), file_name="Relatorio_Saude_Kids.xlsx")
+                    subgrupos_ordenados = sorted(subgrupo_map.keys())
 
-# ================= SAIR (SÓ SAI QUANDO CLICAR) =================
-if st.sidebar.button("🚪 Sair"):
-    st.session_state.logado = False
-    st.session_state.user_email = ""
-    cookie_clear()  # se tiver cookies
-    st.rerun()
+                    row_idx = 3
+                    for sg in subgrupos_ordenados:
+                        ws.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx, end_column=total_dias + 1)
+                        t = ws.cell(row_idx, 1, f"SUBGRUPO: {sg}")
+                        t.fill = fill_group
+                        t.font = Font(bold=True)
+                        t.alignment = Alignment(horizontal="left", vertical="center")
+                        t.border = border
+                        row_idx += 1
+
+                        chapas_sg = sorted(subgrupo_map[sg], key=lambda ch: colab_by.get(ch, {}).get("Nome", ch))
+                        for ch in chapas_sg:
+                            df_f = hist_db[ch]
+                            nome = colab_by.get(ch, {}).get("Nome", ch)
+
+                            c_nome = ws.cell(row_idx, 1, f"{nome}\nCHAPA: {ch}")
+                            c_nome.fill = fill_nome
+                            c_nome.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+                            c_nome.border = border
+                            ws.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx + 1, end_column=1)
+
+                            for i, row in df_f.iterrows():
+                                dia_sem = row["Dia"]
+                                status = row["Status"]
+                                if status == "Férias":
+                                    v1, v2 = "FÉRIAS", ""
+                                elif status == "Folga":
+                                    v1, v2 = "F", ""
+                                else:
+                                    v1, v2 = row["H_Entrada"], row["H_Saida"]
+
+                                cell1 = ws.cell(row_idx, i + 2, v1)
+                                cell2 = ws.cell(row_idx + 1, i + 2, v2)
+
+                                cell1.alignment = center; cell2.alignment = center
+                                cell1.border = border; cell2.border = border
+
+                                if status == "Férias":
+                                    cell1.fill = fill_ferias; cell2.fill = fill_ferias
+                                elif status == "Folga":
+                                    if dia_sem == "dom":
+                                        cell1.fill = fill_dom; cell2.fill = fill_dom
+                                    else:
+                                        cell1.fill = fill_folga; cell2.fill = fill_folga
+
+                            row_idx += 2
+                        row_idx += 1
+
+                    if "Sheet" in wb.sheetnames and len(wb.sheetnames) > 1:
+                        wb.remove(wb["Sheet"])
+
+                st.download_button(
+                    "📥 Baixar Excel",
+                    data=output.getvalue(),
+                    file_name=f"escala_{setor}_{mes:02d}_{ano}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="xls_down"
+                )
+
+# =========================================================
+# MAIN
+# =========================================================
+db_init()
+
+if st.session_state["auth"] is None:
+    page_login()
+else:
+    page_app()
