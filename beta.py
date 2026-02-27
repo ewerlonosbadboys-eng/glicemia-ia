@@ -16,7 +16,7 @@ import shutil
 from pathlib import Path
 
 # ================= CONFIGURAÇÕES INICIAIS =================
-fuso_br = pytz.timezone('America/Sao_Paulo')
+fuso_br = pytz.timezone("America/Sao_Paulo")
 st.set_page_config(page_title="Saúde Kids BETA", page_icon="🧪", layout="wide")
 
 ARQ_G = "dados_glicemia_BETA.csv"
@@ -126,7 +126,7 @@ st.markdown("""
     .stApp { background-color: #0e1117; color: #ffffff; }
     .card { background-color: #1a1c24; padding: 25px; border-radius: 20px; border: 1px solid #30363d; margin-bottom: 25px; }
     .metric-box { background: #262730; border: 1px solid #4a4a4a; padding: 15px; border-radius: 12px; text-align: center; }
-    .dose-destaque { font-size: 38px; font-weight: 700; color: #4ade80; }
+    .dose-destaque { font-size: 34px; font-weight: 800; color: #4ade80; }
     label, p, span, h1, h2, h3, .stMarkdown { color: white !important; }
     .stTextInput>div>div>input, .stNumberInput>div>div>input { background-color: #262730 !important; color: white !important; border: 1px solid #4a4a4a !important; }
     .stTabs [data-baseweb="tab-list"] { background-color: #0e1117; }
@@ -140,20 +140,21 @@ def gerar_senha_temporaria(tamanho=6):
     return ''.join(random.choice(caracteres) for _ in range(tamanho))
 
 def enviar_senha_nova(email_destino, senha_nova):
+    # ⚠️ Configure GMAIL_APP_PASSWORD em st.secrets (Streamlit Cloud / secrets.toml)
     meu_email = "ewerlon.osbadboys@gmail.com"
-    minha_senha = st.secrets.get("GMAIL_APP_PASSWORD", "okiu qihp lglk trcc")
+    minha_senha = st.secrets.get("GMAIL_APP_PASSWORD", "")
 
     if not minha_senha:
         return False
 
     corpo = f"<h3>Saúde Kids</h3><p>Sua nova senha de acesso é: <b>{senha_nova}</b></p>"
-    msg = MIMEText(corpo, 'html')
-    msg['Subject'] = 'Sua Nova Senha - Saúde Kids'
-    msg['From'] = meu_email
-    msg['To'] = email_destino
+    msg = MIMEText(corpo, "html")
+    msg["Subject"] = "Sua Nova Senha - Saúde Kids"
+    msg["From"] = meu_email
+    msg["To"] = email_destino
 
     try:
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
             smtp.login(meu_email, minha_senha)
             smtp.send_message(msg)
         return True
@@ -161,8 +162,8 @@ def enviar_senha_nova(email_destino, senha_nova):
         return False
 
 def init_db():
-    conn = sqlite3.connect('usuarios.db')
-    conn.execute('''CREATE TABLE IF NOT EXISTS users (nome TEXT, email TEXT PRIMARY KEY, senha TEXT)''')
+    conn = sqlite3.connect("usuarios.db")
+    conn.execute("""CREATE TABLE IF NOT EXISTS users (nome TEXT, email TEXT PRIMARY KEY, senha TEXT)""")
     if not conn.execute("SELECT 1 FROM users WHERE email='admin'").fetchone():
         conn.execute("INSERT INTO users VALUES ('Administrador', 'admin', '542820')")
     conn.commit()
@@ -170,9 +171,9 @@ def init_db():
 
 init_db()
 
-if 'logado' not in st.session_state:
+if "logado" not in st.session_state:
     st.session_state.logado = False
-if 'user_email' not in st.session_state:
+if "user_email" not in st.session_state:
     st.session_state.user_email = ""
 
 if not st.session_state.logado:
@@ -183,7 +184,7 @@ if not st.session_state.logado:
         u = st.text_input("E-mail", key="l_email")
         s = st.text_input("Senha", type="password", key="l_pass")
         if st.button("Acessar Aplicativo", use_container_width=True):
-            conn = sqlite3.connect('usuarios.db')
+            conn = sqlite3.connect("usuarios.db")
             if conn.execute("SELECT * FROM users WHERE email=? AND senha=?", (u, s)).fetchone():
                 st.session_state.logado = True
                 st.session_state.user_email = u
@@ -198,7 +199,7 @@ if not st.session_state.logado:
         s_cad = st.text_input("Senha para Cadastro", type="password")
         if st.button("Realizar Cadastro", use_container_width=True):
             try:
-                conn = sqlite3.connect('usuarios.db')
+                conn = sqlite3.connect("usuarios.db")
                 conn.execute("INSERT INTO users VALUES (?,?,?)", (n_cad, e_cad, s_cad))
                 conn.commit()
                 conn.close()
@@ -209,7 +210,7 @@ if not st.session_state.logado:
     with abas_login[2]:
         email_alvo = st.text_input("Digite seu e-mail cadastrado")
         if st.button("Recuperar Acesso", use_container_width=True):
-            conn = sqlite3.connect('usuarios.db')
+            conn = sqlite3.connect("usuarios.db")
             c = conn.cursor()
             user = c.execute("SELECT email FROM users WHERE email=?", (email_alvo,)).fetchone()
             if user:
@@ -232,7 +233,7 @@ if not st.session_state.logado:
         alt_at = st.text_input("Senha Atual", type="password", key="alt_at")
         alt_n1 = st.text_input("Nova Senha", type="password", key="alt_n1")
         if st.button("Confirmar Alteração", use_container_width=True):
-            conn = sqlite3.connect('usuarios.db')
+            conn = sqlite3.connect("usuarios.db")
             if conn.execute("SELECT * FROM users WHERE email=? AND senha=?", (alt_em, alt_at)).fetchone():
                 conn.execute("UPDATE users SET senha=? WHERE email=?", (alt_n1, alt_em))
                 conn.commit()
@@ -247,60 +248,94 @@ if not st.session_state.logado:
 def carregar_dados_seguro(arq):
     if not os.path.exists(arq):
         return pd.DataFrame()
-    df = pd.read_csv(arq)
-    if 'Usuario' not in df.columns:
-        df['Usuario'] = st.session_state.user_email
-    return df[df['Usuario'] == st.session_state.user_email].copy()
 
-def _schema_receita_nova(rec: pd.Series, periodo: str) -> bool:
+    df = pd.read_csv(arq)
+
+    # garante colunas mínimas
+    if "Usuario" not in df.columns:
+        df["Usuario"] = st.session_state.user_email
+
+    # glicemia: garante colunas novas (sem quebrar dados antigos)
+    if arq == ARQ_G:
+        if "Dose_Rapida" not in df.columns:
+            df["Dose_Rapida"] = ""
+        if "Dose_Longa" not in df.columns:
+            df["Dose_Longa"] = ""
+
+    return df[df["Usuario"] == st.session_state.user_email].copy()
+
+# ======= RECEITA: 2 tipos (RÁPIDA / LONGA), por período (manhã/noite) =======
+MOMENTOS_ORDEM = [
+    "Antes Café", "Após Café",
+    "Antes Almoço", "Após Almoço",
+    "Antes Merenda",
+    "Antes Janta", "Após Janta",
+    "Madrugada"
+]
+
+# Aplicações conforme você pediu:
+MOMENTOS_RAPIDA = ["Antes Café", "Antes Almoço", "Antes Janta"]
+MOMENTOS_LONGA  = ["Antes Café", "Antes Janta"]
+
+def _schema_receita_dupla(rec: pd.Series, prefixo: str) -> bool:
     need = [
-        f"{periodo}_f1_min", f"{periodo}_f1_max", f"{periodo}_f1_dose",
-        f"{periodo}_f2_min", f"{periodo}_f2_max", f"{periodo}_f2_dose",
-        f"{periodo}_f3_min", f"{periodo}_f3_max", f"{periodo}_f3_dose"
+        f"{prefixo}_manha_f1_min", f"{prefixo}_manha_f1_max", f"{prefixo}_manha_f1_dose",
+        f"{prefixo}_manha_f2_min", f"{prefixo}_manha_f2_max", f"{prefixo}_manha_f2_dose",
+        f"{prefixo}_manha_f3_min", f"{prefixo}_manha_f3_max", f"{prefixo}_manha_f3_dose",
+        f"{prefixo}_noite_f1_min", f"{prefixo}_noite_f1_max", f"{prefixo}_noite_f1_dose",
+        f"{prefixo}_noite_f2_min", f"{prefixo}_noite_f2_max", f"{prefixo}_noite_f2_dose",
+        f"{prefixo}_noite_f3_min", f"{prefixo}_noite_f3_max", f"{prefixo}_noite_f3_dose",
     ]
     return all(k in rec.index for k in need)
 
-def calc_insulina(v, m):
+def calc_insulina(valor_glicemia: int, momento: str, tipo_insulina: str):
+    """
+    tipo_insulina: "rapida" ou "longa"
+    Retorna (dose_str, mensagem)
+    """
     df_r = carregar_dados_seguro(ARQ_R)
     if df_r.empty:
         return "0 UI", "Configurar Receita"
 
     rec = df_r.iloc[0]
-    periodo = "manha" if m in ["Antes Café", "Após Café", "Antes Almoço", "Após Almoço", "Antes Merenda"] else "noite"
+
+    # aplica somente nos momentos permitidos
+    if tipo_insulina == "rapida" and momento not in MOMENTOS_RAPIDA:
+        return "-", "Rápida não aplica"
+    if tipo_insulina == "longa" and momento not in MOMENTOS_LONGA:
+        return "-", "Longa não aplica"
+
+    periodo = "manha" if momento in ["Antes Café", "Após Café", "Antes Almoço", "Após Almoço", "Antes Merenda"] else "noite"
 
     try:
-        if _schema_receita_nova(rec, periodo):
-            f1_min = float(rec[f"{periodo}_f1_min"]); f1_max = float(rec[f"{periodo}_f1_max"]); f1_dose = float(rec[f"{periodo}_f1_dose"])
-            f2_min = float(rec[f"{periodo}_f2_min"]); f2_max = float(rec[f"{periodo}_f2_max"]); f2_dose = float(rec[f"{periodo}_f2_dose"])
-            f3_min = float(rec[f"{periodo}_f3_min"]); f3_max = float(rec[f"{periodo}_f3_max"]); f3_dose = float(rec[f"{periodo}_f3_dose"])
+        if not _schema_receita_dupla(rec, tipo_insulina):
+            return "0 UI", "Receita incompleta"
 
-            if v < 70:
-                return "0 UI", "Hipoglicemia!"
+        f1_min = float(rec[f"{tipo_insulina}_{periodo}_f1_min"])
+        f1_max = float(rec[f"{tipo_insulina}_{periodo}_f1_max"])
+        f1_dose = float(rec[f"{tipo_insulina}_{periodo}_f1_dose"])
 
-            if f1_min <= v <= f1_max:
-                return f"{int(f1_dose)} UI", f"Faixa 1 ({int(f1_min)}-{int(f1_max)})"
-            elif f2_min <= v <= f2_max:
-                return f"{int(f2_dose)} UI", f"Faixa 2 ({int(f2_min)}-{int(f2_max)})"
-            elif f3_min <= v <= f3_max:
-                return f"{int(f3_dose)} UI", f"Faixa 3 ({int(f3_min)}-{int(f3_max)})"
-            else:
-                return "0 UI", "Fora das faixas"
+        f2_min = float(rec[f"{tipo_insulina}_{periodo}_f2_min"])
+        f2_max = float(rec[f"{tipo_insulina}_{periodo}_f2_max"])
+        f2_dose = float(rec[f"{tipo_insulina}_{periodo}_f2_dose"])
 
-        if v < 70:
+        f3_min = float(rec[f"{tipo_insulina}_{periodo}_f3_min"])
+        f3_max = float(rec[f"{tipo_insulina}_{periodo}_f3_max"])
+        f3_dose = float(rec[f"{tipo_insulina}_{periodo}_f3_dose"])
+
+        if valor_glicemia < 70:
             return "0 UI", "Hipoglicemia!"
-        elif v <= 200:
-            d = rec.get(f"{periodo}_f1", 0)
-        elif v <= 400:
-            d = rec.get(f"{periodo}_f2", 0)
+
+        if f1_min <= valor_glicemia <= f1_max:
+            return f"{int(f1_dose)} UI", f"Faixa 1 ({int(f1_min)}-{int(f1_max)})"
+        elif f2_min <= valor_glicemia <= f2_max:
+            return f"{int(f2_dose)} UI", f"Faixa 2 ({int(f2_min)}-{int(f2_max)})"
+        elif f3_min <= valor_glicemia <= f3_max:
+            return f"{int(f3_dose)} UI", f"Faixa 3 ({int(f3_min)}-{int(f3_max)})"
         else:
-            d = rec.get(f"{periodo}_f3", 0)
-
-        return f"{int(d)} UI", f"Tabela {periodo.capitalize()}"
-
+            return "0 UI", "Fora das faixas"
     except:
         return "0 UI", "Erro na Receita"
-
-MOMENTOS_ORDEM = ["Antes Café", "Após Café", "Antes Almoço", "Após Almoço", "Antes Merenda", "Antes Janta", "Após Janta", "Madrugada"]
 
 ALIMENTOS = {
     "Pão Francês (1un)": [28, 4, 1],
@@ -317,7 +352,7 @@ ALIMENTOS = {
     "Macarrão (pegador)": [30, 5, 1],
     "Batata Doce (100g)": [20, 2, 0],
     "Banana (1un)": [22, 1, 0],
-    "Maçã (1un)": [15, 0, 0]
+    "Maçã (1un)": [15, 0, 0],
 }
 
 # ================= INTERFACE PRINCIPAL =================
@@ -327,7 +362,7 @@ if st.session_state.user_email == "admin":
         ["👥 Pessoas Cadastradas", "📈 Crescimento e App", "📩 Sugestões", "💾 Backup & Restauração"]
     )
 
-    conn = sqlite3.connect('usuarios.db')
+    conn = sqlite3.connect("usuarios.db")
     df_users = pd.read_sql_query("SELECT nome, email FROM users", conn)
     conn.close()
 
@@ -337,11 +372,11 @@ if st.session_state.user_email == "admin":
         st.metric("Total de Cadastros", len(df_users))
         st.markdown("---")
         st.subheader("🔑 Alterar Senha de Usuário (Poder Admin)")
-        user_selecionado = st.selectbox("Selecione o E-mail do Usuário", df_users['email'].tolist())
+        user_selecionado = st.selectbox("Selecione o E-mail do Usuário", df_users["email"].tolist())
         nova_senha_admin = st.text_input("Digite a Nova Senha para este usuário", type="password")
         if st.button("Confirmar Alteração de Senha", use_container_width=True):
             if nova_senha_admin:
-                conn = sqlite3.connect('usuarios.db')
+                conn = sqlite3.connect("usuarios.db")
                 conn.execute("UPDATE users SET senha=? WHERE email=?", (nova_senha_admin, user_selecionado))
                 conn.commit()
                 conn.close()
@@ -355,16 +390,19 @@ if st.session_state.user_email == "admin":
             st.write("### Distribuição de Acessos")
             if os.path.exists(ARQ_G):
                 df_uso = pd.read_csv(ARQ_G)
-                uso_por_user = df_uso['Usuario'].value_counts().reset_index()
-                uso_por_user.columns = ['Usuario', 'Registros']
-                fig_pizza = px.pie(uso_por_user, values='Registros', names='Usuario', hole=.3)
-                st.plotly_chart(fig_pizza, use_container_width=True)
+                if "Usuario" in df_uso.columns:
+                    uso_por_user = df_uso["Usuario"].value_counts().reset_index()
+                    uso_por_user.columns = ["Usuario", "Registros"]
+                    fig_pizza = px.pie(uso_por_user, values="Registros", names="Usuario", hole=.3)
+                    st.plotly_chart(fig_pizza, use_container_width=True)
+                else:
+                    st.info("Sem coluna Usuario no arquivo.")
             else:
                 st.info("Sem dados.")
         with c2:
             st.write("### Crescimento")
-            dados_c = pd.DataFrame({'Mês': ['Jan', 'Fev', 'Mar'], 'Usuários': [len(df_users)//2, int(len(df_users)/1.1), len(df_users)]})
-            st.plotly_chart(px.line(dados_c, x='Mês', y='Usuários', markers=True), use_container_width=True)
+            dados_c = pd.DataFrame({"Mês": ["Jan", "Fev", "Mar"], "Usuários": [len(df_users)//2, int(len(df_users)/1.1), len(df_users)]})
+            st.plotly_chart(px.line(dados_c, x="Mês", y="Usuários", markers=True), use_container_width=True)
 
     with t_sugestoes:
         if os.path.exists(ARQ_M):
@@ -429,6 +467,7 @@ else:
     # --- INTERFACE USUÁRIO ---
     tab1, tab2, tab3, tab4 = st.tabs(["📊 Glicemia", "🍽️ Nutrição", "⚙️ Receita", "📩 Sugerir Melhoria"])
 
+    # ================= TAB 1: GLICEMIA =================
     with tab1:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         dfg = carregar_dados_seguro(ARQ_G)
@@ -437,21 +476,56 @@ else:
         with c1:
             v_gl = st.number_input("Valor Glicemia", 0, 600, 100)
             m_gl = st.selectbox("Momento", MOMENTOS_ORDEM)
-            dose, msg_d = calc_insulina(v_gl, m_gl)
-            st.markdown(f'<div class="metric-box"><small>{msg_d}</small><br><span class="dose-destaque">{dose}</span></div>', unsafe_allow_html=True)
+
+            dose_r, msg_r = calc_insulina(v_gl, m_gl, "rapida")
+            dose_l, msg_l = calc_insulina(v_gl, m_gl, "longa")
+
+            st.markdown(
+                f"""
+                <div style="display:flex; gap:12px;">
+                  <div class="metric-box" style="flex:1;">
+                    <small>⚡ Rápida • {msg_r}</small><br>
+                    <span class="dose-destaque">{dose_r}</span>
+                  </div>
+                  <div class="metric-box" style="flex:1;">
+                    <small>🕒 Longa • {msg_l}</small><br>
+                    <span class="dose-destaque">{dose_l}</span>
+                  </div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
+            st.caption("Aplicação: Rápida (Antes Café/Almoço/Janta) • Longa (Antes Café/Janta)")
 
             if st.button("💾 Salvar Glicemia", use_container_width=True):
                 agora = agora_br()
-                novo = pd.DataFrame([[st.session_state.user_email, agora.strftime("%d/%m/%Y"), agora.strftime("%H:%M"), v_gl, m_gl, dose]],
-                                    columns=["Usuario", "Data", "Hora", "Valor", "Momento", "Dose"])
+                novo = pd.DataFrame([[
+                    st.session_state.user_email,
+                    agora.strftime("%d/%m/%Y"),
+                    agora.strftime("%H:%M"),
+                    v_gl,
+                    m_gl,
+                    dose_r,
+                    dose_l
+                ]], columns=["Usuario", "Data", "Hora", "Valor", "Momento", "Dose_Rapida", "Dose_Longa"])
+
                 base = pd.read_csv(ARQ_G) if os.path.exists(ARQ_G) else pd.DataFrame()
+                # garante colunas
+                if base.empty:
+                    base = pd.DataFrame(columns=novo.columns)
+                else:
+                    for col in novo.columns:
+                        if col not in base.columns:
+                            base[col] = ""
+
                 pd.concat([base, novo], ignore_index=True).to_csv(ARQ_G, index=False)
                 st.rerun()
 
         with c2:
             if not dfg.empty:
-                fig = px.line(dfg.tail(10), x='Hora', y='Valor', markers=True, title="Tendência")
-                fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color="white")
+                fig = px.line(dfg.tail(15), x="Hora", y="Valor", markers=True, title="Tendência (últimos registros)")
+                fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font_color="white")
                 st.plotly_chart(fig, use_container_width=True)
 
         if not dfg.empty:
@@ -459,17 +533,21 @@ else:
                 try:
                     n = int(v)
                     if n < 70:
-                        return 'background-color: #8B8000'
-                    elif n > 180:
-                        return 'background-color: #8B0000'
+                        return "background-color: #8B8000"  # amarelo
+                    elif n > 200:
+                        return "background-color: #8B0000"  # vermelho
                     else:
-                        return 'background-color: #006400'
+                        return "background-color: #262730"  # neutro (dark)
                 except:
-                    return ''
-            st.dataframe(dfg.tail(15).style.applymap(cor_gl, subset=['Valor']), use_container_width=True)
+                    return ""
 
-        st.markdown('</div>', unsafe_allow_html=True)
+            # mostra colunas principais (se existirem)
+            cols_show = [c for c in ["Data", "Hora", "Momento", "Valor", "Dose_Rapida", "Dose_Longa"] if c in dfg.columns]
+            st.dataframe(dfg.tail(20)[cols_show].style.applymap(cor_gl, subset=["Valor"]), use_container_width=True)
 
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # ================= TAB 2: NUTRIÇÃO =================
     with tab2:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         dfn = carregar_dados_seguro(ARQ_N)
@@ -488,70 +566,102 @@ else:
 
         if st.button("💾 Salvar Refeição", use_container_width=True):
             agora = agora_br()
-            novo_n = pd.DataFrame([[st.session_state.user_email, agora.strftime("%d/%m/%Y"), m_nutri, ", ".join(sel), c_tot, p_tot, g_tot]],
-                                  columns=["Usuario", "Data", "Momento", "Info", "C", "P", "G"])
+            novo_n = pd.DataFrame([[
+                st.session_state.user_email,
+                agora.strftime("%d/%m/%Y"),
+                m_nutri,
+                ", ".join(sel),
+                c_tot, p_tot, g_tot
+            ]], columns=["Usuario", "Data", "Momento", "Info", "C", "P", "G"])
+
             base = pd.read_csv(ARQ_N) if os.path.exists(ARQ_N) else pd.DataFrame()
+            if base.empty:
+                base = pd.DataFrame(columns=novo_n.columns)
+            else:
+                for col in novo_n.columns:
+                    if col not in base.columns:
+                        base[col] = ""
+
             pd.concat([base, novo_n], ignore_index=True).to_csv(ARQ_N, index=False)
             st.rerun()
 
-        st.dataframe(dfn.tail(10), use_container_width=True)
-        st.markdown('</div>', unsafe_allow_html=True)
+        st.dataframe(dfn.tail(15), use_container_width=True)
+        st.markdown("</div>", unsafe_allow_html=True)
 
+    # ================= TAB 3: RECEITA (RÁPIDA + LONGA) =================
     with tab3:
         st.markdown('<div class="card">', unsafe_allow_html=True)
 
         df_r_all = pd.read_csv(ARQ_R) if os.path.exists(ARQ_R) else pd.DataFrame()
-        r_u = df_r_all[df_r_all['Usuario'] == st.session_state.user_email] if not df_r_all.empty else pd.DataFrame()
+        r_u = df_r_all[df_r_all["Usuario"] == st.session_state.user_email] if not df_r_all.empty else pd.DataFrame()
         v = r_u.iloc[0] if not r_u.empty else {}
 
-        st.subheader("🌞 Receita Manhã (Editável)")
-        cm1, cm2, cm3 = st.columns(3)
-        with cm1:
-            m1_min = st.number_input("Faixa 1 - Mín", value=int(v.get('manha_f1_min', 70)), key="m1_min_u")
-            m1_max = st.number_input("Faixa 1 - Máx", value=int(v.get('manha_f1_max', 150)), key="m1_max_u")
-            m1_dose = st.number_input("Dose Faixa 1 (UI)", value=int(v.get('manha_f1_dose', 3)), key="m1_dose_u")
-        with cm2:
-            m2_min = st.number_input("Faixa 2 - Mín", value=int(v.get('manha_f2_min', 151)), key="m2_min_u")
-            m2_max = st.number_input("Faixa 2 - Máx", value=int(v.get('manha_f2_max', 300)), key="m2_max_u")
-            m2_dose = st.number_input("Dose Faixa 2 (UI)", value=int(v.get('manha_f2_dose', 5)), key="m2_dose_u")
-        with cm3:
-            m3_min = st.number_input("Faixa 3 - Mín", value=int(v.get('manha_f3_min', 301)), key="m3_min_u")
-            m3_max = st.number_input("Faixa 3 - Máx", value=int(v.get('manha_f3_max', 600)), key="m3_max_u")
-            m3_dose = st.number_input("Dose Faixa 3 (UI)", value=int(v.get('manha_f3_dose', 8)), key="m3_dose_u")
+        st.subheader("⚙️ Configurar Receita (Insulina Rápida e Longa)")
+        tabs_receita = st.tabs(["⚡ Insulina Rápida", "🕒 Insulina Longa"])
 
-        st.markdown("---")
-        st.subheader("🌙 Receita Noite (Editável)")
-        cn1, cn2, cn3 = st.columns(3)
-        with cn1:
-            n1_min = st.number_input("Faixa 1 - Mín", value=int(v.get('noite_f1_min', 70)), key="n1_min_u")
-            n1_max = st.number_input("Faixa 1 - Máx", value=int(v.get('noite_f1_max', 150)), key="n1_max_u")
-            n1_dose = st.number_input("Dose Faixa 1 (UI)", value=int(v.get('noite_f1_dose', 3)), key="n1_dose_u")
-        with cn2:
-            n2_min = st.number_input("Faixa 2 - Mín", value=int(v.get('noite_f2_min', 151)), key="n2_min_u")
-            n2_max = st.number_input("Faixa 2 - Máx", value=int(v.get('noite_f2_max', 300)), key="n2_max_u")
-            n2_dose = st.number_input("Dose Faixa 2 (UI)", value=int(v.get('noite_f2_dose', 5)), key="n2_dose_u")
-        with cn3:
-            n3_min = st.number_input("Faixa 3 - Mín", value=int(v.get('noite_f3_min', 301)), key="n3_min_u")
-            n3_max = st.number_input("Faixa 3 - Máx", value=int(v.get('noite_f3_max', 600)), key="n3_max_u")
-            n3_dose = st.number_input("Dose Faixa 3 (UI)", value=int(v.get('noite_f3_dose', 8)), key="n3_dose_u")
+        def campos_receita(prefixo: str, titulo: str):
+            st.markdown(f"### {titulo} — Manhã")
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                f1_min = st.number_input("Faixa 1 - Mín", value=int(v.get(f"{prefixo}_manha_f1_min", 70)), key=f"{prefixo}_m_f1_min")
+                f1_max = st.number_input("Faixa 1 - Máx", value=int(v.get(f"{prefixo}_manha_f1_max", 150)), key=f"{prefixo}_m_f1_max")
+                f1_dose = st.number_input("Dose Faixa 1 (UI)", value=int(v.get(f"{prefixo}_manha_f1_dose", 3)), key=f"{prefixo}_m_f1_dose")
+            with c2:
+                f2_min = st.number_input("Faixa 2 - Mín", value=int(v.get(f"{prefixo}_manha_f2_min", 151)), key=f"{prefixo}_m_f2_min")
+                f2_max = st.number_input("Faixa 2 - Máx", value=int(v.get(f"{prefixo}_manha_f2_max", 300)), key=f"{prefixo}_m_f2_max")
+                f2_dose = st.number_input("Dose Faixa 2 (UI)", value=int(v.get(f"{prefixo}_manha_f2_dose", 5)), key=f"{prefixo}_m_f2_dose")
+            with c3:
+                f3_min = st.number_input("Faixa 3 - Mín", value=int(v.get(f"{prefixo}_manha_f3_min", 301)), key=f"{prefixo}_m_f3_min")
+                f3_max = st.number_input("Faixa 3 - Máx", value=int(v.get(f"{prefixo}_manha_f3_max", 600)), key=f"{prefixo}_m_f3_max")
+                f3_dose = st.number_input("Dose Faixa 3 (UI)", value=int(v.get(f"{prefixo}_manha_f3_dose", 8)), key=f"{prefixo}_m_f3_dose")
 
-        if st.button("💾 Salvar Receita", use_container_width=True):
-            nova_rec = pd.DataFrame([{
-                'Usuario': st.session_state.user_email,
-                'manha_f1_min': m1_min, 'manha_f1_max': m1_max, 'manha_f1_dose': m1_dose,
-                'manha_f2_min': m2_min, 'manha_f2_max': m2_max, 'manha_f2_dose': m2_dose,
-                'manha_f3_min': m3_min, 'manha_f3_max': m3_max, 'manha_f3_dose': m3_dose,
-                'noite_f1_min': n1_min, 'noite_f1_max': n1_max, 'noite_f1_dose': n1_dose,
-                'noite_f2_min': n2_min, 'noite_f2_max': n2_max, 'noite_f2_dose': n2_dose,
-                'noite_f3_min': n3_min, 'noite_f3_max': n3_max, 'noite_f3_dose': n3_dose,
-            }])
+            st.markdown("---")
+            st.markdown(f"### {titulo} — Noite")
+            n1, n2, n3 = st.columns(3)
+            with n1:
+                n_f1_min = st.number_input("Faixa 1 - Mín", value=int(v.get(f"{prefixo}_noite_f1_min", 70)), key=f"{prefixo}_n_f1_min")
+                n_f1_max = st.number_input("Faixa 1 - Máx", value=int(v.get(f"{prefixo}_noite_f1_max", 150)), key=f"{prefixo}_n_f1_max")
+                n_f1_dose = st.number_input("Dose Faixa 1 (UI)", value=int(v.get(f"{prefixo}_noite_f1_dose", 3)), key=f"{prefixo}_n_f1_dose")
+            with n2:
+                n_f2_min = st.number_input("Faixa 2 - Mín", value=int(v.get(f"{prefixo}_noite_f2_min", 151)), key=f"{prefixo}_n_f2_min")
+                n_f2_max = st.number_input("Faixa 2 - Máx", value=int(v.get(f"{prefixo}_noite_f2_max", 300)), key=f"{prefixo}_n_f2_max")
+                n_f2_dose = st.number_input("Dose Faixa 2 (UI)", value=int(v.get(f"{prefixo}_noite_f2_dose", 5)), key=f"{prefixo}_n_f2_dose")
+            with n3:
+                n_f3_min = st.number_input("Faixa 3 - Mín", value=int(v.get(f"{prefixo}_noite_f3_min", 301)), key=f"{prefixo}_n_f3_min")
+                n_f3_max = st.number_input("Faixa 3 - Máx", value=int(v.get(f"{prefixo}_noite_f3_max", 600)), key=f"{prefixo}_n_f3_max")
+                n_f3_dose = st.number_input("Dose Faixa 3 (UI)", value=int(v.get(f"{prefixo}_noite_f3_dose", 8)), key=f"{prefixo}_n_f3_dose")
 
-            df_r_all = df_r_all[df_r_all['Usuario'] != st.session_state.user_email] if not df_r_all.empty else pd.DataFrame()
+            return {
+                f"{prefixo}_manha_f1_min": f1_min, f"{prefixo}_manha_f1_max": f1_max, f"{prefixo}_manha_f1_dose": f1_dose,
+                f"{prefixo}_manha_f2_min": f2_min, f"{prefixo}_manha_f2_max": f2_max, f"{prefixo}_manha_f2_dose": f2_dose,
+                f"{prefixo}_manha_f3_min": f3_min, f"{prefixo}_manha_f3_max": f3_max, f"{prefixo}_manha_f3_dose": f3_dose,
+                f"{prefixo}_noite_f1_min": n_f1_min, f"{prefixo}_noite_f1_max": n_f1_max, f"{prefixo}_noite_f1_dose": n_f1_dose,
+                f"{prefixo}_noite_f2_min": n_f2_min, f"{prefixo}_noite_f2_max": n_f2_max, f"{prefixo}_noite_f2_dose": n_f2_dose,
+                f"{prefixo}_noite_f3_min": n_f3_min, f"{prefixo}_noite_f3_max": n_f3_max, f"{prefixo}_noite_f3_dose": n_f3_dose,
+            }
+
+        with tabs_receita[0]:
+            rapida_data = campos_receita("rapida", "Insulina Rápida")
+            st.info("Aplicação: **Antes do Café / Antes do Almoço / Antes da Janta**")
+
+        with tabs_receita[1]:
+            longa_data = campos_receita("longa", "Insulina Longa")
+            st.info("Aplicação: **Antes do Café / Antes da Janta**")
+
+        if st.button("💾 Salvar Receita (Rápida + Longa)", use_container_width=True):
+            registro = {"Usuario": st.session_state.user_email}
+            registro.update(rapida_data)
+            registro.update(longa_data)
+
+            nova_rec = pd.DataFrame([registro])
+
+            df_r_all = df_r_all[df_r_all["Usuario"] != st.session_state.user_email] if not df_r_all.empty else pd.DataFrame()
             pd.concat([df_r_all, nova_rec], ignore_index=True).to_csv(ARQ_R, index=False)
-            st.success("Receita salva com sucesso!")
+            st.success("Receitas salvas com sucesso!")
 
-        st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
 
+    # ================= TAB 4: SUGESTÃO =================
     with tab4:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         txt = st.text_area("Sugestão de Melhoria:")
@@ -561,9 +671,15 @@ else:
                 novo_m = pd.DataFrame([[st.session_state.user_email, agora, txt]],
                                       columns=["Usuario", "Data", "Sugestão"])
                 base_m = pd.read_csv(ARQ_M) if os.path.exists(ARQ_M) else pd.DataFrame()
+                if base_m.empty:
+                    base_m = pd.DataFrame(columns=novo_m.columns)
+                else:
+                    for col in novo_m.columns:
+                        if col not in base_m.columns:
+                            base_m[col] = ""
                 pd.concat([base_m, novo_m], ignore_index=True).to_csv(ARQ_M, index=False)
                 st.success("Enviado com sucesso!")
-        st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
 
 # ================= EXCEL COM DUAS ABAS (GLICEMIA E NUTRIÇÃO) =================
 st.sidebar.markdown("---")
@@ -572,36 +688,44 @@ if st.sidebar.button("📥 Gerar Excel Completo"):
     df_e_n = carregar_dados_seguro(ARQ_N)
 
     output = BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        # Aba Glicemia
         if not df_e_g.empty:
-            pivot = df_e_g.pivot_table(index='Data', columns='Momento', values='Valor', aggfunc='last')
-            pivot.to_excel(writer, sheet_name='Glicemia')
-            ws1 = writer.sheets['Glicemia']
+            # pivot só dos valores, e salva também doses em outra tabela simples abaixo
+            pivot = df_e_g.pivot_table(index="Data", columns="Momento", values="Valor", aggfunc="last")
+            pivot.to_excel(writer, sheet_name="Glicemia")
+            ws1 = writer.sheets["Glicemia"]
 
-            f_v = PatternFill("solid", fgColor="C8E6C9")
-            f_r = PatternFill("solid", fgColor="FFB6C1")
-            f_a = PatternFill("solid", fgColor="FFFFE0")
+            f_ok = PatternFill("solid", fgColor="FFFFFF")  # branco (neutral)
+            f_hi = PatternFill("solid", fgColor="FFB6C1")  # vermelho
+            f_lo = PatternFill("solid", fgColor="FFF3B0")  # amarelo
 
             for row in ws1.iter_rows(min_row=2, min_col=2):
                 for cell in row:
                     if cell.value is not None and str(cell.value) != "nan":
                         try:
                             val = int(cell.value)
-                            cell.alignment = Alignment(horizontal='center')
+                            cell.alignment = Alignment(horizontal="center")
                             if val < 70:
-                                cell.fill = f_a
-                            elif val > 180:
-                                cell.fill = f_r
+                                cell.fill = f_lo
+                            elif val > 200:
+                                cell.fill = f_hi
                             else:
-                                cell.fill = f_v
+                                cell.fill = f_ok
                         except:
                             pass
 
+            # cria uma aba "Doses" para relatório médico (rápida/longa)
+            df_doses = df_e_g.copy()
+            cols = [c for c in ["Data", "Hora", "Momento", "Valor", "Dose_Rapida", "Dose_Longa"] if c in df_doses.columns]
+            df_doses[cols].to_excel(writer, sheet_name="Doses", index=False)
+
+        # Aba Nutrição
         if not df_e_n.empty:
-            df_e_n.to_excel(writer, sheet_name='Nutrição', index=False)
-            ws2 = writer.sheets['Nutrição']
+            df_e_n.to_excel(writer, sheet_name="Nutrição", index=False)
+            ws2 = writer.sheets["Nutrição"]
             for cell in ws2[1]:
-                cell.alignment = Alignment(horizontal='center')
+                cell.alignment = Alignment(horizontal="center")
 
     st.sidebar.download_button("Baixar Agora", output.getvalue(), file_name="Relatorio_Saude_Kids.xlsx")
 
