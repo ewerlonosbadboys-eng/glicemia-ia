@@ -2,6 +2,9 @@
 # =========================================================
 # ESCALA 5x2 OFICIAL — COMPLETO (SUBGRUPO = REGRAS)
 # + Preferência "Evitar folga" por subgrupo
+# + Persistência real (SQLite) de ajustes (overrides)
+# + Calendário RH visual + Dashboard + Banco de Horas
+# + Admin (somente setor ADMIN e is_admin)
 # =========================================================
 
 import streamlit as st
@@ -46,20 +49,29 @@ def db_conn():
 def hash_password(password: str, salt: str) -> str:
     return hashlib.sha256((salt + password).encode("utf-8")).hexdigest()
 
+def _safe_exec(cur, sql: str, params=None):
+    try:
+        if params is None:
+            cur.execute(sql)
+        else:
+            cur.execute(sql, params)
+    except Exception:
+        pass
+
 def db_init():
     con = db_conn()
     cur = con.cursor()
 
     # setores
-    cur.execute("""
+    _safe_exec(cur, """
     CREATE TABLE IF NOT EXISTS setores (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         nome TEXT UNIQUE NOT NULL
     )
     """)
 
-    # usuários do sistema (lider/admin)
-    cur.execute("""
+    # usuários do sistema
+    _safe_exec(cur, """
     CREATE TABLE IF NOT EXISTS usuarios_sistema (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         nome TEXT NOT NULL,
@@ -75,7 +87,7 @@ def db_init():
     """)
 
     # colaboradores (sem senha)
-    cur.execute("""
+    _safe_exec(cur, """
     CREATE TABLE IF NOT EXISTS colaboradores (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         nome TEXT NOT NULL,
@@ -90,7 +102,7 @@ def db_init():
     """)
 
     # subgrupos disponíveis por setor
-    cur.execute("""
+    _safe_exec(cur, """
     CREATE TABLE IF NOT EXISTS subgrupos_setor (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         setor TEXT NOT NULL,
@@ -100,7 +112,7 @@ def db_init():
     """)
 
     # preferências por subgrupo (evitar folga)
-    cur.execute("""
+    _safe_exec(cur, """
     CREATE TABLE IF NOT EXISTS subgrupo_regras (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         setor TEXT NOT NULL,
@@ -116,7 +128,7 @@ def db_init():
     """)
 
     # férias
-    cur.execute("""
+    _safe_exec(cur, """
     CREATE TABLE IF NOT EXISTS ferias (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         setor TEXT NOT NULL,
@@ -127,7 +139,7 @@ def db_init():
     """)
 
     # estado mês anterior (escala corrida)
-    cur.execute("""
+    _safe_exec(cur, """
     CREATE TABLE IF NOT EXISTS estado_mes_anterior (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         setor TEXT NOT NULL,
@@ -142,7 +154,7 @@ def db_init():
     """)
 
     # escala do mês (persistida)
-    cur.execute("""
+    _safe_exec(cur, """
     CREATE TABLE IF NOT EXISTS escala_mes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         setor TEXT NOT NULL,
@@ -159,11 +171,26 @@ def db_init():
     )
     """)
 
+    # overrides (ajustes persistidos)
+    _safe_exec(cur, """
+    CREATE TABLE IF NOT EXISTS overrides (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        setor TEXT NOT NULL,
+        ano INTEGER NOT NULL,
+        mes INTEGER NOT NULL,
+        chapa TEXT NOT NULL,
+        dia INTEGER NOT NULL,
+        campo TEXT NOT NULL,   -- status | h_entrada | h_saida
+        valor TEXT NOT NULL,
+        UNIQUE(setor, ano, mes, chapa, dia, campo)
+    )
+    """)
+
     con.commit()
 
     # setores padrão
-    cur.execute("INSERT OR IGNORE INTO setores(nome) VALUES (?)", ("GERAL",))
-    cur.execute("INSERT OR IGNORE INTO setores(nome) VALUES (?)", ("ADMIN",))
+    _safe_exec(cur, "INSERT OR IGNORE INTO setores(nome) VALUES (?)", ("GERAL",))
+    _safe_exec(cur, "INSERT OR IGNORE INTO setores(nome) VALUES (?)", ("ADMIN",))
     con.commit()
 
     # admin padrão
@@ -239,6 +266,32 @@ def update_password(setor: str, chapa: str, nova_senha: str):
     con.close()
 
 # =========================================================
+# ADMIN
+# =========================================================
+def admin_list_users():
+    con = db_conn()
+    df = pd.read_sql_query("""
+        SELECT id, nome, setor, chapa, is_admin, is_lider, criado_em
+        FROM usuarios_sistema
+        ORDER BY setor ASC, nome ASC
+    """, con)
+    con.close()
+    return df
+
+def admin_reset_user_password(user_id: int, nova_senha: str):
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute("SELECT setor, chapa FROM usuarios_sistema WHERE id=?", (int(user_id),))
+    row = cur.fetchone()
+    if not row:
+        con.close()
+        return False
+    setor, chapa = row
+    con.close()
+    update_password(setor, chapa, nova_senha)
+    return True
+
+# =========================================================
 # COLABORADORES (SEM senha)
 # =========================================================
 def colaborador_exists(setor: str, chapa: str) -> bool:
@@ -306,7 +359,6 @@ def add_subgrupo(setor: str, nome: str):
     con = db_conn()
     cur = con.cursor()
     cur.execute("INSERT OR IGNORE INTO subgrupos_setor(setor, nome) VALUES (?, ?)", (setor, nome))
-    # cria linha padrão de regra
     cur.execute("""
         INSERT OR IGNORE INTO subgrupo_regras(setor, subgrupo, evitar_seg, evitar_ter, evitar_qua, evitar_qui, evitar_sex, evitar_sab)
         VALUES (?, ?, 0,0,0,0,0,0)
@@ -398,22 +450,28 @@ def is_de_ferias(setor: str, chapa: str, data_obj: date) -> bool:
     con.close()
     return ok
 
-def data_retorno_ferias(setor: str, chapa: str, data_obj: date):
-    # se estiver em férias, retorno = dia seguinte ao fim do período que cobre data_obj
+# ---- regra “volta de férias”: desconsidera a primeira semana para 5x2 (mas domingo 1x1 continua)
+def is_first_week_after_return(setor: str, chapa: str, data_obj: date) -> bool:
+    ontem = data_obj - timedelta(days=1)
+    if is_de_ferias(setor, chapa, data_obj):
+        return False
+    if is_de_ferias(setor, chapa, ontem):
+        return True
     con = db_conn()
     cur = con.cursor()
     cur.execute("""
         SELECT fim FROM ferias
-        WHERE setor=? AND chapa=?
-          AND date(inicio) <= date(?) AND date(fim) >= date(?)
+        WHERE setor=? AND chapa=? AND date(fim) < date(?)
+        ORDER BY date(fim) DESC
         LIMIT 1
-    """, (setor, chapa, data_obj.strftime("%Y-%m-%d"), data_obj.strftime("%Y-%m-%d")))
+    """, (setor, chapa, data_obj.strftime("%Y-%m-%d")))
     row = cur.fetchone()
     con.close()
     if not row:
-        return None
+        return False
     fim = datetime.strptime(row[0], "%Y-%m-%d").date()
-    return fim + timedelta(days=1)
+    retorno = fim + timedelta(days=1)
+    return retorno <= data_obj <= (retorno + timedelta(days=6))
 
 # =========================================================
 # ESTADO (escala corrida)
@@ -455,6 +513,39 @@ def load_estado_prev(setor: str, ano: int, mes: int):
     return estado
 
 # =========================================================
+# OVERRIDES (AJUSTES PERSISTIDOS)
+# =========================================================
+def set_override(setor: str, ano: int, mes: int, chapa: str, dia: int, campo: str, valor: str):
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute("""
+        INSERT OR REPLACE INTO overrides(setor, ano, mes, chapa, dia, campo, valor)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (setor, int(ano), int(mes), chapa, int(dia), campo, str(valor)))
+    con.commit()
+    con.close()
+
+def del_override(setor: str, ano: int, mes: int, chapa: str, dia: int, campo: str):
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute("""
+        DELETE FROM overrides
+        WHERE setor=? AND ano=? AND mes=? AND chapa=? AND dia=? AND campo=?
+    """, (setor, int(ano), int(mes), chapa, int(dia), campo))
+    con.commit()
+    con.close()
+
+def load_overrides(setor: str, ano: int, mes: int):
+    con = db_conn()
+    df = pd.read_sql_query("""
+        SELECT chapa, dia, campo, valor
+        FROM overrides
+        WHERE setor=? AND ano=? AND mes=?
+    """, con, params=(setor, int(ano), int(mes)))
+    con.close()
+    return df
+
+# =========================================================
 # ESCALA DB
 # =========================================================
 def save_escala_mes_db(setor: str, ano: int, mes: int, historico_df_por_chapa: dict[str, pd.DataFrame]):
@@ -468,7 +559,7 @@ def save_escala_mes_db(setor: str, ano: int, mes: int, historico_df_por_chapa: d
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 setor, int(ano), int(mes), chapa, dia,
-                row["Data"].strftime("%Y-%m-%d"),
+                pd.to_datetime(row["Data"]).strftime("%Y-%m-%d"),
                 row["Dia"],
                 row["Status"],
                 row.get("H_Entrada", "") or "",
@@ -498,6 +589,35 @@ def load_escala_mes_db(setor: str, ano: int, mes: int):
             "H_Entrada": h_ent or "", "H_Saida": h_sai or ""
         })
     return {ch: pd.DataFrame(items) for ch, items in hist.items()}
+
+def apply_overrides_to_hist(setor: str, ano: int, mes: int, hist_db: dict[str, pd.DataFrame]):
+    ov = load_overrides(setor, ano, mes)
+    if ov.empty or not hist_db:
+        return hist_db
+    for _, r in ov.iterrows():
+        ch = str(r["chapa"])
+        dia = int(r["dia"])
+        campo = str(r["campo"])
+        valor = str(r["valor"])
+        if ch not in hist_db:
+            continue
+        df = hist_db[ch].copy()
+        idx = dia - 1
+        if idx < 0 or idx >= len(df):
+            continue
+        if campo == "status":
+            df.loc[idx, "Status"] = valor
+            if valor != "Trabalho":
+                df.loc[idx, "H_Entrada"] = ""
+                df.loc[idx, "H_Saida"] = ""
+        elif campo == "h_entrada":
+            df.loc[idx, "H_Entrada"] = valor
+            if df.loc[idx, "Status"] == "Trabalho":
+                df.loc[idx, "H_Saida"] = _saida_from_entrada(valor)
+        elif campo == "h_saida":
+            df.loc[idx, "H_Saida"] = valor
+        hist_db[ch] = df
+    return hist_db
 
 # =========================================================
 # MOTOR REGRAS
@@ -706,35 +826,64 @@ def rebalance_folgas_dia(hist_by_chapa: dict, colab_by_chapa: dict, chapas_grupo
             if not moved:
                 break
 
-# ---- regra “volta de férias”: desconsidera a primeira semana para 5x2 (mas domingo 1x1 continua)
-def is_first_week_after_return(setor: str, chapa: str, data_obj: date) -> bool:
-    # se data_obj está entre retorno e retorno+6 (inclusive), é primeira semana pós-férias
-    # retorna None se não tiver férias relacionadas
-    # achamos retorno olhando se ontem estava em férias e hoje não.
-    # forma simples: se ontem estava de férias e hoje não => hoje é retorno.
-    ontem = data_obj - timedelta(days=1)
-    if is_de_ferias(setor, chapa, data_obj):
-        return False
-    if is_de_ferias(setor, chapa, ontem):
-        # retorno hoje
-        return True
-    # se retorno foi em dias anteriores, checa janela 7 dias
-    # buscarmos o fim mais recente <= data_obj
-    con = db_conn()
-    cur = con.cursor()
-    cur.execute("""
-        SELECT fim FROM ferias
-        WHERE setor=? AND chapa=? AND date(fim) < date(?)
-        ORDER BY date(fim) DESC
-        LIMIT 1
-    """, (setor, chapa, data_obj.strftime("%Y-%m-%d")))
-    row = cur.fetchone()
-    con.close()
-    if not row:
-        return False
-    fim = datetime.strptime(row[0], "%Y-%m-%d").date()
-    retorno = fim + timedelta(days=1)
-    return retorno <= data_obj <= (retorno + timedelta(days=6))
+# =========================================================
+# DOMINGO 1x1 (SUBGRUPO) — REBALANCE APÓS AJUSTE
+# =========================================================
+def rebalance_sundays_subgrupo(hist_all: dict[str, pd.DataFrame], chapas: list[str], ent_map: dict, datas: pd.DatetimeIndex):
+    """
+    Garante por domingo: ~metade folga / metade trabalho dentro do subgrupo
+    Respeita Férias.
+    Não mexe em sábado/semana — só domingo.
+    """
+    domingos = [i for i, d in enumerate(datas) if d.day_name() == "Sunday"]
+    if not domingos:
+        return
+
+    chapas_sorted = sorted(chapas)
+    n = len(chapas_sorted)
+    if n == 0:
+        return
+    target = (n + 1) // 2  # metade arredondando pra cima
+
+    # ponteiro rotativo fixo por mês (estável)
+    pointer = 0
+    for dom_i in domingos:
+        # disponíveis (não férias)
+        available = [ch for ch in chapas_sorted if hist_all[ch].loc[dom_i, "Status"] != "Férias"]
+        if not available:
+            continue
+
+        # quem está folgando hoje
+        folgando = [ch for ch in available if hist_all[ch].loc[dom_i, "Status"] == "Folga"]
+        trabalhando = [ch for ch in available if hist_all[ch].loc[dom_i, "Status"] == "Trabalho"]
+
+        # Ajustar para target
+        # Se muitos folgando -> mover alguns para trabalhar
+        while len(folgando) > min(target, len(available)):
+            ch = folgando.pop()  # tira do fim
+            ent = ent_map.get(ch, "06:00")
+            _set_trabalho(hist_all[ch], dom_i, ent)
+            trabalhando.append(ch)
+
+        # Se poucos folgando -> mover alguns para folga
+        while len(folgando) < min(target, len(available)):
+            if not trabalhando:
+                break
+            # escolha rotativa para ficar "um sim, um não"
+            ch = available[pointer % len(available)]
+            pointer += 1
+            if hist_all[ch].loc[dom_i, "Status"] == "Férias":
+                continue
+            if hist_all[ch].loc[dom_i, "Status"] == "Trabalho":
+                _set_folga(hist_all[ch], dom_i)
+                folgando.append(ch)
+                try:
+                    trabalhando.remove(ch)
+                except:
+                    pass
+            else:
+                # já está folga, tenta outro
+                continue
 
 # =========================================================
 # GERAR ESCALA — POR SUBGRUPO (com preferências)
@@ -779,24 +928,29 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
         if not chapas:
             continue
 
-        # domingo 1x1: balanceado desde primeiro domingo (metade folga)
-        chapas_sorted = sorted(chapas)
-        rng = random.Random(9000 + ano + mes + len(chapas_sorted) + (hash(sg) % 9999))
-        chapas_sh = chapas_sorted[:]
+        ent_map = {ch: colab_by_chapa[ch].get("Entrada", "06:00") for ch in chapas}
+
+        # aplica férias + domingo inicial baseado no 1x1 do subgrupo
+        for ch in chapas:
+            df = hist_all[ch]
+            ent = ent_map.get(ch, "06:00")
+            for i, d in enumerate(datas):
+                if is_de_ferias(setor, ch, d.date()):
+                    _set_ferias(df, i)
+            hist_all[ch] = df
+
+        # domingo 1x1 do subgrupo (balanceado desde primeiro domingo)
+        # começa com uma distribuição base e depois rebalança para garantir metade/metade
+        rng = random.Random(9000 + ano + mes + len(chapas) + (hash(sg) % 9999))
+        chapas_sh = sorted(chapas)
         rng.shuffle(chapas_sh)
         meio = (len(chapas_sh) + 1) // 2
         grupo_a = set(chapas_sh[:meio])
         grupo_b = set(chapas_sh[meio:])
 
-        # aplica férias + domingo 1x1
         for ch in chapas:
             df = hist_all[ch]
-            ent = colab_by_chapa[ch].get("Entrada", "06:00")
-
-            for i, d in enumerate(datas):
-                if is_de_ferias(setor, ch, d.date()):
-                    _set_ferias(df, i)
-
+            ent = ent_map.get(ch, "06:00")
             for k, dom_i in enumerate(domingos_idx):
                 if df.loc[dom_i, "Status"] == "Férias":
                     continue
@@ -805,59 +959,88 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
                     _set_folga(df, dom_i)
                 else:
                     _set_trabalho(df, dom_i, ent)
-
-            # escala corrida: garante alternância do primeiro domingo
-            if ch in estado_prev and estado_prev[ch].get("ultimo_domingo_status") in ["Trabalho", "Folga"] and domingos_idx:
-                primeiro_dom = domingos_idx[0]
-                if df.loc[primeiro_dom, "Status"] != "Férias":
-                    if estado_prev[ch]["ultimo_domingo_status"] == "Trabalho":
-                        _set_folga(df, primeiro_dom)
-                    else:
-                        _set_trabalho(df, primeiro_dom, ent)
-                    enforce_sundays_alternating_for_employee(df, ent, primeiro_dom)
-
             hist_all[ch] = df
+
+        # escala corrida: usa último domingo do mês anterior para decidir o primeiro domingo
+        if domingos_idx:
+            primeiro_dom = domingos_idx[0]
+            for ch in chapas:
+                if ch in estado_prev and estado_prev[ch].get("ultimo_domingo_status") in ["Trabalho", "Folga"]:
+                    df = hist_all[ch]
+                    ent = ent_map.get(ch, "06:00")
+                    if df.loc[primeiro_dom, "Status"] != "Férias":
+                        if estado_prev[ch]["ultimo_domingo_status"] == "Trabalho":
+                            _set_folga(df, primeiro_dom)
+                        else:
+                            _set_trabalho(df, primeiro_dom, ent)
+                        enforce_sundays_alternating_for_employee(df, ent, primeiro_dom)
+                    hist_all[ch] = df
+
+        # rebalança domingos do subgrupo (garante metade/metade)
+        rebalance_sundays_subgrupo(hist_all, chapas, ent_map, datas)
 
         # 5x2 por semana seg→dom, com preferência de subgrupo “evitar folga”
         pref = regras_cache.get(sg, {"seg": 0, "ter": 0, "qua": 0, "qui": 0, "sex": 0, "sáb": 0})
 
         for week in weeks:
-            # cand: seg..sáb (domingo não entra na 2ª folga; domingo já é 1x1)
-            cand_days = [i for i in week if df_ref.loc[i, "Dia"] != "dom"]
+            cand_days = [i for i in week if df_ref.loc[i, "Dia"] != "dom"]  # domingo já é 1x1
 
             for ch in chapas:
                 df = hist_all[ch]
                 pode_sab = bool(colab_by_chapa[ch].get("Folga_Sab", False))
                 ent_bucket = colab_by_chapa[ch].get("Entrada", "06:00")
 
-                # se está na 1ª semana após retorno de férias, não força 5x2 (mas mantém domingo já feito)
-                # define pela data de segunda daquela semana
                 segunda_idx = min(week, key=lambda i: df_ref.loc[i, "Data"])
                 segunda_date = df_ref.loc[segunda_idx, "Data"].date()
                 ignore_5x2 = is_first_week_after_return(setor, ch, segunda_date)
-
                 if ignore_5x2:
                     continue
 
                 folgas_sem = int((df.loc[week, "Status"] == "Folga").sum())
-                # precisamos de 2 folgas por semana, contando domingo quando folga
-                # (domingo já pode ser folga 1x1, então aqui completa até 2)
+
+                # regra: se TRABALHOU domingo, precisa ter 1 folga seg-sex
+                dom_idx = None
+                for i in week:
+                    if df_ref.loc[i, "Dia"] == "dom":
+                        dom_idx = i
+                        break
+                if dom_idx is not None and df.loc[dom_idx, "Status"] == "Trabalho":
+                    seg_sex = [i for i in cand_days if df_ref.loc[i, "Dia"] in ["seg", "ter", "qua", "qui", "sex"]]
+                    if seg_sex and not any(df.loc[i, "Status"] == "Folga" for i in seg_sex):
+                        # cria 1 folga seg-sex antes de completar
+                        poss = []
+                        for j in seg_sex:
+                            if df.loc[j, "Status"] != "Trabalho":
+                                continue
+                            if not _nao_consecutiva_folga(df, j):
+                                continue
+                            poss.append(j)
+                        if poss:
+                            # escolhe dia mais "vazio" + mistura por horário
+                            counts_day, counts_day_hour = _counts_folgas_day_and_hour(hist_all, colab_by_chapa, chapas, seg_sex, df_ref)
+                            random.shuffle(poss)
+                            poss.sort(key=lambda j: (
+                                counts_day.get(j, 0),
+                                counts_day_hour.get((j, ent_bucket), 0),
+                                PREF_EVITAR_PENALTY if pref.get(df_ref.loc[j, "Dia"], 0) == 1 else 0,
+                                random.random()
+                            ))
+                            _set_folga(df, poss[0])
+                            folgas_sem += 1
+
+                # completa até 2 folgas por semana (contando domingo quando ele for folga)
                 while folgas_sem < 2:
                     counts_day, counts_day_hour = _counts_folgas_day_and_hour(hist_all, colab_by_chapa, chapas, cand_days, df_ref)
 
                     possiveis = []
                     for j in cand_days:
                         dia = df_ref.loc[j, "Dia"]
-
                         if df.loc[j, "Status"] != "Trabalho":
                             continue
-                        # sábado só se permitir
                         if dia == "sáb" and not pode_sab:
                             continue
-                        # sem folga consecutiva
                         if not _nao_consecutiva_folga(df, j):
                             continue
-
                         possiveis.append(j)
 
                     if not possiveis:
@@ -869,15 +1052,11 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
                         dia = df_ref.loc[j, "Dia"]
                         weekday_prio = 0 if dia in ["seg", "ter", "qua", "qui", "sex"] else 1
                         pref_pen = PREF_EVITAR_PENALTY if pref.get(dia, 0) == 1 else 0
-                        # 1) menos folga no dia dentro do subgrupo
-                        # 2) menos folga no dia+horário (misturar horários)
-                        # 3) preferência (evitar)
-                        # 4) prioridade dia útil
                         return (
-                            counts_day.get(j, 0),
-                            counts_day_hour.get((j, ent_bucket), 0),
-                            pref_pen,
-                            weekday_prio,
+                            counts_day.get(j, 0),                    # balance por dia
+                            counts_day_hour.get((j, ent_bucket), 0), # balance por horário
+                            pref_pen,                                # evitar folga
+                            weekday_prio,                            # dia útil
                             random.random()
                         )
 
@@ -887,13 +1066,12 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
                     folgas_sem += 1
                     hist_all[ch] = df
 
-        # limite 5 seguidos + interstício + “escala corrida” no começo do mês
+        # limite 5 seguidos + interstício + escala corrida no começo do mês
         for ch in chapas:
             df = hist_all[ch]
-            ent = colab_by_chapa[ch].get("Entrada", "06:00")
+            ent = ent_map.get(ch, "06:00")
             pode_sab = bool(colab_by_chapa[ch].get("Folga_Sab", False))
 
-            # se veio do mês anterior com 5 seguidos, força uma folga no início em dia útil se possível
             if ch in estado_prev and int(estado_prev[ch].get("consec_trab_final", 0)) >= 5:
                 for i in range(len(df)):
                     if df.loc[i, "Status"] == "Trabalho" and df_ref.loc[i, "Dia"] in ["seg", "ter", "qua", "qui", "sex"]:
@@ -907,6 +1085,9 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
 
         # rebalance folgas por dia dentro do subgrupo (mais equilibrado)
         rebalance_folgas_dia(hist_all, colab_by_chapa, chapas, weeks, df_ref, max_iters=2200)
+
+        # rebalança domingos novamente (após rebalance diário)
+        rebalance_sundays_subgrupo(hist_all, chapas, ent_map, datas)
 
     # estado final para o próximo mês
     estado_out = {}
@@ -934,13 +1115,112 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
 
     return hist_all, estado_out
 
+# =========================================================
+# DASHBOARD / CALENDÁRIO / BANCO DE HORAS
+# =========================================================
+def _to_minutes(hhmm: str) -> int:
+    if not hhmm:
+        return 0
+    t = datetime.strptime(hhmm, "%H:%M")
+    return t.hour * 60 + t.minute
+
+def banco_horas_df(hist_db: dict[str, pd.DataFrame], colab_by: dict, base_min: int):
+    rows = []
+    for ch, df in hist_db.items():
+        nome = colab_by.get(ch, {}).get("Nome", ch)
+        saldo = 0
+        for _, r in df.iterrows():
+            if r["Status"] != "Trabalho":
+                continue
+            ent = r.get("H_Entrada", "") or ""
+            sai = r.get("H_Saida", "") or ""
+            if not ent or not sai:
+                continue
+            dur = _to_minutes(sai) - _to_minutes(ent)
+            if dur < 0:
+                dur += 24 * 60
+            saldo += (dur - base_min)
+        rows.append({"Nome": nome, "Chapa": ch, "Saldo_min": saldo, "Saldo_h": round(saldo/60, 2)})
+    return pd.DataFrame(rows).sort_values(["Saldo_min"], ascending=False)
+
+def folgas_por_dia_df(hist_db: dict[str, pd.DataFrame]):
+    if not hist_db:
+        return pd.DataFrame()
+    any_df = next(iter(hist_db.values()))
+    out = []
+    for i in range(len(any_df)):
+        dia = int(any_df.loc[i, "Data"].day)
+        ds = any_df.loc[i, "Dia"]
+        folgas = 0
+        ferias = 0
+        trab = 0
+        for _, df in hist_db.items():
+            stt = df.loc[i, "Status"]
+            if stt == "Folga":
+                folgas += 1
+            elif stt == "Férias":
+                ferias += 1
+            elif stt == "Trabalho":
+                trab += 1
+        out.append({"Dia": dia, "DiaSem": ds, "Trabalho": trab, "Folga": folgas, "Férias": ferias})
+    return pd.DataFrame(out)
+
+def calendario_rh_df(hist_db: dict[str, pd.DataFrame], colab_by: dict):
+    if not hist_db:
+        return pd.DataFrame()
+    any_df = next(iter(hist_db.values()))
+    dias = [str(int(r.day)) for r in pd.to_datetime(any_df["Data"]).dt.date]
+    cols = ["Nome", "Chapa", "Subgrupo"] + dias
+    rows = []
+    for ch, df in hist_db.items():
+        nome = colab_by.get(ch, {}).get("Nome", ch)
+        sg = (colab_by.get(ch, {}).get("Subgrupo", "") or "").strip() or "SEM SUBGRUPO"
+        row = [nome, ch, sg]
+        for i in range(len(df)):
+            stt = df.loc[i, "Status"]
+            if stt == "Folga":
+                row.append("F")
+            elif stt == "Férias":
+                row.append("FER")
+            else:
+                row.append(df.loc[i, "H_Entrada"] or "")
+        rows.append(row)
+    out = pd.DataFrame(rows, columns=cols)
+    return out.sort_values(["Subgrupo", "Nome"]).reset_index(drop=True)
+
+def style_calendario(df: pd.DataFrame, mes: int, ano: int):
+    if df.empty:
+        return df
+    # colunas dia começam no índice 3
+    dias_cols = df.columns[3:]
+    # mapa dia->dia_sem
+    qtd = calendar.monthrange(int(ano), int(mes))[1]
+    dsem = {}
+    for d in range(1, qtd + 1):
+        ds = pd.Timestamp(year=int(ano), month=int(mes), day=int(d)).day_name()
+        dsem[str(d)] = D_PT[ds]
+
+    def cell_style(v, col):
+        if col in dias_cols:
+            dia_sem = dsem.get(col, "")
+            if str(v) == "F":
+                return "background-color:#FFF2CC; color:#000000; font-weight:700;"
+            if str(v) == "FER":
+                return "background-color:#92D050; color:#000000; font-weight:700;"
+            if dia_sem == "dom":
+                return "background-color:#BDD7EE; color:#000000;"
+        return ""
+
+    styles = pd.DataFrame("", index=df.index, columns=df.columns)
+    for c in df.columns:
+        styles[c] = df[c].apply(lambda v: cell_style(v, c))
+    return df.style.apply(lambda _: styles, axis=None)
 
 # =========================================================
 # UI
 # =========================================================
 if "auth" not in st.session_state:
     st.session_state["auth"] = None
-
 if "cfg_mes" not in st.session_state:
     st.session_state["cfg_mes"] = datetime.now().month
 if "cfg_ano" not in st.session_state:
@@ -949,9 +1229,9 @@ if "cfg_ano" not in st.session_state:
 db_init()
 
 def page_login():
-    st.title("🔐 Login por Setor (Líder/Admin)")
+    st.title("🔐 Login por Setor (Usuário / Líder / Admin)")
 
-    tab_login, tab_cadastrar, tab_esqueci = st.tabs(["Entrar", "Cadastrar Líder", "Esqueci a senha"])
+    tab_login, tab_cadastrar, tab_esqueci = st.tabs(["Entrar", "Cadastrar Usuário do Sistema", "Esqueci a senha"])
 
     with tab_login:
         con = db_conn()
@@ -974,15 +1254,15 @@ def page_login():
         st.caption("Admin padrão: setor ADMIN | chapa admin | senha 123")
 
     with tab_cadastrar:
-        st.subheader("Cadastrar usuário do sistema (Líder/Admin)")
-        st.info("Somente líder/admin precisa senha. Colaborador é SEM senha.")
+        st.subheader("Cadastrar usuário do sistema (com senha)")
+        st.info("⚠️ Somente usuário do sistema tem senha. Colaborador é SEM senha.")
         nome = st.text_input("Nome:", key="cl_nome")
         setor = st.text_input("Setor:", key="cl_setor").strip().upper()
         chapa = st.text_input("Chapa:", key="cl_chapa")
         senha = st.text_input("Senha:", type="password", key="cl_senha")
         senha2 = st.text_input("Confirmar senha:", type="password", key="cl_senha2")
         is_admin = st.checkbox("Admin?", key="cl_admin")
-        is_lider = st.checkbox("Líder?", value=True, key="cl_lider")
+        is_lider = st.checkbox("Líder?", value=False, key="cl_lider")
 
         if st.button("Criar usuário", key="cl_btn"):
             if not nome or not setor or not chapa or not senha:
@@ -1037,14 +1317,19 @@ def page_app():
         st.rerun()
 
     st.title(f"📅 Escala 5x2 — Setor: {setor}")
-    st.caption("📌 Regras por SUBGRUPO + Preferência 'Evitar folga' por subgrupo (seg/ter/qua/qui/sex/sáb).")
+    st.caption("📌 Regras por SUBGRUPO + Preferência 'Evitar folga' por subgrupo + Domingo 1x1 balanceado.")
 
-    aba1, aba2, aba3, aba4, aba5 = st.tabs(["👥 Colaboradores", "🚀 Gerar Escala", "⚙️ Ajustes", "🏖️ Férias", "📥 Excel"])
+    # Tabs do setor (sempre visíveis para qualquer usuário do sistema logado)
+    tabs = ["👥 Colaboradores", "🚀 Gerar Escala", "⚙️ Ajustes", "🏖️ Férias", "📥 Excel"]
+    is_admin_area = bool(auth.get("is_admin", False)) and setor == "ADMIN"
+    if is_admin_area:
+        tabs.append("🔒 Admin")
+    abas = st.tabs(tabs)
 
     # ------------------------------------------------------
     # ABA 1: Colaboradores + Subgrupos + Preferências
     # ------------------------------------------------------
-    with aba1:
+    with abas[0]:
         colaboradores = load_colaboradores_setor(setor)
         st.subheader("Colaboradores (SEM senha)")
 
@@ -1139,13 +1424,16 @@ def page_app():
                 st.rerun()
 
     # ------------------------------------------------------
-    # ABA 2: Gerar Escala
+    # ABA 2: Gerar Escala + Calendário RH + Dashboard + Banco Horas
     # ------------------------------------------------------
-    with aba2:
+    with abas[1]:
         st.subheader("Gerar escala")
-        c1, c2 = st.columns(2)
+
+        c1, c2, c3 = st.columns(3)
         mes = c1.selectbox("Mês:", list(range(1, 13)), index=st.session_state["cfg_mes"] - 1, key="gen_mes")
         ano = c2.number_input("Ano:", value=st.session_state["cfg_ano"], step=1, key="gen_ano")
+        seed = c3.number_input("Semente (opcional)", min_value=0, max_value=999999, value=0, key="gen_seed")
+
         st.session_state["cfg_mes"] = int(mes)
         st.session_state["cfg_ano"] = int(ano)
 
@@ -1153,24 +1441,64 @@ def page_app():
         if not colaboradores:
             st.warning("Cadastre colaboradores.")
         else:
-            if st.button("🚀 Gerar agora", key="gen_btn"):
+            colG1, colG2 = st.columns(2)
+            if colG1.button("🚀 Gerar agora", key="gen_btn"):
+                random.seed(int(seed))
                 hist, estado_out = gerar_escala_setor_por_subgrupo(setor, colaboradores, int(ano), int(mes))
                 save_escala_mes_db(setor, int(ano), int(mes), hist)
                 save_estado_mes(setor, int(ano), int(mes), estado_out)
                 st.success("Escala gerada!")
                 st.rerun()
 
+            if colG2.button("📥 Recarregar do banco", key="gen_reload_btn"):
+                st.rerun()
+
             hist_db = load_escala_mes_db(setor, int(ano), int(mes))
+            hist_db = apply_overrides_to_hist(setor, int(ano), int(mes), hist_db)
+
             if hist_db:
-                st.markdown("### Visualizar colaborador")
+                colab_by = {c["Chapa"]: c for c in colaboradores}
+
+                st.markdown("### 📅 Calendário RH (visual por colaborador)")
+                cal = calendario_rh_df(hist_db, colab_by)
+                st.dataframe(style_calendario(cal, int(mes), int(ano)), use_container_width=True)
+
+                st.markdown("---")
+                st.markdown("### 📊 Dashboard estatístico")
+                d1, d2 = st.columns(2)
+                d1.dataframe(folgas_por_dia_df(hist_db), use_container_width=True)
+
+                # folgas por subgrupo
+                sg_rows = []
+                for ch, df in hist_db.items():
+                    sg = (colab_by.get(ch, {}).get("Subgrupo", "") or "").strip() or "SEM SUBGRUPO"
+                    sg_rows.append({"Subgrupo": sg,
+                                    "Folgas": int((df["Status"] == "Folga").sum()),
+                                    "Férias": int((df["Status"] == "Férias").sum()),
+                                    "Trabalho": int((df["Status"] == "Trabalho").sum())})
+                if sg_rows:
+                    sg_df = pd.DataFrame(sg_rows).groupby("Subgrupo", as_index=False).sum(numeric_only=True)
+                    d2.dataframe(sg_df.sort_values("Subgrupo"), use_container_width=True)
+
+                st.markdown("---")
+                st.markdown("### 🧮 Indicador de banco de horas")
+                base_min = int(DURACAO_JORNADA.total_seconds() // 60)
+                bh = banco_horas_df(hist_db, colab_by, base_min)
+                st.dataframe(bh, use_container_width=True)
+
+                st.markdown("---")
+                st.markdown("### Visualizar colaborador (detalhado)")
                 ch_view = st.selectbox("Chapa:", list(hist_db.keys()), key="view_ch")
                 st.dataframe(hist_db[ch_view], use_container_width=True)
+            else:
+                st.info("Sem escala no mês. Clique em **Gerar agora**.")
 
     # ------------------------------------------------------
-    # ABA 3: Ajustes
+    # ABA 3: Ajustes (com persistência + domingo 1x1 subgrupo)
     # ------------------------------------------------------
-    with aba3:
+    with abas[2]:
         st.subheader("Ajustes")
+
         ano = int(st.session_state["cfg_ano"])
         mes = int(st.session_state["cfg_mes"])
         hist_db = load_escala_mes_db(setor, ano, mes)
@@ -1178,8 +1506,10 @@ def page_app():
         colab_by = {c["Chapa"]: c for c in colaboradores}
 
         if not hist_db:
-            st.info("Gere a escala.")
+            st.info("Gere a escala primeiro.")
         else:
+            hist_db = apply_overrides_to_hist(setor, ano, mes, hist_db)
+
             t1, t2 = st.tabs(["🔧 Ajuste por dia", "📅 Trocar horário mês inteiro"])
 
             with t1:
@@ -1196,40 +1526,65 @@ def page_app():
                 if st.button("Aplicar", key="adj_apply"):
                     idx = int(dia_sel) - 1
                     dia_sem = df.loc[idx, "Dia"]
+                    dia_num = int(pd.to_datetime(df.loc[idx, "Data"]).day)
 
                     if acao == "Marcar Férias":
                         _set_ferias(df, idx)
+                        set_override(setor, ano, mes, ch, dia_num, "status", "Férias")
+
                     elif acao == "Marcar Folga":
                         if df.loc[idx, "Status"] == "Férias":
-                            st.error("Não pode.")
+                            st.error("Não pode (dia está em férias).")
                         elif dia_sem == "sáb" and not pode_sab:
-                            st.error("Sábado só se permitir.")
+                            st.error("Sábado só se permitir folga no sábado.")
                         else:
                             _set_folga(df, idx)
+                            set_override(setor, ano, mes, ch, dia_num, "status", "Folga")
+
                     elif acao == "Marcar Trabalho":
                         if df.loc[idx, "Status"] == "Férias":
-                            st.error("Não pode.")
+                            st.error("Não pode (dia está em férias).")
                         else:
                             e = nova_ent.strftime("%H:%M")
                             df.loc[idx, "H_Entrada"] = e
                             _set_trabalho(df, idx, e)
-                    else:
+                            set_override(setor, ano, mes, ch, dia_num, "status", "Trabalho")
+                            set_override(setor, ano, mes, ch, dia_num, "h_entrada", e)
+
+                    else:  # Alterar Entrada
                         if df.loc[idx, "Status"] != "Trabalho":
-                            st.error("Só em trabalho.")
+                            st.error("Só em dias de trabalho.")
                         else:
                             e = nova_ent.strftime("%H:%M")
                             df.loc[idx, "H_Entrada"] = e
                             df.loc[idx, "H_Saida"] = _saida_from_entrada(e)
+                            set_override(setor, ano, mes, ch, dia_num, "h_entrada", e)
 
-                    # mexeu no domingo => propaga alternância para próximos domingos automaticamente
+                    # Se mexeu em domingo: propaga alternância do colaborador
                     if df.loc[idx, "Data"].day_name() == "Sunday":
                         enforce_sundays_alternating_for_employee(df, ent_pad, idx)
 
                     enforce_max_5_consecutive_work(df, ent_pad, pode_sab)
                     recompute_hours_with_intersticio(df, ent_pad)
 
+                    # salva esse colaborador no mês
                     save_escala_mes_db(setor, ano, mes, {ch: df})
-                    st.success("Salvo!")
+
+                    # re-balance domingo 1x1 do subgrupo inteiro (não deixa todo mundo folgar no mesmo domingo)
+                    # aplica no subgrupo do colaborador
+                    sg = (colab_by.get(ch, {}).get("Subgrupo", "") or "").strip() or "SEM SUBGRUPO"
+                    chapas_sg = [c["Chapa"] for c in colaboradores if ((c.get("Subgrupo") or "").strip() or "SEM SUBGRUPO") == sg]
+                    if chapas_sg:
+                        hist_all = load_escala_mes_db(setor, ano, mes)
+                        hist_all = apply_overrides_to_hist(setor, ano, mes, hist_all)
+                        datas = _dias_mes(ano, mes)
+                        ent_map = {cc: colab_by.get(cc, {}).get("Entrada", "06:00") for cc in chapas_sg if cc in hist_all}
+                        # rebalança domingos do subgrupo
+                        rebalance_sundays_subgrupo(hist_all, [cc for cc in chapas_sg if cc in hist_all], ent_map, datas)
+                        # salva todos afetados
+                        save_escala_mes_db(setor, ano, mes, {cc: hist_all[cc] for cc in chapas_sg if cc in hist_all})
+
+                    st.success("Ajuste salvo (com persistência) e domingos reequilibrados no subgrupo!")
                     st.rerun()
 
                 st.dataframe(df, use_container_width=True)
@@ -1247,12 +1602,14 @@ def page_app():
                         if dfm.loc[i, "Status"] == "Trabalho":
                             dfm.loc[i, "H_Entrada"] = e
                             dfm.loc[i, "H_Saida"] = _saida_from_entrada(e)
+                            dia_num = int(pd.to_datetime(dfm.loc[i, "Data"]).day)
+                            set_override(setor, ano, mes, ch2, dia_num, "h_entrada", e)
 
                     enforce_max_5_consecutive_work(dfm, e, pode_sab2)
                     recompute_hours_with_intersticio(dfm, e)
 
                     save_escala_mes_db(setor, ano, mes, {ch2: dfm})
-                    st.success("Salvo!")
+                    st.success("Horário do mês inteiro aplicado (persistido)!")
                     st.rerun()
 
                 st.dataframe(dfm, use_container_width=True)
@@ -1260,7 +1617,7 @@ def page_app():
     # ------------------------------------------------------
     # ABA 4: Férias
     # ------------------------------------------------------
-    with aba4:
+    with abas[3]:
         st.subheader("Férias")
         colaboradores = load_colaboradores_setor(setor)
         if not colaboradores:
@@ -1298,7 +1655,7 @@ def page_app():
     # ------------------------------------------------------
     # ABA 5: Excel (separado por subgrupo)
     # ------------------------------------------------------
-    with aba5:
+    with abas[4]:
         st.subheader("Excel modelo RH (separado por subgrupo)")
         ano = int(st.session_state["cfg_ano"])
         mes = int(st.session_state["cfg_mes"])
@@ -1309,6 +1666,8 @@ def page_app():
         if not hist_db:
             st.info("Gere a escala.")
         else:
+            hist_db = apply_overrides_to_hist(setor, ano, mes, hist_db)
+
             if st.button("📊 Gerar Excel", key="xls_btn"):
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine="openpyxl") as writer:
@@ -1428,6 +1787,47 @@ def page_app():
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     key="xls_down"
                 )
+
+    # ------------------------------------------------------
+    # ABA 6 (somente ADMIN): Admin
+    # ------------------------------------------------------
+    if is_admin_area:
+        with abas[5]:
+            st.subheader("🔒 Admin do Sistema (somente ADMIN)")
+            dfu = admin_list_users()
+            st.dataframe(dfu, use_container_width=True)
+
+            st.markdown("### Resetar senha de um usuário")
+            if not dfu.empty:
+                uid = st.selectbox("ID do usuário", dfu["id"].tolist(), key="adm_uid")
+                newp = st.text_input("Nova senha", type="password", key="adm_newp")
+                if st.button("Resetar senha", key="adm_reset"):
+                    if not newp:
+                        st.error("Digite a senha.")
+                    else:
+                        ok = admin_reset_user_password(int(uid), newp)
+                        st.success("Senha resetada!" if ok else "Falha.")
+                        st.rerun()
+
+            st.markdown("---")
+            st.markdown("### Criar usuário do sistema (com senha)")
+            c1, c2, c3 = st.columns(3)
+            nome = c1.text_input("Nome", key="adm_nome")
+            setor_u = c2.text_input("Setor", key="adm_setor").strip().upper()
+            chapa = c3.text_input("Chapa", key="adm_chapa")
+            c4, c5, c6 = st.columns(3)
+            senha = c4.text_input("Senha", type="password", key="adm_senha")
+            is_lider = c5.checkbox("Líder", key="adm_lider")
+            is_admin = c6.checkbox("Admin", key="adm_admin")
+            if st.button("Criar usuário", key="adm_create"):
+                if not nome or not setor_u or not chapa or not senha:
+                    st.error("Preencha tudo.")
+                elif system_user_exists(setor_u, chapa):
+                    st.error("Já existe.")
+                else:
+                    create_system_user(nome.strip(), setor_u, chapa.strip(), senha, is_lider=int(is_lider), is_admin=int(is_admin))
+                    st.success("Criado!")
+                    st.rerun()
 
 # =========================================================
 # MAIN
