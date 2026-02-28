@@ -1398,6 +1398,10 @@ def page_login():
                 update_password(setor, chapa, nova)
                 st.success("Senha alterada.")
                 st.rerun()
+                
+def _set_balanco(df, idx):
+    # função provisória para evitar NameError
+    return df
 
 def page_app():
     auth = st.session_state["auth"] or {}
