@@ -1402,6 +1402,14 @@ def page_login():
 def _set_balanco(df, idx):
     # função provisória para evitar NameError
     return df
+    
+def _set_balanco_madrugada(df, idx):
+    """
+    Placeholder para evitar NameError.
+    Ajustes de 'balanço' para registros de madrugada devem ficar aqui,
+    mas por enquanto só retorna df sem alterar.
+    """
+    return df    
 
 def page_app():
     auth = st.session_state["auth"] or {}
