@@ -1421,6 +1421,14 @@ def _set_balanco_madrugada(df, idx):
     
 def _eh_madrugada(dt_inicio: datetime) -> bool:
     return dt_inicio.time() <= time(6, 0)    
+def _plano_madrugada(dt_madrugada: datetime):
+    d = dt_madrugada.date()
+    return {
+        "D-3": datetime.combine(d - timedelta(days=3), time(10, 0)),
+        "D-2_folga": (d - timedelta(days=2)),  # só a data da folga
+        "D-1": datetime.combine(d - timedelta(days=1), time(9, 50)),
+        "D": datetime.combine(d, dt_madrugada.time()),  # ex 06:00
+    }
 
 def page_app():
     auth = st.session_state["auth"] or {}
@@ -1675,6 +1683,9 @@ def page_app():
                                 if df.loc[idx + 1, "Status"] == "Férias":
                                     st.warning("O próximo dia está em Férias — não marquei a madrugada.")
                                 else:
+                                    st.write("COLUNAS DF:", list(df.columns))
+                                    st.write("LINHA IDX:", idx)
+                                    st.write(df.head(3))
                                     _set_balanco_madrugada(df, idx + 1)
                                     set_override(setor, ano, mes, ch, dia_num2, "status", BALANCO_MADRUGADA_STATUS)
                                     set_override(setor, ano, mes, ch, dia_num2, "h_entrada", "00:10")
