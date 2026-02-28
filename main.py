@@ -1418,6 +1418,9 @@ from datetime import datetime, timedelta, time
 def _set_balanco_madrugada(df, idx):
         # placeholder: não faz nada ainda, só evita NameError
     return df
+    
+def _eh_madrugada(dt_inicio: datetime) -> bool:
+    return dt_inicio.time() <= time(6, 0)    
 
 def page_app():
     auth = st.session_state["auth"] or {}
