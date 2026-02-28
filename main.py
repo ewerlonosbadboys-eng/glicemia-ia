@@ -1601,6 +1601,36 @@ def page_app():
                             st.rerun()
                     else:
                         st.info("Crie pelo menos 1 subgrupo na aba 👥 Colaboradores para configurar preferência.")
+                        
+                with t4:
+                    st.markdown("## 📌 Subgrupos (editável) + Preferência de dias com menos folga")
+
+                    subgrupos = list_subgrupos(setor)
+                
+                    cA, cB = st.columns([1, 1])
+                    with cA:
+                        novo_sub = st.text_input("Novo subgrupo:", key="sg_new")
+                        if st.button("Adicionar subgrupo", key="sg_add"):
+                            if novo_sub.strip():
+                                add_subgrupo(setor, novo_sub.strip())
+                                st.success("Subgrupo adicionado!")
+                                st.rerun()
+                            else:
+                                st.error("Digite o nome do subgrupo.")
+                
+                    with cB:
+                        if subgrupos:
+                            del_sel = st.selectbox("Remover subgrupo:", ["(nenhum)"] + subgrupos, key="sg_del")
+                            if del_sel != "(nenhum)" and st.button("Remover", key="sg_del_btn"):
+                                delete_subgrupo(setor, del_sel)
+                                st.success("Subgrupo removido!")
+                                st.rerun()
+                        else:
+                            st.caption("Nenhum subgrupo cadastrado.")
+                
+                    st.markdown("---")
+                    st.info("Após criar o subgrupo, configure as regras na aba '✅ Preferência por subgrupo'.")
+                        
                 
 
     # ------------------------------------------------------
