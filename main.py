@@ -1409,7 +1409,15 @@ def _set_balanco_madrugada(df, idx):
     Ajustes de 'balanço' para registros de madrugada devem ficar aqui,
     mas por enquanto só retorna df sem alterar.
     """
-    return df    
+    return df
+
+from datetime import datetime, timedelta, time
+    
+    DESCANSO_MIN = timedelta(hours=11, minutes=10)
+    
+def _set_balanco_madrugada(df, idx):
+        # placeholder: não faz nada ainda, só evita NameError
+    return df
 
 def page_app():
     auth = st.session_state["auth"] or {}
