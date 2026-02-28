@@ -23,8 +23,6 @@ from openpyxl.utils import get_column_letter
 
 st.set_page_config(page_title="Escala 5x2 Oficial", layout="wide")
 
-APP_VERSION = "v1.0.3-balanco-madrugada"
-
 DB_PATH = "escala.db"
 
 # ---- Regras fixas
@@ -34,12 +32,10 @@ DURACAO_JORNADA = timedelta(hours=9, minutes=58)
 # Penalidade forte para "evitar folga" (não proíbe, só evita)
 PREF_EVITAR_PENALTY = 1000
 
-# Status que contam como TRABALHO (inclui marcações especiais)
-WORK_STATUSES = {"Trabalho", "Balanço", "Balanço Madrugada"}
-
-def is_work_status(status: str) -> bool:
-    return str(status) in WORK_STATUSES
-
+# Status especiais (1 turno por dia)
+BALANCO_STATUS = "Balanço"
+BALANCO_MADRUGADA_STATUS = "Balanço Madrugada"
+WORK_STATUSES = {"Trabalho", BALANCO_STATUS, BALANCO_MADRUGADA_STATUS}
 
 D_PT = {
     "Monday": "seg",
@@ -595,7 +591,7 @@ def _apply_overrides_to_df_inplace(df: pd.DataFrame, chapa: str, ovmap: dict):
         if "h_saida" in rule:
             df.loc[i, "H_Saida"] = rule["h_saida"]
 
-        if is_work_status(df.loc[i, "Status"]):
+        if df.loc[i, "Status"] in WORK_STATUSES:
             if (df.loc[i, "H_Entrada"] or "") and not (df.loc[i, "H_Saida"] or ""):
                 df.loc[i, "H_Saida"] = _saida_from_entrada(df.loc[i, "H_Entrada"])
     return df
@@ -662,12 +658,12 @@ def apply_overrides_to_hist(setor: str, ano: int, mes: int, hist_db: dict[str, p
             continue
         if campo == "status":
             df.loc[idx, "Status"] = valor
-            if not is_work_status(valor):
+            if valor not in WORK_STATUSES:
                 df.loc[idx, "H_Entrada"] = ""
                 df.loc[idx, "H_Saida"] = ""
         elif campo == "h_entrada":
             df.loc[idx, "H_Entrada"] = valor
-            if df.loc[idx, "Status"] == "Trabalho":
+            if df.loc[idx, "Status"] in WORK_STATUSES:
                 df.loc[idx, "H_Saida"] = _saida_from_entrada(valor)
         elif campo == "h_saida":
             df.loc[idx, "H_Saida"] = valor
@@ -730,19 +726,22 @@ def _set_ferias(df, idx, locked_status: set[int] | None = None):
     df.loc[idx, "H_Saida"] = ""
 
 def recompute_hours_with_intersticio(df, ent_padrao, ultima_saida_prev: str | None = None):
+    """
+    Recalcula horários respeitando interstício mínimo.
+    - Para BALANCO_STATUS e BALANCO_MADRUGADA_STATUS: mantém horário FIXO (não ajusta).
+    - Para Trabalho normal: ajusta entrada se necessário.
+    """
     ents, sais = [], []
     first_work_done = False
-
     for i in range(len(df)):
         stt = df.loc[i, "Status"]
-
-        if not is_work_status(stt):
+        if stt not in WORK_STATUSES:
             ents.append("")
             sais.append("")
             continue
 
-        # preserva horários fixos do balanço (não recalcular)
-        if stt in ("Balanço", "Balanço Madrugada") and df.loc[i, "H_Entrada"] and df.loc[i, "H_Saida"]:
+        # horários fixos: não ajustar nem sobrescrever
+        if stt in (BALANCO_STATUS, BALANCO_MADRUGADA_STATUS) and (df.loc[i, "H_Entrada"] and df.loc[i, "H_Saida"]):
             ents.append(df.loc[i, "H_Entrada"])
             sais.append(df.loc[i, "H_Saida"])
             continue
@@ -798,7 +797,7 @@ def enforce_sundays_alternating_for_employee(df, ent_padrao, start_dom_idx):
 
 def enforce_max_5_consecutive_work(df, ent_padrao, pode_folgar_sabado: bool):
     def can_make_folga(i):
-        if not is_work_status(df.loc[i, "Status"]):
+        if df.loc[i, "Status"] != "Trabalho":
             return False
         dia = df.loc[i, "Dia"]
         if dia == "dom":
@@ -811,7 +810,7 @@ def enforce_max_5_consecutive_work(df, ent_padrao, pode_folgar_sabado: bool):
 
     consec, i = 0, 0
     while i < len(df):
-        if is_work_status(df.loc[i, "Status"]):
+        if df.loc[i, "Status"] == "Trabalho":
             consec += 1
             if consec > 5:
                 block_start = i - (consec - 1)
@@ -1179,7 +1178,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
     for ch, df in hist_all.items():
         consec = 0
         for i in range(len(df)-1, -1, -1):
-            if is_work_status(df.loc[i, "Status"]):
+            if df.loc[i, "Status"] == "Trabalho":
                 consec += 1
             else:
                 break
@@ -1215,7 +1214,7 @@ def banco_horas_df(hist_db: dict[str, pd.DataFrame], colab_by: dict, base_min: i
         nome = colab_by.get(ch, {}).get("Nome", ch)
         saldo = 0
         for _, r in df.iterrows():
-            if not is_work_status(r["Status"]):
+            if r["Status"] not in WORK_STATUSES:
                 continue
             ent = r.get("H_Entrada", "") or ""
             sai = r.get("H_Saida", "") or ""
@@ -1245,7 +1244,7 @@ def folgas_por_dia_df(hist_db: dict[str, pd.DataFrame]):
                 folgas += 1
             elif stt == "Férias":
                 ferias += 1
-            elif is_work_status(stt):
+            elif stt == "Trabalho":
                 trab += 1
         out.append({"Dia": dia, "DiaSem": ds, "Trabalho": trab, "Folga": folgas, "Férias": ferias})
     return pd.DataFrame(out)
@@ -1390,7 +1389,6 @@ def page_app():
     setor = auth.get("setor", "GERAL")
 
     st.sidebar.title("👤 Sessão")
-    st.sidebar.caption(f"Versão: {APP_VERSION}")
     st.sidebar.write(f"**Nome:** {auth.get('nome','-')}")
     st.sidebar.write(f"**Setor:** {setor}")
     st.sidebar.write(f"**Chapa:** {auth.get('chapa','-')}")
@@ -1524,7 +1522,7 @@ def page_app():
                     sg_rows.append({"Subgrupo": sg,
                                     "Folgas": int((df["Status"] == "Folga").sum()),
                                     "Férias": int((df["Status"] == "Férias").sum()),
-                                    "Trabalho": int(df["Status"].apply(is_work_status).sum())})
+                                    "Trabalho": int((df["Status"] == "Trabalho").sum())})
                 if sg_rows:
                     sg_df = pd.DataFrame(sg_rows).groupby("Subgrupo", as_index=False).sum(numeric_only=True)
                     d2.dataframe(sg_df.sort_values("Subgrupo"), use_container_width=True)
@@ -1559,187 +1557,202 @@ def page_app():
         else:
             hist_db = apply_overrides_to_hist(setor, ano, mes, hist_db)
 
-            t1, t2, t3, t4 = st.tabs([
-                "🔧 Ajuste por dia",
-                "📅 Trocar horário mês inteiro",
-                "✅ Preferência por subgrupo",
-                "📌 Subgrupos (editável)"
-            ])
+            
+t1, t2, t3, t4 = st.tabs([
+    "🔧 Ajuste por dia",
+    "📅 Trocar horário mês inteiro",
+    "✅ Preferência por subgrupo",
+    "📌 Subgrupos (editável)"
+])
 
-            with t1:
-                ch = st.selectbox("Chapa:", list(hist_db.keys()), key="adj_ch")
-                df = hist_db[ch].copy()
-                ent_pad = colab_by.get(ch, {}).get("Entrada", "06:00")
-                pode_sab = bool(colab_by.get(ch, {}).get("Folga_Sab", False))
+with t1:
+    ch = st.selectbox("Chapa:", list(hist_db.keys()), key="adj_ch")
+    df = hist_db[ch].copy()
+    ent_pad = colab_by.get(ch, {}).get("Entrada", "06:00")
+    pode_sab = bool(colab_by.get(ch, {}).get("Folga_Sab", False))
 
-                col1, col2, col3 = st.columns(3)
-                dia_sel = col1.number_input("Dia:", 1, len(df), value=1, key="adj_dia")
-                acao = col2.selectbox("Ação:", ["Marcar Trabalho", "Marcar Folga", "Marcar Férias", "Alterar Entrada", "Marcar Balanço (madrugada)"], key="adj_acao")
-                nova_ent = col3.time_input("Entrada:", value=datetime.strptime(ent_pad, "%H:%M").time(), key="adj_ent")
+    col1, col2, col3 = st.columns(3)
+    dia_sel = col1.number_input("Dia:", 1, len(df), value=1, key="adj_dia")
+    acao = col2.selectbox(
+        "Ação:",
+        ["Marcar Trabalho", "Marcar Folga", "Marcar Férias", "Alterar Entrada", "Marcar Balanço (madrugada)"],
+        key="adj_acao"
+    )
+    nova_ent = col3.time_input("Entrada:", value=datetime.strptime(ent_pad, "%H:%M").time(), key="adj_ent")
 
-                if st.button("Aplicar", key="adj_apply"):
-                    idx = int(dia_sel) - 1
-                    dia_sem = df.loc[idx, "Dia"]
-                    dia_num = int(pd.to_datetime(df.loc[idx, "Data"]).day)
+    if st.button("Aplicar", key="adj_apply"):
+        idx = int(dia_sel) - 1
+        dia_sem = df.loc[idx, "Dia"]
+        dia_num = int(pd.to_datetime(df.loc[idx, "Data"]).day)
 
-                    if acao == "Marcar Férias":
-                        _set_ferias(df, idx)
-                        set_override(setor, ano, mes, ch, dia_num, "status", "Férias")
+        if acao == "Marcar Férias":
+            _set_ferias(df, idx)
+            set_override(setor, ano, mes, ch, dia_num, "status", "Férias")
 
-                    elif acao == "Marcar Folga":
-                        if df.loc[idx, "Status"] == "Férias":
-                            st.error("Não pode (dia está em férias).")
-                        elif dia_sem == "sáb" and not pode_sab:
-                            st.error("Sábado só se permitir folga no sábado.")
-                        else:
-                            _set_folga(df, idx)
-                            set_override(setor, ano, mes, ch, dia_num, "status", "Folga")
+        elif acao == "Marcar Folga":
+            if df.loc[idx, "Status"] == "Férias":
+                st.error("Não pode (dia está em férias).")
+            elif dia_sem == "sáb" and not pode_sab:
+                st.error("Sábado só se permitir folga no sábado.")
+            else:
+                _set_folga(df, idx)
+                set_override(setor, ano, mes, ch, dia_num, "status", "Folga")
 
-                    elif acao == "Marcar Trabalho":
-                        if df.loc[idx, "Status"] == "Férias":
-                            st.error("Não pode (dia está em férias).")
-                        else:
-                            e = nova_ent.strftime("%H:%M")
-                            df.loc[idx, "H_Entrada"] = e
-                            _set_trabalho(df, idx, e)
-                            set_override(setor, ano, mes, ch, dia_num, "status", "Trabalho")
-                            set_override(setor, ano, mes, ch, dia_num, "h_entrada", e)
+        elif acao == "Marcar Trabalho":
+            if df.loc[idx, "Status"] == "Férias":
+                st.error("Não pode (dia está em férias).")
+            else:
+                e = nova_ent.strftime("%H:%M")
+                df.loc[idx, "H_Entrada"] = e
+                _set_trabalho(df, idx, e)
+                set_override(setor, ano, mes, ch, dia_num, "status", "Trabalho")
+                set_override(setor, ano, mes, ch, dia_num, "h_entrada", e)
 
-                    elif acao == "Marcar Balanço (madrugada)":
-                        # Dia marcado: 06:00 → 11:50 (Balanço)
-                        # Dia seguinte automático: 00:10 → 10:08 (Balanço Madrugada)
-                        if df.loc[idx, "Status"] == "Férias":
-                            st.error("Não pode (dia está em férias).")
-                        else:
-                            df.loc[idx, "Status"] = "Balanço"
-                            df.loc[idx, "H_Entrada"] = "06:00"
-                            df.loc[idx, "H_Saida"] = "11:50"
-                            set_override(setor, ano, mes, ch, dia_num, "status", "Balanço")
-                            set_override(setor, ano, mes, ch, dia_num, "h_entrada", "06:00")
-                            set_override(setor, ano, mes, ch, dia_num, "h_saida", "11:50")
-
-                            if idx + 1 < len(df):
-                                dia_num2 = int(pd.to_datetime(df.loc[idx + 1, "Data"]).day)
-                                if df.loc[idx + 1, "Status"] != "Férias":
-                                    df.loc[idx + 1, "Status"] = "Balanço Madrugada"
-                                    df.loc[idx + 1, "H_Entrada"] = "00:10"
-                                    df.loc[idx + 1, "H_Saida"] = "10:08"
-                                    set_override(setor, ano, mes, ch, dia_num2, "status", "Balanço Madrugada")
-                                    set_override(setor, ano, mes, ch, dia_num2, "h_entrada", "00:10")
-                                    set_override(setor, ano, mes, ch, dia_num2, "h_saida", "10:08")
-
-                    else:  # Alterar Entrada
-                        if not is_work_status(df.loc[idx, "Status"]):
-                            st.error("Só em dias de trabalho.")
-                        else:
-                            e = nova_ent.strftime("%H:%M")
-                            df.loc[idx, "H_Entrada"] = e
-                            df.loc[idx, "H_Saida"] = _saida_from_entrada(e)
-                            set_override(setor, ano, mes, ch, dia_num, "h_entrada", e)
-                    if df.loc[idx, "Data"].day_name() == "Sunday":
-                        enforce_sundays_alternating_for_employee(df, ent_pad, idx)
-
-                    enforce_max_5_consecutive_work(df, ent_pad, pode_sab)
-                    recompute_hours_with_intersticio(df, ent_pad)
-
-                    save_escala_mes_db(setor, ano, mes, {ch: df})
-
-                    sg = (colab_by.get(ch, {}).get("Subgrupo", "") or "").strip() or "SEM SUBGRUPO"
-                    chapas_sg = [c["Chapa"] for c in colaboradores if ((c.get("Subgrupo") or "").strip() or "SEM SUBGRUPO") == sg]
-                    if chapas_sg:
-                        hist_all = load_escala_mes_db(setor, ano, mes)
-                        hist_all = apply_overrides_to_hist(setor, ano, mes, hist_all)
-                        datas = _dias_mes(ano, mes)
-                        ent_map = {cc: colab_by.get(cc, {}).get("Entrada", "06:00") for cc in chapas_sg if cc in hist_all}
-                        rebalance_sundays_subgrupo(hist_all, [cc for cc in chapas_sg if cc in hist_all], ent_map, datas)
-                        save_escala_mes_db(setor, ano, mes, {cc: hist_all[cc] for cc in chapas_sg if cc in hist_all})
-
-                    st.success("Ajuste salvo (com persistência) e domingos reequilibrados no subgrupo!")
-                    st.rerun()
-
-                st.dataframe(df, use_container_width=True)
-
-            with t2:
-                ch2 = st.selectbox("Chapa:", list(hist_db.keys()), key="adjm_ch")
-                dfm = hist_db[ch2].copy()
-                ent_pad2 = colab_by.get(ch2, {}).get("Entrada", "06:00")
-                pode_sab2 = bool(colab_by.get(ch2, {}).get("Folga_Sab", False))
-
-                nova_ent_mes = st.time_input("Nova entrada:", value=datetime.strptime(ent_pad2, "%H:%M").time(), key="adjm_ent")
-                if st.button("Aplicar mês inteiro", key="adjm_apply"):
-                    e = nova_ent_mes.strftime("%H:%M")
-                    for i in range(len(dfm)):
-                        if dfm.loc[i, "Status"] == "Trabalho":
-                            dfm.loc[i, "H_Entrada"] = e
-                            dfm.loc[i, "H_Saida"] = _saida_from_entrada(e)
-                            dia_num = int(pd.to_datetime(dfm.loc[i, "Data"]).day)
-                            set_override(setor, ano, mes, ch2, dia_num, "h_entrada", e)
-
-                    enforce_max_5_consecutive_work(dfm, e, pode_sab2)
-                    recompute_hours_with_intersticio(dfm, e)
-
-                    save_escala_mes_db(setor, ano, mes, {ch2: dfm})
-                    st.success("Horário do mês inteiro aplicado (persistido)!")
-                    st.rerun()
-
-                st.dataframe(dfm, use_container_width=True)
-
-            with t3:
-                st.markdown("### ✅ Preferência por subgrupo (Evitar folga se possível)")
-                subgrupos = list_subgrupos(setor)
-
-                if subgrupos:
-                    sg_sel = st.selectbox("Escolha o subgrupo:", subgrupos, key="pref_sg_sel")
-                    regras = get_subgrupo_regras(setor, sg_sel)
-
-                    p1, p2, p3 = st.columns(3)
-                    ev_seg = p1.checkbox("Evitar SEG", value=bool(regras["seg"]), key=f"ev_seg_{sg_sel}")
-                    ev_ter = p1.checkbox("Evitar TER", value=bool(regras["ter"]), key=f"ev_ter_{sg_sel}")
-                    ev_qua = p2.checkbox("Evitar QUA", value=bool(regras["qua"]), key=f"ev_qua_{sg_sel}")
-                    ev_qui = p2.checkbox("Evitar QUI", value=bool(regras["qui"]), key=f"ev_qui_{sg_sel}")
-                    ev_sex = p3.checkbox("Evitar SEX", value=bool(regras["sex"]), key=f"ev_sex_{sg_sel}")
-                    ev_sab = p3.checkbox("Evitar SÁB", value=bool(regras["sáb"]), key=f"ev_sab_{sg_sel}")
-
-                    if st.button("Salvar preferência do subgrupo", key="pref_save"):
-                        set_subgrupo_regras(setor, sg_sel, {
-                            "seg": int(ev_seg), "ter": int(ev_ter), "qua": int(ev_qua),
-                            "qui": int(ev_qui), "sex": int(ev_sex), "sáb": int(ev_sab)
-                        })
-                        st.success("Preferência salva!")
-                        st.rerun()
+        elif acao == "Alterar Entrada":
+            if df.loc[idx, "Status"] not in WORK_STATUSES:
+                st.error("Só em dias de trabalho/balanço.")
+            else:
+                # Para Balanço/Balanço Madrugada: NÃO deixa alterar, são fixos
+                if df.loc[idx, "Status"] in (BALANCO_STATUS, BALANCO_MADRUGADA_STATUS):
+                    st.error("Balanço tem horário fixo.")
                 else:
-                    st.info("Crie pelo menos 1 subgrupo para configurar preferência.")
+                    e = nova_ent.strftime("%H:%M")
+                    df.loc[idx, "H_Entrada"] = e
+                    df.loc[idx, "H_Saida"] = _saida_from_entrada(e)
+                    set_override(setor, ano, mes, ch, dia_num, "h_entrada", e)
 
-            with t4:
-                st.markdown("## 📌 Subgrupos (editável) + Preferência de dias com menos folga")
+        else:  # Marcar Balanço (madrugada)
+            if df.loc[idx, "Status"] == "Férias":
+                st.error("Não pode (dia está em férias).")
+            else:
+                # Dia do balanço
+                _set_balanco(df, idx)
+                set_override(setor, ano, mes, ch, dia_num, "status", BALANCO_STATUS)
+                set_override(setor, ano, mes, ch, dia_num, "h_entrada", "06:00")
+                set_override(setor, ano, mes, ch, dia_num, "h_saida", "11:50")
 
-                subgrupos = list_subgrupos(setor)
-
-                cA, cB = st.columns([1, 1])
-                with cA:
-                    novo_sub = st.text_input("Novo subgrupo:", key="sg_new")
-                    if st.button("Adicionar subgrupo", key="sg_add"):
-                        if novo_sub.strip():
-                            add_subgrupo(setor, novo_sub.strip())
-                            st.success("Subgrupo adicionado!")
-                            st.rerun()
-                        else:
-                            st.error("Digite o nome do subgrupo.")
-
-                with cB:
-                    if subgrupos:
-                        del_sel = st.selectbox("Remover subgrupo:", ["(nenhum)"] + subgrupos, key="sg_del")
-                        if del_sel != "(nenhum)" and st.button("Remover", key="sg_del_btn"):
-                            delete_subgrupo(setor, del_sel)
-                            st.success("Subgrupo removido!")
-                            st.rerun()
+                # Próximo dia (madrugada)
+                if idx + 1 < len(df):
+                    dia_num2 = int(pd.to_datetime(df.loc[idx + 1, "Data"]).day)
+                    if df.loc[idx + 1, "Status"] == "Férias":
+                        st.warning("O próximo dia está em Férias — não marquei a madrugada.")
                     else:
-                        st.caption("Nenhum subgrupo cadastrado.")
+                        _set_balanco_madrugada(df, idx + 1)
+                        set_override(setor, ano, mes, ch, dia_num2, "status", BALANCO_MADRUGADA_STATUS)
+                        set_override(setor, ano, mes, ch, dia_num2, "h_entrada", "00:10")
+                        set_override(setor, ano, mes, ch, dia_num2, "h_saida", "10:08")
+                else:
+                    st.warning("Não existe próximo dia no mês para marcar a madrugada.")
 
-                st.markdown("---")
-                st.info("Após criar o subgrupo, configure as regras na aba '✅ Preferência por subgrupo'.")
+        # Se mexeu em domingo: propaga alternância do colaborador
+        if df.loc[idx, "Data"].day_name() == "Sunday":
+            enforce_sundays_alternating_for_employee(df, ent_pad, idx)
 
-    # ------------------------------------------------------
+        enforce_max_5_consecutive_work(df, ent_pad, pode_sab)
+        recompute_hours_with_intersticio(df, ent_pad)
+
+        # salva esse colaborador no mês
+        save_escala_mes_db(setor, ano, mes, {ch: df})
+
+        # re-balance domingo 1x1 do subgrupo inteiro (não deixa todo mundo folgar no mesmo domingo)
+        sg = (colab_by.get(ch, {}).get("Subgrupo", "") or "").strip() or "SEM SUBGRUPO"
+        chapas_sg = [c["Chapa"] for c in colaboradores if ((c.get("Subgrupo") or "").strip() or "SEM SUBGRUPO") == sg]
+        if chapas_sg:
+            hist_all = load_escala_mes_db(setor, ano, mes)
+            hist_all = apply_overrides_to_hist(setor, ano, mes, hist_all)
+            datas = _dias_mes(ano, mes)
+            ent_map = {cc: colab_by.get(cc, {}).get("Entrada", "06:00") for cc in chapas_sg if cc in hist_all}
+            rebalance_sundays_subgrupo(hist_all, [cc for cc in chapas_sg if cc in hist_all], ent_map, datas)
+            save_escala_mes_db(setor, ano, mes, {cc: hist_all[cc] for cc in chapas_sg if cc in hist_all})
+
+        st.success("Ajuste salvo (com persistência) e domingos reequilibrados no subgrupo!")
+        st.rerun()
+
+    st.dataframe(df, use_container_width=True)
+
+with t2:
+    ch2 = st.selectbox("Chapa:", list(hist_db.keys()), key="adjm_ch")
+    dfm = hist_db[ch2].copy()
+    ent_pad2 = colab_by.get(ch2, {}).get("Entrada", "06:00")
+    pode_sab2 = bool(colab_by.get(ch2, {}).get("Folga_Sab", False))
+
+    nova_ent_mes = st.time_input("Nova entrada:", value=datetime.strptime(ent_pad2, "%H:%M").time(), key="adjm_ent")
+    if st.button("Aplicar mês inteiro", key="adjm_apply"):
+        e = nova_ent_mes.strftime("%H:%M")
+        for i in range(len(dfm)):
+            # não altera balanço fixo
+            if dfm.loc[i, "Status"] == "Trabalho":
+                dfm.loc[i, "H_Entrada"] = e
+                dfm.loc[i, "H_Saida"] = _saida_from_entrada(e)
+                dia_num = int(pd.to_datetime(dfm.loc[i, "Data"]).day)
+                set_override(setor, ano, mes, ch2, dia_num, "h_entrada", e)
+
+        enforce_max_5_consecutive_work(dfm, e, pode_sab2)
+        recompute_hours_with_intersticio(dfm, e)
+
+        save_escala_mes_db(setor, ano, mes, {ch2: dfm})
+        st.success("Horário do mês inteiro aplicado (persistido)!")
+        st.rerun()
+
+    st.dataframe(dfm, use_container_width=True)
+
+with t3:
+    st.markdown("### ✅ Preferência por subgrupo (Evitar folga se possível)")
+
+    subgrupos = list_subgrupos(setor)
+
+    if subgrupos:
+        sg_sel = st.selectbox("Escolha o subgrupo:", subgrupos, key="pref_sg_sel")
+        regras = get_subgrupo_regras(setor, sg_sel)
+
+        p1, p2, p3 = st.columns(3)
+        ev_seg = p1.checkbox("Evitar SEG", value=bool(regras["seg"]), key=f"ev_seg_{sg_sel}")
+        ev_ter = p1.checkbox("Evitar TER", value=bool(regras["ter"]), key=f"ev_ter_{sg_sel}")
+        ev_qua = p2.checkbox("Evitar QUA", value=bool(regras["qua"]), key=f"ev_qua_{sg_sel}")
+        ev_qui = p2.checkbox("Evitar QUI", value=bool(regras["qui"]), key=f"ev_qui_{sg_sel}")
+        ev_sex = p3.checkbox("Evitar SEX", value=bool(regras["sex"]), key=f"ev_sex_{sg_sel}")
+        ev_sab = p3.checkbox("Evitar SÁB", value=bool(regras["sáb"]), key=f"ev_sab_{sg_sel}")
+
+        if st.button("Salvar preferência do subgrupo", key="pref_save"):
+            set_subgrupo_regras(setor, sg_sel, {
+                "seg": int(ev_seg), "ter": int(ev_ter), "qua": int(ev_qua),
+                "qui": int(ev_qui), "sex": int(ev_sex), "sáb": int(ev_sab)
+            })
+            st.success("Preferência salva!")
+            st.rerun()
+    else:
+        st.info("Crie pelo menos 1 subgrupo na aba 👥 Colaboradores para configurar preferência.")
+
+with t4:
+    st.markdown("## 📌 Subgrupos (editável)")
+
+    subgrupos = list_subgrupos(setor)
+
+    cA, cB = st.columns([1, 1])
+    with cA:
+        novo_sub = st.text_input("Novo subgrupo:", key="sg_new")
+        if st.button("Adicionar subgrupo", key="sg_add"):
+            if novo_sub.strip():
+                add_subgrupo(setor, novo_sub.strip())
+                st.success("Subgrupo adicionado!")
+                st.rerun()
+            else:
+                st.error("Digite o nome do subgrupo.")
+
+    with cB:
+        if subgrupos:
+            del_sel = st.selectbox("Remover subgrupo:", ["(nenhum)"] + subgrupos, key="sg_del")
+            if del_sel != "(nenhum)" and st.button("Remover", key="sg_del_btn"):
+                delete_subgrupo(setor, del_sel)
+                st.success("Subgrupo removido!")
+                st.rerun()
+        else:
+            st.caption("Nenhum subgrupo cadastrado.")
+
+    st.markdown("---")
+    st.info("Após criar o subgrupo, configure as regras na aba '✅ Preferência por subgrupo'.")
+
+# ------------------------------------------------------
     # ABA 4: Férias
     # ------------------------------------------------------
     with abas[3]:
