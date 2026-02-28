@@ -1365,29 +1365,6 @@ def page_app():
             else:
                 st.caption("Nenhum subgrupo cadastrado.")
 
-        st.markdown("### ✅ Preferência por subgrupo (Evitar folga se possível)")
-        if subgrupos:
-            sg_sel = st.selectbox("Escolha o subgrupo:", subgrupos, key="pref_sg_sel")
-            regras = get_subgrupo_regras(setor, sg_sel)
-
-            p1, p2, p3 = st.columns(3)
-            ev_seg = p1.checkbox("Evitar SEG", value=bool(regras["seg"]), key=f"ev_seg_{sg_sel}")
-            ev_ter = p1.checkbox("Evitar TER", value=bool(regras["ter"]), key=f"ev_ter_{sg_sel}")
-            ev_qua = p2.checkbox("Evitar QUA", value=bool(regras["qua"]), key=f"ev_qua_{sg_sel}")
-            ev_qui = p2.checkbox("Evitar QUI", value=bool(regras["qui"]), key=f"ev_qui_{sg_sel}")
-            ev_sex = p3.checkbox("Evitar SEX", value=bool(regras["sex"]), key=f"ev_sex_{sg_sel}")
-            ev_sab = p3.checkbox("Evitar SÁB", value=bool(regras["sáb"]), key=f"ev_sab_{sg_sel}")
-
-            if st.button("Salvar preferência do subgrupo", key="pref_save"):
-                set_subgrupo_regras(setor, sg_sel, {
-                    "seg": int(ev_seg), "ter": int(ev_ter), "qua": int(ev_qua),
-                    "qui": int(ev_qui), "sex": int(ev_sex), "sáb": int(ev_sab)
-                })
-                st.success("Preferência salva!")
-                st.rerun()
-        else:
-            st.info("Crie pelo menos 1 subgrupo para configurar preferência.")
-
         st.markdown("---")
         st.markdown("## ➕ Cadastrar colaborador (SEM senha — setor vem do login)")
         c1, c2 = st.columns(2)
@@ -1510,7 +1487,7 @@ def page_app():
         else:
             hist_db = apply_overrides_to_hist(setor, ano, mes, hist_db)
 
-            t1, t2 = st.tabs(["🔧 Ajuste por dia", "📅 Trocar horário mês inteiro"])
+            t1, t2, t3 = st.tabs(["🔧 Ajuste por dia", "📅 Trocar horário mês inteiro", "✅ Preferência por subgrupo"])
 
             with t1:
                 ch = st.selectbox("Chapa:", list(hist_db.keys()), key="adj_ch")
@@ -1588,8 +1565,8 @@ def page_app():
                     st.rerun()
 
                 st.dataframe(df, use_container_width=True)
-
-            with t2:
+                
+                with t2:
                 ch2 = st.selectbox("Chapa:", list(hist_db.keys()), key="adjm_ch")
                 dfm = hist_db[ch2].copy()
                 ent_pad2 = colab_by.get(ch2, {}).get("Entrada", "06:00")
@@ -1613,6 +1590,34 @@ def page_app():
                     st.rerun()
 
                 st.dataframe(dfm, use_container_width=True)
+
+                with t3:
+                    st.markdown("### ✅ Preferência por subgrupo (Evitar folga se possível)")
+                
+                    subgrupos = list_subgrupos(setor)
+                
+                    if subgrupos:
+                        sg_sel = st.selectbox("Escolha o subgrupo:", subgrupos, key="pref_sg_sel")
+                        regras = get_subgrupo_regras(setor, sg_sel)
+                
+                        p1, p2, p3 = st.columns(3)
+                        ev_seg = p1.checkbox("Evitar SEG", value=bool(regras["seg"]), key=f"ev_seg_{sg_sel}")
+                        ev_ter = p1.checkbox("Evitar TER", value=bool(regras["ter"]), key=f"ev_ter_{sg_sel}")
+                        ev_qua = p2.checkbox("Evitar QUA", value=bool(regras["qua"]), key=f"ev_qua_{sg_sel}")
+                        ev_qui = p2.checkbox("Evitar QUI", value=bool(regras["qui"]), key=f"ev_qui_{sg_sel}")
+                        ev_sex = p3.checkbox("Evitar SEX", value=bool(regras["sex"]), key=f"ev_sex_{sg_sel}")
+                        ev_sab = p3.checkbox("Evitar SÁB", value=bool(regras["sáb"]), key=f"ev_sab_{sg_sel}")
+                
+                        if st.button("Salvar preferência do subgrupo", key="pref_save"):
+                            set_subgrupo_regras(setor, sg_sel, {
+                                "seg": int(ev_seg), "ter": int(ev_ter), "qua": int(ev_qua),
+                                "qui": int(ev_qui), "sex": int(ev_sex), "sáb": int(ev_sab)
+                            })
+                            st.success("Preferência salva!")
+                            st.rerun()
+                    else:
+                        st.info("Crie pelo menos 1 subgrupo na aba 👥 Colaboradores para configurar preferência.")
+                
 
     # ------------------------------------------------------
     # ABA 4: Férias
