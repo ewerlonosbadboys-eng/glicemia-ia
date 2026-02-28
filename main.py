@@ -23,6 +23,8 @@ from openpyxl.utils import get_column_letter
 
 st.set_page_config(page_title="Escala 5x2 Oficial", layout="wide")
 
+APP_VERSION = "v1.0.3-balanco-madrugada"
+
 DB_PATH = "escala.db"
 
 # ---- Regras fixas
@@ -1388,6 +1390,7 @@ def page_app():
     setor = auth.get("setor", "GERAL")
 
     st.sidebar.title("👤 Sessão")
+    st.sidebar.caption(f"Versão: {APP_VERSION}")
     st.sidebar.write(f"**Nome:** {auth.get('nome','-')}")
     st.sidebar.write(f"**Setor:** {setor}")
     st.sidebar.write(f"**Chapa:** {auth.get('chapa','-')}")
