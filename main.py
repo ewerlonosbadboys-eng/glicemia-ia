@@ -1566,7 +1566,7 @@ def page_app():
 
                 st.dataframe(df, use_container_width=True)
                 
-                with t2:
+            with t2:
                 ch2 = st.selectbox("Chapa:", list(hist_db.keys()), key="adjm_ch")
                 dfm = hist_db[ch2].copy()
                 ent_pad2 = colab_by.get(ch2, {}).get("Entrada", "06:00")
