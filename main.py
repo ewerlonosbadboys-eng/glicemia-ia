@@ -1345,28 +1345,7 @@ def page_app():
             st.info("Sem colaboradores.")
 
         st.markdown("---")
-        st.markdown("## 📌 Subgrupos (editável) + Preferência de dias com menos folga")
-
-        subgrupos = list_subgrupos(setor)
-
-        cA, cB = st.columns([1, 1])
-        with cA:
-            novo_sub = st.text_input("Novo subgrupo:", key="sg_new")
-            if st.button("Adicionar subgrupo", key="sg_add"):
-                add_subgrupo(setor, novo_sub)
-                st.rerun()
-
-        with cB:
-            if subgrupos:
-                del_sel = st.selectbox("Remover subgrupo:", ["(nenhum)"] + subgrupos, key="sg_del")
-                if del_sel != "(nenhum)" and st.button("Remover", key="sg_del_btn"):
-                    delete_subgrupo(setor, del_sel)
-                    st.rerun()
-            else:
-                st.caption("Nenhum subgrupo cadastrado.")
-
-        st.markdown("---")
-        st.markdown("## ➕ Cadastrar colaborador (SEM senha — setor vem do login)")
+        
         c1, c2 = st.columns(2)
         nome_n = c1.text_input("Nome:", key="col_nome")
         chapa_n = c2.text_input("Chapa:", key="col_chapa")
@@ -1487,7 +1466,12 @@ def page_app():
         else:
             hist_db = apply_overrides_to_hist(setor, ano, mes, hist_db)
 
-            t1, t2, t3 = st.tabs(["🔧 Ajuste por dia", "📅 Trocar horário mês inteiro", "✅ Preferência por subgrupo"])
+            t1, t2, t3, t4 = st.tabs([
+                    "🔧 Ajuste por dia",
+                    "📅 Trocar horário mês inteiro",
+                    "✅ Preferência por subgrupo",
+                    "📌 Subgrupos (editável)"
+                ])
 
             with t1:
                 ch = st.selectbox("Chapa:", list(hist_db.keys()), key="adj_ch")
