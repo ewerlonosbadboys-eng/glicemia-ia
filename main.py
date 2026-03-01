@@ -838,12 +838,18 @@ def _dias_mes(ano: int, mes: int):
     return pd.date_range(start=f"{ano}-{mes:02d}-01", periods=qtd, freq="D")
 
 def _nao_consecutiva_folga(df, idx):
-    if idx > 0 and df.loc[idx - 1, "Status"] == "Folga":
+    """
+    Verifica se o índice 'idx' NÃO fica colado com outra folga (idx-1 ou idx+1).
+    Usa iloc (posição) para evitar KeyError quando o índice do DF não é 0..N-1.
+    """
+    n = len(df)
+    if n == 0:
+        return True
+    if idx > 0 and df.iloc[idx - 1]["Status"] == "Folga":
         return False
-    if idx < len(df) - 1 and df.loc[idx + 1, "Status"] == "Folga":
+    if idx < n - 1 and df.iloc[idx + 1]["Status"] == "Folga":
         return False
     return True
-
 def _set_trabalho(df, idx, ent_padrao, locked_status: set[int] | None = None):
     if _locked(locked_status, idx):
         return
