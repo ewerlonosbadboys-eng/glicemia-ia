@@ -1376,6 +1376,7 @@ def rebalance_folgas_dia(
     df_ref,
     estado_prev: dict | None = None,
     locked_idx: dict | None = None,
+    past_flag: bool = False,
     max_iters=2200
 ):
     """
@@ -1385,6 +1386,8 @@ def rebalance_folgas_dia(
     """
     estado_prev = estado_prev or {}
     locked_idx = locked_idx or {}
+
+    _past = bool(past_flag)
 
     def is_dom(i): return df_ref.loc[i, "Dia"] == "dom"
 
@@ -1647,6 +1650,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
                 hist_all, colab_by_chapa, chapas, weeks, df_ref,
                 estado_prev=estado_prev,
                 locked_idx=locked_idx,
+                past_flag=_past,
                 max_iters=2200
             )
 
