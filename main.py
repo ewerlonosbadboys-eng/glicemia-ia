@@ -546,78 +546,6 @@ def apply_manual_base_folgas(setor: str, ano: int, mes: int, base_rows: list[dic
                 continue
             set_override(setor, int(ano), int(mes), ch, dd, "status", "Folga")
 
-
-# =========================================================
-# ✅ IMPORTAR DSR (FOLGAS OFICIAIS) — Março/2026
-# - Cria overrides Status=Folga nos dias informados.
-# - Opcional: limpar overrides do mês antes de aplicar.
-# =========================================================
-def aplicar_dsr_marco_2026(setor: str, limpar_overrides_mes: bool = False):
-    ano = 2026
-    mes = 3
-
-    dsr_data = {
-        "020.0823": [1, 4, 6, 9, 15, 17, 20, 23, 29],
-        "020.1447": [1, 3, 6, 11, 15, 17, 20, 26, 29, 31],
-        "020.1733": [],  # (não veio dias no relatório)
-        "020.1751": [1, 4, 6, 10, 15, 17, 19, 24, 29, 31],
-        "020.2288": [4, 8, 10, 12],
-        "020.0265": [4, 8, 10, 12, 18, 22, 24, 26],
-        "020.1839": [3, 5, 8, 11, 13, 19, 22, 25, 27],
-        "020.1884": [1, 3, 5, 9, 15, 17, 20, 23, 29],
-        "020.2192": [],  # (não veio dias no relatório)
-        "020.2144": [1, 3, 5, 9, 15, 17, 19, 23, 29, 31],
-        "020.1750": [2, 8, 11, 13, 19, 22, 24, 26],
-        "020.1984": [1, 3, 5, 9, 15, 17, 19, 23, 29, 31],
-        "020.2139": [4, 8, 10, 12, 18, 22, 25, 27],
-        "020.2450": [3, 8, 11, 13, 18, 22, 25, 27, 31],
-        "020.0748": [4, 8, 10, 12, 16, 22, 24, 26, 31],
-        "020.2299": [2, 8, 10, 12, 16, 22, 24, 26, 30],
-        "020.1649": [1, 3, 6, 9, 15, 17, 20, 23, 29, 31],
-        "020.2274": [1, 3, 5, 9, 15, 17, 19, 23, 29],
-        "020.2143": [4, 8, 11, 13, 16, 22, 25, 27, 30],
-        "020.1639": [1, 4, 6, 10, 15, 18, 20, 24, 29],
-        "020.2050": [1, 3, 5, 11, 15, 17, 19, 25, 29, 31],
-        "020.1628": [5, 8, 10, 12, 18, 22, 24, 27],
-        "020.0463": [2, 8, 11, 13, 16, 22, 25, 27, 30],
-        "020.1854": [8, 10, 12, 17, 22, 24, 26, 31],
-        "020.1128": [1],
-        "020.2309": [1, 4, 6, 11, 15, 18, 20, 25, 29],
-        "020.2348": [1, 3, 5, 9, 15, 17, 19, 23, 29],
-        "020.1856": [2, 8, 11, 13, 18, 22, 24, 27],
-        "020.2388": [2, 8, 11, 13, 16, 22, 25, 27],
-        "020.1906": [15, 17, 20, 26, 29],
-        "020.2203": [1, 4, 6, 9, 15, 18, 20, 24, 29],
-        "020.0994": [1, 2, 7, 8, 14, 15, 21, 22, 28, 29],
-        "020.1559": [1, 3, 5, 10, 15, 17, 19, 23, 29, 31],
-        "020.1980": [2, 8, 11, 13, 16, 22, 25, 27, 30],
-    }
-
-    # opcional: limpar overrides do mês antes de aplicar
-    if limpar_overrides_mes:
-        con = db_conn()
-        cur = con.cursor()
-        cur.execute("DELETE FROM overrides WHERE setor=? AND ano=? AND mes=?", (setor, int(ano), int(mes)))
-        con.commit()
-        con.close()
-        try:
-            st.cache_data.clear()
-        except Exception:
-            pass
-
-    for chapa, dias in dsr_data.items():
-        for dia in (dias or []):
-            try:
-                dd = int(dia)
-            except Exception:
-                continue
-            if dd <= 0:
-                continue
-            set_override(setor, int(ano), int(mes), str(chapa), dd, "status", "Folga")
-
-    return True
-
-
 def delete_colaborador_total(setor: str, chapa: str):
     """
     Exclui colaborador e tudo do setor relacionado a ele:
@@ -2282,23 +2210,6 @@ def page_app():
                 st.markdown("### 🧩 Folgas manuais em grade (por colaborador)")
                 st.caption("Marque/desmarque as folgas do mês. Isso cria/remove travas (overrides) de Status=Folga. Domingo não é editável aqui.")
 
-                # --------------------------------------------------
-                # ✅ Importar DSR oficial — Março/2026 (da planilha)
-                # --------------------------------------------------
-                with st.expander("📌 Importar DSR Março/2026 (aplicar folgas oficiais do relatório)", expanded=False):
-                    st.write("Isso vai criar **overrides de Folga** em **03/2026** para as chapas do relatório de DSR.")
-                    st.warning("Se você já tiver ajustes manuais em 03/2026, escolha com cuidado a opção de limpar.")
-                    cA, cB = st.columns([1, 3])
-                    limpar_ov_dsr = cA.checkbox("Limpar overrides de 03/2026 antes", value=False, key="dsr_mar_limpar")
-                    if cB.button("✅ Importar DSR Março/2026 e readequar escala", use_container_width=True, key="dsr_mar_btn"):
-                        aplicar_dsr_marco_2026(setor, limpar_overrides_mes=bool(limpar_ov_dsr))
-                        # Regera Março/2026 respeitando travas (DSR) para ficar consistente no banco
-                        st.session_state["cfg_ano"] = 2026
-                        st.session_state["cfg_mes"] = 3
-                        _regenerar_mes_inteiro(setor, 2026, 3, seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
-                        st.success("DSR de Março/2026 importado e escala readequada! Agora você pode gerar Abril/2026.")
-                        st.rerun()
-
                 qtd = calendar.monthrange(int(ano), int(mes))[1]
                 dias = list(range(1, qtd + 1))
 
@@ -2319,7 +2230,7 @@ def page_app():
                     dfh = hist_db.get(chg)
                     for d in dias:
                         if dfh is not None and len(dfh) >= d:
-                            if dfh.loc[d - 1, "Dia"] == "dom" or dfh.loc[d - 1, "Status"] == "Férias":
+                            if dfh.loc[d - 1, "Status"] == "Férias":
                                 row[str(d)] = False
                             else:
                                 row[str(d)] = (d in ov_status.get(chg, set()))
@@ -2348,7 +2259,7 @@ def page_app():
                             want = bool(r[str(d)])
                             was = (d in ov_status.get(chg, set()))
                             if dfh is not None and len(dfh) >= d:
-                                if dfh.loc[d - 1, "Dia"] == "dom" or dfh.loc[d - 1, "Status"] == "Férias":
+                                if dfh.loc[d - 1, "Status"] == "Férias":
                                     continue
                             if want and not was:
                                 set_override(setor, ano, mes, chg, d, "status", "Folga")
