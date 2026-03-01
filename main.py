@@ -3,7 +3,7 @@
 # ESCALA 5x2 OFICIAL — COMPLETO (SUBGRUPO = REGRAS)
 # + Preferência "Evitar folga" por subgrupo
 # + Persistência real (SQLite) de ajustes (overrides)
-# + Calendário RH visual + Dashboard + Banco de Horas
+# + Calendário RH visual + Banco de Horas
 # + Admin (somente setor ADMIN e is_admin)
 # + Gerar respeitando ajustes (overrides) OU ignorando
 #
@@ -11,30 +11,13 @@
 # 1) DESCANSO GLOBAL 11:10 (INTERSTÍCIO) PARA A ESCALA INTEIRA
 # 2) DOMINGO 1x1 (POR COLABORADOR) GLOBAL
 #
-# ✅ ATUALIZAÇÃO DA REGRA (PEDIDO AGORA):
-# ✅ DOMINGO 1x1 = REGRA "ACIMA" DAS OUTRAS REGRAS AUTOMÁTICAS
-# - Se cair Balanço / Balanço Madrugada / qualquer WORK_STATUS no DOMINGO,
-#   a regra do domingo converte para:
-#     - "Folga" OU "Trabalho" (com entrada padrão do colaborador)
-# - NÃO altera se estiver em Férias
-# - RESPEITA lock (override de status) — se você travou o status do dia, ele não mexe.
-#
-# ✅ A) "Trocar horário mês inteiro" -> FORÇA acima de qualquer regra
-#    - sobrepõe Balanço / Madrugada (vira Trabalho com o horário escolhido)
-#    - grava override (status + entrada + saída) nos dias de WORK_STATUSES
-#
-# ✅ B) Nova ação: "Marcar Balanço Madrugada (saída tarde) ✅"
-#    - você marca o DIA que a pessoa vai entrar 00:10
-#    - o sistema aplica um ciclo antes (D-3..D):
-#        D-3: 10:00
-#        D-2: 07:00
-#        D-1: Balanço 06:00–11:50
-#        D  : Madrugada 00:10–10:08
-#    - Depois (D+1) volta ao horário normal do colaborador (ex.: 12:40)
-#
-# ✅ AJUSTE IMPORTANTE (para manter o ciclo EXATO):
-#    - Quando aplicar "saída tarde ✅", NÃO roda enforce_global_rest_keep_targets nesse clique,
-#      para não mexer em D-1/D-2/D-3.
+# ✅ CORREÇÃO PEDIDA AGORA (SEU PROBLEMA: SHIAN / LUCAS):
+# 3) PROIBIR FOLGAS CONSECUTIVAS AUTOMÁTICAS (ex.: DOM+SEG)
+#    - Só fica folga consecutiva se estiver TRAVADO por override (manual / "caixinha")
+# 4) enforce_global_rest_keep_targets NÃO PODE criar folga consecutiva “por acidente”
+#    - Se a alternativa de “folgar o dia anterior” gerar folga consecutiva,
+#      o sistema empurra a entrada do dia atual para respeitar 11:10.
+# 5) enforce_max_5_consecutive_work conta WORK_STATUSES como trabalho para sequência
 # =========================================================
 
 import streamlit as st
@@ -134,6 +117,26 @@ def _ajustar_para_intersticio(ent_desejada: str, saida_anterior: str) -> str:
 
     e_ok = max(e_des, e_min)
     return _min_to_hhmm(e_ok)
+
+# =========================================================
+# ✅ Proibir folga consecutiva AUTOMÁTICA (DOM+SEG etc.)
+# Só permite se estiver travado (override/manual/"caixinha")
+# =========================================================
+def enforce_no_consecutive_folga(df: pd.DataFrame, locked_status: set[int] | None = None):
+    for i in range(1, len(df)):
+        if df.loc[i - 1, "Status"] == "Folga" and df.loc[i, "Status"] == "Folga":
+            prev_locked = _locked(locked_status, i - 1)
+            cur_locked = _locked(locked_status, i)
+
+            # ambos travados => foi decisão manual, mantém
+            if prev_locked and cur_locked:
+                continue
+
+            # prioriza manter o travado e desfazer o outro
+            if not cur_locked:
+                df.loc[i, "Status"] = "Trabalho"
+            elif not prev_locked:
+                df.loc[i - 1, "Status"] = "Trabalho"
 
 # =========================================================
 # ✅ Ciclo: Balanço Madrugada (saída tarde) ancorado no DIA da MADRUGADA
@@ -863,9 +866,9 @@ def _all_weeks_seg_dom(datas: pd.DatetimeIndex):
 
 # =========================================================
 # ✅ DOMINGO 1x1 POR COLABORADOR (GLOBAL, RESPEITA LOCK/FÉRIAS)
-# ✅ ATUALIZADO: DOMINGO 1x1 "SOBREPÕE" STATUS AUTOMÁTICO (Balanço/Madrugada) NO DOMINGO
-# - No domingo, considera WORK_STATUSES como "Trabalho"
-# - Se precisar setar como trabalho: força "Trabalho" com ent_padrao (não permite Balanço/Madrugada no domingo)
+# Domingo sobrepõe status automático no domingo:
+# - WorkStatus no domingo conta como "Trabalho"
+# - Se for trabalho no domingo: vira "Trabalho" com entrada padrão
 # =========================================================
 def enforce_sundays_1x1_for_employee(
     df: pd.DataFrame,
@@ -878,10 +881,6 @@ def enforce_sundays_1x1_for_employee(
         return
 
     def _normalize_dom_status(i: int) -> str | None:
-        """
-        Retorna 'Trabalho' ou 'Folga' quando o dia é domingo e não é férias.
-        Se estiver em work_status (inclui Balanço/Madrugada), considera como 'Trabalho'.
-        """
         stt = df.loc[i, "Status"]
         if stt == "Férias":
             return None
@@ -892,9 +891,6 @@ def enforce_sundays_1x1_for_employee(
         return None
 
     def _force_dom(i: int, val: str):
-        """
-        Aplica o domingo como Folga ou Trabalho (entrada padrão).
-        """
         if _locked(locked_status, i):
             return
         if df.loc[i, "Status"] == "Férias":
@@ -902,17 +898,14 @@ def enforce_sundays_1x1_for_employee(
         if val == "Folga":
             _set_folga(df, i, locked_status=locked_status)
         else:
-            # domingo trabalho SEMPRE vira "Trabalho" com ent_padrao
             df.loc[i, "H_Entrada"] = ent_padrao
             _set_trabalho(df, i, ent_padrao, locked_status=locked_status)
 
-    # Define o primeiro domingo se base_first veio explícito
     first_idx = domingos[0]
     if not _locked(locked_status, first_idx) and df.loc[first_idx, "Status"] != "Férias":
         if base_first in ("Trabalho", "Folga"):
             _force_dom(first_idx, base_first)
 
-    # Descobre o "cur" inicial (Trabalho/Folga) baseado no primeiro domingo elegível
     cur = None
     for i in domingos:
         norm = _normalize_dom_status(i)
@@ -922,28 +915,24 @@ def enforce_sundays_1x1_for_employee(
     if cur is None:
         return
 
-    # Aplica alternância 1x1
     for i in domingos:
         if df.loc[i, "Status"] == "Férias":
             continue
 
         if _locked(locked_status, i):
-            # Se está travado e é Folga/Trabalho/WorkStatus, atualiza cur e segue
             norm = _normalize_dom_status(i)
             if norm in ("Trabalho", "Folga"):
                 cur = norm
             continue
 
-        # Força o domingo para o valor atual de cur
         _force_dom(i, cur)
-
-        # Alterna
         cur = "Folga" if cur == "Trabalho" else "Trabalho"
 
 # =========================================================
-# ✅ DESCANSO GLOBAL 11:10 COM "MANTER ENTRADA DO DIA SEGUINTE"
+# ✅ DESCANSO GLOBAL 11:10 (corrigido para NÃO criar folga consecutiva)
 # =========================================================
 def enforce_global_rest_keep_targets(df: pd.DataFrame, ent_padrao: str, locked_status: set[int] | None = None, ultima_saida_prev: str | None = None):
+    # mantém horários fixos de balanço/madrugada
     for i in range(len(df)):
         if df.loc[i, "Status"] == BALANCO_STATUS:
             df.loc[i, "H_Entrada"] = BALANCO_DIA_ENTRADA
@@ -991,6 +980,7 @@ def enforce_global_rest_keep_targets(df: pd.DataFrame, ent_padrao: str, locked_s
 
         prev = i - 1
         if prev >= 0:
+            # tenta ajustar o dia anterior (saída mais cedo) sem virar folga
             if (
                 df.loc[prev, "Status"] == "Trabalho"
                 and not _locked(locked_status, prev)
@@ -1006,21 +996,36 @@ def enforce_global_rest_keep_targets(df: pd.DataFrame, ent_padrao: str, locked_s
                 last_saida = df.loc[i, "H_Saida"]
                 continue
 
+            # ✅ plano B: folgar o dia anterior SÓ se NÃO gerar folga consecutiva
             if prev >= 0 and not _locked(locked_status, prev) and df.loc[prev, "Status"] != "Férias":
-                _set_folga(df, prev, locked_status=locked_status)
-                last_saida = ""
-                df.loc[i, "H_Entrada"] = target
-                df.loc[i, "H_Saida"] = _saida_from_entrada(target)
-                last_saida = df.loc[i, "H_Saida"]
-                continue
+                if _nao_consecutiva_folga(df, prev):
+                    _set_folga(df, prev, locked_status=locked_status)
+                    last_saida = ""
+                    df.loc[i, "H_Entrada"] = target
+                    df.loc[i, "H_Saida"] = _saida_from_entrada(target)
+                    last_saida = df.loc[i, "H_Saida"]
+                    continue
+                else:
+                    # ✅ alternativa: empurra o dia atual (não cria folga seguida)
+                    ent_ok = _ajustar_para_intersticio(target, last_saida)
+                    df.loc[i, "H_Entrada"] = ent_ok
+                    df.loc[i, "H_Saida"] = _saida_from_entrada(ent_ok)
+                    last_saida = df.loc[i, "H_Saida"]
+                    continue
 
+        # fallback final: empurra entrada
         ent_ok = _ajustar_para_intersticio(target, last_saida)
         df.loc[i, "H_Entrada"] = ent_ok
         df.loc[i, "H_Saida"] = _saida_from_entrada(ent_ok)
         last_saida = df.loc[i, "H_Saida"]
 
+# =========================================================
+# ✅ 5x2: máxima sequência de trabalho = 5
+# (corrigido para contar WORK_STATUSES como trabalho na contagem)
+# =========================================================
 def enforce_max_5_consecutive_work(df, ent_padrao, pode_folgar_sabado: bool):
     def can_make_folga(i):
+        # Só converte TRABALHO normal em folga (não mexe em Balanço/Madrugada)
         if df.loc[i, "Status"] != "Trabalho":
             return False
         dia = df.loc[i, "Dia"]
@@ -1034,7 +1039,8 @@ def enforce_max_5_consecutive_work(df, ent_padrao, pode_folgar_sabado: bool):
 
     consec, i = 0, 0
     while i < len(df):
-        if df.loc[i, "Status"] == "Trabalho":
+        # ✅ conta balanço/madrugada como trabalho para sequência
+        if df.loc[i, "Status"] in WORK_STATUSES:
             consec += 1
             if consec > 5:
                 block_start = i - (consec - 1)
@@ -1153,6 +1159,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
     colab_by_chapa = {c["Chapa"]: c for c in colaboradores}
     locked_idx = {}
 
+    # base de cada colaborador
     for c in colaboradores:
         ch = c["Chapa"]
         df = df_ref.copy()
@@ -1177,6 +1184,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
         locked_idx[ch] = locked
         hist_all[ch] = df
 
+    # seed do 1º domingo: metade folga
     domingos_idx = [i for i, d in enumerate(datas) if d.day_name() == "Sunday"]
     first_sun = domingos_idx[0] if domingos_idx else None
 
@@ -1211,6 +1219,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
                 _set_trabalho(df, first_sun, ent, locked_status=locked_idx.get(ch, set()))
             hist_all[ch] = df
 
+    # cria 2 folgas por semana (seg-dom, sem domingo)
     for sg, membros in grupos.items():
         chapas = [m["Chapa"] for m in membros]
         if not chapas:
@@ -1273,16 +1282,23 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
                     folgas_sem += 1
                     hist_all[ch] = df
 
+    # Pós: aplica regras globais por colaborador
     for ch, df in hist_all.items():
         ent = colab_by_chapa[ch].get("Entrada", "06:00")
         locked = locked_idx.get(ch, set())
         pode_sab = bool(colab_by_chapa[ch].get("Folga_Sab", False))
 
-        # ✅ domingo atualizado (sobrepõe status automático no domingo)
         enforce_sundays_1x1_for_employee(df, ent, locked_status=locked, base_first=None)
-
         enforce_max_5_consecutive_work(df, ent, pode_sab)
+
+        # ✅ remove folga consecutiva automática (só mantém se travado)
+        enforce_no_consecutive_folga(df, locked_status=locked)
+
         ultima_saida_prev = estado_prev.get(ch, {}).get("ultima_saida", "") or ""
+        enforce_global_rest_keep_targets(df, ent, locked_status=locked, ultima_saida_prev=ultima_saida_prev)
+
+        # pode mexer em horários/status, então revalida consecutiva de novo e re-aplica descanso
+        enforce_no_consecutive_folga(df, locked_status=locked)
         enforce_global_rest_keep_targets(df, ent, locked_status=locked, ultima_saida_prev=ultima_saida_prev)
 
         if respeitar_ajustes:
@@ -1290,19 +1306,20 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
 
         hist_all[ch] = df
 
+    # rebalance por grupo
     for sg, membros in grupos.items():
         chapas = [m["Chapa"] for m in membros]
         if chapas:
             rebalance_folgas_dia(hist_all, colab_by_chapa, chapas, weeks, df_ref, max_iters=2200)
 
+    # Pós final (garantia)
     for ch, df in hist_all.items():
         ent = colab_by_chapa[ch].get("Entrada", "06:00")
         locked = locked_idx.get(ch, set())
         ultima_saida_prev = estado_prev.get(ch, {}).get("ultima_saida", "") or ""
 
-        # ✅ domingo atualizado (sobrepõe status automático no domingo)
         enforce_sundays_1x1_for_employee(df, ent, locked_status=locked, base_first=None)
-
+        enforce_no_consecutive_folga(df, locked_status=locked)
         enforce_global_rest_keep_targets(df, ent, locked_status=locked, ultima_saida_prev=ultima_saida_prev)
 
         if respeitar_ajustes:
@@ -1310,11 +1327,12 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
 
         hist_all[ch] = df
 
+    # Estado do mês
     estado_out = {}
     for ch, df in hist_all.items():
         consec = 0
         for i in range(len(df) - 1, -1, -1):
-            if df.loc[i, "Status"] == "Trabalho":
+            if df.loc[i, "Status"] in WORK_STATUSES:
                 consec += 1
             else:
                 break
@@ -1328,7 +1346,6 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
         ultimo_dom = None
         for i in range(len(df) - 1, -1, -1):
             if df.loc[i, "Dia"] == "dom":
-                # ✅ considera WORK_STATUSES como trabalho para estado
                 if df.loc[i, "Status"] == "Folga":
                     ultimo_dom = "Folga"
                     break
@@ -1511,7 +1528,7 @@ def page_app():
         st.rerun()
 
     st.title(f"📅 Escala 5x2 — Setor: {setor}")
-    st.caption("✅ Correções ativas: Descanso global 11:10 + Domingo 1x1 por colaborador (global).")
+    st.caption("✅ Correções ativas: Descanso global 11:10 + Domingo 1x1 + Proibir folga consecutiva automática (exceto travada).")
 
     tabs = ["👥 Colaboradores", "🚀 Gerar Escala", "⚙️ Ajustes", "🏖️ Férias", "📥 Excel"]
     is_admin_area = bool(auth.get("is_admin", False)) and setor == "ADMIN"
@@ -1776,12 +1793,15 @@ def page_app():
 
                     # ✅ Regras pós-ajuste:
                     enforce_max_5_consecutive_work(df, ent_pad, pode_sab)
-
-                    # ✅ domingo atualizado (sobrepõe status automático no domingo)
                     enforce_sundays_1x1_for_employee(df, ent_pad, locked_status=None, base_first=None)
+
+                    # ✅ remove folga consecutiva automática (só mantém se travado por override)
+                    enforce_no_consecutive_folga(df, locked_status=None)
 
                     # ✅ IMPORTANTE: para manter o ciclo "saída tarde" EXATO, não roda o descanso 11:10 nesse clique
                     if not aplicou_saida_tarde:
+                        enforce_global_rest_keep_targets(df, ent_pad, locked_status=None, ultima_saida_prev=None)
+                        enforce_no_consecutive_folga(df, locked_status=None)
                         enforce_global_rest_keep_targets(df, ent_pad, locked_status=None, ultima_saida_prev=None)
 
                     save_escala_mes_db(setor, ano, mes, {ch: df})
@@ -1821,7 +1841,6 @@ def page_app():
 
                     update_colaborador_perfil(setor, ch2, subgrupo2, e, bool(pode_sab2))
 
-                    # ⚠️ Não roda enforce_* aqui porque você pediu FORÇAR acima de qualquer regra.
                     save_escala_mes_db(setor, ano, mes, {ch2: dfm})
                     st.success("Horário do mês inteiro FORÇADO (sobrepôs qualquer regra).")
                     st.rerun()
@@ -1985,9 +2004,9 @@ def page_app():
                     ws.column_dimensions["A"].width = 36
 
                     subgrupo_map = {}
-                    for ch in hist_db.keys():
-                        sg = (colab_by.get(ch, {}).get("Subgrupo", "") or "").strip() or "SEM SUBGRUPO"
-                        subgrupo_map.setdefault(sg, []).append(ch)
+                    for chx in hist_db.keys():
+                        sg = (colab_by.get(chx, {}).get("Subgrupo", "") or "").strip() or "SEM SUBGRUPO"
+                        subgrupo_map.setdefault(sg, []).append(chx)
 
                     subgrupos_ordenados = sorted(subgrupo_map.keys())
                     row_idx = 3
@@ -2001,12 +2020,12 @@ def page_app():
                         t.border = border
                         row_idx += 1
 
-                        chapas_sg = sorted(subgrupo_map[sg], key=lambda ch: colab_by.get(ch, {}).get("Nome", ch))
-                        for ch in chapas_sg:
-                            df_f = hist_db[ch]
-                            nome = colab_by.get(ch, {}).get("Nome", ch)
+                        chapas_sg = sorted(subgrupo_map[sg], key=lambda chx: colab_by.get(chx, {}).get("Nome", chx))
+                        for chx in chapas_sg:
+                            df_f = hist_db[chx]
+                            nome = colab_by.get(chx, {}).get("Nome", chx)
 
-                            c_nome = ws.cell(row_idx, 1, f"{nome}\nCHAPA: {ch}")
+                            c_nome = ws.cell(row_idx, 1, f"{nome}\nCHAPA: {chx}")
                             c_nome.fill = fill_nome
                             c_nome.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
                             c_nome.border = border
