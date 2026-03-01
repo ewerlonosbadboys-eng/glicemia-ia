@@ -102,6 +102,52 @@ D_PT = {
     "Sunday": "dom",
 }
 
+
+# =========================================================
+# ESCALA MANUAL (BASE) — Fevereiro/2026 (DSR)
+# - Esta base serve para "iniciar" o mês com folgas pré-definidas.
+# - Ao clicar em "Aplicar base", o app cria overrides (Status=Folga) nesses dias.
+# - Depois, "Gerar agora (respeitando ajustes)" completa o restante mantendo as folgas travadas.
+# =========================================================
+MANUAL_BASES = {
+    (2026, 2): [
+        {"Chapa": "020.0823", "Nome": "ALEXANDRE ROBERTO ALMEIDA DOS REIS", "Dias_Folga": [1,4,6,9,15,18,20,23]},
+        {"Chapa": "020.1447", "Nome": "ANA CAROLINA THEODORO PADILHA", "Dias_Folga": [1,3,6,11,15,18,20,26]},
+        {"Chapa": "020.1733", "Nome": "BEATRIZ VITORIA DOS SANTOS LOPES", "Dias_Folga": [3,8,11,13,16,22,24,26]},
+        {"Chapa": "020.1751", "Nome": "BRUNA SILVA MARTINS", "Dias_Folga": [1,4,6,9,15,17,19,23]},
+        {"Chapa": "020.2288", "Nome": "CRISTIANE ALVES DOS SANTOS", "Dias_Folga": [2,8,11,13,16,22,24,26]},
+        {"Chapa": "020.0265", "Nome": "DECIO EPAMINONDAS DE ALMEIDA NETO", "Dias_Folga": [4,8,10,12,18,22,24,26]},
+        {"Chapa": "020.1839", "Nome": "DEYBSON JOSE DA SILVA", "Dias_Folga": [2,8,10,13,19,22,24,26]},
+        {"Chapa": "020.1884", "Nome": "DISNEI OLIVEIRA ADORNO", "Dias_Folga": [1,4,6,10,15,17,20,23]},
+        {"Chapa": "020.2192", "Nome": "EDILENE MARTINS DE MIRANDA", "Dias_Folga": [3,8,10,12,17,22,24,26]},
+        {"Chapa": "020.2144", "Nome": "ELIS MIRIAN MARQUES OLIVEIRA", "Dias_Folga": [1,4,6,12,15,18,20,26]},
+        {"Chapa": "020.1750", "Nome": "ELIZANGELA BARBOSA MOREIRA", "Dias_Folga": [22,25,27]},
+        {"Chapa": "020.1984", "Nome": "EWERLON DE JESUS DA SILVA E SILVA", "Dias_Folga": [1,3,6,9,15,17,20,23]},
+        {"Chapa": "020.2139", "Nome": "FABIANA SOUZA SILVA", "Dias_Folga": [3,8,11,13,18,22,24,26]},
+        {"Chapa": "020.2450", "Nome": "GABRIEL CAMELO PINTO", "Dias_Folga": [3,8,10,12,18,22,25,27]},
+        {"Chapa": "020.0748", "Nome": "IVANILDO FIGUEIREDO DA VERA CRUZ", "Dias_Folga": [16,22,25,27]},
+        {"Chapa": "020.2299", "Nome": "JAIRON MACHADO DE ALMEIDA", "Dias_Folga": [2,8,11,13,16,22,24,26]},
+        {"Chapa": "020.1649", "Nome": "JOAO VICTOR DE SOUZA SAMPAIO", "Dias_Folga": [1,3,5,9,15,17,20,25]},
+        {"Chapa": "020.2274", "Nome": "JOSE FERNANDO OLIVEIRA DO NASCIMENTO", "Dias_Folga": [1,4,6,10,15,18,20,25]},
+        {"Chapa": "020.2143", "Nome": "LUCAS EDUARDO DOS SANTOS SANTILLO", "Dias_Folga": [8,10,12,16,22,24,26]},
+        {"Chapa": "020.1639", "Nome": "LUCIMARA EMILIA MARQUES", "Dias_Folga": [1,3,5,9,15,18,20,25]},
+        {"Chapa": "020.2050", "Nome": "LUIZ FERNANDO DE TULIO", "Dias_Folga": [1,3,5,11,15,17,19,23]},
+        {"Chapa": "020.1628", "Nome": "MACICLEIDE CONCEICAO DOS SANTOS", "Dias_Folga": [1,5,8,10,13,19,22,25,27]},
+        {"Chapa": "020.0463", "Nome": "MARIA EDUARDA GONCALVES NUNES", "Dias_Folga": [2,8,10,12,16,22,24,26]},
+        {"Chapa": "020.1854", "Nome": "MARIANA MABILLE DE MORAES", "Dias_Folga": []},
+        {"Chapa": "020.1128", "Nome": "MARIVALDO RODRIGUES DA SILVA", "Dias_Folga": [1,4,6,12,15,18,20,23]},
+        {"Chapa": "020.2309", "Nome": "MAURICIO DAVI DA SILVA NEIVAS ARAUJO", "Dias_Folga": [1,3,5,9,15,17,20,23]},
+        {"Chapa": "020.2348", "Nome": "NATALIA CRISTINA GIMENES DE OLIVEIRA", "Dias_Folga": [1,4,6,12,15,17,19,23,27]},
+        {"Chapa": "020.1856", "Nome": "RIQUELME CABRAL DE JESUS", "Dias_Folga": [3,8,11,13,18,22,24,26]},
+        {"Chapa": "020.2388", "Nome": "RUTH PEREIRA DA SILVA", "Dias_Folga": [2,8,11,13,19,22,25,27]},
+        {"Chapa": "020.1906", "Nome": "SHAIAN RUAN BARBOSA ALVES", "Dias_Folga": [4,8]},
+        {"Chapa": "020.2203", "Nome": "TATIANE APARECIDA CABECA", "Dias_Folga": [1,4,6,9,15,18,20,25]},
+        {"Chapa": "020.0994", "Nome": "VERA LUCIA BENEDITO ARRUDA", "Dias_Folga": [1,4,8,11,15,18,22,25]},
+        {"Chapa": "020.1559", "Nome": "VIVIANE NASCIMENTO LIMA LEMOS", "Dias_Folga": [1,3,5,11,15,17,19,23]},
+        {"Chapa": "020.1980", "Nome": "YASMIM STEFHANNY BATA SANTOS", "Dias_Folga": [5,8,10,12,17,22,24,26]},
+    ]
+}
+
 # =========================================================
 # Helpers de hora (minutos)
 # =========================================================
@@ -444,6 +490,56 @@ def create_colaborador(nome: str, setor: str, chapa: str):
         st.cache_data.clear()
     except Exception:
         pass
+
+
+def upsert_colaborador_nome(setor: str, chapa: str, nome: str):
+    """
+    Garante que existe o colaborador (SEM senha) e atualiza o nome pelo que veio na base manual.
+    - Se a chapa existir: atualiza nome.
+    - Se não existir: cria.
+    """
+    nome = (nome or "").strip()
+    chapa = (chapa or "").strip()
+    if not chapa:
+        return
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute("SELECT 1 FROM colaboradores WHERE setor=? AND chapa=? LIMIT 1", (setor, chapa))
+    if cur.fetchone() is None:
+        cur.execute("INSERT INTO colaboradores(nome, setor, chapa, criado_em) VALUES (?, ?, ?, ?)",
+                    (nome or chapa, setor, chapa, datetime.now().isoformat()))
+    else:
+        if nome:
+            cur.execute("UPDATE colaboradores SET nome=? WHERE setor=? AND chapa=?", (nome, setor, chapa))
+    con.commit()
+    con.close()
+
+def apply_manual_base_folgas(setor: str, ano: int, mes: int, base_rows: list[dict], limpar_overrides_mes: bool = False):
+    """
+    Aplica uma base manual criando overrides Status=Folga.
+    - Opcional: limpar_overrides_mes = True remove TODOS os overrides do mês antes de aplicar.
+    """
+    con = db_conn()
+    cur = con.cursor()
+    if limpar_overrides_mes:
+        cur.execute("DELETE FROM overrides WHERE setor=? AND ano=? AND mes=?", (setor, int(ano), int(mes)))
+        con.commit()
+    con.close()
+
+    # garante colaboradores e aplica folgas como override
+    for r in base_rows:
+        ch = str(r.get("Chapa","")).strip()
+        nm = str(r.get("Nome","")).strip()
+        dias = r.get("Dias_Folga", []) or []
+        upsert_colaborador_nome(setor, ch, nm)
+        for d in dias:
+            try:
+                dd = int(d)
+            except Exception:
+                continue
+            if dd <= 0:
+                continue
+            set_override(setor, int(ano), int(mes), ch, dd, "status", "Folga")
 
 def delete_colaborador_total(setor: str, chapa: str):
     """
@@ -2085,6 +2181,26 @@ def page_app():
                     "Domingo continua 1x1 e não é editável aqui."
                 )
 
+
+                # --------------------------------------------------
+                # ✅ ESCALA MANUAL (BASE) — aplica overrides por mês
+                # --------------------------------------------------
+                with st.expander("🧾 Escala manual (Base do mês) — aplicar folgas oficiais (DSR)", expanded=False):
+                    b1, b2, b3 = st.columns([1,1,2])
+                    base_ano = b1.number_input("Ano da base", value=int(ano), step=1, key="base_ano")
+                    base_mes = b2.selectbox("Mês da base", list(range(1,13)), index=int(mes)-1, key="base_mes")
+                    limpar_ov = b3.checkbox("Limpar overrides do mês antes de aplicar a base", value=False, key="base_limpar")
+
+                    base_key = (int(base_ano), int(base_mes))
+                    if base_key in MANUAL_BASES:
+                        st.success(f"Base encontrada para {base_key[1]:02d}/{base_key[0]} — {len(MANUAL_BASES[base_key])} colaboradores.")
+                        if st.button("✅ Aplicar base (criar folgas/overrides) e readequar escala", key="base_apply_btn"):
+                            apply_manual_base_folgas(setor, int(base_ano), int(base_mes), MANUAL_BASES[base_key], limpar_overrides_mes=bool(limpar_ov))
+                            _regenerar_mes_inteiro(setor, int(base_ano), int(base_mes), seed=0, respeitar_ajustes=True)
+                            st.success("Base aplicada! Agora o mês já inicia com as folgas travadas. (Gerar agora respeita.)")
+                            st.rerun()
+                    else:
+                        st.info("Nenhuma base cadastrada para este mês/ano (neste app).")
                 st.markdown("**Competência da grade (mês/ano):**")
                 gA, gB, gC = st.columns([1, 1, 2])
                 mes_grid = gA.selectbox("Mês", list(range(1, 13)), index=int(mes) - 1, key="grid_mes_sel")
