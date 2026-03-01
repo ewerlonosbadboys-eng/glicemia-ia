@@ -328,6 +328,13 @@ def db_init():
 
     con.close()
 
+
+def is_past_competencia(ano: int, mes: int) -> bool:
+    """Meses anteriores ao mês atual (no fuso do servidor)."""
+    today = date.today()
+    return (int(ano), int(mes)) < (int(today.year), int(today.month))
+
+
 # =========================================================
 # AUTH
 # =========================================================
@@ -1311,7 +1318,7 @@ def rebalance_folgas_dia(
 
         enforce_max_5_consecutive_work(
             df, ent, pode_sab,
-            initial_consec=int((estado_prev.get(ch, {}) or {}).get('consec_trab_final', 0))
+            initial_consec=(0 if _past else int((estado_prev.get(ch, {}) or {}).get('consec_trab_final', 0)))
         )
         hist_by_chapa[ch] = df
 
@@ -1350,7 +1357,9 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
     datas = _dias_mes(ano, mes)
     weeks = _all_weeks_seg_dom(datas)
     df_ref = pd.DataFrame({"Data": datas, "Dia": [D_PT[d.day_name()] for d in datas]})
-    estado_prev = load_estado_prev(setor, ano, mes)
+    # Meses passados: não aplicar continuidade/travamentos do mês anterior.
+    _past = is_past_competencia(ano, mes)
+    estado_prev = {} if _past else load_estado_prev(setor, ano, mes)
 
     ovmap = _ov_map(setor, int(ano), int(mes)) if respeitar_ajustes else {}
 
@@ -1401,13 +1410,16 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
         ent = colab_by_chapa[ch].get("Entrada", "06:00")
         locked = locked_idx.get(ch, set())
 
-        prev_dom = (estado_prev.get(ch, {}) or {}).get("ultimo_domingo_status", None)
-        if prev_dom == "Folga":
-            base_first = "Trabalho"
-        elif prev_dom == "Trabalho":
-            base_first = "Folga"
-        else:
+        if _past:
             base_first = None
+        else:
+            prev_dom = (estado_prev.get(ch, {}) or {}).get("ultimo_domingo_status", None)
+            if prev_dom == "Folga":
+                base_first = "Trabalho"
+            elif prev_dom == "Trabalho":
+                base_first = "Folga"
+            else:
+                base_first = None
 
         enforce_sundays_1x1_for_employee(df, ent, locked_status=locked, base_first=base_first)
         hist_all[ch] = df
@@ -1501,20 +1513,23 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
         locked = locked_idx.get(ch, set())
         pode_sab = bool(colab_by_chapa[ch].get("Folga_Sab", False))
 
-        prev_dom = (estado_prev.get(ch, {}) or {}).get("ultimo_domingo_status", None)
-        if prev_dom == "Folga":
-            base_first = "Trabalho"
-        elif prev_dom == "Trabalho":
-            base_first = "Folga"
-        else:
+        if _past:
             base_first = None
+        else:
+            prev_dom = (estado_prev.get(ch, {}) or {}).get("ultimo_domingo_status", None)
+            if prev_dom == "Folga":
+                base_first = "Trabalho"
+            elif prev_dom == "Trabalho":
+                base_first = "Folga"
+            else:
+                base_first = None
         enforce_sundays_1x1_for_employee(df, ent, locked_status=locked, base_first=base_first)
 
-        enforce_max_5_consecutive_work(df, ent, pode_sab, initial_consec=int((estado_prev.get(ch, {}) or {}).get('consec_trab_final', 0)))
+        enforce_max_5_consecutive_work(df, ent, pode_sab, initial_consec=(0 if _past else int((estado_prev.get(ch, {}) or {}).get('consec_trab_final', 0))))
         enforce_no_consecutive_folga(df, locked_status=locked)
         enforce_weekly_folga_targets(df, df_ref=df_ref, pode_folgar_sabado=pode_sab, locked_status=locked)
 
-        ultima_saida_prev = estado_prev.get(ch, {}).get("ultima_saida", "") or ""
+        ultima_saida_prev = "" if _past else (estado_prev.get(ch, {}).get("ultima_saida", "") or "")
         enforce_global_rest_keep_targets(df, ent, locked_status=locked, ultima_saida_prev=ultima_saida_prev)
 
         enforce_no_consecutive_folga(df, locked_status=locked)
@@ -1540,15 +1555,18 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
     for ch, df in hist_all.items():
         ent = colab_by_chapa[ch].get("Entrada", "06:00")
         locked = locked_idx.get(ch, set())
-        ultima_saida_prev = estado_prev.get(ch, {}).get("ultima_saida", "") or ""
+        ultima_saida_prev = "" if _past else (estado_prev.get(ch, {}).get("ultima_saida", "") or "")
 
-        prev_dom = (estado_prev.get(ch, {}) or {}).get("ultimo_domingo_status", None)
-        if prev_dom == "Folga":
-            base_first = "Trabalho"
-        elif prev_dom == "Trabalho":
-            base_first = "Folga"
-        else:
+        if _past:
             base_first = None
+        else:
+            prev_dom = (estado_prev.get(ch, {}) or {}).get("ultimo_domingo_status", None)
+            if prev_dom == "Folga":
+                base_first = "Trabalho"
+            elif prev_dom == "Trabalho":
+                base_first = "Folga"
+            else:
+                base_first = None
         enforce_sundays_1x1_for_employee(df, ent, locked_status=locked, base_first=base_first)
         enforce_no_consecutive_folga(df, locked_status=locked)
         enforce_weekly_folga_targets(df, df_ref=df_ref, pode_folgar_sabado=bool(colab_by_chapa[ch].get('Folga_Sab', False)), locked_status=locked)
@@ -2027,9 +2045,8 @@ def page_app():
         else:
             hist_db = apply_overrides_to_hist(setor, ano, mes, hist_db)
 
-            t1, tgrid, t2, t3, t4 = st.tabs([
-                "🔧 Ajuste por dia",
-                "🧩 Folgas manuais em grade",
+            tgrid, t2, t3, t4 = st.tabs([
+                                "🧩 Folgas manuais em grade",
                 "📅 Trocar horário mês inteiro",
                 "✅ Preferência por subgrupo",
                 "📌 Subgrupos (editável)"
