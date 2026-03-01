@@ -2231,3 +2231,73 @@ if st.session_state["auth"] is None:
     page_login()
 else:
     page_app()
+
+            # --- Painel por mês (quem está de férias em cada mês)
+            st.markdown("### 📌 Pessoas de férias por mês (painel)")
+
+            meses_nome = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"]
+
+            # Limites (alertas)
+            cL1, cL2, cL3 = st.columns(3)
+            limite_pessoas = cL1.number_input("Limite de pessoas de férias no mês", min_value=0, value=0, step=1, help="0 = sem limite", key="fer_lim_pessoas")
+            limite_pct = cL2.number_input("Limite em % do time", min_value=0.0, max_value=100.0, value=0.0, step=1.0, help="0 = sem limite", key="fer_lim_pct")
+            mostrar_lista = cL3.checkbox("Mostrar lista de nomes dentro de cada mês", value=True, key="fer_mostrar_lista_mes")
+
+            tabs_mes = st.tabs(meses_nome)
+
+            # Função para listar quem sobrepõe um mês específico
+            def _people_in_month(ano_: int, mes_: int):
+                if df_fer.empty:
+                    return pd.DataFrame(columns=["Nome","Chapa","Início","Fim","Subgrupo"])
+                items = []
+                for _, rr in df_fer.iterrows():
+                    ini_s = str(rr["Início"])
+                    fim_s = str(rr["Fim"])
+                    if _overlaps_month(ini_s, fim_s, int(ano_), int(mes_)):
+                        chp = str(rr["Chapa"])
+                        nome = nome_by.get(chp, chp)
+                        # pega subgrupo
+                        sg = ""
+                        for c in colaboradores:
+                            if str(c["Chapa"]) == chp:
+                                sg = (c.get("Subgrupo","") or "").strip() or "SEM SUBGRUPO"
+                                break
+                        items.append({"Nome": nome, "Chapa": chp, "Início": ini_s, "Fim": fim_s, "Subgrupo": sg})
+                dfm = pd.DataFrame(items)
+                if dfm.empty:
+                    return dfm
+                return dfm.sort_values(["Subgrupo","Nome"]).reset_index(drop=True)
+
+            total_time = len(colaboradores)
+
+            for mi, tab in enumerate(tabs_mes, start=1):
+                with tab:
+                    df_mes = _people_in_month(int(ano_mapa), int(mi))
+                    n = len(df_mes)
+                    pct = (n / total_time * 100.0) if total_time > 0 else 0.0
+
+                    cA, cB, cC = st.columns(3)
+                    cA.metric("Pessoas no mês", n)
+                    cB.metric("% do time", f"{pct:.1f}%")
+                    # alerta
+                    alert_msgs = []
+                    if limite_pessoas and n > int(limite_pessoas):
+                        alert_msgs.append(f"Ultrapassou limite de pessoas ({n} > {int(limite_pessoas)}).")
+                    if limite_pct and pct > float(limite_pct):
+                        alert_msgs.append(f"Ultrapassou limite em % ({pct:.1f}% > {float(limite_pct):.1f}%).")
+                    if alert_msgs:
+                        cC.error(" | ".join(alert_msgs))
+                    else:
+                        cC.success("Dentro do limite" if (limite_pessoas or limite_pct) else "Sem limite configurado")
+
+                    if n == 0:
+                        st.info("Nenhuma pessoa de férias neste mês.")
+                        continue
+
+                    # gráfico simples por subgrupo
+                    if "Subgrupo" in df_mes.columns and not df_mes.empty:
+                        grp = df_mes.groupby("Subgrupo")["Chapa"].count().reset_index().rename(columns={"Chapa":"Pessoas"})
+                        st.bar_chart(grp.set_index("Subgrupo")["Pessoas"])
+
+                    if mostrar_lista:
+                        st.dataframe(df_mes, use_container_width=True)
