@@ -1736,12 +1736,13 @@ with st.sidebar:
 
     st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
 
-    st.subheader("⚡ Atalhos")
-    st.caption("Use as abas no topo; aqui é só referência rápida.")
-    st.write("• 👥 Colaboradores\n• 🚀 Gerar Escala
-• ⚙️ Ajustes
-• 🏖️ Férias
-• 📥 Excel")
+    st.write(
+    "• 👥 Colaboradores\n"
+    "• 🚀 Gerar Escala\n"
+    "• ⚙️ Ajustes\n"
+    "• 🏖️ Férias\n"
+    "• 📥 Excel"
+)
 
     st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
 
