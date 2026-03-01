@@ -5,7 +5,7 @@
 # + Persistência real (SQLite) de ajustes (overrides)
 # + Calendário RH visual + Dashboard + Banco de Horas
 # + Admin (somente setor ADMIN e is_admin)
-# + Gerar respeitando ajustes (overrides) OU ignorando
+# + Gerar respeitando ajustes (overrides) OU ignorando 
 #
 # ✅ CORREÇÕES IMEDIATAS:
 # 1) DESCANSO GLOBAL 11:10 (INTERSTÍCIO) PARA A ESCALA INTEIRA
