@@ -2256,7 +2256,7 @@ def page_app():
                             if dfh.loc[d - 1, "Status"] == "Férias":
                                 row[str(d)] = False
                             else:
-                                row[str(d)] = (d in ov_status.get(chg, set()))
+                                row[str(d)] = (dfh.loc[d - 1, "Status"] == "Folga") or (d in ov_status.get(chg, set()))
                         else:
                             row[str(d)] = False
                     rows.append(row)
@@ -2274,27 +2274,34 @@ def page_app():
                 auto_readequar = st.checkbox("🔄 Readequar escala ao salvar", value=True, key="grid_auto_regen")
 
                 if st.button("💾 Salvar folgas manuais (e readequar mês)", key="grid_save"):
-                    saved = removed = 0
+                    set_folga = 0
+                    set_trab = 0
                     for _, r in edited.iterrows():
                         chg = str(r["Chapa"])
                         dfh = hist_db.get(chg)
+                        ent_pad_local = colab_by.get(chg, {}).get("Entrada", "06:00")
                         for d in dias:
-                            want = bool(r[str(d)])
-                            was = (d in ov_status.get(chg, set()))
+                            want_folga = bool(r[str(d)])
                             if dfh is not None and len(dfh) >= d:
                                 if dfh.loc[d - 1, "Status"] == "Férias":
                                     continue
-                            if want and not was:
+
+                            if want_folga:
                                 set_override(setor, ano, mes, chg, d, "status", "Folga")
-                                saved += 1
-                            elif (not want) and was:
-                                delete_override(setor, ano, mes, chg, d, "status")
-                                removed += 1
+                                set_folga += 1
+                            else:
+                                # ✅ regra pedida: desmarcado = TRABALHO (travado)
+                                set_override(setor, ano, mes, chg, d, "status", "Trabalho")
+                                # mantém horário padrão no banco via geração/descanso global; se quiser travar horário também,
+                                # descomente as linhas abaixo:
+                                # set_override(setor, ano, mes, chg, d, "h_entrada", ent_pad_local)
+                                # set_override(setor, ano, mes, chg, d, "h_saida", _saida_from_entrada(ent_pad_local))
+                                set_trab += 1
 
                     if auto_readequar:
                         _regenerar_mes_inteiro(setor, ano, mes, seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
 
-                    st.success(f"Salvo! Criadas: {saved} | Removidas: {removed}.")
+                    st.success(f"Salvo! Folgas travadas: {set_folga} | Trabalhos travados: {set_trab}.")
                     st.rerun()
 
             with t2:
