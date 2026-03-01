@@ -1102,6 +1102,10 @@ def enforce_sundays_1x1_for_employee(
     base_first: str | None = None
 ):
     domingos = [i for i in range(len(df)) if df.loc[i, "Data"].day_name() == "Sunday"]
+    # 🔥 REGRA SUPREMA: se existir domingo travado por override, não aplicar domingo 1x1.
+    # Manual manda (pode trabalhar/folgar quantos domingos quiser).
+    if locked_status and any(i in locked_status for i in domingos):
+        return
     if not domingos:
         return
 
@@ -2208,7 +2212,7 @@ def page_app():
 
             with tgrid:
                 st.markdown("### 🧩 Folgas manuais em grade (por colaborador)")
-                st.caption("Marque/desmarque as folgas do mês. Isso cria/remove travas (overrides) de Status=Folga. Domingo não é editável aqui.")
+                st.caption("Marque/desmarque as folgas do mês. Isso cria/remove travas (overrides) de Status=Folga. Domingo é editável aqui (manual é soberano).")
 
                 qtd = calendar.monthrange(int(ano), int(mes))[1]
                 dias = list(range(1, qtd + 1))
