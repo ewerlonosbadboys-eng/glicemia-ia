@@ -2064,7 +2064,13 @@ def page_app():
         st.markdown("## ✏️ Editar perfil do colaborador")
         if colaboradores:
             chapas = [c["Chapa"] for c in colaboradores]
-            ch_sel = st.selectbox("Chapa:", chapas, key="pf_chapa")
+            nome_by_chapa = {c["Chapa"]: c.get("Nome", "") for c in colaboradores}
+            ch_sel = st.selectbox(
+                "Colaborador (Nome — Chapa):",
+                chapas,
+                key="pf_chapa",
+                format_func=lambda ch: f"{(nome_by_chapa.get(ch, ch) or ch)} — {ch}",
+            )
             csel = next(x for x in colaboradores if x["Chapa"] == ch_sel)
 
             colp1, colp2, colp3 = st.columns(3)
