@@ -2428,7 +2428,7 @@ st.session_state["cfg_ano"] = int(ano)
             if st.button("Criar usuário", key="adm_create"):
                 if not nome or not setor_u or not chapa or not senha:
                     st.error("Preencha tudo.")
-                elif system_user_exists(setor_u, chapa): 
+                elif system_user_exists(setor_u, chapa):
                     st.error("Já existe.")
                 else:
                     create_system_user(nome.strip(), setor_u, chapa.strip(), senha, is_lider=int(is_lider), is_admin=int(is_admin))
