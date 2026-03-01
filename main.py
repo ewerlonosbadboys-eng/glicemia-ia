@@ -391,6 +391,7 @@ def update_password(setor: str, chapa: str, nova_senha: str):
 # =========================================================
 # ADMIN
 # =========================================================
+@st.cache_data(show_spinner=False)
 def admin_list_users():
     con = db_conn()
     df = pd.read_sql_query("""
@@ -432,6 +433,10 @@ def create_colaborador(nome: str, setor: str, chapa: str):
                 (nome, setor, chapa, datetime.now().isoformat()))
     con.commit()
     con.close()
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
 
 def delete_colaborador_total(setor: str, chapa: str):
     """
@@ -451,6 +456,10 @@ def delete_colaborador_total(setor: str, chapa: str):
     cur.execute("DELETE FROM colaboradores WHERE setor=? AND chapa=?", (setor, chapa))
     con.commit()
     con.close()
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
 
 def update_colaborador_perfil(setor: str, chapa: str, subgrupo: str, entrada: str, folga_sab: bool):
     con = db_conn()
@@ -462,7 +471,12 @@ def update_colaborador_perfil(setor: str, chapa: str, subgrupo: str, entrada: st
     """, (subgrupo or "", entrada, 1 if folga_sab else 0, setor, chapa))
     con.commit()
     con.close()
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
 
+@st.cache_data(show_spinner=False)
 def load_colaboradores_setor(setor: str):
     con = db_conn()
     cur = con.cursor()
@@ -486,6 +500,7 @@ def load_colaboradores_setor(setor: str):
 # =========================================================
 # SUBGRUPOS + REGRAS
 # =========================================================
+@st.cache_data(show_spinner=False)
 def list_subgrupos(setor: str):
     con = db_conn()
     cur = con.cursor()
@@ -507,6 +522,10 @@ def add_subgrupo(setor: str, nome: str):
     """, (setor, nome))
     con.commit()
     con.close()
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
 
 def delete_subgrupo(setor: str, nome: str):
     con = db_conn()
@@ -516,7 +535,12 @@ def delete_subgrupo(setor: str, nome: str):
     cur.execute("UPDATE colaboradores SET subgrupo='' WHERE setor=? AND subgrupo=?", (setor, nome))
     con.commit()
     con.close()
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
 
+@st.cache_data(show_spinner=False)
 def get_subgrupo_regras(setor: str, subgrupo: str):
     con = db_conn()
     cur = con.cursor()
@@ -549,6 +573,10 @@ def set_subgrupo_regras(setor: str, subgrupo: str, regras: dict):
     ))
     con.commit()
     con.close()
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
 
 # =========================================================
 # FÉRIAS
@@ -560,6 +588,10 @@ def add_ferias(setor: str, chapa: str, inicio: date, fim: date):
                 (setor, chapa, inicio.strftime("%Y-%m-%d"), fim.strftime("%Y-%m-%d")))
     con.commit()
     con.close()
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
 
 def delete_ferias_row(setor: str, chapa: str, inicio: str, fim: str):
     con = db_conn()
@@ -570,7 +602,12 @@ def delete_ferias_row(setor: str, chapa: str, inicio: str, fim: str):
     """, (setor, chapa, inicio, fim))
     con.commit()
     con.close()
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
 
+@st.cache_data(show_spinner=False)
 def list_ferias(setor: str):
     con = db_conn()
     cur = con.cursor()
@@ -633,6 +670,10 @@ def save_estado_mes(setor: str, ano: int, mes: int, estado: dict):
         ))
     con.commit()
     con.close()
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
 
 def load_estado_prev(setor: str, ano: int, mes: int):
     prev_ano, prev_mes = ano, mes - 1
@@ -665,6 +706,10 @@ def set_override(setor: str, ano: int, mes: int, chapa: str, dia: int, campo: st
     """, (setor, int(ano), int(mes), chapa, int(dia), campo, str(valor)))
     con.commit()
     con.close()
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
 
 def delete_override(setor: str, ano: int, mes: int, chapa: str, dia: int, campo: str | None = None):
     con = db_conn()
@@ -681,7 +726,12 @@ def delete_override(setor: str, ano: int, mes: int, chapa: str, dia: int, campo:
         """, (setor, int(ano), int(mes), chapa, int(dia)))
     con.commit()
     con.close()
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
 
+@st.cache_data(show_spinner=False)
 def load_overrides(setor: str, ano: int, mes: int):
     con = db_conn()
     df = pd.read_sql_query("""
@@ -768,7 +818,12 @@ def save_escala_mes_db(setor: str, ano: int, mes: int, historico_df_por_chapa: d
             ))
     con.commit()
     con.close()
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
 
+@st.cache_data(show_spinner=False)
 def load_escala_mes_db(setor: str, ano: int, mes: int):
     con = db_conn()
     cur = con.cursor()
@@ -1932,7 +1987,11 @@ def page_app():
                 colab_by = {c["Chapa"]: c for c in colaboradores}
                 st.markdown("### 📅 Calendário RH (visual por colaborador)")
                 cal = calendario_rh_df(hist_db, colab_by)
-                st.dataframe(style_calendario(cal, int(mes), int(ano)), use_container_width=True)
+                show_color = st.checkbox("🎨 Mostrar cores no calendário (pode deixar lento)", value=False, key="cal_color")
+                if show_color:
+                    st.dataframe(style_calendario(cal, int(mes), int(ano)), use_container_width=True)
+                else:
+                    st.dataframe(cal, use_container_width=True)
 
                 st.markdown("---")
                 st.markdown("### 👤 Visualizar colaborador (detalhado)")
@@ -1975,82 +2034,6 @@ def page_app():
                 "✅ Preferência por subgrupo",
                 "📌 Subgrupos (editável)"
             ])
-
-            with t1:
-                ch = st.selectbox("Chapa:", list(hist_db.keys()), key="adj_ch")
-                df = hist_db[ch].copy()
-                ent_pad = colab_by.get(ch, {}).get("Entrada", "06:00")
-                pode_sab = bool(colab_by.get(ch, {}).get("Folga_Sab", False))
-
-                col1, col2, col3 = st.columns(3)
-                dia_sel = col1.number_input("Dia:", 1, len(df), value=1, key="adj_dia")
-                acao = col2.selectbox(
-                    "Ação:",
-                    ["Marcar Trabalho", "Marcar Folga", "Marcar Férias", "Alterar Entrada", "Marcar Balanço"],
-                    key="adj_acao"
-                )
-                nova_ent = col3.time_input("Entrada:", value=datetime.strptime(ent_pad, "%H:%M").time(), key="adj_ent")
-
-                if st.button("Aplicar ajuste (e readequar mês)", key="adj_apply"):
-                    idx = int(dia_sel) - 1
-                    dia_sem = df.loc[idx, "Dia"]
-                    dia_num = int(pd.to_datetime(df.loc[idx, "Data"]).day)
-
-                    if acao == "Marcar Férias":
-                        data_obj = pd.to_datetime(df.loc[idx, "Data"]).date()
-                        add_ferias(setor, ch, data_obj, data_obj)
-                        delete_override(setor, ano, mes, ch, dia_num)
-                        _set_ferias(df, idx)
-
-                    elif acao == "Marcar Folga":
-                        if df.loc[idx, "Status"] == "Férias":
-                            st.error("Não pode (dia está em férias).")
-                        elif dia_sem == "sáb" and not pode_sab:
-                            st.error("Sábado só se permitir folga no sábado.")
-                        else:
-                            _set_folga(df, idx)
-                            set_override(setor, ano, mes, ch, dia_num, "status", "Folga")
-
-                    elif acao == "Marcar Trabalho":
-                        if df.loc[idx, "Status"] == "Férias":
-                            st.error("Não pode (dia está em férias).")
-                        else:
-                            e = nova_ent.strftime("%H:%M")
-                            df.loc[idx, "H_Entrada"] = e
-                            _set_trabalho(df, idx, e)
-                            set_override(setor, ano, mes, ch, dia_num, "status", "Trabalho")
-                            set_override(setor, ano, mes, ch, dia_num, "h_entrada", e)
-
-                    elif acao == "Alterar Entrada":
-                        if df.loc[idx, "Status"] not in WORK_STATUSES:
-                            st.error("Só em dias de trabalho/balanço.")
-                        else:
-                            if _is_fixed_day(df.loc[idx, "Status"]):
-                                st.error("Balanço tem horário fixo.")
-                            else:
-                                e = nova_ent.strftime("%H:%M")
-                                df.loc[idx, "H_Entrada"] = e
-                                df.loc[idx, "H_Saida"] = _saida_from_entrada(e)
-                                set_override(setor, ano, mes, ch, dia_num, "h_entrada", e)
-
-                    else:  # Balanço
-                        if df.loc[idx, "Status"] == "Férias":
-                            st.error("Não pode (dia está em férias).")
-                        else:
-                            _set_balanco(df, idx)
-                            set_override(setor, ano, mes, ch, dia_num, "status", BALANCO_STATUS)
-                            set_override(setor, ano, mes, ch, dia_num, "h_entrada", BALANCO_DIA_ENTRADA)
-                            set_override(setor, ano, mes, ch, dia_num, "h_saida", BALANCO_DIA_SAIDA)
-
-                    save_escala_mes_db(setor, ano, mes, {ch: df})
-
-                    # Readequar mantendo padrão sugerido (seed atual)
-                    _regenerar_mes_inteiro(setor, ano, mes, seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
-
-                    st.success("Ajuste salvo e escala readequada no mês inteiro (mantendo travas)!")
-                    st.rerun()
-
-                st.dataframe(df, use_container_width=True, height=420)
 
             with tgrid:
                 st.markdown("### 🧩 Folgas manuais em grade (por colaborador)")
