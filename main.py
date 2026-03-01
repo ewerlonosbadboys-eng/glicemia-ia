@@ -2192,6 +2192,28 @@ def style_calendario(df: pd.DataFrame, mes: int, ano: int):
         ds = pd.Timestamp(year=int(ano), month=int(mes), day=int(d)).day_name()
         dsem[str(d)] = D_PT[ds]
 
+
+
+# =========================================================
+# PDF UI helpers (filtro estilo "Impressão de Escala")
+# =========================================================
+def _filtrar_colaboradores(colaboradores: list[dict], subgrupos_sel: list[str] | None, busca: str | None):
+    subgrupos_sel = subgrupos_sel or []
+    busca = (busca or "").strip().lower()
+    out = []
+    for c in colaboradores:
+        sg = (c.get("Subgrupo") or "").strip() or "SEM SUBGRUPO"
+        nome = (c.get("Nome") or "").strip()
+        ch = (c.get("Chapa") or "").strip()
+        if subgrupos_sel and sg not in subgrupos_sel:
+            continue
+        if busca:
+            key = f"{nome} {ch} {sg}".lower()
+            if busca not in key:
+                continue
+        out.append(c)
+    return out
+
     def cell_style(v, col):
         if col in dias_cols:
             dia_sem = dsem.get(col, "")
@@ -2940,7 +2962,69 @@ def page_app():
 
     
 
+            
+
             st.markdown("---")
+            st.markdown("## 🖨️ Impressão de Escala (PDF) — estilo Savegnago")
+
+            all_subgrupos = sorted({((c.get("Subgrupo") or "").strip() or "SEM SUBGRUPO") for c in colaboradores})
+            cfx1, cfx2, cfx3 = st.columns([1.2, 1.2, 1.6])
+            loja_txt = cfx1.text_input("Loja:", value=str(setor), key="pdf_loja_txt")
+            secoes_sel = cfx2.multiselect("Seções (Subgrupo):", options=all_subgrupos, default=[], key="pdf_secoes_sel")
+            busca_txt = cfx3.text_input("Filtro (nome/chapa/subgrupo):", value="", key="pdf_busca")
+
+            cols_dates = st.columns([1,1,2])
+            data_ini = cols_dates[0].date_input("Dia inicial:", value=date(int(ano), int(mes), 1), key="pdf_dt_ini")
+            data_fim = cols_dates[1].date_input("Dia final:", value=date(int(ano), int(mes), calendar.monthrange(int(ano), int(mes))[1]), key="pdf_dt_fim")
+            cols_dates[2].caption("Obs.: o PDF segue o modelo oficial do mês. Aqui o filtro é para escolher colaboradores/Seções como no sistema.")
+
+            colabs_filtrados = _filtrar_colaboradores(colaboradores, secoes_sel, busca_txt)
+
+            opcoes = [
+                f"{(c.get('Nome') or '').strip()} — Chapa: {str(c.get('Chapa') or '').strip()} — {((c.get('Subgrupo') or '').strip() or 'SEM SUBGRUPO')}"
+                for c in colabs_filtrados
+            ]
+            mapa_idx = {opcoes[i]: colabs_filtrados[i] for i in range(len(opcoes))}
+
+            st.markdown("### 👥 Colaboradores")
+            sel = st.multiselect(
+                "Selecione (se vazio, imprime TODOS do filtro):",
+                options=opcoes,
+                default=[],
+                key="pdf_colabs_sel"
+            )
+
+            cbtn1, cbtn2 = st.columns([1, 3])
+            gerar = cbtn1.button("🖨️ Imprimir (gerar PDF)", key="pdf_print_btn", use_container_width=True)
+            cbtn2.caption("Dica: selecione uma seção, depois marque os colaboradores. Se não marcar nenhum, imprime todos os filtrados.")
+
+            if gerar:
+                hist_db_pdf = load_escala_mes_db(setor, ano, mes)
+                if not hist_db_pdf:
+                    st.warning("Gere a escala antes na aba 🚀 Gerar Escala.")
+                else:
+                    hist_db_pdf = apply_overrides_to_hist(setor, ano, mes, hist_db_pdf)
+
+                    if sel:
+                        chapas_sel = [str(mapa_idx[x].get("Chapa")) for x in sel if x in mapa_idx]
+                    else:
+                        chapas_sel = [str(c.get("Chapa")) for c in colabs_filtrados]
+
+                    hist_db_pdf = {ch: df for ch, df in hist_db_pdf.items() if ch in set(chapas_sel)}
+
+                    if not hist_db_pdf:
+                        st.warning("Nenhum colaborador para imprimir com os filtros atuais.")
+                    else:
+                        pdf_bytes = gerar_pdf_modelo_oficial(loja_txt.strip() or str(setor), ano, mes, hist_db_pdf, colaboradores)
+                        st.download_button(
+                            "⬇️ Baixar PDF",
+                            data=pdf_bytes,
+                            file_name=f"escala_{(loja_txt.strip() or str(setor))}_{mes:02d}_{ano}.pdf",
+                            mime="application/pdf",
+                            key="pdf_down"
+                        )
+
+st.markdown("---")
             st.markdown("### 📄 PDF (modelo oficial)")
             if st.button("📄 Gerar PDF (modelo oficial)", key="pdf_btn"):
                 hist_db_pdf = load_escala_mes_db(setor, ano, mes)
