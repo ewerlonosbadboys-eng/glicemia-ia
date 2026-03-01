@@ -2065,98 +2065,130 @@ def page_app():
                 st.markdown("### 🧩 Folgas manuais em grade (por colaborador)")
                 st.caption("Marque/desmarque as folgas do mês. Isso cria/remove travas (overrides) de Status=Folga. Domingo continua 1x1 e não é editável aqui.")
 
-                f1, f2, f3 = st.columns([1, 1, 2])
-                fil_sub = f1.selectbox(
-                    "Filtrar subgrupo:",
-                    ["(todos)"] + sorted({(c.get("Subgrupo") or "").strip() or "SEM SUBGRUPO" for c in colaboradores}),
-                    key="grid_sub",
-                )
-                fil_nome = f2.text_input("Buscar nome:", "", key="grid_busca").strip().lower()
-                somente_permite_sab = f3.checkbox("Mostrar só quem PERMITE folga sábado", value=False, key="grid_sab_only")
+                gA, gB, gC = st.columns([1, 1, 2])
+                grid_mes = gA.selectbox("Mês (grade):", list(range(1, 13)), index=int(mes) - 1, key="grid_mes_sel")
+                grid_ano = gB.number_input("Ano (grade):", value=int(ano), step=1, key="grid_ano_sel")
+                auto_save = gC.checkbox("💾 Salvar automaticamente ao marcar/desmarcar", value=True, key="grid_autosave")
 
-                cols_f = []
-                for c in colaboradores:
-                    sg = (c.get("Subgrupo") or "").strip() or "SEM SUBGRUPO"
-                    if fil_sub != "(todos)" and sg != fil_sub:
-                        continue
-                    if fil_nome and fil_nome not in (c.get("Nome", "").lower()):
-                        continue
-                    if somente_permite_sab and not bool(c.get("Folga_Sab", False)):
-                        continue
-                    cols_f.append(c)
-
-                if not cols_f:
-                    st.info("Nenhum colaborador no filtro.")
+                hist_db_grid = load_escala_mes_db(setor, int(grid_ano), int(grid_mes))
+                if not hist_db_grid:
+                    st.info("Não existe escala para este mês/ano. Vá em **🚀 Gerar Escala** e gere primeiro.")
                 else:
-                    qtd = calendar.monthrange(int(ano), int(mes))[1]
-                    dias = list(range(1, qtd + 1))
+                    hist_db_grid = apply_overrides_to_hist(setor, int(grid_ano), int(grid_mes), hist_db_grid)
 
-                    ovdf = load_overrides(setor, ano, mes)
-                    ov_status = {}
-                    if ovdf is not None and not ovdf.empty:
-                        od = ovdf[ovdf["campo"] == "status"]
-                        for _, r in od.iterrows():
-                            if str(r["valor"]) == "Folga":
-                                ov_status.setdefault(str(r["chapa"]), set()).add(int(r["dia"]))
-
-                    rows = []
-                    for c in cols_f:
-                        chx = str(c["Chapa"])
-                        row = {"Nome": c["Nome"], "Chapa": chx}
-                        dfh = hist_db.get(chx)
-                        for d in dias:
-                            is_dom = False
-                            is_fer = False
-                            if dfh is not None and len(dfh) >= d:
-                                is_dom = (dfh.loc[d - 1, "Dia"] == "dom")
-                                is_fer = (dfh.loc[d - 1, "Status"] == "Férias")
-                            if is_dom or is_fer:
-                                row[str(d)] = False
-                            else:
-                                row[str(d)] = (d in ov_status.get(chx, set()))
-                        rows.append(row)
-
-                    df_grid = pd.DataFrame(rows)
-
-                    st.markdown("#### ✅ Marque as folgas (dias)")
-                    edited = st.data_editor(
-                        df_grid,
-                        use_container_width=True,
-                        hide_index=True,
-                        num_rows="fixed",
-                        column_config={str(d): st.column_config.CheckboxColumn(str(d), width="small") for d in dias},
-                        key="grid_editor",
+                    f1, f2, f3 = st.columns([1,1,2])
+                    fil_sub = f1.selectbox(
+                        "Filtrar subgrupo:",
+                        ["(todos)"] + sorted({(c.get("Subgrupo") or "").strip() or "SEM SUBGRUPO" for c in colaboradores}),
+                        key="grid_sub"
                     )
+                    fil_nome = f2.text_input("Buscar nome:", "", key="grid_busca").strip().lower()
+                    somente_permite_sab = f3.checkbox("Mostrar só quem PERMITE folga sábado", value=False, key="grid_sab_only")
 
-                    if st.button("💾 Salvar folgas manuais", key="grid_save"):
-                        saved = 0
-                        removed = 0
-                        for _, r in edited.iterrows():
-                            chx = str(r["Chapa"])
-                            dfh = hist_db.get(chx)
+                    cols_f = []
+                    for c in colaboradores:
+                        sg = (c.get("Subgrupo") or "").strip() or "SEM SUBGRUPO"
+                        if fil_sub != "(todos)" and sg != fil_sub:
+                            continue
+                        if fil_nome and fil_nome not in (c.get("Nome","").lower()):
+                            continue
+                        if somente_permite_sab and not bool(c.get("Folga_Sab", False)):
+                            continue
+                        cols_f.append(c)
+
+                    if not cols_f:
+                        st.info("Nenhum colaborador no filtro.")
+                    else:
+                        qtd = calendar.monthrange(int(grid_ano), int(grid_mes))[1]
+                        dias = list(range(1, qtd + 1))
+
+                        ovdf = load_overrides(setor, int(grid_ano), int(grid_mes))
+                        ov_status = {}
+                        if ovdf is not None and not ovdf.empty:
+                            od = ovdf[ovdf["campo"] == "status"]
+                            for _, r in od.iterrows():
+                                if str(r["valor"]) == "Folga":
+                                    ov_status.setdefault(str(r["chapa"]), set()).add(int(r["dia"]))
+
+                        rows = []
+                        for c in cols_f:
+                            ch = str(c["Chapa"])
+                            row = {"Nome": c["Nome"], "Chapa": ch}
+                            dfh = hist_db_grid.get(ch)
                             for d in dias:
-                                col = str(d)
-                                want = bool(r[col])
-                                was = (d in ov_status.get(chx, set()))
-
+                                is_dom = False
+                                is_fer = False
                                 if dfh is not None and len(dfh) >= d:
-                                    if dfh.loc[d - 1, "Dia"] == "dom":
-                                        continue
-                                    if dfh.loc[d - 1, "Status"] == "Férias":
-                                        continue
+                                    is_dom = (dfh.loc[d-1, "Dia"] == "dom")
+                                    is_fer = (dfh.loc[d-1, "Status"] == "Férias")
+                                if is_dom or is_fer:
+                                    row[str(d)] = False
+                                else:
+                                    row[str(d)] = (d in ov_status.get(ch, set()))
+                            rows.append(row)
 
-                                if want and not was:
-                                    set_override(setor, ano, mes, chx, d, "status", "Folga")
-                                    saved += 1
-                                elif (not want) and was:
-                                    delete_override(setor, ano, mes, chx, d, "status")
-                                    removed += 1
+                        df_grid = pd.DataFrame(rows)
 
-                        _regenerar_mes_inteiro(setor, ano, mes, seed=0, respeitar_ajustes=True)
-                        st.success(f"Salvo! Criadas: {saved} | Removidas: {removed}. Escala readequada!")
-                        st.rerun()
+                        st.markdown("#### ✅ Marque as folgas (dias)")
+                        editor_key = f"grid_editor_{int(grid_ano)}_{int(grid_mes)}"
+                        edited = st.data_editor(
+                            df_grid,
+                            use_container_width=True,
+                            hide_index=True,
+                            num_rows="fixed",
+                            column_config={str(d): st.column_config.CheckboxColumn(str(d), width="small") for d in dias},
+                            key=editor_key
+                        )
 
-            # -------- t2: trocar horário mês inteiro
+                        def _apply_grid_changes(edited_df: pd.DataFrame):
+                            saved = 0
+                            removed = 0
+                            for _, r in edited_df.iterrows():
+                                chx = str(r["Chapa"])
+                                dfh2 = hist_db_grid.get(chx)
+                                for d in dias:
+                                    col = str(d)
+                                    want = bool(r[col])
+                                    was = (d in ov_status.get(chx, set()))
+
+                                    # não mexe em DOM / FÉRIAS
+                                    if dfh2 is not None and len(dfh2) >= d:
+                                        if dfh2.loc[d-1, "Dia"] == "dom":
+                                            continue
+                                        if dfh2.loc[d-1, "Status"] == "Férias":
+                                            continue
+
+                                    if want and not was:
+                                        set_override(setor, int(grid_ano), int(grid_mes), chx, d, "status", "Folga")
+                                        saved += 1
+                                    elif (not want) and was:
+                                        delete_override(setor, int(grid_ano), int(grid_mes), chx, d, "status")
+                                        removed += 1
+
+                            # readequar escala inteira do setor respeitando travas
+                            _regenerar_mes_inteiro(setor, int(grid_ano), int(grid_mes), seed=0, respeitar_ajustes=True)
+                            return saved, removed
+
+                        # ✅ AUTO-SAVE: se mudou algo no editor, salva e readequar automaticamente
+                        state_key = f"grid_hash_{int(grid_ano)}_{int(grid_mes)}"
+                        cur_hash = hashlib.md5(pd.util.hash_pandas_object(edited, index=True).values.tobytes()).hexdigest()
+
+                        if st.session_state.get(state_key) is None:
+                            st.session_state[state_key] = cur_hash
+
+                        if auto_save and cur_hash != st.session_state.get(state_key):
+                            saved, removed = _apply_grid_changes(edited)
+                            st.session_state[state_key] = cur_hash
+                            st.toast(f"Folgas atualizadas! Criadas: {saved} | Removidas: {removed}. Escala readequada ✅", icon="✅")
+                            st.rerun()
+
+                        # Botão opcional (para quem não quer auto-save)
+                        if st.button("💾 Salvar folgas manuais", key="grid_save"):
+                            saved, removed = _apply_grid_changes(edited)
+                            st.session_state[state_key] = cur_hash
+                            st.success(f"Salvo! Criadas: {saved} | Removidas: {removed}. Escala readequada!")
+                            st.rerun()
+
             with t2:
                 ch2 = st.selectbox("Chapa:", list(hist_db.keys()), key="adjm_ch")
                 dfm = hist_db[ch2].copy()
