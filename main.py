@@ -1946,9 +1946,18 @@ def page_app():
     # ------------------------------------------------------
     with abas[2]:
         st.subheader("⚙️ Ajustes (travas) — sempre entram na geração")
-        ano = int(st.session_state["cfg_ano"])
-        mes = int(st.session_state["cfg_mes"])
-        st.caption(f"Competência ativa: **{mes:02d}/{ano}** | Seed atual: **{int(st.session_state.get('last_seed', 0))}**")
+
+        # ✅ IMPORTANTE: Ajustes/folgas manuais são gravados por MÊS/ANO (competência).
+        # Se você editar Fevereiro e gerar Janeiro, não vai aparecer.
+        with st.container(border=True):
+            c1, c2, c3 = st.columns([1,1,2])
+            mes = c1.selectbox("Mês (ajustes)", list(range(1,13)), index=int(st.session_state["cfg_mes"])-1, key="adj_mes")
+            ano = c2.number_input("Ano (ajustes)", value=int(st.session_state["cfg_ano"]), step=1, key="adj_ano")
+            c3.caption("Dica: deixe o mês/ano aqui igual ao mês/ano da aba 🚀 Gerar Escala.")
+
+        st.session_state["cfg_mes"] = int(mes)
+        st.session_state["cfg_ano"] = int(ano)
+        st.caption(f"Competência ativa: **{int(mes):02d}/{int(ano)}** | Seed atual: **{int(st.session_state.get('last_seed', 0))}**")
 
         hist_db = load_escala_mes_db(setor, ano, mes)
         colaboradores = load_colaboradores_setor(setor)
