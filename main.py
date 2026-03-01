@@ -1708,82 +1708,114 @@ def _regenerar_mes_inteiro(setor: str, ano: int, mes: int, seed: int = 0, respei
     return True
 
 def page_app():
-    auth = st.session_state["auth"] or {}
+    auth = st.session_state.get("auth") or {}
     setor = auth.get("setor", "GERAL")
 
-# =========================
-# SIDEBAR — Sessão + Atalhos
-# =========================
-with st.sidebar:
-    st.title("👤 Sessão")
-    st.caption("Acesso por setor (usuário / líder / admin)")
+    # =========================
+    # SIDEBAR — Sessão + Atalhos
+    # =========================
+    with st.sidebar:
+        st.title("👤 Sessão")
+        st.caption("Acesso por setor (usuário / líder / admin)")
 
-    cA, cB = st.columns([1,1])
-    cA.write(f"**Nome:** {auth.get('nome','-')}")
-    cB.write(f"**Perfil:** {'ADMIN' if auth.get('is_admin', False) else ('LÍDER' if auth.get('is_lider', False) else 'USUÁRIO')}")
+        cA, cB = st.columns([1, 1])
+        cA.write(f"**Nome:** {auth.get('nome','-')}")
+        cB.write(
+            f"**Perfil:** {'ADMIN' if auth.get('is_admin', False) else ('LÍDER' if auth.get('is_lider', False) else 'USUÁRIO')}"
+        )
 
-    st.write(f"**Setor:** {setor}")
-    st.write(f"**Chapa:** {auth.get('chapa','-')}")
+        st.write(f"**Setor:** {setor}")
+        st.write(f"**Chapa:** {auth.get('chapa','-')}")
 
-    st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
+        st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
 
-    st.subheader("🗓️ Competência")
-    m1, m2 = st.columns(2)
-    cfg_mes = m1.selectbox("Mês", list(range(1,13)), index=st.session_state["cfg_mes"]-1, key="sb_mes")
-    cfg_ano = m2.number_input("Ano", value=int(st.session_state["cfg_ano"]), step=1, key="sb_ano")
-    st.session_state["cfg_mes"] = int(cfg_mes)
-    st.session_state["cfg_ano"] = int(cfg_ano)
+        st.subheader("🗓️ Competência")
+        m1, m2 = st.columns(2)
+        cfg_mes = m1.selectbox(
+            "Mês",
+            list(range(1, 13)),
+            index=int(st.session_state.get("cfg_mes", datetime.now().month)) - 1,
+            key="sb_mes",
+        )
+        cfg_ano = m2.number_input(
+            "Ano",
+            value=int(st.session_state.get("cfg_ano", datetime.now().year)),
+            step=1,
+            key="sb_ano",
+        )
+        st.session_state["cfg_mes"] = int(cfg_mes)
+        st.session_state["cfg_ano"] = int(cfg_ano)
 
-    st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
+        st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
 
-    st.write(
-    "• 👥 Colaboradores\n"
-    "• 🚀 Gerar Escala\n"
-    "• ⚙️ Ajustes\n"
-    "• 🏖️ Férias\n"
-    "• 📥 Excel"
-)
+        st.write(
+            "• 👥 Colaboradores\n"
+            "• 🚀 Gerar Escala\n"
+            "• ⚙️ Ajustes\n"
+            "• 🏖️ Férias\n"
+            "• 📥 Excel"
+        )
 
-    st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
+        st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
 
-    if st.button("🚪 Sair", use_container_width=True, key="logout_btn"):
-        st.session_state["auth"] = None
-        st.rerun()
+        if st.button("🚪 Sair", use_container_width=True, key="logout_btn"):
+            st.session_state["auth"] = None
+            st.rerun()
 
+    # =========================
+    # HEADER
+    # =========================
     st.title(f"📅 Escala 5x2 — Setor: {setor}")
-    st.caption("✅ Regras ativas: Descanso 11:10 + Domingo 1x1 + Sem folga consecutiva automática + Férias só via Aba Férias + Regra semanal depende do domingo.")
+    st.caption(
+        "✅ Regras ativas: Descanso 11:10 + Domingo 1x1 + Sem folga consecutiva automática + "
+        "Férias só via Aba Férias + Regra semanal depende do domingo."
+    )
 
+    # =========================
+    # KPIs — só visual
+    # =========================
+    ano_k = int(st.session_state["cfg_ano"])
+    mes_k = int(st.session_state["cfg_mes"])
 
-# =========================
-# KPIs — só visual (não altera regra)
-# =========================
-ano_k = int(st.session_state["cfg_ano"])
-mes_k = int(st.session_state["cfg_mes"])
+    colaboradores_k = load_colaboradores_setor(setor)
+    total_colab = len(colaboradores_k)
 
-colaboradores_k = load_colaboradores_setor(setor)
-total_colab = len(colaboradores_k)
+    hist_db_kpi = load_escala_mes_db(setor, ano_k, mes_k)
+    if hist_db_kpi:
+        hist_db_kpi = apply_overrides_to_hist(setor, ano_k, mes_k, hist_db_kpi)
 
-hist_db_kpi = load_escala_mes_db(setor, ano_k, mes_k)
-if hist_db_kpi:
-    hist_db_kpi = apply_overrides_to_hist(setor, ano_k, mes_k, hist_db_kpi)
+    folgas_mes = 0
+    ferias_mes = 0
+    trabalhos_mes = 0
+    if hist_db_kpi:
+        for _, dfk in hist_db_kpi.items():
+            folgas_mes += int((dfk["Status"] == "Folga").sum())
+            ferias_mes += int((dfk["Status"] == "Férias").sum())
+            trabalhos_mes += int(dfk["Status"].isin(WORK_STATUSES).sum())
 
-folgas_mes = 0
-ferias_mes = 0
-trabalhos_mes = 0
-if hist_db_kpi:
-    for _, dfk in hist_db_kpi.items():
-        folgas_mes += int((dfk["Status"] == "Folga").sum())
-        ferias_mes += int((dfk["Status"] == "Férias").sum())
-        trabalhos_mes += int(dfk["Status"].isin(WORK_STATUSES).sum())
+    k1, k2, k3, k4 = st.columns(4)
+    k1.markdown(
+        f"<div class='kpi-card'><div class='kpi-title'>Colaboradores</div><p class='kpi-value'>{total_colab}</p></div>",
+        unsafe_allow_html=True,
+    )
+    k2.markdown(
+        f"<div class='kpi-card'><div class='kpi-title'>Dias de Folga (mês)</div><p class='kpi-value'>{folgas_mes}</p></div>",
+        unsafe_allow_html=True,
+    )
+    k3.markdown(
+        f"<div class='kpi-card'><div class='kpi-title'>Dias de Férias (mês)</div><p class='kpi-value'>{ferias_mes}</p></div>",
+        unsafe_allow_html=True,
+    )
+    k4.markdown(
+        f"<div class='kpi-card'><div class='kpi-title'>Dias de Trabalho (mês)</div><p class='kpi-value'>{trabalhos_mes}</p></div>",
+        unsafe_allow_html=True,
+    )
 
-k1, k2, k3, k4 = st.columns(4)
-k1.markdown(f"<div class='kpi-card'><div class='kpi-title'>Colaboradores</div><p class='kpi-value'>{total_colab}</p></div>", unsafe_allow_html=True)
-k2.markdown(f"<div class='kpi-card'><div class='kpi-title'>Dias de Folga (mês)</div><p class='kpi-value'>{folgas_mes}</p></div>", unsafe_allow_html=True)
-k3.markdown(f"<div class='kpi-card'><div class='kpi-title'>Dias de Férias (mês)</div><p class='kpi-value'>{ferias_mes}</p></div>", unsafe_allow_html=True)
-k4.markdown(f"<div class='kpi-card'><div class='kpi-title'>Dias de Trabalho (mês)</div><p class='kpi-value'>{trabalhos_mes}</p></div>", unsafe_allow_html=True)
+    st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
 
-st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
-
+    # =========================
+    # ABAS PRINCIPAIS
+    # =========================
     tabs = ["👥 Colaboradores", "🚀 Gerar Escala", "⚙️ Ajustes", "🏖️ Férias", "📥 Excel"]
     is_admin_area = bool(auth.get("is_admin", False)) and setor == "ADMIN"
     if is_admin_area:
@@ -1798,39 +1830,46 @@ st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
         st.subheader("Colaboradores (SEM senha)")
 
         if colaboradores:
-            st.dataframe(pd.DataFrame([{
-                "Nome": c["Nome"],
-                "Chapa": c["Chapa"],
-                "Subgrupo": c["Subgrupo"] or "SEM SUBGRUPO",
-                "Entrada": c["Entrada"],
-                "Folga Sábado": "Sim" if c["Folga_Sab"] else "Não",
-            } for c in colaboradores]), use_container_width=True)
+            st.dataframe(
+                pd.DataFrame(
+                    [
+                        {
+                            "Nome": c["Nome"],
+                            "Chapa": c["Chapa"],
+                            "Subgrupo": c["Subgrupo"] or "SEM SUBGRUPO",
+                            "Entrada": c["Entrada"],
+                            "Folga Sábado": "Sim" if c["Folga_Sab"] else "Não",
+                        }
+                        for c in colaboradores
+                    ]
+                ),
+                use_container_width=True,
+                height=420,
+            )
         else:
             st.info("Sem colaboradores.")
 
         st.markdown("---")
 
-        
-with st.form("form_add_colaborador", clear_on_submit=True):
-    c1, c2 = st.columns(2)
-    nome_n = c1.text_input("Nome:", key="col_nome")
-    chapa_n = c2.text_input("Chapa:", key="col_chapa")
+        with st.form("form_add_colaborador", clear_on_submit=True):
+            c1, c2 = st.columns(2)
+            nome_n = c1.text_input("Nome:", key="col_nome")
+            chapa_n = c2.text_input("Chapa:", key="col_chapa")
+            submitted = st.form_submit_button("Cadastrar colaborador", use_container_width=True)
 
-    submitted = st.form_submit_button("Cadastrar colaborador", use_container_width=True)
-    if submitted:
-        if not nome_n or not chapa_n:
-            st.error("Preencha nome e chapa.")
-        elif colaborador_exists(setor, chapa_n.strip()):
-            st.error("Já existe essa chapa.")
-        else:
-            create_colaborador(nome_n.strip(), setor, chapa_n.strip())
-            st.success("Cadastrado!")
-            st.rerun()
-
-# ✅ EXCLUIR COLABORADOR
+            if submitted:
+                if not nome_n or not chapa_n:
+                    st.error("Preencha nome e chapa.")
+                elif colaborador_exists(setor, chapa_n.strip()):
+                    st.error("Já existe essa chapa.")
+                else:
+                    create_colaborador(nome_n.strip(), setor, chapa_n.strip())
+                    st.success("Cadastrado!")
+                    st.rerun()
 
         st.markdown("---")
         st.markdown("## 🗑️ Excluir colaborador")
+        colaboradores = load_colaboradores_setor(setor)
         if colaboradores:
             ch_del = st.selectbox("Escolha a chapa para excluir:", [c["Chapa"] for c in colaboradores], key="del_chapa")
             st.warning("⚠️ Excluir remove também férias, ajustes, escala e estado desse colaborador no setor.")
@@ -1842,9 +1881,12 @@ with st.form("form_add_colaborador", clear_on_submit=True):
                     delete_colaborador_total(setor, ch_del)
                     st.success("Colaborador excluído!")
                     st.rerun()
+        else:
+            st.info("Sem colaboradores para excluir.")
 
         st.markdown("---")
         st.markdown("## ✏️ Editar perfil do colaborador")
+        colaboradores = load_colaboradores_setor(setor)
         if colaboradores:
             chapas = [c["Chapa"] for c in colaboradores]
             ch_sel = st.selectbox("Chapa:", chapas, key="pf_chapa")
@@ -1861,33 +1903,30 @@ with st.form("form_add_colaborador", clear_on_submit=True):
                 update_colaborador_perfil(setor, ch_sel, sg, ent.strftime("%H:%M"), sab)
                 st.success("Salvo!")
                 st.rerun()
+        else:
+            st.info("Sem colaboradores para editar.")
 
     # ------------------------------------------------------
     # ABA 2: Gerar Escala
     # ------------------------------------------------------
     with abas[1]:
-        
-st.subheader("Gerar escala")
+        st.subheader("Gerar escala")
 
-with st.container(border=True):
-    c1, c2, c3, c4 = st.columns([1,1,1,2])
-    mes = c1.selectbox("Mês:", list(range(1, 13)), index=st.session_state["cfg_mes"] - 1, key="gen_mes")
-    ano = c2.number_input("Ano:", value=st.session_state["cfg_ano"], step=1, key="gen_ano")
-    seed = c3.number_input("Semente", min_value=0, max_value=999999, value=0, key="gen_seed")
-    respeitar_ajustes = c4.checkbox("✅ Respeitar ajustes (aba ⚙️ Ajustes)", value=True, key="gen_respeitar_ajustes")
+        with st.container(border=True):
+            c1, c2, c3, c4 = st.columns([1, 1, 1, 2])
+            mes = c1.selectbox("Mês:", list(range(1, 13)), index=int(st.session_state["cfg_mes"]) - 1, key="gen_mes")
+            ano = c2.number_input("Ano:", value=int(st.session_state["cfg_ano"]), step=1, key="gen_ano")
+            seed = c3.number_input("Semente", min_value=0, max_value=999999, value=0, key="gen_seed")
+            respeitar_ajustes = c4.checkbox("✅ Respeitar ajustes (aba ⚙️ Ajustes)", value=True, key="gen_respeitar_ajustes")
 
-st.session_state["cfg_mes"] = int(mes)
-st.session_state["cfg_ano"] = int(ano)
-",
-            value=True,
-            key="gen_respeitar_ajustes",
-        )
+        st.session_state["cfg_mes"] = int(mes)
+        st.session_state["cfg_ano"] = int(ano)
 
         colaboradores = load_colaboradores_setor(setor)
         if not colaboradores:
             st.warning("Cadastre colaboradores.")
         else:
-                        b1, b2, _ = st.columns([1,1,6])
+            b1, b2, _ = st.columns([1, 1, 6])
             if b1.button("🚀 Gerar agora", use_container_width=True, key="gen_btn"):
                 ok = _regenerar_mes_inteiro(setor, int(ano), int(mes), seed=int(seed), respeitar_ajustes=bool(respeitar_ajustes))
                 if ok:
@@ -1896,7 +1935,7 @@ st.session_state["cfg_ano"] = int(ano)
                     st.warning("Sem colaboradores.")
                 st.rerun()
 
-                        if b2.button("📥 Recarregar do banco", use_container_width=True, key="gen_reload_btn"):
+            if b2.button("📥 Recarregar do banco", use_container_width=True, key="gen_reload_btn"):
                 st.rerun()
 
             hist_db = load_escala_mes_db(setor, int(ano), int(mes))
@@ -1933,14 +1972,17 @@ st.session_state["cfg_ano"] = int(ano)
         else:
             hist_db = apply_overrides_to_hist(setor, ano, mes, hist_db)
 
-            t1, tgrid, t2, t3, t4 = st.tabs([
-                "🔧 Ajuste por dia",
-                "🧩 Marcar folgas (grade)",
-                "📅 Trocar horário mês inteiro",
-                "✅ Preferência por subgrupo",
-                "📌 Subgrupos (editável)"
-            ])
+            t1, tgrid, t2, t3, t4 = st.tabs(
+                [
+                    "🔧 Ajuste por dia",
+                    "🧩 Marcar folgas (grade)",
+                    "📅 Trocar horário mês inteiro",
+                    "✅ Preferência por subgrupo",
+                    "📌 Subgrupos (editável)",
+                ]
+            )
 
+            # -------- t1: ajuste por dia
             with t1:
                 ch = st.selectbox("Chapa:", list(hist_db.keys()), key="adj_ch")
                 df = hist_db[ch].copy()
@@ -1951,14 +1993,8 @@ st.session_state["cfg_ano"] = int(ano)
                 dia_sel = col1.number_input("Dia:", 1, len(df), value=1, key="adj_dia")
                 acao = col2.selectbox(
                     "Ação:",
-                    [
-                        "Marcar Trabalho",
-                        "Marcar Folga",
-                        "Marcar Férias",
-                        "Alterar Entrada",
-                        "Marcar Balanço"
-                    ],
-                    key="adj_acao"
+                    ["Marcar Trabalho", "Marcar Folga", "Marcar Férias", "Alterar Entrada", "Marcar Balanço"],
+                    key="adj_acao",
                 )
                 nova_ent = col3.time_input("Entrada:", value=datetime.strptime(ent_pad, "%H:%M").time(), key="adj_ent")
 
@@ -2004,7 +2040,7 @@ st.session_state["cfg_ano"] = int(ano)
                                 df.loc[idx, "H_Saida"] = _saida_from_entrada(e)
                                 set_override(setor, ano, mes, ch, dia_num, "h_entrada", e)
 
-                    else:  # "Marcar Balanço"
+                    else:  # Marcar Balanço
                         if df.loc[idx, "Status"] == "Férias":
                             st.error("Não pode (dia está em férias).")
                         else:
@@ -2013,10 +2049,8 @@ st.session_state["cfg_ano"] = int(ano)
                             set_override(setor, ano, mes, ch, dia_num, "h_entrada", BALANCO_DIA_ENTRADA)
                             set_override(setor, ano, mes, ch, dia_num, "h_saida", BALANCO_DIA_SAIDA)
 
-                    # Salva ajuste do colaborador (para não perder)...
                     save_escala_mes_db(setor, ano, mes, {ch: df})
 
-                    # ✅ NOVO: readequar a escala inteira do setor respeitando travas
                     ok = _regenerar_mes_inteiro(setor, ano, mes, seed=0, respeitar_ajustes=True)
                     if ok:
                         st.success("Ajuste salvo e escala readequada no mês inteiro!")
@@ -2026,12 +2060,17 @@ st.session_state["cfg_ano"] = int(ano)
 
                 st.dataframe(df, use_container_width=True, height=420)
 
+            # -------- tgrid: grade de folgas
             with tgrid:
                 st.markdown("### 🧩 Folgas manuais em grade (por colaborador)")
                 st.caption("Marque/desmarque as folgas do mês. Isso cria/remove travas (overrides) de Status=Folga. Domingo continua 1x1 e não é editável aqui.")
 
-                f1, f2, f3 = st.columns([1,1,2])
-                fil_sub = f1.selectbox("Filtrar subgrupo:", ["(todos)"] + sorted({(c.get("Subgrupo") or "").strip() or "SEM SUBGRUPO" for c in colaboradores}), key="grid_sub")
+                f1, f2, f3 = st.columns([1, 1, 2])
+                fil_sub = f1.selectbox(
+                    "Filtrar subgrupo:",
+                    ["(todos)"] + sorted({(c.get("Subgrupo") or "").strip() or "SEM SUBGRUPO" for c in colaboradores}),
+                    key="grid_sub",
+                )
                 fil_nome = f2.text_input("Buscar nome:", "", key="grid_busca").strip().lower()
                 somente_permite_sab = f3.checkbox("Mostrar só quem PERMITE folga sábado", value=False, key="grid_sab_only")
 
@@ -2040,7 +2079,7 @@ st.session_state["cfg_ano"] = int(ano)
                     sg = (c.get("Subgrupo") or "").strip() or "SEM SUBGRUPO"
                     if fil_sub != "(todos)" and sg != fil_sub:
                         continue
-                    if fil_nome and fil_nome not in (c.get("Nome","").lower()):
+                    if fil_nome and fil_nome not in (c.get("Nome", "").lower()):
                         continue
                     if somente_permite_sab and not bool(c.get("Folga_Sab", False)):
                         continue
@@ -2062,19 +2101,19 @@ st.session_state["cfg_ano"] = int(ano)
 
                     rows = []
                     for c in cols_f:
-                        ch = str(c["Chapa"])
-                        row = {"Nome": c["Nome"], "Chapa": ch}
-                        dfh = hist_db.get(ch)
+                        chx = str(c["Chapa"])
+                        row = {"Nome": c["Nome"], "Chapa": chx}
+                        dfh = hist_db.get(chx)
                         for d in dias:
                             is_dom = False
                             is_fer = False
                             if dfh is not None and len(dfh) >= d:
-                                is_dom = (dfh.loc[d-1, "Dia"] == "dom")
-                                is_fer = (dfh.loc[d-1, "Status"] == "Férias")
+                                is_dom = (dfh.loc[d - 1, "Dia"] == "dom")
+                                is_fer = (dfh.loc[d - 1, "Status"] == "Férias")
                             if is_dom or is_fer:
                                 row[str(d)] = False
                             else:
-                                row[str(d)] = (d in ov_status.get(ch, set()))
+                                row[str(d)] = (d in ov_status.get(chx, set()))
                         rows.append(row)
 
                     df_grid = pd.DataFrame(rows)
@@ -2086,39 +2125,38 @@ st.session_state["cfg_ano"] = int(ano)
                         hide_index=True,
                         num_rows="fixed",
                         column_config={str(d): st.column_config.CheckboxColumn(str(d), width="small") for d in dias},
-                        key="grid_editor"
+                        key="grid_editor",
                     )
 
                     if st.button("💾 Salvar folgas manuais", key="grid_save"):
                         saved = 0
                         removed = 0
                         for _, r in edited.iterrows():
-                            ch = str(r["Chapa"])
-                            dfh = hist_db.get(ch)
+                            chx = str(r["Chapa"])
+                            dfh = hist_db.get(chx)
                             for d in dias:
                                 col = str(d)
                                 want = bool(r[col])
-                                was = (d in ov_status.get(ch, set()))
+                                was = (d in ov_status.get(chx, set()))
 
                                 if dfh is not None and len(dfh) >= d:
-                                    if dfh.loc[d-1, "Dia"] == "dom":
+                                    if dfh.loc[d - 1, "Dia"] == "dom":
                                         continue
-                                    if dfh.loc[d-1, "Status"] == "Férias":
+                                    if dfh.loc[d - 1, "Status"] == "Férias":
                                         continue
 
                                 if want and not was:
-                                    set_override(setor, ano, mes, ch, d, "status", "Folga")
+                                    set_override(setor, ano, mes, chx, d, "status", "Folga")
                                     saved += 1
                                 elif (not want) and was:
-                                    delete_override(setor, ano, mes, ch, d, "status")
+                                    delete_override(setor, ano, mes, chx, d, "status")
                                     removed += 1
 
-                        # ✅ NOVO: readequar a escala inteira do setor respeitando travas
                         _regenerar_mes_inteiro(setor, ano, mes, seed=0, respeitar_ajustes=True)
-
                         st.success(f"Salvo! Criadas: {saved} | Removidas: {removed}. Escala readequada!")
                         st.rerun()
 
+            # -------- t2: trocar horário mês inteiro
             with t2:
                 ch2 = st.selectbox("Chapa:", list(hist_db.keys()), key="adjm_ch")
                 dfm = hist_db[ch2].copy()
@@ -2149,7 +2187,6 @@ st.session_state["cfg_ano"] = int(ano)
                             dfm.loc[i, "H_Saida"] = ""
 
                     update_colaborador_perfil(setor, ch2, subgrupo2, e, bool(pode_sab2))
-
                     save_escala_mes_db(setor, ano, mes, {ch2: dfm})
                     _regenerar_mes_inteiro(setor, ano, mes, seed=0, respeitar_ajustes=True)
 
@@ -2158,6 +2195,7 @@ st.session_state["cfg_ano"] = int(ano)
 
                 st.dataframe(dfm, use_container_width=True, height=420)
 
+            # -------- t3: preferência por subgrupo
             with t3:
                 st.markdown("### ✅ Preferência por subgrupo (Evitar folga se possível)")
                 subgrupos = list_subgrupos(setor)
@@ -2175,16 +2213,18 @@ st.session_state["cfg_ano"] = int(ano)
                     ev_sab = p3.checkbox("Evitar SÁB", value=bool(regras["sáb"]), key=f"ev_sab_{sg_sel}")
 
                     if st.button("Salvar preferência do subgrupo", key="pref_save"):
-                        set_subgrupo_regras(setor, sg_sel, {
-                            "seg": int(ev_seg), "ter": int(ev_ter), "qua": int(ev_qua),
-                            "qui": int(ev_qui), "sex": int(ev_sex), "sáb": int(ev_sab)
-                        })
+                        set_subgrupo_regras(
+                            setor,
+                            sg_sel,
+                            {"seg": int(ev_seg), "ter": int(ev_ter), "qua": int(ev_qua), "qui": int(ev_qui), "sex": int(ev_sex), "sáb": int(ev_sab)},
+                        )
                         _regenerar_mes_inteiro(setor, ano, mes, seed=0, respeitar_ajustes=True)
                         st.success("Preferência salva e escala readequada!")
                         st.rerun()
                 else:
                     st.info("Crie pelo menos 1 subgrupo na aba 👥 Colaboradores.")
 
+            # -------- t4: subgrupos
             with t4:
                 st.markdown("## 📌 Subgrupos (editável)")
                 subgrupos = list_subgrupos(setor)
@@ -2215,7 +2255,7 @@ st.session_state["cfg_ano"] = int(ano)
     # ABA 4: Férias
     # ------------------------------------------------------
     with abas[3]:
-        st.subheader("🏖️ Controle de Férias (com visão anual)")
+        st.subheader("🏖️ Controle de Férias")
         colaboradores = load_colaboradores_setor(setor)
 
         if not colaboradores:
@@ -2251,7 +2291,7 @@ st.session_state["cfg_ano"] = int(ano)
                     min_value=1,
                     max_value=len(df_f),
                     value=1,
-                    key="fer_rem_idx"
+                    key="fer_rem_idx",
                 )
 
                 if st.button("Remover linha", key="fer_rem_btn"):
@@ -2262,8 +2302,6 @@ st.session_state["cfg_ano"] = int(ano)
                     st.rerun()
             else:
                 st.info("Nenhuma férias cadastrada.")
-
-            st.info("📌 (Mapa anual de férias mantido igual ao seu código original; para reduzir tamanho do arquivo aqui, ele foi omitido.)")
 
     # ------------------------------------------------------
     # ABA 5: Excel
@@ -2297,8 +2335,12 @@ st.session_state["cfg_ano"] = int(ano)
                     font_header = Font(color="FFFFFF", bold=True)
                     font_dom = Font(color="FFFFFF", bold=True)
 
-                    border = Border(left=Side(style="thin"), right=Side(style="thin"),
-                                    top=Side(style="thin"), bottom=Side(style="thin"))
+                    border = Border(
+                        left=Side(style="thin"),
+                        right=Side(style="thin"),
+                        top=Side(style="thin"),
+                        bottom=Side(style="thin"),
+                    )
                     center = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
                     ch0 = list(hist_db.keys())[0]
@@ -2320,14 +2362,20 @@ st.session_state["cfg_ano"] = int(ano)
                         cB = ws.cell(2, i + 2, dia_sem)
 
                         if dia_sem == "dom":
-                            cA.fill = fill_dom; cB.fill = fill_dom
-                            cA.font = font_dom; cB.font = font_dom
+                            cA.fill = fill_dom
+                            cB.fill = fill_dom
+                            cA.font = font_dom
+                            cB.font = font_dom
                         else:
-                            cA.fill = fill_header; cB.fill = fill_header
-                            cA.font = font_header; cB.font = font_header
+                            cA.fill = fill_header
+                            cB.fill = fill_header
+                            cA.font = font_header
+                            cB.font = font_header
 
-                        cA.alignment = center; cB.alignment = center
-                        cA.border = border; cB.border = border
+                        cA.alignment = center
+                        cB.alignment = center
+                        cA.border = border
+                        cB.border = border
                         ws.column_dimensions[get_column_letter(i + 2)].width = 7
 
                     ws.column_dimensions["A"].width = 36
@@ -2373,16 +2421,21 @@ st.session_state["cfg_ano"] = int(ano)
                                 cell1 = ws.cell(row_idx, i + 2, v1)
                                 cell2 = ws.cell(row_idx + 1, i + 2, v2)
 
-                                cell1.alignment = center; cell2.alignment = center
-                                cell1.border = border; cell2.border = border
+                                cell1.alignment = center
+                                cell2.alignment = center
+                                cell1.border = border
+                                cell2.border = border
 
                                 if status == "Férias":
-                                    cell1.fill = fill_ferias; cell2.fill = fill_ferias
+                                    cell1.fill = fill_ferias
+                                    cell2.fill = fill_ferias
                                 elif status == "Folga":
                                     if dia_sem == "dom":
-                                        cell1.fill = fill_dom; cell2.fill = fill_dom
+                                        cell1.fill = fill_dom
+                                        cell2.fill = fill_dom
                                     else:
-                                        cell1.fill = fill_folga; cell2.fill = fill_folga
+                                        cell1.fill = fill_folga
+                                        cell2.fill = fill_folga
 
                             row_idx += 2
                         row_idx += 1
@@ -2395,9 +2448,12 @@ st.session_state["cfg_ano"] = int(ano)
                     data=output.getvalue(),
                     file_name=f"escala_{setor}_{mes:02d}_{ano}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    key="xls_down"
+                    key="xls_down",
                 )
 
+    # ------------------------------------------------------
+    # ABA ADMIN (somente ADMIN)
+    # ------------------------------------------------------
     if is_admin_area:
         with abas[5]:
             st.subheader("🔒 Admin do Sistema (somente ADMIN)")
@@ -2436,7 +2492,6 @@ st.session_state["cfg_ano"] = int(ano)
                     st.success("Criado!")
                     st.rerun()
 
-# =========================================================
 # MAIN
 # =========================================================
 db_init()
