@@ -1172,6 +1172,25 @@ def enforce_global_rest_keep_targets(df: pd.DataFrame, ent_padrao: str, locked_s
     for i in range(len(df)):
         stt = df.loc[i, "Status"]
 
+        # 🔥 REGRA SUPREMA (MANUAL): se este dia está TRAVADO por override,
+        # NENHUMA regra automática pode mexer (nem status, nem horários).
+        if _locked(locked_status, i):
+            if stt not in WORK_STATUSES:
+                df.loc[i, "H_Entrada"] = ""
+                df.loc[i, "H_Saida"] = ""
+                last_saida = ""
+            else:
+                if stt == BALANCO_STATUS:
+                    df.loc[i, "H_Entrada"] = BALANCO_DIA_ENTRADA
+                    df.loc[i, "H_Saida"] = BALANCO_DIA_SAIDA
+                else:
+                    ent_fix = (df.loc[i, "H_Entrada"] or "").strip() or ent_padrao
+                    df.loc[i, "H_Entrada"] = ent_fix
+                    if not (df.loc[i, "H_Saida"] or ""):
+                        df.loc[i, "H_Saida"] = _saida_from_entrada(ent_fix)
+                last_saida = (df.loc[i, "H_Saida"] or "").strip()
+            continue
+
         if stt not in WORK_STATUSES:
             df.loc[i, "H_Entrada"] = ""
             df.loc[i, "H_Saida"] = ""
