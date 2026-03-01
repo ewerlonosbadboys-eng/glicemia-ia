@@ -10,14 +10,14 @@
 # ✅ CORREÇÕES ATIVAS:
 # 1) DESCANSO GLOBAL 11:10 (INTERSTÍCIO) PARA A ESCALA INTEIRA
 # 2) DOMINGO 1x1 (POR COLABORADOR) GLOBAL
-#
-# ✅ CORREÇÃO PEDIDA AGORA (SEU PROBLEMA: SHIAN / LUCAS):
 # 3) PROIBIR FOLGAS CONSECUTIVAS AUTOMÁTICAS (ex.: DOM+SEG)
 #    - Só fica folga consecutiva se estiver TRAVADO por override (manual / "caixinha")
 # 4) enforce_global_rest_keep_targets NÃO PODE criar folga consecutiva “por acidente”
-#    - Se a alternativa de “folgar o dia anterior” gerar folga consecutiva,
-#      o sistema empurra a entrada do dia atual para respeitar 11:10.
 # 5) enforce_max_5_consecutive_work conta WORK_STATUSES como trabalho para sequência
+#
+# ✅ ALTERAÇÃO PEDIDA AGORA:
+# - REMOVIDO TUDO RELACIONADO A "Balanço Madrugada" e ao ciclo "saída tarde"
+#   (status, horários, funções e AÇÕES da aba Ajustes)
 # =========================================================
 
 import streamlit as st
@@ -43,18 +43,10 @@ DURACAO_JORNADA = timedelta(hours=9, minutes=58)    # 9:58
 PREF_EVITAR_PENALTY = 1000
 
 BALANCO_STATUS = "Balanço"
-BALANCO_MADRUGADA_STATUS = "Balanço Madrugada"
-WORK_STATUSES = {"Trabalho", BALANCO_STATUS, BALANCO_MADRUGADA_STATUS}
+WORK_STATUSES = {"Trabalho", BALANCO_STATUS}
 
 BALANCO_DIA_ENTRADA = "06:00"
 BALANCO_DIA_SAIDA = "11:50"
-BALANCO_MADRUGADA_ENTRADA = "00:10"
-BALANCO_MADRUGADA_SAIDA = "10:08"
-
-# ✅ Ciclo "saída tarde" (pré-madrugada)
-BALANCO_CICLO_PRE_D3_ENTRADA = "10:00"
-BALANCO_CICLO_PRE_D2_ENTRADA = "07:00"
-BALANCO_CICLO_JANELA_DIAS = 7  # ±1 semana (limite de alcance)
 
 D_PT = {
     "Monday": "seg",
@@ -89,8 +81,8 @@ def _saida_from_entrada(ent: str) -> str:
     return _add_min(ent, DURACAO_JORNADA)
 
 def _is_fixed_day(status: str) -> bool:
-    # FIXOS: balanço e madrugada
-    return str(status) in (BALANCO_STATUS, BALANCO_MADRUGADA_STATUS)
+    # FIXO: balanço
+    return str(status) == BALANCO_STATUS
 
 def is_work_status(status: str) -> bool:
     return str(status) in WORK_STATUSES
@@ -137,67 +129,6 @@ def enforce_no_consecutive_folga(df: pd.DataFrame, locked_status: set[int] | Non
                 df.loc[i, "Status"] = "Trabalho"
             elif not prev_locked:
                 df.loc[i - 1, "Status"] = "Trabalho"
-
-# =========================================================
-# ✅ Ciclo: Balanço Madrugada (saída tarde) ancorado no DIA da MADRUGADA
-# =========================================================
-def aplicar_ciclo_balanco_madrugada_saida_tarde_por_madrugada(
-    df: pd.DataFrame,
-    idx_madrugada: int,
-    ent_normal: str,
-    locked_status: set[int] | None = None,
-    janela_dias: int = BALANCO_CICLO_JANELA_DIAS,
-):
-    """
-    Você marca o DIA da MADRUGADA (00:10–10:08). O sistema aplica:
-      D-3: Trabalho 10:00
-      D-2: Trabalho 07:00
-      D-1: Balanço 06:00–11:50
-      D  : Balanço Madrugada 00:10–10:08
-
-    Depois (D+1...) volta ao horário normal do colaborador (não mexe).
-
-    Respeita: Férias e lock.
-    Limita alcance pela janela ±janela_dias.
-    """
-    n = len(df)
-    if idx_madrugada < 0 or idx_madrugada >= n:
-        return
-
-    left = max(0, idx_madrugada - int(janela_dias))
-    right = min(n - 1, idx_madrugada + int(janela_dias))
-
-    def pode_mexer(i: int) -> bool:
-        if i < left or i > right:
-            return False
-        if df.loc[i, "Status"] == "Férias":
-            return False
-        if _locked(locked_status, i):
-            return False
-        return True
-
-    # D = madrugada
-    if pode_mexer(idx_madrugada):
-        _set_balanco_madrugada(df, idx_madrugada, locked_status=locked_status)
-
-    # D-1 = balanço
-    idx_d1 = idx_madrugada - 1
-    if idx_d1 >= 0 and pode_mexer(idx_d1):
-        _set_balanco(df, idx_d1, locked_status=locked_status)
-
-    # D-2 = 07:00
-    idx_d2 = idx_madrugada - 2
-    if idx_d2 >= 0 and pode_mexer(idx_d2):
-        df.loc[idx_d2, "Status"] = "Trabalho"
-        df.loc[idx_d2, "H_Entrada"] = BALANCO_CICLO_PRE_D2_ENTRADA
-        df.loc[idx_d2, "H_Saida"] = _saida_from_entrada(BALANCO_CICLO_PRE_D2_ENTRADA)
-
-    # D-3 = 10:00
-    idx_d3 = idx_madrugada - 3
-    if idx_d3 >= 0 and pode_mexer(idx_d3):
-        df.loc[idx_d3, "Status"] = "Trabalho"
-        df.loc[idx_d3, "H_Entrada"] = BALANCO_CICLO_PRE_D3_ENTRADA
-        df.loc[idx_d3, "H_Saida"] = _saida_from_entrada(BALANCO_CICLO_PRE_D3_ENTRADA)
 
 # =========================================================
 # DB
@@ -842,13 +773,6 @@ def _set_balanco(df, idx, locked_status: set[int] | None = None):
     df.loc[idx, "H_Entrada"] = BALANCO_DIA_ENTRADA
     df.loc[idx, "H_Saida"] = BALANCO_DIA_SAIDA
 
-def _set_balanco_madrugada(df, idx, locked_status: set[int] | None = None):
-    if _locked(locked_status, idx):
-        return
-    df.loc[idx, "Status"] = BALANCO_MADRUGADA_STATUS
-    df.loc[idx, "H_Entrada"] = BALANCO_MADRUGADA_ENTRADA
-    df.loc[idx, "H_Saida"] = BALANCO_MADRUGADA_SAIDA
-
 def _semana_seg_dom_indices(datas: pd.DatetimeIndex, idx_any: int):
     d = datas[idx_any]
     monday = d - timedelta(days=d.weekday())
@@ -932,14 +856,11 @@ def enforce_sundays_1x1_for_employee(
 # ✅ DESCANSO GLOBAL 11:10 (corrigido para NÃO criar folga consecutiva)
 # =========================================================
 def enforce_global_rest_keep_targets(df: pd.DataFrame, ent_padrao: str, locked_status: set[int] | None = None, ultima_saida_prev: str | None = None):
-    # mantém horários fixos de balanço/madrugada
+    # mantém horário fixo de balanço
     for i in range(len(df)):
         if df.loc[i, "Status"] == BALANCO_STATUS:
             df.loc[i, "H_Entrada"] = BALANCO_DIA_ENTRADA
             df.loc[i, "H_Saida"] = BALANCO_DIA_SAIDA
-        elif df.loc[i, "Status"] == BALANCO_MADRUGADA_STATUS:
-            df.loc[i, "H_Entrada"] = BALANCO_MADRUGADA_ENTRADA
-            df.loc[i, "H_Saida"] = BALANCO_MADRUGADA_SAIDA
 
     last_saida = (ultima_saida_prev or "").strip()
 
@@ -952,7 +873,7 @@ def enforce_global_rest_keep_targets(df: pd.DataFrame, ent_padrao: str, locked_s
             last_saida = ""
             continue
 
-        if stt in (BALANCO_STATUS, BALANCO_MADRUGADA_STATUS):
+        if stt == BALANCO_STATUS:
             last_saida = (df.loc[i, "H_Saida"] or "").strip()
             continue
 
@@ -1025,7 +946,7 @@ def enforce_global_rest_keep_targets(df: pd.DataFrame, ent_padrao: str, locked_s
 # =========================================================
 def enforce_max_5_consecutive_work(df, ent_padrao, pode_folgar_sabado: bool):
     def can_make_folga(i):
-        # Só converte TRABALHO normal em folga (não mexe em Balanço/Madrugada)
+        # Só converte TRABALHO normal em folga (não mexe em Balanço)
         if df.loc[i, "Status"] != "Trabalho":
             return False
         dia = df.loc[i, "Dia"]
@@ -1039,7 +960,7 @@ def enforce_max_5_consecutive_work(df, ent_padrao, pode_folgar_sabado: bool):
 
     consec, i = 0, 0
     while i < len(df):
-        # ✅ conta balanço/madrugada como trabalho para sequência
+        # ✅ conta balanço como trabalho para sequência
         if df.loc[i, "Status"] in WORK_STATUSES:
             consec += 1
             if consec > 5:
@@ -1682,8 +1603,7 @@ def page_app():
                         "Marcar Folga",
                         "Marcar Férias",
                         "Alterar Entrada",
-                        "Marcar Balanço (madrugada)",
-                        "Marcar Balanço Madrugada (saída tarde) ✅"
+                        "Marcar Balanço"
                     ],
                     key="adj_acao"
                 )
@@ -1693,8 +1613,6 @@ def page_app():
                     idx = int(dia_sel) - 1
                     dia_sem = df.loc[idx, "Dia"]
                     dia_num = int(pd.to_datetime(df.loc[idx, "Data"]).day)
-
-                    aplicou_saida_tarde = (acao == "Marcar Balanço Madrugada (saída tarde) ✅")
 
                     if acao == "Marcar Férias":
                         _set_ferias(df, idx)
@@ -1731,7 +1649,7 @@ def page_app():
                                 df.loc[idx, "H_Saida"] = _saida_from_entrada(e)
                                 set_override(setor, ano, mes, ch, dia_num, "h_entrada", e)
 
-                    elif acao == "Marcar Balanço (madrugada)":
+                    else:  # "Marcar Balanço"
                         if df.loc[idx, "Status"] == "Férias":
                             st.error("Não pode (dia está em férias).")
                         else:
@@ -1740,69 +1658,14 @@ def page_app():
                             set_override(setor, ano, mes, ch, dia_num, "h_entrada", BALANCO_DIA_ENTRADA)
                             set_override(setor, ano, mes, ch, dia_num, "h_saida", BALANCO_DIA_SAIDA)
 
-                            if idx + 1 < len(df):
-                                dia_num2 = int(pd.to_datetime(df.loc[idx + 1, "Data"]).day)
-                                if df.loc[idx + 1, "Status"] == "Férias":
-                                    st.warning("O próximo dia está em Férias — não marquei a madrugada.")
-                                else:
-                                    _set_balanco_madrugada(df, idx + 1)
-                                    set_override(setor, ano, mes, ch, dia_num2, "status", BALANCO_MADRUGADA_STATUS)
-                                    set_override(setor, ano, mes, ch, dia_num2, "h_entrada", BALANCO_MADRUGADA_ENTRADA)
-                                    set_override(setor, ano, mes, ch, dia_num2, "h_saida", BALANCO_MADRUGADA_SAIDA)
-                            else:
-                                st.warning("Não existe próximo dia no mês para marcar a madrugada.")
-
-                    else:  # "Marcar Balanço Madrugada (saída tarde) ✅"
-                        if df.loc[idx, "Status"] == "Férias":
-                            st.error("Não pode (dia está em férias).")
-                        else:
-                            aplicar_ciclo_balanco_madrugada_saida_tarde_por_madrugada(
-                                df=df,
-                                idx_madrugada=idx,
-                                ent_normal=ent_pad,
-                                locked_status=None,
-                                janela_dias=BALANCO_CICLO_JANELA_DIAS
-                            )
-
-                            # overrides D
-                            dia_D = int(pd.to_datetime(df.loc[idx, "Data"]).day)
-                            set_override(setor, ano, mes, ch, dia_D, "status", BALANCO_MADRUGADA_STATUS)
-                            set_override(setor, ano, mes, ch, dia_D, "h_entrada", BALANCO_MADRUGADA_ENTRADA)
-                            set_override(setor, ano, mes, ch, dia_D, "h_saida", BALANCO_MADRUGADA_SAIDA)
-
-                            # overrides D-1
-                            if idx - 1 >= 0:
-                                d1 = int(pd.to_datetime(df.loc[idx - 1, "Data"]).day)
-                                set_override(setor, ano, mes, ch, d1, "status", BALANCO_STATUS)
-                                set_override(setor, ano, mes, ch, d1, "h_entrada", BALANCO_DIA_ENTRADA)
-                                set_override(setor, ano, mes, ch, d1, "h_saida", BALANCO_DIA_SAIDA)
-
-                            # overrides D-2
-                            if idx - 2 >= 0:
-                                d2 = int(pd.to_datetime(df.loc[idx - 2, "Data"]).day)
-                                set_override(setor, ano, mes, ch, d2, "status", "Trabalho")
-                                set_override(setor, ano, mes, ch, d2, "h_entrada", BALANCO_CICLO_PRE_D2_ENTRADA)
-                                set_override(setor, ano, mes, ch, d2, "h_saida", _saida_from_entrada(BALANCO_CICLO_PRE_D2_ENTRADA))
-
-                            # overrides D-3
-                            if idx - 3 >= 0:
-                                d3 = int(pd.to_datetime(df.loc[idx - 3, "Data"]).day)
-                                set_override(setor, ano, mes, ch, d3, "status", "Trabalho")
-                                set_override(setor, ano, mes, ch, d3, "h_entrada", BALANCO_CICLO_PRE_D3_ENTRADA)
-                                set_override(setor, ano, mes, ch, d3, "h_saida", _saida_from_entrada(BALANCO_CICLO_PRE_D3_ENTRADA))
-
                     # ✅ Regras pós-ajuste:
                     enforce_max_5_consecutive_work(df, ent_pad, pode_sab)
                     enforce_sundays_1x1_for_employee(df, ent_pad, locked_status=None, base_first=None)
-
-                    # ✅ remove folga consecutiva automática (só mantém se travado por override)
                     enforce_no_consecutive_folga(df, locked_status=None)
 
-                    # ✅ IMPORTANTE: para manter o ciclo "saída tarde" EXATO, não roda o descanso 11:10 nesse clique
-                    if not aplicou_saida_tarde:
-                        enforce_global_rest_keep_targets(df, ent_pad, locked_status=None, ultima_saida_prev=None)
-                        enforce_no_consecutive_folga(df, locked_status=None)
-                        enforce_global_rest_keep_targets(df, ent_pad, locked_status=None, ultima_saida_prev=None)
+                    enforce_global_rest_keep_targets(df, ent_pad, locked_status=None, ultima_saida_prev=None)
+                    enforce_no_consecutive_folga(df, locked_status=None)
+                    enforce_global_rest_keep_targets(df, ent_pad, locked_status=None, ultima_saida_prev=None)
 
                     save_escala_mes_db(setor, ano, mes, {ch: df})
                     st.success("Ajuste salvo!")
