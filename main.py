@@ -1046,9 +1046,9 @@ def enforce_max_5_consecutive_work(df, ent_padrao, pode_folgar_sabado: bool, ini
 
     def can_make_folga(i):
         # Só converte TRABALHO normal em folga (não mexe em Balanço)
-        if df.loc[i, "Status"] != "Trabalho":
+        if df.iloc[i]["Status"] != "Trabalho":
             return False
-        dia = df.loc[i, "Dia"]
+        dia = df.iloc[i]["Dia"]
         if dia == "dom":
             return False
         if dia == "sáb" and not pode_folgar_sabado:
@@ -1059,7 +1059,7 @@ def enforce_max_5_consecutive_work(df, ent_padrao, pode_folgar_sabado: bool, ini
 
     consec, i = int(initial_consec), 0
     while i < len(df):
-        if df.loc[i, "Status"] in WORK_STATUSES:
+        if df.iloc[i]["Status"] in WORK_STATUSES:
             consec += 1
             if consec > 5:
                 block_start = i - (consec - 1)
@@ -1067,7 +1067,7 @@ def enforce_max_5_consecutive_work(df, ent_padrao, pode_folgar_sabado: bool, ini
                 candidatos = []
                 for j in range(block_start, block_end + 1):
                     if can_make_folga(j):
-                        dia = df.loc[j, "Dia"]
+                        dia = df.iloc[j]["Dia"]
                         weekday_prio = 0 if dia in ["seg", "ter", "qua", "qui", "sex"] else 1
                         mid = (block_start + block_end) / 2
                         dist = abs(j - mid)
