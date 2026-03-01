@@ -200,125 +200,338 @@ def _hhmm_add(hhmm: str, minutes: int) -> str:
 def _montar_batidas_modelo(h_entrada: str):
     """
     Retorna (entrada1, saida_ref, entrada_ref, saida, horas_trab)
-    Modelo padrão:
-      - Entrada = h_entrada
-      - Saída Refeição = 12:00
-      - Entrada Refeição = 13:10
-      - Saída = entrada + DURACAO_JORNADA (9:58)
-      - Horas Trab. = 08:48
+
+    Modelo igual ao do PDF:
+      - Jornada (entrada->saída) = 9:58  (DURACAO_JORNADA)
+      - Intervalo refeição = 1:10
+      - Primeira parte (entrada -> saída refeição) = 5:10
+      - Resultado "Horas Trab." = 08:48 quando é jornada padrão.
     """
+    h_entrada = (h_entrada or "").strip()
     if not h_entrada:
-        return ("", "", "", "", "")
-    entrada1 = h_entrada
-    saida_ref = "12:00"
-    entrada_ref = "13:10"
-    saida = _hhmm_add(h_entrada, int(DURACAO_JORNADA.total_seconds() // 60))
-    horas = f"{int(DURACAO_TRABALHADA.total_seconds()//3600):02d}:{int((DURACAO_TRABALHADA.total_seconds()%3600)//60):02d}"
-    return (entrada1, saida_ref, entrada_ref, saida, horas)
+        return "", "", "", "", ""
+
+    # Parte 1 = 5h10, Refeição = 1h10
+    parte1 = 5 * 60 + 10
+    refeicao = 1 * 60 + 10
+
+    saida_ref = _hhmm_add(h_entrada, parte1)
+    ent_ref = _hhmm_add(saida_ref, refeicao)
+    saida = _hhmm_add(h_entrada, int(DURACAO_JORNADA.total_seconds() // 60))  # 9:58
+
+    # Horas trabalhadas no modelo = (9:58 - 1:10) = 8:48
+    horas = "08:48"
+    return h_entrada, saida_ref, ent_ref, saida, horas
 
 def gerar_pdf_modelo_oficial(setor: str, ano: int, mes: int, hist_db: dict, colaboradores: list[dict]) -> bytes:
     """
-    Gera PDF (A4 paisagem) 1 colaborador por página.
-    - FOLG em amarelo
-    - Cabeçalho no estilo do modelo fornecido
+    Gera PDF (A4 paisagem) com **4 colaboradores por página** (como o modelo enviado).
+    - Folga: "FOLG" com destaque amarelo.
+    - Férias: "FER" (sem destaque).
+    - Manual supremo: o PDF reflete exatamente o que está salvo em hist_db.
     """
+    from io import BytesIO
+    from reportlab.pdfgen import canvas
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
+    from reportlab.lib.pagesizes import landscape, A4
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib import colors
+    from reportlab.lib.units import mm
+    import re
+
+    # -----------------------------
+    # Canvas com contagem total de páginas (X / Y)
+    # -----------------------------
+    class _NumberedCanvas(canvas.Canvas):
+        def __init__(self, *args, **kwargs):
+            canvas.Canvas.__init__(self, *args, **kwargs)
+            self._saved_page_states = []
+
+        def showPage(self):
+            self._saved_page_states.append(dict(self.__dict__))
+            self._startPage()
+
+        def save(self):
+            num_pages = len(self._saved_page_states)
+            for state in self._saved_page_states:
+                self.__dict__.update(state)
+                self._draw_page_number(num_pages)
+                canvas.Canvas.showPage(self)
+            canvas.Canvas.save(self)
+
+        def _draw_page_number(self, page_count):
+            # no topo direito
+            self.setFont("Helvetica", 7)
+            self.drawRightString(landscape(A4)[0] - 12*mm, landscape(A4)[1] - 10*mm, f"Página: {self._pageNumber} / {page_count}")
+
     styles = getSampleStyleSheet()
     normal = styles["Normal"]
-    normal.fontSize = 9
+    normal.fontName = "Helvetica"
+    normal.fontSize = 7
+    normal.leading = 8
 
-    buff = io.BytesIO()
+    # Ordena colaboradores pelo nome (igual na tela)
+    colab_by = {c["Chapa"]: c for c in colaboradores}
+    chapas = sorted([ch for ch in hist_db.keys()], key=lambda ch: (colab_by.get(ch, {}).get("Nome", ch) or ch))
+
+    # Config páginas
+    buffer = BytesIO()
     doc = SimpleDocTemplate(
-        buff,
+        buffer,
         pagesize=landscape(A4),
-        leftMargin=18,
-        rightMargin=18,
-        topMargin=14,
-        bottomMargin=14,
+        leftMargin=10*mm,
+        rightMargin=10*mm,
+        topMargin=14*mm,
+        bottomMargin=10*mm,
+        title=f"Escala DSR {setor} {mes:02d}/{ano}"
     )
 
-    colab_by = {c["Chapa"]: c for c in colaboradores}
-    elements = []
+    W, H = landscape(A4)
+    usable_w = W - doc.leftMargin - doc.rightMargin
 
-    for ch, df in hist_db.items():
-        c = colab_by.get(ch, {"Nome": ch, "Chapa": ch})
-        nome = c.get("Nome", ch)
+    # ----- helpers
+    def _pt_weekday(ts: pd.Timestamp) -> str:
+        # usa D_PT já definido no app: Monday->seg...
+        return {
+            "seg": "Seg", "ter": "Ter", "qua": "Qua", "qui": "Qui", "sex": "Sex", "sáb": "Sáb", "dom": "Dom"
+        }.get(D_PT[ts.day_name()], D_PT[ts.day_name()])
 
-        elements.append(Paragraph(f"<b>Loja: {setor}</b>", normal))
-        elements.append(Paragraph(f"<b>ESCALA_PONTO_NEW</b>", normal))
-        elements.append(Paragraph(f"Escala de DSR e Horário de Trabalho - Mês: {mes:02d}/{ano}", normal))
-        elements.append(Spacer(1, 6))
-        elements.append(Paragraph(f"<b>{nome} ({ch})</b>", normal))
-        elements.append(Spacer(1, 8))
+    def _format_mes():
+        return f"Mês: {mes:02d}/{ano}"
 
-        dias = [str(int(pd.to_datetime(df.loc[i,'Data']).day)) for i in range(len(df))]
-        header1 = ["Data / Dia"] + dias
-        header2 = ["Dia / Semana"] + [str(df.loc[i, "Dia"]).title() for i in range(len(df))]
+    def _hhmm_norm(h: str) -> str:
+        h = (h or "").strip()
+        if not h:
+            return ""
+        h = h.replace(".", ":")
+        if re.fullmatch(r"\d{1,2}:\d{2}", h):
+            hh, mm_ = h.split(":")
+            return f"{int(hh):02d}:{int(mm_):02d}"
+        if re.fullmatch(r"\d{3,4}", h):
+            h = h.zfill(4)
+            return f"{h[:2]}:{h[2:]}"
+        return h
+
+    def _hhmm_diff_min(h1: str, h2: str) -> int:
+        try:
+            h1n = _hhmm_norm(h1); h2n = _hhmm_norm(h2)
+            if not h1n or not h2n:
+                return 0
+            t1 = datetime.strptime(h1n, "%H:%M")
+            t2 = datetime.strptime(h2n, "%H:%M")
+            return int((t2 - t1).total_seconds() // 60)
+        except Exception:
+            return 0
+
+    def _sum_total_horas(df: pd.DataFrame) -> str:
+        # soma horas trabalhadas no modelo (primeira parte + segunda parte), respeitando horários reais quando existirem.
+        total_min = 0
+        for _, r in df.iterrows():
+            stt = str(r.get("Status", ""))
+            if stt not in WORK_STATUSES:
+                continue
+            ent = (r.get("H_Entrada") or "").strip()
+            sai = (r.get("H_Saida") or "").strip()
+            if not ent or not sai:
+                continue
+            # tenta modelo com refeição
+            ent1, sref, entref, sai2, _ = _montar_batidas_modelo(ent)
+            if sai2 == sai and sref and entref:
+                # 8:48 padrão
+                total_min += 8*60 + 48
+            else:
+                # fallback: duração bruta
+                dur = _hhmm_diff_min(ent, sai)
+                if dur > 0:
+                    total_min += dur
+        return f"{total_min//60}:{total_min%60:02d}"
+
+    def _make_block(ch: str) -> list:
+        df = hist_db[ch].copy()
+        nome = colab_by.get(ch, {}).get("Nome", ch)
+        sg = (colab_by.get(ch, {}).get("Subgrupo", "") or "").strip() or "COLABORADOR"
+        sg_title = str(sg).upper()
+
+        # tabela por dia
+        qtd = len(df)
+        dias_nums = [str(int(d.day)) for d in pd.to_datetime(df["Data"])]
+        dias_sem = [_pt_weekday(pd.to_datetime(d)) for d in pd.to_datetime(df["Data"])]
+
+        # constrói matriz 7 x (1+qtd)
+        data = []
+        data.append(["Data / Dia"] + dias_nums)
+        data.append(["Dia / Semana"] + dias_sem)
 
         row_ent = ["Entrada"]
         row_sref = ["Saída Refeição"]
-        row_eref = ["Entrada Refeição"]
+        row_entref = ["Entrada"]
         row_sai = ["Saída"]
-        row_horas = ["Horas Trab."]
+        row_h = ["Horas Trab."]
 
-        total_min = 0
+        folg_cols = []
+        for i in range(qtd):
+            stt = str(df.loc[i, "Status"])
+            ent = (df.loc[i, "H_Entrada"] or "").strip()
+            sai = (df.loc[i, "H_Saida"] or "").strip()
 
-        for i in range(len(df)):
-            status = str(df.loc[i, "Status"])
-            if status == "Folga":
-                for r in (row_ent, row_sref, row_eref, row_sai):
-                    r.append("FOLG")
-                row_horas.append("")
-            elif status == "Férias":
-                for r in (row_ent, row_sref, row_eref, row_sai):
-                    r.append("")
-                row_horas.append("")
+            if stt == "Folga":
+                row_ent.append("FOLG")
+                row_sref.append("FOLG")
+                row_entref.append("FOLG")
+                row_sai.append("FOLG")
+                row_h.append("")
+                folg_cols.append(i+1)  # +1 por causa do label col
+            elif stt == "Férias":
+                row_ent.append("FER")
+                row_sref.append("FER")
+                row_entref.append("FER")
+                row_sai.append("FER")
+                row_h.append("")
+            elif stt in WORK_STATUSES:
+                if stt == BALANCO_STATUS:
+                    row_ent.append(ent)
+                    row_sref.append("")
+                    row_entref.append("")
+                    row_sai.append(sai)
+                    # horas brutas
+                    dm = _hhmm_diff_min(ent, sai) if ent and sai else 0
+                    row_h.append(f"{dm//60:02d}:{dm%60:02d}" if dm else "")
+                else:
+                    ent1, sref, entref, saida2, horas = _montar_batidas_modelo(ent or colab_by.get(ch, {}).get("Entrada", "06:00"))
+                    # respeita saída real do DF se diferente
+                    if sai and saida2 and _hhmm_norm(sai) != _hhmm_norm(saida2):
+                        # se alterado manualmente, mantém o do DF e deixa refeição em branco
+                        row_ent.append(ent or "")
+                        row_sref.append("")
+                        row_entref.append("")
+                        row_sai.append(sai)
+                        dm = _hhmm_diff_min(ent, sai) if ent and sai else 0
+                        row_h.append(f"{dm//60:02d}:{dm%60:02d}" if dm else "")
+                    else:
+                        row_ent.append(ent1)
+                        row_sref.append(sref)
+                        row_entref.append(entref)
+                        row_sai.append(saida2)
+                        row_h.append(horas)
             else:
-                ent = (df.loc[i, "H_Entrada"] or "").strip()
-                if not ent:
-                    ent = colab_by.get(ch, {}).get("Entrada", "06:00")
-                ent1, sref, eref, sai, horas = _montar_batidas_modelo(ent)
-                row_ent.append(ent1)
-                row_sref.append(sref)
-                row_eref.append(eref)
-                row_sai.append(sai)
-                row_horas.append(horas)
-                total_min += int(DURACAO_TRABALHADA.total_seconds() // 60)
+                # status desconhecido
+                row_ent.append("")
+                row_sref.append("")
+                row_entref.append("")
+                row_sai.append("")
+                row_h.append("")
 
-        table_data = [header1, header2, row_ent, row_sref, row_eref, row_sai, row_horas]
-        t = Table(table_data, repeatRows=2)
-        t.setStyle(TableStyle([
-            ("GRID", (0,0), (-1,-1), 0.6, colors.black),
-            ("FONTNAME", (0,0), (-1,1), "Helvetica-Bold"),
-            ("FONTSIZE", (0,0), (-1,-1), 7.5),
+        data += [row_ent, row_sref, row_entref, row_sai, row_h]
+
+        label_w = 34*mm
+        day_w = (usable_w - label_w) / max(1, qtd)
+
+        tbl = Table(
+            data,
+            colWidths=[label_w] + [day_w]*qtd,
+            rowHeights=[10, 10, 10, 10, 10, 10, 10]
+        )
+
+        ts = TableStyle([
+            ("FONTNAME", (0,0), (-1,-1), "Helvetica"),
+            ("FONTSIZE", (0,0), (-1,-1), 7),
+            ("ALIGN", (0,0), (0,-1), "LEFT"),
+            ("ALIGN", (1,0), (-1,-1), "CENTER"),
+            ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+            ("GRID", (0,0), (-1,-1), 0.5, colors.black),
+            ("BACKGROUND", (0,0), (0,-1), colors.whitesmoke),
+            ("FONTNAME", (0,0), (0,-1), "Helvetica-Bold"),
+        ])
+
+        # destaque FOLG (linhas 2..5)
+        for c in folg_cols:
+            for r in [2,3,4,5]:
+                ts.add("BACKGROUND", (c, r), (c, r), colors.HexColor("#FFE699"))
+                ts.add("FONTNAME", (c, r), (c, r), "Helvetica-Bold")
+
+        tbl.setStyle(ts)
+
+        # Barra cinza (cargo)
+        bar = Table([[sg_title]], colWidths=[usable_w], rowHeights=[10])
+        bar.setStyle(TableStyle([
+            ("BACKGROUND", (0,0), (-1,-1), colors.HexColor("#D9D9D9")),
+            ("FONTNAME", (0,0), (-1,-1), "Helvetica-Bold"),
+            ("FONTSIZE", (0,0), (-1,-1), 8),
             ("ALIGN", (0,0), (-1,-1), "CENTER"),
             ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
-            ("LEFTPADDING", (0,0), (-1,-1), 2),
-            ("RIGHTPADDING", (0,0), (-1,-1), 2),
-            ("TOPPADDING", (0,0), (-1,-1), 1),
-            ("BOTTOMPADDING", (0,0), (-1,-1), 1),
+            ("BOX", (0,0), (-1,-1), 0.8, colors.black),
         ]))
 
-        # FOLG amarelo
-        for r in range(2, 6):
-            for cidx in range(1, len(df) + 1):
-                if table_data[r][cidx] == "FOLG":
-                    t.setStyle(TableStyle([
-                        ("BACKGROUND", (cidx, r), (cidx, r), colors.yellow),
-                        ("FONTNAME", (cidx, r), (cidx, r), "Helvetica-Bold"),
-                    ]))
+        # Linha Nome / Mês / Cliente
+        header2 = Table(
+            [[f"{nome} ({ch})", _format_mes(), "CLIENTE:"]],
+            colWidths=[usable_w*0.55, usable_w*0.20, usable_w*0.25],
+            rowHeights=[10]
+        )
+        header2.setStyle(TableStyle([
+            ("FONTNAME", (0,0), (-1,-1), "Helvetica-Bold"),
+            ("FONTSIZE", (0,0), (-1,-1), 7),
+            ("ALIGN", (0,0), (0,0), "LEFT"),
+            ("ALIGN", (1,0), (1,0), "CENTER"),
+            ("ALIGN", (2,0), (2,0), "LEFT"),
+            ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+            ("BOX", (0,0), (-1,-1), 0.8, colors.black),
+        ]))
 
-        elements.append(t)
-        elements.append(Spacer(1, 10))
+        # Rodapé do bloco
+        total_horas = _sum_total_horas(df)
+        footer = Table(
+            [["É DE RESPONSABILIDADE DE CADA FUNCIONÁRIO CUMPRIR RIGOROSAMENTE ESTA ESCALA.", f"TOTAL DE HORAS : {total_horas}"]],
+            colWidths=[usable_w*0.78, usable_w*0.22],
+            rowHeights=[10]
+        )
+        footer.setStyle(TableStyle([
+            ("FONTNAME", (0,0), (-1,-1), "Helvetica-Bold"),
+            ("FONTSIZE", (0,0), (-1,-1), 7),
+            ("ALIGN", (0,0), (0,0), "LEFT"),
+            ("ALIGN", (1,0), (1,0), "RIGHT"),
+            ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+            ("BOX", (0,0), (-1,-1), 0.8, colors.black),
+        ]))
 
-        total_h = total_min // 60
-        total_m = total_min % 60
-        elements.append(Paragraph(f"<b>TOTAL DE HORAS: {total_h:02d}:{total_m:02d}</b>", normal))
-        elements.append(Spacer(1, 6))
-        elements.append(Paragraph("É DE RESPONSABILIDADE DE CADA FUNCIONÁRIO CUMPRIR RIGOROSAMENTE ESTA ESCALA.", normal))
-        elements.append(PageBreak())
+        return [bar, header2, tbl, footer, Spacer(1, 6)]
 
-    doc.build(elements)
-    return buff.getvalue()
+    # Cabeçalho de página (desenhado pelo onPage)
+    emissao = datetime.now().strftime("%d/%m/%Y %H:%M")
+
+    def _draw_header(canv, doc_):
+        canv.saveState()
+        canv.setStrokeColor(colors.black)
+        canv.setFillColor(colors.black)
+
+        # caixas do topo
+        y = H - 12*mm
+        canv.setFont("Helvetica-Bold", 9)
+        canv.drawString(doc.leftMargin, y, f"Loja: {setor}")
+        canv.drawCentredString(W/2, y, "Escala de DSR e Horário de Trabalho - Mês : {:02d}/{:04d}".format(mes, ano))
+        canv.setFont("Helvetica", 7)
+        canv.drawRightString(W - doc.rightMargin, y, f"Emissão: {emissao}")
+
+        # título grande
+        canv.setFont("Helvetica-Bold", 10)
+        canv.drawString(doc.leftMargin, y - 10, "ESCALA_PONTO_NEW")
+
+        # linha separadora
+        canv.setLineWidth(1)
+        canv.line(doc.leftMargin, y - 12, W - doc.rightMargin, y - 12)
+
+        canv.restoreState()
+
+    # Monta story: 4 blocos por página
+    story = []
+    per_page = 4
+    for i, ch in enumerate(chapas):
+        story += _make_block(ch)
+        if (i+1) % per_page == 0 and (i+1) < len(chapas):
+            story.append(PageBreak())
+
+    doc.build(story, onFirstPage=_draw_header, onLaterPages=_draw_header, canvasmaker=_NumberedCanvas)
+    return buffer.getvalue()
 
 def _is_fixed_day(status: str) -> bool:
     # FIXO: balanço
