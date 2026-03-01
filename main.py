@@ -1768,20 +1768,35 @@ def page_login():
 
 def _regenerar_mes_inteiro(setor: str, ano: int, mes: int, seed: int = 0, respeitar_ajustes: bool = True):
     """
-    Regera a escala do mês inteiro para TODO o setor, respeitando overrides (travas),
-    para 'readequar' automaticamente após ajustes manuais.
+    Regera a escala do mês inteiro para TODO o setor.
+
+    ✅ Garantias:
+    - Se respeitar_ajustes=True, TODAS as folgas/alterações manuais (overrides) são reaplicadas
+      no final e gravadas novamente no banco (escala_mes). Isso evita “sumir” folga manual ao gerar.
     """
     colaboradores = load_colaboradores_setor(setor)
     if not colaboradores:
         return False
+
     random.seed(int(seed))
     hist, estado_out = gerar_escala_setor_por_subgrupo(
         setor, colaboradores, int(ano), int(mes),
         respeitar_ajustes=bool(respeitar_ajustes)
     )
+
+    # 1) grava a geração
     save_escala_mes_db(setor, int(ano), int(mes), hist)
     save_estado_mes(setor, int(ano), int(mes), estado_out)
+
+    # 2) “pós-fix”: reaplica overrides do banco e grava de novo
+    if bool(respeitar_ajustes):
+        hist_db = load_escala_mes_db(setor, int(ano), int(mes))
+        hist_db = apply_overrides_to_hist(setor, int(ano), int(mes), hist_db)
+        if hist_db:
+            save_escala_mes_db(setor, int(ano), int(mes), hist_db)
+
     return True
+
 
 def page_app():
     auth = st.session_state.get("auth") or {}
@@ -1987,6 +2002,14 @@ def page_app():
         else:
             b1, b2, _ = st.columns([1, 1, 6])
             if b1.button("🚀 Gerar agora (respeita ajustes)", use_container_width=True, key="gen_btn"):
+                # Diagnóstico rápido: quantos overrides existem para esta competência?
+                ovdf_dbg = load_overrides(setor, int(ano), int(mes))
+                qtd_over = 0 if (ovdf_dbg is None or ovdf_dbg.empty) else int(len(ovdf_dbg))
+                if qtd_over > 0:
+                    st.info(f"✅ Encontrado(s) {qtd_over} ajuste(s) salvos (overrides) — vou aplicar na geração.")
+                else:
+                    st.warning("⚠️ Nenhum ajuste (overrides) encontrado para esta competência. Se você marcou folgas na grade, confira se está no mesmo MÊS/ANO.")
+
                 st.session_state["last_seed"] = int(seed)
                 ok = _regenerar_mes_inteiro(setor, int(ano), int(mes), seed=int(seed), respeitar_ajustes=True)
                 if ok:
