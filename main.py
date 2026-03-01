@@ -1738,8 +1738,7 @@ with st.sidebar:
 
     st.subheader("⚡ Atalhos")
     st.caption("Use as abas no topo; aqui é só referência rápida.")
-    st.write("• 👥 Colaboradores
-• 🚀 Gerar Escala
+    st.write("• 👥 Colaboradores\n• 🚀 Gerar Escala
 • ⚙️ Ajustes
 • 🏖️ Férias
 • 📥 Excel")
