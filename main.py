@@ -11,12 +11,19 @@
 # 1) DESCANSO GLOBAL 11:10 (INTERSTÍCIO) PARA A ESCALA INTEIRA
 # 2) DOMINGO 1x1 (POR COLABORADOR) GLOBAL
 #
-# ✅ ATUALIZAÇÕES PEDIDAS AGORA:
-# A) "Trocar horário mês inteiro" -> FORÇA acima de qualquer regra
+# ✅ ATUALIZAÇÃO DA REGRA (PEDIDO AGORA):
+# ✅ DOMINGO 1x1 = REGRA "ACIMA" DAS OUTRAS REGRAS AUTOMÁTICAS
+# - Se cair Balanço / Balanço Madrugada / qualquer WORK_STATUS no DOMINGO,
+#   a regra do domingo converte para:
+#     - "Folga" OU "Trabalho" (com entrada padrão do colaborador)
+# - NÃO altera se estiver em Férias
+# - RESPEITA lock (override de status) — se você travou o status do dia, ele não mexe.
+#
+# ✅ A) "Trocar horário mês inteiro" -> FORÇA acima de qualquer regra
 #    - sobrepõe Balanço / Madrugada (vira Trabalho com o horário escolhido)
 #    - grava override (status + entrada + saída) nos dias de WORK_STATUSES
 #
-# B) Nova ação: "Marcar Balanço Madrugada (saída tarde) ✅"
+# ✅ B) Nova ação: "Marcar Balanço Madrugada (saída tarde) ✅"
 #    - você marca o DIA que a pessoa vai entrar 00:10
 #    - o sistema aplica um ciclo antes (D-3..D):
 #        D-3: 10:00
@@ -856,46 +863,81 @@ def _all_weeks_seg_dom(datas: pd.DatetimeIndex):
 
 # =========================================================
 # ✅ DOMINGO 1x1 POR COLABORADOR (GLOBAL, RESPEITA LOCK/FÉRIAS)
+# ✅ ATUALIZADO: DOMINGO 1x1 "SOBREPÕE" STATUS AUTOMÁTICO (Balanço/Madrugada) NO DOMINGO
+# - No domingo, considera WORK_STATUSES como "Trabalho"
+# - Se precisar setar como trabalho: força "Trabalho" com ent_padrao (não permite Balanço/Madrugada no domingo)
 # =========================================================
-def enforce_sundays_1x1_for_employee(df: pd.DataFrame, ent_padrao: str, locked_status: set[int] | None = None, base_first: str | None = None):
+def enforce_sundays_1x1_for_employee(
+    df: pd.DataFrame,
+    ent_padrao: str,
+    locked_status: set[int] | None = None,
+    base_first: str | None = None
+):
     domingos = [i for i in range(len(df)) if df.loc[i, "Data"].day_name() == "Sunday"]
     if not domingos:
         return
 
-    first_idx = domingos[0]
-    if df.loc[first_idx, "Status"] != "Férias" and not _locked(locked_status, first_idx):
-        if base_first in ("Trabalho", "Folga"):
-            if base_first == "Folga":
-                _set_folga(df, first_idx, locked_status=locked_status)
-            else:
-                _set_trabalho(df, first_idx, ent_padrao, locked_status=locked_status)
+    def _normalize_dom_status(i: int) -> str | None:
+        """
+        Retorna 'Trabalho' ou 'Folga' quando o dia é domingo e não é férias.
+        Se estiver em work_status (inclui Balanço/Madrugada), considera como 'Trabalho'.
+        """
+        stt = df.loc[i, "Status"]
+        if stt == "Férias":
+            return None
+        if stt == "Folga":
+            return "Folga"
+        if stt in WORK_STATUSES:
+            return "Trabalho"
+        return None
 
+    def _force_dom(i: int, val: str):
+        """
+        Aplica o domingo como Folga ou Trabalho (entrada padrão).
+        """
+        if _locked(locked_status, i):
+            return
+        if df.loc[i, "Status"] == "Férias":
+            return
+        if val == "Folga":
+            _set_folga(df, i, locked_status=locked_status)
+        else:
+            # domingo trabalho SEMPRE vira "Trabalho" com ent_padrao
+            df.loc[i, "H_Entrada"] = ent_padrao
+            _set_trabalho(df, i, ent_padrao, locked_status=locked_status)
+
+    # Define o primeiro domingo se base_first veio explícito
+    first_idx = domingos[0]
+    if not _locked(locked_status, first_idx) and df.loc[first_idx, "Status"] != "Férias":
+        if base_first in ("Trabalho", "Folga"):
+            _force_dom(first_idx, base_first)
+
+    # Descobre o "cur" inicial (Trabalho/Folga) baseado no primeiro domingo elegível
     cur = None
     for i in domingos:
-        if df.loc[i, "Status"] == "Férias":
-            continue
-        if df.loc[i, "Status"] in ("Trabalho", "Folga"):
-            cur = df.loc[i, "Status"]
+        norm = _normalize_dom_status(i)
+        if norm in ("Trabalho", "Folga"):
+            cur = norm
             break
     if cur is None:
         return
 
+    # Aplica alternância 1x1
     for i in domingos:
         if df.loc[i, "Status"] == "Férias":
             continue
+
         if _locked(locked_status, i):
-            if df.loc[i, "Status"] in ("Trabalho", "Folga"):
-                cur = df.loc[i, "Status"]
+            # Se está travado e é Folga/Trabalho/WorkStatus, atualiza cur e segue
+            norm = _normalize_dom_status(i)
+            if norm in ("Trabalho", "Folga"):
+                cur = norm
             continue
 
-        if df.loc[i, "Status"] in ("Trabalho", "Folga") and df.loc[i, "Status"] == cur:
-            pass
-        else:
-            if cur == "Folga":
-                _set_folga(df, i, locked_status=locked_status)
-            else:
-                _set_trabalho(df, i, ent_padrao, locked_status=locked_status)
+        # Força o domingo para o valor atual de cur
+        _force_dom(i, cur)
 
+        # Alterna
         cur = "Folga" if cur == "Trabalho" else "Trabalho"
 
 # =========================================================
@@ -1236,7 +1278,9 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
         locked = locked_idx.get(ch, set())
         pode_sab = bool(colab_by_chapa[ch].get("Folga_Sab", False))
 
+        # ✅ domingo atualizado (sobrepõe status automático no domingo)
         enforce_sundays_1x1_for_employee(df, ent, locked_status=locked, base_first=None)
+
         enforce_max_5_consecutive_work(df, ent, pode_sab)
         ultima_saida_prev = estado_prev.get(ch, {}).get("ultima_saida", "") or ""
         enforce_global_rest_keep_targets(df, ent, locked_status=locked, ultima_saida_prev=ultima_saida_prev)
@@ -1256,7 +1300,9 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
         locked = locked_idx.get(ch, set())
         ultima_saida_prev = estado_prev.get(ch, {}).get("ultima_saida", "") or ""
 
+        # ✅ domingo atualizado (sobrepõe status automático no domingo)
         enforce_sundays_1x1_for_employee(df, ent, locked_status=locked, base_first=None)
+
         enforce_global_rest_keep_targets(df, ent, locked_status=locked, ultima_saida_prev=ultima_saida_prev)
 
         if respeitar_ajustes:
@@ -1281,9 +1327,14 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
 
         ultimo_dom = None
         for i in range(len(df) - 1, -1, -1):
-            if df.loc[i, "Dia"] == "dom" and df.loc[i, "Status"] in ["Trabalho", "Folga"]:
-                ultimo_dom = df.loc[i, "Status"]
-                break
+            if df.loc[i, "Dia"] == "dom":
+                # ✅ considera WORK_STATUSES como trabalho para estado
+                if df.loc[i, "Status"] == "Folga":
+                    ultimo_dom = "Folga"
+                    break
+                if df.loc[i, "Status"] in WORK_STATUSES:
+                    ultimo_dom = "Trabalho"
+                    break
 
         estado_out[ch] = {"consec_trab_final": consec, "ultima_saida": ultima_saida, "ultimo_domingo_status": ultimo_dom}
 
@@ -1688,7 +1739,6 @@ def page_app():
                         if df.loc[idx, "Status"] == "Férias":
                             st.error("Não pode (dia está em férias).")
                         else:
-                            # ✅ idx = DIA DA MADRUGADA (00:10)
                             aplicar_ciclo_balanco_madrugada_saida_tarde_por_madrugada(
                                 df=df,
                                 idx_madrugada=idx,
@@ -1726,6 +1776,8 @@ def page_app():
 
                     # ✅ Regras pós-ajuste:
                     enforce_max_5_consecutive_work(df, ent_pad, pode_sab)
+
+                    # ✅ domingo atualizado (sobrepõe status automático no domingo)
                     enforce_sundays_1x1_for_employee(df, ent_pad, locked_status=None, base_first=None)
 
                     # ✅ IMPORTANTE: para manter o ciclo "saída tarde" EXATO, não roda o descanso 11:10 nesse clique
@@ -1747,9 +1799,6 @@ def page_app():
 
                 nova_ent_mes = st.time_input("Nova entrada:", value=datetime.strptime(ent_pad2, "%H:%M").time(), key="adjm_ent")
 
-                # ✅ FORÇA TOTAL acima de qualquer regra:
-                # - transforma WORK_STATUSES (Trabalho/Balanço/Madrugada) em Trabalho com o horário escolhido
-                # - grava overrides (status + entrada + saída) nesses dias
                 if st.button("Aplicar mês inteiro", key="adjm_apply"):
                     e = nova_ent_mes.strftime("%H:%M")
                     s = _saida_from_entrada(e)
@@ -1770,7 +1819,6 @@ def page_app():
                             dfm.loc[i, "H_Entrada"] = ""
                             dfm.loc[i, "H_Saida"] = ""
 
-                    # atualiza perfil para próximos meses
                     update_colaborador_perfil(setor, ch2, subgrupo2, e, bool(pode_sab2))
 
                     # ⚠️ Não roda enforce_* aqui porque você pediu FORÇAR acima de qualquer regra.
