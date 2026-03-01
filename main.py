@@ -1949,177 +1949,104 @@ def page_app():
             else:
                 st.info("Nenhuma férias cadastrada.")
 
-            # 3) VISÃO ANUAL
+            # 3) MAPA ANUAL (estilo grade por mês, como na imagem)
             st.markdown("---")
-            st.markdown("## 📊 Visão Anual (Pessoas em férias por mês)")
+            st.markdown("## 🗺️ Mapa anual de férias (por colaborador x mês)")
 
-            ano_grafico = st.number_input(
-                "Ano para visualizar:",
+            ano_mapa = st.number_input(
+                "Ano do mapa:",
                 value=datetime.now().year,
                 step=1,
-                key="fer_ano_grafico"
+                key="fer_ano_mapa"
             )
 
-            # Limites para alerta
-            st.markdown("### 🚨 Alertas (limites)")
-            cA, cB, cC = st.columns(3)
-            limite_pessoas = cA.number_input(
-                "Limite de pessoas por mês",
-                min_value=0,
-                value=max(1, round(total_time * 0.2)),
-                step=1,
-                key="fer_limite_pessoas"
-            )
-            limite_percentual = cB.number_input(
-                "Limite % do time por mês",
-                min_value=0.0,
-                max_value=100.0,
-                value=20.0,
-                step=1.0,
-                key="fer_limite_percentual"
-            )
-            modo_alerta = cC.selectbox(
-                "Modo do alerta",
-                ["Disparar se passar em QUALQUER um (pessoas OU %)", "Disparar se passar em AMBOS (pessoas E %)"],
-                key="fer_modo_alerta"
-            )
+            # Monta um mapa: linhas = colaboradores (nome), colunas = meses
+            meses_nome = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"]
 
-            # Modo previsão
-            st.markdown("### 🔮 Previsão automática")
-            modo_previsao = st.selectbox(
-                "O que mostrar no gráfico?",
-                [
-                    "Planejado (banco): férias cadastradas no ano",
-                    "Planejado + Previsão (base ano anterior)",
-                    "Somente Previsão (base ano anterior)"
-                ],
-                key="fer_modo_previsao"
-            )
+            # Carrega férias do setor
+            rows_all = list_ferias(setor)
+            df_fer = pd.DataFrame(rows_all, columns=["Chapa","Início","Fim"]) if rows_all else pd.DataFrame(columns=["Chapa","Início","Fim"])
 
-            def _count_distinct_chapas_on_vacation_in_month(setor_: str, ano_: int, mes_: int) -> int:
-                inicio_mes = date(int(ano_), int(mes_), 1)
-                ultimo_dia = calendar.monthrange(int(ano_), int(mes_))[1]
-                fim_mes = date(int(ano_), int(mes_), int(ultimo_dia))
+            # Dicionário chapa -> nome
+            nome_by = {c["Chapa"]: c["Nome"] for c in colaboradores}
 
-                con = db_conn()
-                cur = con.cursor()
-                cur.execute("""
-                    SELECT COUNT(DISTINCT chapa)
-                    FROM ferias
-                    WHERE setor=?
-                      AND (date(inicio) <= date(?) AND date(fim) >= date(?))
-                """, (
-                    setor_,
-                    fim_mes.strftime("%Y-%m-%d"),
-                    inicio_mes.strftime("%Y-%m-%d")
-                ))
-                total = cur.fetchone()[0] or 0
-                con.close()
-                return int(total)
+            def _overlaps_month(inicio_s: str, fim_s: str, ano_: int, mes_: int) -> bool:
+                ini = datetime.strptime(inicio_s, "%Y-%m-%d").date()
+                fim = datetime.strptime(fim_s, "%Y-%m-%d").date()
+                first = date(int(ano_), int(mes_), 1)
+                last_day = calendar.monthrange(int(ano_), int(mes_))[1]
+                last = date(int(ano_), int(mes_), int(last_day))
+                return ini <= last and fim >= first
 
-            meses = list(range(1, 13))
+            # Cria matriz
+            linhas = []
+            for c in colaboradores:
+                chapa_c = c["Chapa"]
+                nome_c = c["Nome"]
+                row = {"Nome": nome_c, "Chapa": chapa_c}
+                for mi, mname in enumerate(meses_nome, start=1):
+                    has = False
+                    if not df_fer.empty:
+                        dfc = df_fer[df_fer["Chapa"].astype(str) == str(chapa_c)]
+                        for _, rr in dfc.iterrows():
+                            # considera apenas se houver sobreposição com o ano selecionado
+                            if _overlaps_month(str(rr["Início"]), str(rr["Fim"]), int(ano_mapa), int(mi)):
+                                has = True
+                                break
+                    row[mname] = " "  # mantém célula “limpa”
+                    row[f"__flag_{mi}"] = has  # flag escondida para estilo
+                linhas.append(row)
 
-            # Planejado (banco)
-            cont_planejado = [_count_distinct_chapas_on_vacation_in_month(setor, int(ano_grafico), m) for m in meses]
+            df_map = pd.DataFrame(linhas).sort_values(["Nome"]).reset_index(drop=True)
 
-            # Previsão (ano anterior)
-            ano_base = int(ano_grafico) - 1
-            cont_prev = [_count_distinct_chapas_on_vacation_in_month(setor, int(ano_base), m) for m in meses]
+            # Resumo por mês (quantas pessoas em férias no mês)
+            resumo = []
+            total_time = len(colaboradores)
+            for mi, mname in enumerate(meses_nome, start=1):
+                n = int(df_map[f"__flag_{mi}"].sum()) if f"__flag_{mi}" in df_map.columns else 0
+                pct = round((n / total_time) * 100.0, 1) if total_time > 0 else 0.0
+                resumo.append({"Mês": mname, "Pessoas": n, "% do time": pct})
+            st.dataframe(pd.DataFrame(resumo), use_container_width=True)
 
-            # Decide o que plotar
-            if modo_previsao == "Planejado (banco): férias cadastradas no ano":
-                series_plot = cont_planejado
-                label_plot = f"Planejado {ano_grafico}"
-                series_extra = None
-                label_extra = None
-            elif modo_previsao == "Somente Previsão (base ano anterior)":
-                series_plot = cont_prev
-                label_plot = f"Previsão {ano_grafico} (base {ano_base})"
-                series_extra = None
-                label_extra = None
-            else:
-                series_plot = cont_planejado
-                label_plot = f"Planejado {ano_grafico}"
-                series_extra = cont_prev
-                label_extra = f"Previsão {ano_grafico} (base {ano_base})"
+            # Mostra a grade (sem as colunas de flag)
+            show_cols = ["Nome"] + meses_nome
+            df_show = df_map[show_cols].copy()
 
-            def _to_pct(n: int) -> float:
-                if total_time <= 0:
-                    return 0.0
-                return round((n / total_time) * 100.0, 2)
+            def _style_map(row):
+                styles = []
+                # Nome
+                styles.append("font-weight:700;")
+                # Meses
+                for mi in range(1, 13):
+                    has = bool(row.get(f"__flag_{mi}", False))
+                    if has:
+                        # azul escuro (parecido com a imagem)
+                        styles.append("background-color:#1F4E78; color:#FFFFFF;")
+                    else:
+                        styles.append("background-color:#FFFFFF; color:#000000;")
+                return styles
 
-            df_resumo = pd.DataFrame({
-                "Mês": meses,
-                "Pessoas (Planejado)": cont_planejado,
-                "% do time (Planejado)": [_to_pct(x) for x in cont_planejado],
-                "Pessoas (Previsão)": cont_prev,
-                "% do time (Previsão)": [_to_pct(x) for x in cont_prev],
-            })
+            # Para o style, precisamos juntar flags na mesma DF
+            df_style_base = df_map[["Nome"] + meses_nome + [f"__flag_{i}" for i in range(1,13)]].copy()
 
-            st.markdown("### 📌 Resumo (contagem e percentual)")
-            st.dataframe(df_resumo, use_container_width=True)
+            # Build styler manually
+            sty = df_show.style
 
-            # Alertas (com base na série principal exibida)
-            st.markdown("### 🚨 Meses em alerta")
-            alert_rows = []
-            for m, val in zip(meses, series_plot):
-                pct = _to_pct(val)
-                passa_pessoas = (val > int(limite_pessoas)) if int(limite_pessoas) > 0 else False
-                passa_pct = (pct > float(limite_percentual)) if float(limite_percentual) > 0 else False
+            # apply style per row using flags from df_style_base
+            def _apply_row_styles(_):
+                out = pd.DataFrame("", index=df_show.index, columns=df_show.columns)
+                for idx in df_show.index:
+                    # Nome
+                    out.loc[idx, "Nome"] = "font-weight:700;"
+                    for mi, mname in enumerate(meses_nome, start=1):
+                        has = bool(df_style_base.loc[idx, f"__flag_{mi}"])
+                        out.loc[idx, mname] = "background-color:#1F4E78; color:#FFFFFF;" if has else "background-color:#FFFFFF; color:#000000;"
+                return out
 
-                if modo_alerta.startswith("Disparar se passar em QUALQUER"):
-                    em_alerta = passa_pessoas or passa_pct
-                else:
-                    em_alerta = passa_pessoas and passa_pct
+            sty = sty.apply(_apply_row_styles, axis=None)
 
-                if em_alerta:
-                    alert_rows.append({
-                        "Mês": m,
-                        "Pessoas": val,
-                        "% do time": pct,
-                        "Limite pessoas": int(limite_pessoas),
-                        "Limite %": float(limite_percentual),
-                    })
-
-            if alert_rows:
-                st.warning("Atenção: há meses que ultrapassam o limite definido.")
-                st.dataframe(pd.DataFrame(alert_rows), use_container_width=True)
-            else:
-                st.success("Sem meses em alerta com os limites atuais.")
-
-            # Gráfico de barras (matplotlib)
-            st.markdown("### 📊 Gráfico (Barras)")
-            import matplotlib.pyplot as plt
-
-            x = meses
-            plt.figure()
-            plt.bar(x, series_plot, label=label_plot)
-
-            if series_extra is not None:
-                x2 = [v + 0.35 for v in x]
-                plt.bar(x2, series_extra, label=label_extra)
-                plt.xticks([v + 0.175 for v in x], x)
-            else:
-                plt.xticks(x, x)
-
-            plt.xlabel("Mês")
-            plt.ylabel("Pessoas em férias")
-            plt.title(f"Férias — Setor {setor} — Ano {ano_grafico}")
-            plt.legend()
-            st.pyplot(plt)
-
-            # Percentual do time (linha)
-            st.markdown("### 📈 Percentual do time (linha)")
-            pct_series = [_to_pct(v) for v in series_plot]
-            plt.figure()
-            plt.plot(x, pct_series, marker="o")
-            plt.xticks(x, x)
-            plt.xlabel("Mês")
-            plt.ylabel("% do time em férias")
-            plt.title(f"% do time em férias — {ano_grafico}")
-            if float(limite_percentual) > 0:
-                plt.axhline(float(limite_percentual))
-            st.pyplot(plt)
+            st.markdown("**Legenda:** célula azul = colaborador com férias em algum dia daquele mês.")
+            st.dataframe(sty, use_container_width=True, height=520)
 
     # ------------------------------------------------------
     # ABA 5: Excel
