@@ -67,6 +67,14 @@ DB_PATH = "escala.db"
 
 
 
+# ---- Status / Regras base
+BALANCO_STATUS = "Balanço"
+WORK_STATUSES = {"Trabalho", BALANCO_STATUS}
+
+# horários fixos (quando Status = Balanço)
+BALANCO_DIA_ENTRADA = "06:00"
+BALANCO_DIA_SAIDA = "11:50"
+
 # =========================================================
 # PDF — MODELO OFICIAL (igual ao exemplo)
 # - 1 colaborador por página (landscape A4)
