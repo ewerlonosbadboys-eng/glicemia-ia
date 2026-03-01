@@ -1,12 +1,4 @@
-# Gerar arquivo completo app_final_corrigido_v3.py com correções:
-# - Corrige NameError: estado_prev em rebalance_folgas_dia (passa como parâmetro)
-# - Rebance respeita travas (overrides) ao trocar folgas
-# - Após ajustes manuais (aba Ajustes), regenera escala do mês inteiro respeitando overrides
-#   para "readequar" automaticamente toda a escala dali pra frente (na prática: mês inteiro, mantendo travas)
-
-from pathlib import Path
-
-code = r'''# app.py
+# app.py
 # =========================================================
 # ESCALA 5x2 OFICIAL — COMPLETO (SUBGRUPO = REGRAS)
 # + Preferência "Evitar folga" por subgrupo
@@ -51,6 +43,40 @@ from openpyxl.styles import PatternFill, Alignment, Border, Side, Font
 from openpyxl.utils import get_column_letter
 
 st.set_page_config(page_title="Escala 5x2 Oficial", layout="wide")
+
+
+
+# =========================================================
+# UI THEME (CSS) — só visual
+# =========================================================
+st.markdown("""
+<style>
+/* largura e respiro geral */
+.block-container { padding-top: 1.2rem; padding-bottom: 2rem; }
+
+/* títulos mais compactos */
+h1, h2, h3 { letter-spacing: -0.2px; }
+
+/* cards */
+.kpi-card {
+  border: 1px solid rgba(49, 51, 63, 0.12);
+  border-radius: 14px;
+  padding: 14px 16px;
+  background: rgba(250, 250, 252, 0.6);
+}
+.kpi-title { font-size: 0.85rem; opacity: 0.75; margin-bottom: 2px; }
+.kpi-value { font-size: 1.3rem; font-weight: 800; margin: 0; }
+
+/* caixas e divisórias */
+.hr { height:1px; background: rgba(49, 51, 63, 0.12); margin: 14px 0; }
+
+/* sidebar mais limpa */
+section[data-testid="stSidebar"] .block-container { padding-top: 1rem; }
+
+/* dataframe: arredondar */
+div[data-testid="stDataFrame"] { border-radius: 12px; overflow: hidden; }
+</style>
+""", unsafe_allow_html=True)
 
 DB_PATH = "escala.db"
 
@@ -1685,18 +1711,78 @@ def page_app():
     auth = st.session_state["auth"] or {}
     setor = auth.get("setor", "GERAL")
 
-    st.sidebar.title("👤 Sessão")
-    st.sidebar.write(f"**Nome:** {auth.get('nome','-')}")
-    st.sidebar.write(f"**Setor:** {setor}")
-    st.sidebar.write(f"**Chapa:** {auth.get('chapa','-')}")
-    st.sidebar.write(f"**Perfil:** {'ADMIN' if auth.get('is_admin', False) else ('LÍDER' if auth.get('is_lider', False) else 'USUÁRIO')}")
+# =========================
+# SIDEBAR — Sessão + Atalhos
+# =========================
+with st.sidebar:
+    st.title("👤 Sessão")
+    st.caption("Acesso por setor (usuário / líder / admin)")
 
-    if st.sidebar.button("Sair", key="logout_btn"):
+    cA, cB = st.columns([1,1])
+    cA.write(f"**Nome:** {auth.get('nome','-')}")
+    cB.write(f"**Perfil:** {'ADMIN' if auth.get('is_admin', False) else ('LÍDER' if auth.get('is_lider', False) else 'USUÁRIO')}")
+
+    st.write(f"**Setor:** {setor}")
+    st.write(f"**Chapa:** {auth.get('chapa','-')}")
+
+    st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
+
+    st.subheader("🗓️ Competência")
+    m1, m2 = st.columns(2)
+    cfg_mes = m1.selectbox("Mês", list(range(1,13)), index=st.session_state["cfg_mes"]-1, key="sb_mes")
+    cfg_ano = m2.number_input("Ano", value=int(st.session_state["cfg_ano"]), step=1, key="sb_ano")
+    st.session_state["cfg_mes"] = int(cfg_mes)
+    st.session_state["cfg_ano"] = int(cfg_ano)
+
+    st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
+
+    st.subheader("⚡ Atalhos")
+    st.caption("Use as abas no topo; aqui é só referência rápida.")
+    st.write("• 👥 Colaboradores
+• 🚀 Gerar Escala
+• ⚙️ Ajustes
+• 🏖️ Férias
+• 📥 Excel")
+
+    st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
+
+    if st.button("🚪 Sair", use_container_width=True, key="logout_btn"):
         st.session_state["auth"] = None
         st.rerun()
 
     st.title(f"📅 Escala 5x2 — Setor: {setor}")
     st.caption("✅ Regras ativas: Descanso 11:10 + Domingo 1x1 + Sem folga consecutiva automática + Férias só via Aba Férias + Regra semanal depende do domingo.")
+
+
+# =========================
+# KPIs — só visual (não altera regra)
+# =========================
+ano_k = int(st.session_state["cfg_ano"])
+mes_k = int(st.session_state["cfg_mes"])
+
+colaboradores_k = load_colaboradores_setor(setor)
+total_colab = len(colaboradores_k)
+
+hist_db_kpi = load_escala_mes_db(setor, ano_k, mes_k)
+if hist_db_kpi:
+    hist_db_kpi = apply_overrides_to_hist(setor, ano_k, mes_k, hist_db_kpi)
+
+folgas_mes = 0
+ferias_mes = 0
+trabalhos_mes = 0
+if hist_db_kpi:
+    for _, dfk in hist_db_kpi.items():
+        folgas_mes += int((dfk["Status"] == "Folga").sum())
+        ferias_mes += int((dfk["Status"] == "Férias").sum())
+        trabalhos_mes += int(dfk["Status"].isin(WORK_STATUSES).sum())
+
+k1, k2, k3, k4 = st.columns(4)
+k1.markdown(f"<div class='kpi-card'><div class='kpi-title'>Colaboradores</div><p class='kpi-value'>{total_colab}</p></div>", unsafe_allow_html=True)
+k2.markdown(f"<div class='kpi-card'><div class='kpi-title'>Dias de Folga (mês)</div><p class='kpi-value'>{folgas_mes}</p></div>", unsafe_allow_html=True)
+k3.markdown(f"<div class='kpi-card'><div class='kpi-title'>Dias de Férias (mês)</div><p class='kpi-value'>{ferias_mes}</p></div>", unsafe_allow_html=True)
+k4.markdown(f"<div class='kpi-card'><div class='kpi-title'>Dias de Trabalho (mês)</div><p class='kpi-value'>{trabalhos_mes}</p></div>", unsafe_allow_html=True)
+
+st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
 
     tabs = ["👥 Colaboradores", "🚀 Gerar Escala", "⚙️ Ajustes", "🏖️ Férias", "📥 Excel"]
     is_admin_area = bool(auth.get("is_admin", False)) and setor == "ADMIN"
@@ -1724,21 +1810,25 @@ def page_app():
 
         st.markdown("---")
 
-        c1, c2 = st.columns(2)
-        nome_n = c1.text_input("Nome:", key="col_nome")
-        chapa_n = c2.text_input("Chapa:", key="col_chapa")
+        
+with st.form("form_add_colaborador", clear_on_submit=True):
+    c1, c2 = st.columns(2)
+    nome_n = c1.text_input("Nome:", key="col_nome")
+    chapa_n = c2.text_input("Chapa:", key="col_chapa")
 
-        if st.button("Cadastrar colaborador", key="col_add"):
-            if not nome_n or not chapa_n:
-                st.error("Preencha nome e chapa.")
-            elif colaborador_exists(setor, chapa_n.strip()):
-                st.error("Já existe essa chapa.")
-            else:
-                create_colaborador(nome_n.strip(), setor, chapa_n.strip())
-                st.success("Cadastrado!")
-                st.rerun()
+    submitted = st.form_submit_button("Cadastrar colaborador", use_container_width=True)
+    if submitted:
+        if not nome_n or not chapa_n:
+            st.error("Preencha nome e chapa.")
+        elif colaborador_exists(setor, chapa_n.strip()):
+            st.error("Já existe essa chapa.")
+        else:
+            create_colaborador(nome_n.strip(), setor, chapa_n.strip())
+            st.success("Cadastrado!")
+            st.rerun()
 
-        # ✅ EXCLUIR COLABORADOR
+# ✅ EXCLUIR COLABORADOR
+
         st.markdown("---")
         st.markdown("## 🗑️ Excluir colaborador")
         if colaboradores:
@@ -1776,16 +1866,19 @@ def page_app():
     # ABA 2: Gerar Escala
     # ------------------------------------------------------
     with abas[1]:
-        st.subheader("Gerar escala")
-        c1, c2, c3 = st.columns(3)
-        mes = c1.selectbox("Mês:", list(range(1, 13)), index=st.session_state["cfg_mes"] - 1, key="gen_mes")
-        ano = c2.number_input("Ano:", value=st.session_state["cfg_ano"], step=1, key="gen_ano")
-        seed = c3.number_input("Semente (opcional)", min_value=0, max_value=999999, value=0, key="gen_seed")
-        st.session_state["cfg_mes"] = int(mes)
-        st.session_state["cfg_ano"] = int(ano)
+        
+st.subheader("Gerar escala")
 
-        respeitar_ajustes = st.checkbox(
-            "✅ Gerar respeitando ajustes (⚙️ Ajustes)",
+with st.container(border=True):
+    c1, c2, c3, c4 = st.columns([1,1,1,2])
+    mes = c1.selectbox("Mês:", list(range(1, 13)), index=st.session_state["cfg_mes"] - 1, key="gen_mes")
+    ano = c2.number_input("Ano:", value=st.session_state["cfg_ano"], step=1, key="gen_ano")
+    seed = c3.number_input("Semente", min_value=0, max_value=999999, value=0, key="gen_seed")
+    respeitar_ajustes = c4.checkbox("✅ Respeitar ajustes (aba ⚙️ Ajustes)", value=True, key="gen_respeitar_ajustes")
+
+st.session_state["cfg_mes"] = int(mes)
+st.session_state["cfg_ano"] = int(ano)
+",
             value=True,
             key="gen_respeitar_ajustes",
         )
@@ -1794,8 +1887,8 @@ def page_app():
         if not colaboradores:
             st.warning("Cadastre colaboradores.")
         else:
-            colG1, colG2 = st.columns(2)
-            if colG1.button("🚀 Gerar agora", key="gen_btn"):
+                        b1, b2, _ = st.columns([1,1,6])
+            if b1.button("🚀 Gerar agora", use_container_width=True, key="gen_btn"):
                 ok = _regenerar_mes_inteiro(setor, int(ano), int(mes), seed=int(seed), respeitar_ajustes=bool(respeitar_ajustes))
                 if ok:
                     st.success("Escala gerada!")
@@ -1803,7 +1896,7 @@ def page_app():
                     st.warning("Sem colaboradores.")
                 st.rerun()
 
-            if colG2.button("📥 Recarregar do banco", key="gen_reload_btn"):
+                        if b2.button("📥 Recarregar do banco", use_container_width=True, key="gen_reload_btn"):
                 st.rerun()
 
             hist_db = load_escala_mes_db(setor, int(ano), int(mes))
@@ -1819,7 +1912,7 @@ def page_app():
                 st.markdown("---")
                 st.markdown("### Visualizar colaborador (detalhado)")
                 ch_view = st.selectbox("Chapa:", list(hist_db.keys()), key="view_ch")
-                st.dataframe(hist_db[ch_view], use_container_width=True)
+                st.dataframe(hist_db[ch_view], use_container_width=True, height=420)
             else:
                 st.info("Sem escala no mês. Clique em **Gerar agora**.")
 
@@ -1931,7 +2024,7 @@ def page_app():
                         st.success("Ajuste salvo!")
                     st.rerun()
 
-                st.dataframe(df, use_container_width=True)
+                st.dataframe(df, use_container_width=True, height=420)
 
             with tgrid:
                 st.markdown("### 🧩 Folgas manuais em grade (por colaborador)")
@@ -2063,7 +2156,7 @@ def page_app():
                     st.success("Horário do mês inteiro FORÇADO e escala readequada.")
                     st.rerun()
 
-                st.dataframe(dfm, use_container_width=True)
+                st.dataframe(dfm, use_container_width=True, height=420)
 
             with t3:
                 st.markdown("### ✅ Preferência por subgrupo (Evitar folga se possível)")
@@ -2150,7 +2243,7 @@ def page_app():
 
             if rows:
                 df_f = pd.DataFrame(rows, columns=["Chapa", "Início", "Fim"])
-                st.dataframe(df_f, use_container_width=True)
+                st.dataframe(df_f, use_container_width=True, height=420)
 
                 st.markdown("### ❌ Remover férias")
                 rem_idx = st.number_input(
@@ -2309,7 +2402,7 @@ def page_app():
         with abas[5]:
             st.subheader("🔒 Admin do Sistema (somente ADMIN)")
             dfu = admin_list_users()
-            st.dataframe(dfu, use_container_width=True)
+            st.dataframe(dfu, use_container_width=True, height=420)
 
             st.markdown("### Resetar senha de um usuário")
             if not dfu.empty:
@@ -2352,8 +2445,3 @@ if st.session_state["auth"] is None:
     page_login()
 else:
     page_app()
-'''
-
-out_path = Path("/mnt/data/app_final_corrigido_v3.py")
-out_path.write_text(code, encoding="utf-8")
-str(out_path)
