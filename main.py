@@ -47,267 +47,122 @@ import secrets
 from openpyxl.styles import PatternFill, Alignment, Border, Side, Font
 from openpyxl.utils import get_column_letter
 
-# PDF (modelo oficial)
+# =========================================================
+# PDF (Modelo Oficial) — ReportLab
+# =========================================================
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
-from reportlab.lib import colors
-from reportlab.lib.pagesizes import A4, landscape
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import mm
-
 from reportlab.lib.pagesizes import landscape, A4
-from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.lib.units import mm
-
+from reportlab.lib import colors
 st.set_page_config(page_title="Escala 5x2 Oficial", layout="wide")
+
+
+
+# =========================================================
+# UI THEME (CSS) — só visual
+# =========================================================
+st.markdown("""
+<style>
+/* largura e respiro geral */
+.block-container { padding-top: 1.2rem; padding-bottom: 2rem; }
+
+/* títulos mais compactos */
+h1, h2, h3 { letter-spacing: -0.2px; }
+
+/* cards */
+.kpi-card {
+  border: 1px solid rgba(49, 51, 63, 0.12);
+  border-radius: 14px;
+  padding: 14px 16px;
+  background: rgba(250, 250, 252, 0.6);
+}
+.kpi-title { font-size: 0.85rem; opacity: 0.75; margin-bottom: 2px; }
+.kpi-value { font-size: 1.3rem; font-weight: 800; margin: 0; }
+
+/* caixas e divisórias */
+.hr { height:1px; background: rgba(49, 51, 63, 0.12); margin: 14px 0; }
+
+/* sidebar mais limpa */
+section[data-testid="stSidebar"] .block-container { padding-top: 1rem; }
+
+/* dataframe: arredondar */
+div[data-testid="stDataFrame"] { border-radius: 12px; overflow: hidden; }
+</style>
+""", unsafe_allow_html=True)
 
 DB_PATH = "escala.db"
 
+# ---- Regras fixas
+INTERSTICIO_MIN = timedelta(hours=11, minutes=10)   # 11:10
+DURACAO_JORNADA = timedelta(hours=9, minutes=58)    # 9:58
 
+PREF_EVITAR_PENALTY = 1000
 
-
-
-# ---- Status / Regras base
 BALANCO_STATUS = "Balanço"
 WORK_STATUSES = {"Trabalho", BALANCO_STATUS}
 
-# horários fixos (quando Status = Balanço)
 BALANCO_DIA_ENTRADA = "06:00"
 BALANCO_DIA_SAIDA = "11:50"
 
+D_PT = {
+    "Monday": "seg",
+    "Tuesday": "ter",
+    "Wednesday": "qua",
+    "Thursday": "qui",
+    "Friday": "sex",
+    "Saturday": "sáb",
+    "Sunday": "dom",
+}
+
+
 # =========================================================
-# PDF — MODELO OFICIAL (igual ao exemplo)
-# - 1 colaborador por página (landscape A4)
-# - "FOLG" em amarelo
-# - Horários calculados: refeição 6h após entrada, retorno +1h10
+# ESCALA MANUAL (BASE) — Fevereiro/2026 (DSR)
+# - Esta base serve para "iniciar" o mês com folgas pré-definidas.
+# - Ao clicar em "Aplicar base", o app cria overrides (Status=Folga) nesses dias.
+# - Depois, "Gerar agora (respeitando ajustes)" completa o restante mantendo as folgas travadas.
 # =========================================================
-def _calc_refeicao(ent_hhmm: str):
-    # padrão do modelo: 6h de trabalho antes da refeição + 1h10 de intervalo
-    if not ent_hhmm:
-        return ("", "", "")
-    saida_ref = _add_min(ent_hhmm, timedelta(hours=6))
-    entrada_ref = _add_min(saida_ref, timedelta(hours=1, minutes=10))
-    # saída final já existe no app (9:58) como padrão, mas vamos calcular por consistência
-    saida_final = _saida_from_entrada(ent_hhmm)
-    return (saida_ref, entrada_ref, saida_final)
+MANUAL_BASES = {
+    (2026, 2): [
+        {"Chapa": "020.0823", "Nome": "ALEXANDRE ROBERTO ALMEIDA DOS REIS", "Dias_Folga": [1,4,6,9,15,18,20,23]},
+        {"Chapa": "020.1447", "Nome": "ANA CAROLINA THEODORO PADILHA", "Dias_Folga": [1,3,6,11,15,18,20,26]},
+        {"Chapa": "020.1733", "Nome": "BEATRIZ VITORIA DOS SANTOS LOPES", "Dias_Folga": [3,8,11,13,16,22,24,26]},
+        {"Chapa": "020.1751", "Nome": "BRUNA SILVA MARTINS", "Dias_Folga": [1,4,6,9,15,17,19,23]},
+        {"Chapa": "020.2288", "Nome": "CRISTIANE ALVES DOS SANTOS", "Dias_Folga": [2,8,11,13,16,22,24,26]},
+        {"Chapa": "020.0265", "Nome": "DECIO EPAMINONDAS DE ALMEIDA NETO", "Dias_Folga": [4,8,10,12,18,22,24,26]},
+        {"Chapa": "020.1839", "Nome": "DEYBSON JOSE DA SILVA", "Dias_Folga": [2,8,10,13,19,22,24,26]},
+        {"Chapa": "020.1884", "Nome": "DISNEI OLIVEIRA ADORNO", "Dias_Folga": [1,4,6,10,15,17,20,23]},
+        {"Chapa": "020.2192", "Nome": "EDILENE MARTINS DE MIRANDA", "Dias_Folga": [3,8,10,12,17,22,24,26]},
+        {"Chapa": "020.2144", "Nome": "ELIS MIRIAN MARQUES OLIVEIRA", "Dias_Folga": [1,4,6,12,15,18,20,26]},
+        {"Chapa": "020.1750", "Nome": "ELIZANGELA BARBOSA MOREIRA", "Dias_Folga": [22,25,27]},
+        {"Chapa": "020.1984", "Nome": "EWERLON DE JESUS DA SILVA E SILVA", "Dias_Folga": [1,3,6,9,15,17,20,23]},
+        {"Chapa": "020.2139", "Nome": "FABIANA SOUZA SILVA", "Dias_Folga": [3,8,11,13,18,22,24,26]},
+        {"Chapa": "020.2450", "Nome": "GABRIEL CAMELO PINTO", "Dias_Folga": [3,8,10,12,18,22,25,27]},
+        {"Chapa": "020.0748", "Nome": "IVANILDO FIGUEIREDO DA VERA CRUZ", "Dias_Folga": [16,22,25,27]},
+        {"Chapa": "020.2299", "Nome": "JAIRON MACHADO DE ALMEIDA", "Dias_Folga": [2,8,11,13,16,22,24,26]},
+        {"Chapa": "020.1649", "Nome": "JOAO VICTOR DE SOUZA SAMPAIO", "Dias_Folga": [1,3,5,9,15,17,20,25]},
+        {"Chapa": "020.2274", "Nome": "JOSE FERNANDO OLIVEIRA DO NASCIMENTO", "Dias_Folga": [1,4,6,10,15,18,20,25]},
+        {"Chapa": "020.2143", "Nome": "LUCAS EDUARDO DOS SANTOS SANTILLO", "Dias_Folga": [8,10,12,16,22,24,26]},
+        {"Chapa": "020.1639", "Nome": "LUCIMARA EMILIA MARQUES", "Dias_Folga": [1,3,5,9,15,18,20,25]},
+        {"Chapa": "020.2050", "Nome": "LUIZ FERNANDO DE TULIO", "Dias_Folga": [1,3,5,11,15,17,19,23]},
+        {"Chapa": "020.1628", "Nome": "MACICLEIDE CONCEICAO DOS SANTOS", "Dias_Folga": [1,5,8,10,13,19,22,25,27]},
+        {"Chapa": "020.0463", "Nome": "MARIA EDUARDA GONCALVES NUNES", "Dias_Folga": [2,8,10,12,16,22,24,26]},
+        {"Chapa": "020.1854", "Nome": "MARIANA MABILLE DE MORAES", "Dias_Folga": []},
+        {"Chapa": "020.1128", "Nome": "MARIVALDO RODRIGUES DA SILVA", "Dias_Folga": [1,4,6,12,15,18,20,23]},
+        {"Chapa": "020.2309", "Nome": "MAURICIO DAVI DA SILVA NEIVAS ARAUJO", "Dias_Folga": [1,3,5,9,15,17,20,23]},
+        {"Chapa": "020.2348", "Nome": "NATALIA CRISTINA GIMENES DE OLIVEIRA", "Dias_Folga": [1,4,6,12,15,17,19,23,27]},
+        {"Chapa": "020.1856", "Nome": "RIQUELME CABRAL DE JESUS", "Dias_Folga": [3,8,11,13,18,22,24,26]},
+        {"Chapa": "020.2388", "Nome": "RUTH PEREIRA DA SILVA", "Dias_Folga": [2,8,11,13,19,22,25,27]},
+        {"Chapa": "020.1906", "Nome": "SHAIAN RUAN BARBOSA ALVES", "Dias_Folga": [4,8]},
+        {"Chapa": "020.2203", "Nome": "TATIANE APARECIDA CABECA", "Dias_Folga": [1,4,6,9,15,18,20,25]},
+        {"Chapa": "020.0994", "Nome": "VERA LUCIA BENEDITO ARRUDA", "Dias_Folga": [1,4,8,11,15,18,22,25]},
+        {"Chapa": "020.1559", "Nome": "VIVIANE NASCIMENTO LIMA LEMOS", "Dias_Folga": [1,3,5,11,15,17,19,23]},
+        {"Chapa": "020.1980", "Nome": "YASMIM STEFHANNY BATA SANTOS", "Dias_Folga": [5,8,10,12,17,22,24,26]},
+    ]
+}
 
-def _horas_trab_padrao(ent_hhmm: str):
-    # 9:58 - 1:10 = 8:48 (modelo)
-    if not ent_hhmm:
-        return ""
-    return "08:48"
-
-
-def _hhmm_add(hhmm: str, minutes: int) -> str:
-    if not hhmm:
-        return ""
-    h, m = map(int, hhmm.split(":"))
-    total = h * 60 + m + int(minutes)
-    total %= 1440
-    return f"{total//60:02d}:{total%60:02d}"
-
-def _work_minutes_from_status(status: str) -> int:
-    # Modelo do PDF (padrão): 8:48 por dia trabalhado
-    return 8 * 60 + 48
-
-def _dow_pt_abbrev(dt: pd.Timestamp) -> str:
-    # Abreviações exatamente como no modelo
-    d = dt.day_name()
-    return {"Sunday":"Dom","Monday":"Seg","Tuesday":"Ter","Wednesday":"Qua","Thursday":"Qui","Friday":"Sex","Saturday":"Sáb"}[d]
-
-def _montar_batidas_modelo(h_entrada: str) -> tuple[str,str,str,str,str]:
-    """
-    Retorna (entrada, saida_ref, entrada_ref, saida, horas)
-    Regra para ficar parecido com o modelo:
-      - intervalo fixo 1:10
-      - saída final = entrada + 9:58
-      - saída refeição:
-          * se entrada <= 09:00 => +6:00 (padrão manhã)
-          * senão => +4:25 (padrão tarde/noite)
-    """
-    if not h_entrada:
-        return ("","","","","")
-    ent_min = _to_min(h_entrada)
-    if ent_min <= 9*60:
-        saida_ref = _hhmm_add(h_entrada, 6*60)
-    else:
-        saida_ref = _hhmm_add(h_entrada, 4*60 + 25)
-    entrada_ref = _hhmm_add(saida_ref, 70)  # 1:10
-    saida = _hhmm_add(h_entrada, int(DURACAO_JORNADA.total_seconds()//60))  # 9:58
-    horas = "08:48"
-    return (h_entrada, saida_ref, entrada_ref, saida, horas)
-
-def gerar_pdf_modelo_oficial(setor: str, ano: int, mes: int, hist_db: dict[str, pd.DataFrame], colaboradores: list[dict]) -> bytes:
-    """
-    Gera PDF A4 paisagem extremamente parecido com o modelo enviado (ESCALA_PONTO_NEW):
-      - Cabeçalho com Loja / Emissão / Página
-      - Linha ESCALA_PONTO_NEW + Título central do mês
-      - Faixa "OPERADOR DE SUPERMERCADO"
-      - Grade com dias 1..31, Dia/Semana, batidas e Horas Trab.
-      - Folga: "FOLG" com fundo amarelo (#FFFF00)
-      - Rodapé com responsabilidade + TOTAL DE HORAS
-    """
-    buffer = io.BytesIO()
-    doc = SimpleDocTemplate(
-        buffer,
-        pagesize=landscape(A4),
-        leftMargin=10*mm, rightMargin=10*mm,
-        topMargin=8*mm, bottomMargin=10*mm,
-        title="ESCALA_PONTO_NEW"
-    )
-
-    styles = getSampleStyleSheet()
-    s8 = ParagraphStyle("s8", parent=styles["Normal"], fontName="Helvetica", fontSize=8, leading=9)
-    s7 = ParagraphStyle("s7", parent=styles["Normal"], fontName="Helvetica", fontSize=7, leading=8)
-    s6 = ParagraphStyle("s6", parent=styles["Normal"], fontName="Helvetica", fontSize=6, leading=7)
-    s10b = ParagraphStyle("s10b", parent=styles["Normal"], fontName="Helvetica-Bold", fontSize=10, leading=11)
-
-    # Mapa de colaboradores
-    colab_by = {c["Chapa"]: c for c in colaboradores}
-
-    elements = []
-    emissao = datetime.now().strftime("%d/%m/%Y %H:%M")
-
-    # medidas
-    page_w, page_h = landscape(A4)
-    usable_w = page_w - doc.leftMargin - doc.rightMargin
-    label_w = 62  # coluna esquerda (labels)
-    day_w = (usable_w - label_w) / 31.0
-    col_widths = [label_w] + [day_w]*31
-
-    # cores
-    yellow = colors.HexColor("#FFFF00")
-    gray = colors.HexColor("#E6E6E6")
-    lightgray = colors.HexColor("#F2F2F2")
-
-    # ordem por nome
-    chapas_ordenadas = sorted(hist_db.keys(), key=lambda ch: (colab_by.get(ch, {}).get("Nome",""), ch))
-
-    for idx_page, ch in enumerate(chapas_ordenadas, start=1):
-        df = hist_db[ch].copy()
-        nome = colab_by.get(ch, {}).get("Nome", ch)
-        mes_txt = f"{int(mes):02d}/{int(ano)}"
-
-        # ===== Cabeçalho (3 linhas, bem parecido com o modelo)
-        header_data = [
-            [Paragraph(f"Loja:  {setor}", s7),
-             Paragraph("Escala de DSR e Horário de Trabalho - Mês : " + mes_txt, s7),
-             Paragraph(f"Emissão :     {emissao}", s7)],
-            [Paragraph("ESCALA_PONTO_NEW", s7), "", Paragraph(f"Página :     {idx_page}     /     {len(chapas_ordenadas)}", s7)]
-        ]
-        ht = Table(header_data, colWidths=[usable_w*0.34, usable_w*0.44, usable_w*0.22])
-        ht.setStyle(TableStyle([
-            ("LINEBELOW",(0,0),(-1,0),0.8,colors.black),
-            ("LINEBELOW",(0,1),(-1,1),0.8,colors.black),
-            ("VALIGN",(0,0),(-1,-1),"MIDDLE"),
-            ("ALIGN",(1,0),(1,0),"CENTER"),
-            ("ALIGN",(2,0),(2,1),"RIGHT"),
-            ("ALIGN",(0,1),(0,1),"LEFT"),
-            ("SPAN",(1,1),(1,1)),
-        ]))
-        elements.append(ht)
-
-        # Faixa função
-        faixa = Table([[Paragraph("OPERADOR DE SUPERMERCADO", s7)]], colWidths=[usable_w])
-        faixa.setStyle(TableStyle([
-            ("BOX",(0,0),(-1,-1),0.8,colors.black),
-            ("ALIGN",(0,0),(-1,-1),"CENTER"),
-            ("VALIGN",(0,0),(-1,-1),"MIDDLE"),
-        ]))
-        elements.append(faixa)
-
-        # ===== Grade (tabela principal)
-        # Linha superior: nome/chapa + Mês + CLIENTE + (dias em branco)
-        top = [""]*(1+31)
-        top[0] = f"{nome} ({ch})"
-        top[9] = f"Mês: {mes_txt}"
-        top[13] = "CLIENTE:"
-        # Linha dias
-        qtd = len(df)
-        dias = list(range(1, 32))
-        row_dias = ["Data / Dia"] + [str(d) if d <= qtd else "" for d in dias]
-        row_dow = ["Dia / Semana"] + [_dow_pt_abbrev(df.loc[d-1,"Data"]) if d <= qtd else "" for d in dias]
-
-        r_ent1 = ["Entrada"]
-        r_sref = ["Saída Refeição"]
-        r_ent2 = ["Entrada"]
-        r_sai = ["Saída"]
-        r_h = ["Horas Trab."]
-
-        total_work_days = 0
-
-        for d in dias:
-            if d > qtd:
-                r_ent1.append(""); r_sref.append(""); r_ent2.append(""); r_sai.append(""); r_h.append("")
-                continue
-            stt = str(df.loc[d-1, "Status"])
-            if stt == "Folga":
-                r_ent1.append("FOLG"); r_sref.append("FOLG"); r_ent2.append("FOLG"); r_sai.append("FOLG"); r_h.append("")
-            elif stt == "Férias":
-                r_ent1.append(""); r_sref.append(""); r_ent2.append(""); r_sai.append(""); r_h.append("")
-            else:
-                ent = (df.loc[d-1, "H_Entrada"] or "").strip()
-                ent1, sref, entref, sai, horas = _montar_batidas_modelo(ent)
-                r_ent1.append(ent1); r_sref.append(sref); r_ent2.append(entref); r_sai.append(sai); r_h.append(horas)
-                total_work_days += 1
-
-        data_tbl = [top, row_dias, row_dow, r_ent1, r_sref, r_ent2, r_sai, r_h]
-        t = Table(data_tbl, colWidths=col_widths, rowHeights=[14, 14, 14, 14, 14, 14, 14, 14])
-        ts = TableStyle([
-            ("BOX",(0,0),(-1,-1),0.9,colors.black),
-            ("INNERGRID",(0,0),(-1,-1),0.6,colors.black),
-            ("FONT",(0,0),(-1,-1),"Helvetica",6.5),
-            ("VALIGN",(0,0),(-1,-1),"MIDDLE"),
-            ("ALIGN",(0,0),(-1,-1),"CENTER"),
-            ("ALIGN",(0,0),(0,-1),"LEFT"),
-
-            # spans do topo
-            ("SPAN",(0,0),(8,0)),
-            ("SPAN",(9,0),(12,0)),
-            ("SPAN",(13,0),(31,0)),
-            ("ALIGN",(0,0),(8,0),"LEFT"),
-            ("ALIGN",(9,0),(12,0),"CENTER"),
-            ("ALIGN",(13,0),(31,0),"LEFT"),
-
-            # backgrounds
-            ("BACKGROUND",(0,1),(-1,1),colors.white),
-            ("BACKGROUND",(0,2),(-1,2),gray),
-            ("BACKGROUND",(0,3),(0,7),lightgray),
-        ])
-
-        # amarelo FOLG (linhas 3..6)
-        for d in range(1, qtd+1):
-            if str(df.loc[d-1,"Status"]) == "Folga":
-                col = d  # col 1..31
-                ts.add("BACKGROUND",(col,3),(col,6),yellow)
-                ts.add("FONT",(col,3),(col,6),"Helvetica-Bold",6.5)
-        t.setStyle(ts)
-        elements.append(t)
-
-        # ===== Rodapé (responsabilidade + total)
-        total_min = total_work_days * (8*60+48)
-        total_h = total_min//60
-        total_m = total_min%60
-
-        rod = Table(
-            [[Paragraph("É DE RESPONSABILIDADE DE CADA FUNCIONÁRIO CUMPRIR RIGOROSAMENTE ESTA ESCALA.", s7),
-              Paragraph(f"TOTAL DE HORAS :  {total_h:02d}:{total_m:02d}", s7)]],
-            colWidths=[usable_w*0.78, usable_w*0.22]
-        )
-        rod.setStyle(TableStyle([
-            ("BOX",(0,0),(-1,-1),0.8,colors.black),
-            ("VALIGN",(0,0),(-1,-1),"MIDDLE"),
-            ("ALIGN",(0,0),(0,0),"LEFT"),
-            ("ALIGN",(1,0),(1,0),"RIGHT"),
-        ]))
-        elements.append(rod)
-
-        if idx_page < len(chapas_ordenadas):
-            elements.append(PageBreak())
-
-    doc.build(elements)
-    return buffer.getvalue()
-
+# =========================================================
+# Helpers de hora (minutos)
+# =========================================================
 def _to_min(hhmm: str) -> int:
     if not hhmm:
         return 0
@@ -326,6 +181,144 @@ def _sub_min(hhmm: str, delta: timedelta) -> str:
 
 def _saida_from_entrada(ent: str) -> str:
     return _add_min(ent, DURACAO_JORNADA)
+
+
+
+# =========================================================
+# PDF helpers (modelo de escala/ponto)
+# - Linha "Horas Trab." do modelo costuma ser 08:48 (jornada 9:58 com 1:10 de intervalo)
+# =========================================================
+DURACAO_TRABALHADA = timedelta(hours=8, minutes=48)   # 08:48 (modelo)
+
+def _hhmm_add(hhmm: str, minutes: int) -> str:
+    if not hhmm:
+        return ""
+    h, m = map(int, hhmm.split(":"))
+    total = (h * 60 + m + int(minutes)) % (24 * 60)
+    return f"{total//60:02d}:{total%60:02d}"
+
+def _montar_batidas_modelo(h_entrada: str):
+    """
+    Retorna (entrada1, saida_ref, entrada_ref, saida, horas_trab)
+    Modelo padrão:
+      - Entrada = h_entrada
+      - Saída Refeição = 12:00
+      - Entrada Refeição = 13:10
+      - Saída = entrada + DURACAO_JORNADA (9:58)
+      - Horas Trab. = 08:48
+    """
+    if not h_entrada:
+        return ("", "", "", "", "")
+    entrada1 = h_entrada
+    saida_ref = "12:00"
+    entrada_ref = "13:10"
+    saida = _hhmm_add(h_entrada, int(DURACAO_JORNADA.total_seconds() // 60))
+    horas = f"{int(DURACAO_TRABALHADA.total_seconds()//3600):02d}:{int((DURACAO_TRABALHADA.total_seconds()%3600)//60):02d}"
+    return (entrada1, saida_ref, entrada_ref, saida, horas)
+
+def gerar_pdf_modelo_oficial(setor: str, ano: int, mes: int, hist_db: dict, colaboradores: list[dict]) -> bytes:
+    """
+    Gera PDF (A4 paisagem) 1 colaborador por página.
+    - FOLG em amarelo
+    - Cabeçalho no estilo do modelo fornecido
+    """
+    styles = getSampleStyleSheet()
+    normal = styles["Normal"]
+    normal.fontSize = 9
+
+    buff = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buff,
+        pagesize=landscape(A4),
+        leftMargin=18,
+        rightMargin=18,
+        topMargin=14,
+        bottomMargin=14,
+    )
+
+    colab_by = {c["Chapa"]: c for c in colaboradores}
+    elements = []
+
+    for ch, df in hist_db.items():
+        c = colab_by.get(ch, {"Nome": ch, "Chapa": ch})
+        nome = c.get("Nome", ch)
+
+        elements.append(Paragraph(f"<b>Loja: {setor}</b>", normal))
+        elements.append(Paragraph(f"<b>ESCALA_PONTO_NEW</b>", normal))
+        elements.append(Paragraph(f"Escala de DSR e Horário de Trabalho - Mês: {mes:02d}/{ano}", normal))
+        elements.append(Spacer(1, 6))
+        elements.append(Paragraph(f"<b>{nome} ({ch})</b>", normal))
+        elements.append(Spacer(1, 8))
+
+        dias = [str(int(pd.to_datetime(df.loc[i,'Data']).day)) for i in range(len(df))]
+        header1 = ["Data / Dia"] + dias
+        header2 = ["Dia / Semana"] + [str(df.loc[i, "Dia"]).title() for i in range(len(df))]
+
+        row_ent = ["Entrada"]
+        row_sref = ["Saída Refeição"]
+        row_eref = ["Entrada Refeição"]
+        row_sai = ["Saída"]
+        row_horas = ["Horas Trab."]
+
+        total_min = 0
+
+        for i in range(len(df)):
+            status = str(df.loc[i, "Status"])
+            if status == "Folga":
+                for r in (row_ent, row_sref, row_eref, row_sai):
+                    r.append("FOLG")
+                row_horas.append("")
+            elif status == "Férias":
+                for r in (row_ent, row_sref, row_eref, row_sai):
+                    r.append("")
+                row_horas.append("")
+            else:
+                ent = (df.loc[i, "H_Entrada"] or "").strip()
+                if not ent:
+                    ent = colab_by.get(ch, {}).get("Entrada", "06:00")
+                ent1, sref, eref, sai, horas = _montar_batidas_modelo(ent)
+                row_ent.append(ent1)
+                row_sref.append(sref)
+                row_eref.append(eref)
+                row_sai.append(sai)
+                row_horas.append(horas)
+                total_min += int(DURACAO_TRABALHADA.total_seconds() // 60)
+
+        table_data = [header1, header2, row_ent, row_sref, row_eref, row_sai, row_horas]
+        t = Table(table_data, repeatRows=2)
+        t.setStyle(TableStyle([
+            ("GRID", (0,0), (-1,-1), 0.6, colors.black),
+            ("FONTNAME", (0,0), (-1,1), "Helvetica-Bold"),
+            ("FONTSIZE", (0,0), (-1,-1), 7.5),
+            ("ALIGN", (0,0), (-1,-1), "CENTER"),
+            ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+            ("LEFTPADDING", (0,0), (-1,-1), 2),
+            ("RIGHTPADDING", (0,0), (-1,-1), 2),
+            ("TOPPADDING", (0,0), (-1,-1), 1),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 1),
+        ]))
+
+        # FOLG amarelo
+        for r in range(2, 6):
+            for cidx in range(1, len(df) + 1):
+                if table_data[r][cidx] == "FOLG":
+                    t.setStyle(TableStyle([
+                        ("BACKGROUND", (cidx, r), (cidx, r), colors.yellow),
+                        ("FONTNAME", (cidx, r), (cidx, r), "Helvetica-Bold"),
+                    ]))
+
+        elements.append(t)
+        elements.append(Spacer(1, 10))
+
+        total_h = total_min // 60
+        total_m = total_min % 60
+        elements.append(Paragraph(f"<b>TOTAL DE HORAS: {total_h:02d}:{total_m:02d}</b>", normal))
+        elements.append(Spacer(1, 6))
+        elements.append(Paragraph("É DE RESPONSABILIDADE DE CADA FUNCIONÁRIO CUMPRIR RIGOROSAMENTE ESTA ESCALA.", normal))
+        elements.append(PageBreak())
+
+    doc.build(elements)
+    return buff.getvalue()
 
 def _is_fixed_day(status: str) -> bool:
     # FIXO: balanço
@@ -2426,41 +2419,35 @@ def page_app():
                 auto_readequar = st.checkbox("🔄 Readequar escala ao salvar", value=True, key="grid_auto_regen")
 
                 if st.button("💾 Salvar folgas manuais (e readequar mês)", key="grid_save"):
-                        set_folga = 0
-                        set_trab = 0
-                        for _, r in edited.iterrows():
-                            chg = str(r["Chapa"])
-                            dfh = hist_db.get(chg)
-                            ent_pad_local = colab_by.get(chg, {}).get("Entrada", "06:00")
-                            sai_pad_local = _saida_from_entrada(ent_pad_local)
+                    set_folga = 0
+                    set_trab = 0
+                    for _, r in edited.iterrows():
+                        chg = str(r["Chapa"])
+                        dfh = hist_db.get(chg)
+                        ent_pad_local = colab_by.get(chg, {}).get("Entrada", "06:00")
+                        for d in dias:
+                            want_folga = bool(r[str(d)])
+                            if dfh is not None and len(dfh) >= d:
+                                if dfh.loc[d - 1, "Status"] == "Férias":
+                                    continue
 
-                            for d in dias:
-                                want_folga = bool(r[str(d)])
+                            if want_folga:
+                                set_override(setor, ano, mes, chg, d, "status", "Folga")
+                                set_folga += 1
+                            else:
+                                # ✅ regra pedida: desmarcado = TRABALHO (travado)
+                                set_override(setor, ano, mes, chg, d, "status", "Trabalho")
+                                # mantém horário padrão no banco via geração/descanso global; se quiser travar horário também,
+                                # descomente as linhas abaixo:
+                                # set_override(setor, ano, mes, chg, d, "h_entrada", ent_pad_local)
+                                # set_override(setor, ano, mes, chg, d, "h_saida", _saida_from_entrada(ent_pad_local))
+                                set_trab += 1
 
-                                # não mexe em férias
-                                if dfh is not None and len(dfh) >= d:
-                                    if dfh.loc[d - 1, "Status"] == "Férias":
-                                        continue
+                    if auto_readequar:
+                        _regenerar_mes_inteiro(setor, ano, mes, seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
 
-                                if want_folga:
-                                    # ✅ marcado = FOLGA (travado)
-                                    set_override(setor, ano, mes, chg, d, "status", "Folga")
-                                    # folga não tem horário
-                                    delete_override(setor, ano, mes, chg, d, "h_entrada")
-                                    delete_override(setor, ano, mes, chg, d, "h_saida")
-                                    set_folga += 1
-                                else:
-                                    # ✅ desmarcado = TRABALHO (travado) + horário padrão (nunca vazio)
-                                    set_override(setor, ano, mes, chg, d, "status", "Trabalho")
-                                    set_override(setor, ano, mes, chg, d, "h_entrada", ent_pad_local)
-                                    set_override(setor, ano, mes, chg, d, "h_saida", sai_pad_local)
-                                    set_trab += 1
-
-                        if auto_readequar:
-                            _regenerar_mes_inteiro(setor, ano, mes, seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
-
-                        st.success(f"Salvo! Folgas travadas: {set_folga} | Trabalhos travados: {set_trab}. Escala readequada mantendo travas!")
-                        st.rerun()
+                    st.success(f"Salvo! Folgas travadas: {set_folga} | Trabalhos travados: {set_trab}.")
+                    st.rerun()
 
             with t2:
                 ch2 = st.selectbox("Chapa:", list(hist_db.keys()), key="adjm_ch")
@@ -2738,12 +2725,14 @@ def page_app():
                     key="xls_down"
                 )
 
+    
+
             st.markdown("---")
-            st.markdown("### 📄 PDF (modelo igual ao RH)")
+            st.markdown("### 📄 PDF (modelo oficial)")
             if st.button("📄 Gerar PDF (modelo oficial)", key="pdf_btn"):
                 hist_db_pdf = load_escala_mes_db(setor, ano, mes)
                 if not hist_db_pdf:
-                    st.warning("Sem escala salva para gerar PDF.")
+                    st.warning("Gere a escala antes.")
                 else:
                     hist_db_pdf = apply_overrides_to_hist(setor, ano, mes, hist_db_pdf)
                     pdf_bytes = gerar_pdf_modelo_oficial(setor, ano, mes, hist_db_pdf, colaboradores)
@@ -2755,7 +2744,7 @@ def page_app():
                         key="pdf_down"
                     )
 
-    # ------------------------------------------------------
+# ------------------------------------------------------
     # ABA 6: Admin (somente ADMIN)
     # ------------------------------------------------------
     if is_admin_area:
