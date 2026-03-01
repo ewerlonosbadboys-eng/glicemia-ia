@@ -771,33 +771,68 @@ def _set_balanco_madrugada(df, idx, locked_status: set[int] | None = None):
     df.loc[idx, "H_Saida"] = BALANCO_MADRUGADA_SAIDA
 
 # ✅ NOVO: aplica o ciclo completo de "saída tarde" em D0..D4
-def aplicar_ciclo_balanco_madrugada_saida_tarde(
+def aplicar_ciclo_balanco_madrugada_saida_tarde_por_madrugada(
     df: pd.DataFrame,
-    idx_balanco: int,
-    ent_padrao: str,
+    idx_madrugada: int,
+    ent_normal: str,
     locked_status: set[int] | None = None,
+    janela_dias: int = BALANCO_CICLO_JANELA_DIAS,
 ):
-    _set_balanco(df, idx_balanco, locked_status=locked_status)
+    """
+    Marca um ciclo ANTES da madrugada (ancorado no dia da madrugada idx_madrugada):
+      D-3: Trabalho 10:00
+      D-2: Trabalho 07:00
+      D-1: Balanço 06:00–11:50
+      D  : Balanço Madrugada 00:10–10:08
+    Depois (D+1...) volta ao horário normal (não mexe).
 
-    if idx_balanco + 1 < len(df):
-        if df.loc[idx_balanco + 1, "Status"] != "Férias" and not _locked(locked_status, idx_balanco + 1):
-            df.loc[idx_balanco + 1, "Status"] = "Trabalho"
-            df.loc[idx_balanco + 1, "H_Entrada"] = BALANCO_CICLO_D1_ENTRADA
-            df.loc[idx_balanco + 1, "H_Saida"] = _saida_from_entrada(BALANCO_CICLO_D1_ENTRADA)
+    - Só aplica mudanças se o índice estiver dentro da janela +/- janela_dias
+      (na prática, limita o alcance de alterações).
+    - Respeita Férias e lock (não altera dia travado).
+    """
 
-    if idx_balanco + 2 < len(df):
-        if df.loc[idx_balanco + 2, "Status"] != "Férias" and not _locked(locked_status, idx_balanco + 2):
-            df.loc[idx_balanco + 2, "Status"] = "Trabalho"
-            df.loc[idx_balanco + 2, "H_Entrada"] = BALANCO_CICLO_D2_ENTRADA
-            df.loc[idx_balanco + 2, "H_Saida"] = _saida_from_entrada(BALANCO_CICLO_D2_ENTRADA)
+    n = len(df)
+    if idx_madrugada < 0 or idx_madrugada >= n:
+        return
 
-    if idx_balanco + 3 < len(df):
-        if df.loc[idx_balanco + 3, "Status"] != "Férias" and not _locked(locked_status, idx_balanco + 3):
-            _set_balanco(df, idx_balanco + 3, locked_status=locked_status)
+    # Janela de segurança (± uma semana)
+    left = max(0, idx_madrugada - janela_dias)
+    right = min(n - 1, idx_madrugada + janela_dias)
 
-    if idx_balanco + 4 < len(df):
-        if df.loc[idx_balanco + 4, "Status"] != "Férias" and not _locked(locked_status, idx_balanco + 4):
-            _set_balanco_madrugada(df, idx_balanco + 4, locked_status=locked_status)
+    def pode_mexer(i: int) -> bool:
+        if i < left or i > right:
+            return False
+        if df.loc[i, "Status"] == "Férias":
+            return False
+        if _locked(locked_status, i):
+            return False
+        return True
+
+    # D = madrugada
+    if pode_mexer(idx_madrugada):
+        _set_balanco_madrugada(df, idx_madrugada, locked_status=locked_status)
+
+    # D-1 = balanço
+    idx_d1 = idx_madrugada - 1
+    if idx_d1 >= 0 and pode_mexer(idx_d1):
+        _set_balanco(df, idx_d1, locked_status=locked_status)
+
+    # D-2 = 07:00
+    idx_d2 = idx_madrugada - 2
+    if idx_d2 >= 0 and pode_mexer(idx_d2):
+        df.loc[idx_d2, "Status"] = "Trabalho"
+        df.loc[idx_d2, "H_Entrada"] = BALANCO_CICLO_PRE_D2_ENTRADA
+        df.loc[idx_d2, "H_Saida"] = _saida_from_entrada(BALANCO_CICLO_PRE_D2_ENTRADA)
+
+    # D-3 = 10:00
+    idx_d3 = idx_madrugada - 3
+    if idx_d3 >= 0 and pode_mexer(idx_d3):
+        df.loc[idx_d3, "Status"] = "Trabalho"
+        df.loc[idx_d3, "H_Entrada"] = BALANCO_CICLO_PRE_D3_ENTRADA
+        df.loc[idx_d3, "H_Saida"] = _saida_from_entrada(BALANCO_CICLO_PRE_D3_ENTRADA)
+
+    # ✅ IMPORTANTE: não mexe D+1 em diante
+    # (volta ao normal automaticamente: se o normal é 12:40, no dia seguinte fica 12:40)
 
 def _semana_seg_dom_indices(datas: pd.DatetimeIndex, idx_any: int):
     d = datas[idx_any]
