@@ -1948,16 +1948,36 @@ def _regenerar_mes_inteiro(setor: str, ano: int, mes: int, seed: int = 0, respei
 
 
 def page_app():
-    # (UI completa continua no seu código original)
-    st.info("Arquivo gerado para download. Cole o restante do seu UI original abaixo se quiser manter 100% igual.")
-    st.stop()
+    st.title("📅 Escala 5x2 Oficial")
 
-# =========================================================
-# MAIN
-# =========================================================
-db_init()
+    setor = st.session_state["auth"]["setor"]
 
-if st.session_state["auth"] is None:
-    page_login()
-else:
-    page_app()
+    ano = st.number_input("Ano", value=st.session_state["cfg_ano"])
+    mes = st.number_input("Mês", min_value=1, max_value=12, value=st.session_state["cfg_mes"])
+
+    colaboradores = load_colaboradores_setor(setor)
+
+    if not colaboradores:
+        st.warning("Nenhum colaborador cadastrado.")
+        return
+
+    if st.button("Gerar escala"):
+        hist, estado_out = gerar_escala_setor_por_subgrupo(
+            setor,
+            colaboradores,
+            int(ano),
+            int(mes),
+            respeitar_ajustes=True
+        )
+
+        save_escala_mes_db(setor, int(ano), int(mes), hist)
+        save_estado_mes(setor, int(ano), int(mes), estado_out)
+
+        st.success("Escala gerada com sucesso!")
+
+    hist_db = load_escala_mes_db(setor, int(ano), int(mes))
+
+    if hist_db:
+        colab_by = {c["Chapa"]: c for c in colaboradores}
+        cal = calendario_rh_df(hist_db, colab_by)
+        st.dataframe(cal)
