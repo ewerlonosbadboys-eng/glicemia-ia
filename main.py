@@ -2142,6 +2142,47 @@ def page_app():
                         key="grid_editor"
                     )
 
+
+                    # ==============================
+                    # ✅ PRÉVIA — Atualiza o Calendário RH imediatamente
+                    # (sem precisar clicar em "Gerar agora")
+                    # ==============================
+                    st.markdown("#### 👁️ Prévia do Calendário RH (com suas marcações)")
+                    hist_preview = {}
+                    for _, rr in edited.iterrows():
+                        chg = str(rr["Chapa"])
+                        if chg in hist_db:
+                            hist_preview[chg] = hist_db[chg].copy()
+
+                    for _, rr in edited.iterrows():
+                        chg = str(rr["Chapa"])
+                        dfh2 = hist_preview.get(chg)
+                        if dfh2 is None:
+                            continue
+                        ent_pad_local = colab_by.get(chg, {}).get("Entrada", "06:00")
+                        for d in dias:
+                            if len(dfh2) < d:
+                                continue
+                            if dfh2.loc[d-1, "Dia"] == "dom":
+                                continue
+                            if dfh2.loc[d-1, "Status"] == "Férias":
+                                continue
+                            want = bool(rr[str(d)])
+                            if want:
+                                dfh2.loc[d-1, "Status"] = "Folga"
+                                dfh2.loc[d-1, "H_Entrada"] = ""
+                                dfh2.loc[d-1, "H_Saida"] = ""
+                            else:
+                                if dfh2.loc[d-1, "Status"] == "Folga":
+                                    dfh2.loc[d-1, "Status"] = "Trabalho"
+                                    dfh2.loc[d-1, "H_Entrada"] = ent_pad_local
+                                    dfh2.loc[d-1, "H_Saida"] = _saida_from_entrada(ent_pad_local)
+                        hist_preview[chg] = dfh2
+
+                    cal_prev = calendario_rh_df(hist_preview, colab_by)
+                    st.dataframe(style_calendario(cal_prev, int(mes), int(ano)), use_container_width=True)
+
+
                     if st.button("💾 Salvar folgas manuais (e readequar mês)", key="grid_save"):
                         saved = 0
                         removed = 0
