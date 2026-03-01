@@ -61,6 +61,9 @@ from reportlab.lib.units import mm
 
 st.set_page_config(page_title="Escala 5x2 Oficial", layout="wide")
 
+DB_PATH = "escala.db"
+
+
 
 
 
