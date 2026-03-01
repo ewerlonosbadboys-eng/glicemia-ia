@@ -1041,6 +1041,9 @@ def enforce_global_rest_keep_targets(df: pd.DataFrame, ent_padrao: str, locked_s
 # ✅ 5x2: máxima sequência de trabalho = 5
 # =========================================================
 def enforce_max_5_consecutive_work(df, ent_padrao, pode_folgar_sabado: bool, initial_consec: int = 0):
+    # Segurança: garante índice 0..N-1 (evita KeyError por índice quebrado)
+    df.reset_index(drop=True, inplace=True)
+
     def can_make_folga(i):
         # Só converte TRABALHO normal em folga (não mexe em Balanço)
         if df.loc[i, "Status"] != "Trabalho":
@@ -1780,8 +1783,9 @@ def page_app():
         else:
             hist_db = apply_overrides_to_hist(setor, ano, mes, hist_db)
 
-            t1, t2, t3, t4 = st.tabs([
+            t1, tgrid, t2, t3, t4 = st.tabs([
                 "🔧 Ajuste por dia",
+                "🧩 Marcar folgas (grade)",
                 "📅 Trocar horário mês inteiro",
                 "✅ Preferência por subgrupo",
                 "📌 Subgrupos (editável)"
@@ -1874,6 +1878,108 @@ def page_app():
                     st.rerun()
 
                 st.dataframe(df, use_container_width=True)
+
+
+            with tgrid:
+                st.markdown("### 🧩 Folgas manuais em grade (por colaborador)")
+                st.caption("Marque/desmarque as folgas do mês. Isso cria/remove travas (overrides) de Status=Folga. Domingo continua 1x1 e não é editável aqui.")
+
+                # filtros
+                f1, f2, f3 = st.columns([1,1,2])
+                fil_sub = f1.selectbox("Filtrar subgrupo:", ["(todos)"] + sorted({(c.get("Subgrupo") or "").strip() or "SEM SUBGRUPO" for c in colaboradores}), key="grid_sub")
+                fil_nome = f2.text_input("Buscar nome:", "", key="grid_busca").strip().lower()
+                somente_permite_sab = f3.checkbox("Mostrar só quem PERMITE folga sábado", value=False, key="grid_sab_only")
+
+                # lista filtrada
+                cols_f = []
+                for c in colaboradores:
+                    sg = (c.get("Subgrupo") or "").strip() or "SEM SUBGRUPO"
+                    if fil_sub != "(todos)" and sg != fil_sub:
+                        continue
+                    if fil_nome and fil_nome not in (c.get("Nome","").lower()):
+                        continue
+                    if somente_permite_sab and not bool(c.get("Folga_Sab", False)):
+                        continue
+                    cols_f.append(c)
+
+                if not cols_f:
+                    st.info("Nenhum colaborador no filtro.")
+                else:
+                    # Base do mês (dias)
+                    qtd = calendar.monthrange(int(ano), int(mes))[1]
+                    dias = list(range(1, qtd + 1))
+
+                    # mapa de overrides atuais de status
+                    ovdf = load_overrides(setor, ano, mes)
+                    ov_status = {}
+                    if ovdf is not None and not ovdf.empty:
+                        od = ovdf[ovdf["campo"] == "status"]
+                        for _, r in od.iterrows():
+                            if str(r["valor"]) == "Folga":
+                                ov_status.setdefault(str(r["chapa"]), set()).add(int(r["dia"]))
+
+                    # construir tabela editável (checkbox)
+                    rows = []
+                    for c in cols_f:
+                        ch = str(c["Chapa"])
+                        row = {"Nome": c["Nome"], "Chapa": ch}
+                        # pega df do hist (para saber domingos e férias)
+                        dfh = hist_db.get(ch)
+                        for d in dias:
+                            # domingo: bloqueia
+                            is_dom = False
+                            is_fer = False
+                            if dfh is not None and len(dfh) >= d:
+                                is_dom = (dfh.loc[d-1, "Dia"] == "dom")
+                                is_fer = (dfh.loc[d-1, "Status"] == "Férias")
+                            # não permite editar domingo nem férias
+                            if is_dom or is_fer:
+                                row[str(d)] = False
+                            else:
+                                row[str(d)] = (d in ov_status.get(ch, set()))
+                        rows.append(row)
+
+                    df_grid = pd.DataFrame(rows)
+
+                    st.markdown("#### ✅ Marque as folgas (dias)")
+                    edited = st.data_editor(
+                        df_grid,
+                        use_container_width=True,
+                        hide_index=True,
+                        num_rows="fixed",
+                        column_config={str(d): st.column_config.CheckboxColumn(str(d), width="small") for d in dias},
+                        key="grid_editor"
+                    )
+
+                    if st.button("💾 Salvar folgas manuais", key="grid_save"):
+                        # aplica diferença (delta)
+                        # recarrega base para checar domingos/férias
+                        saved = 0
+                        removed = 0
+                        for _, r in edited.iterrows():
+                            ch = str(r["Chapa"])
+                            dfh = hist_db.get(ch)
+                            for d in dias:
+                                col = str(d)
+                                want = bool(r[col])
+                                was = (d in ov_status.get(ch, set()))
+
+                                # pula domingo/férias
+                                if dfh is not None and len(dfh) >= d:
+                                    if dfh.loc[d-1, "Dia"] == "dom":
+                                        continue
+                                    if dfh.loc[d-1, "Status"] == "Férias":
+                                        continue
+
+                                if want and not was:
+                                    set_override(setor, ano, mes, ch, d, "status", "Folga")
+                                    saved += 1
+                                elif (not want) and was:
+                                    delete_override(setor, ano, mes, ch, d, "status")
+                                    removed += 1
+
+                        st.success(f"Salvo! Criadas: {saved} | Removidas: {removed}.")
+                        st.rerun()
 
             with t2:
                 ch2 = st.selectbox("Chapa:", list(hist_db.keys()), key="adjm_ch")
