@@ -1705,28 +1705,42 @@ def page_app():
 
                 if st.button("Aplicar mês inteiro", key="adjm_apply"):
                     e = nova_ent_mes.strftime("%H:%M")
-
-                    # ✅ NOVO (seu pedido): atualiza IMEDIATO no mês inteiro
-                    # - aplica em TODOS os dias com Status == "Trabalho"
-                    # - não mexe em Balanço / Balanço Madrugada (fixos)
-                    # - salva override de entrada e saída em cada dia alterado
+                    s = _saida_from_entrada(e)
+                
+                    # ✅ FORÇA TOTAL: sobrepõe QUALQUER regra
+                    # - transforma qualquer dia de trabalho/balanço/madrugada em "Trabalho"
+                    # - grava overrides de status + entrada + saída em TODOS esses dias
+                    # - não mexe em Folga/Férias (continua vazio)
                     for i in range(len(dfm)):
-                        if dfm.loc[i, "Status"] == "Trabalho":
+                        stt = dfm.loc[i, "Status"]
+                        dia_num = int(pd.to_datetime(dfm.loc[i, "Data"]).day)
+                
+                        if stt in WORK_STATUSES:
+                            # força virar Trabalho (para não ter "fixo" que reescreve)
+                            dfm.loc[i, "Status"] = "Trabalho"
                             dfm.loc[i, "H_Entrada"] = e
-                            dfm.loc[i, "H_Saida"] = _saida_from_entrada(e)
-                            dia_num = int(pd.to_datetime(dfm.loc[i, "Data"]).day)
+                            dfm.loc[i, "H_Saida"] = s
+                
+                            set_override(setor, ano, mes, ch2, dia_num, "status", "Trabalho")
                             set_override(setor, ano, mes, ch2, dia_num, "h_entrada", e)
-                            set_override(setor, ano, mes, ch2, dia_num, "h_saida", _saida_from_entrada(e))
-
-                    # ✅ também atualiza o perfil do colaborador para os próximos meses
+                            set_override(setor, ano, mes, ch2, dia_num, "h_saida", s)
+                
+                        else:
+                            # Folga/Férias: garante vazio (e não cria override)
+                            dfm.loc[i, "H_Entrada"] = ""
+                            dfm.loc[i, "H_Saida"] = ""
+                
+                    # ✅ também atualiza o perfil do colaborador (para os próximos meses)
                     update_colaborador_perfil(setor, ch2, subgrupo2, e, bool(pode_sab2))
-
-                    enforce_max_5_consecutive_work(dfm, e, pode_sab2)
-                    enforce_sundays_1x1_for_employee(dfm, e, locked_status=None, base_first=None)
-                    enforce_global_rest_keep_targets(dfm, e, locked_status=None, ultima_saida_prev=None)
-
+                
+                    # ⚠️ IMPORTANTE:
+                    # Como você pediu para "forçar acima de qualquer regra",
+                    # NÃO vamos rodar enforce_global_rest_keep_targets aqui,
+                    # porque ele pode puxar/ajustar dias e você quer travar o horário.
+                    # (Domingo 1x1 / 5x2 também poderiam mexer em status; aqui a intenção é travar.)
+                
                     save_escala_mes_db(setor, ano, mes, {ch2: dfm})
-                    st.success("Horário do mês inteiro aplicado IMEDIATO (e perfil atualizado).")
+                    st.success("Horário do mês inteiro FORÇADO (sobrepôs qualquer regra).")
                     st.rerun()
 
                 st.dataframe(dfm, use_container_width=True)
