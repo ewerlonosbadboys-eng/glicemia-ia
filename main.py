@@ -2050,7 +2050,29 @@ def page_app():
                     "Domingo continua 1x1 e não é editável aqui."
                 )
 
-                st.info(f"Competência desta grade: **{mes:02d}/{ano}** (se quiser mudar, use a barra lateral).")
+                st.markdown("**Competência da grade (mês/ano):**")
+                gA, gB, gC = st.columns([1, 1, 2])
+                mes_grid = gA.selectbox("Mês", list(range(1, 13)), index=int(mes) - 1, key="grid_mes_sel")
+                ano_grid = gB.number_input("Ano", value=int(ano), step=1, key="grid_ano_sel")
+                auto_readequar = gC.checkbox("🔄 Readequar escala ao salvar", value=True, key="grid_auto_regen")
+
+                # mantém competência selecionada nas demais abas
+                st.session_state["cfg_mes"] = int(mes_grid)
+                st.session_state["cfg_ano"] = int(ano_grid)
+
+                # recarrega a escala desta competência
+                hist_db_grid = load_escala_mes_db(setor, int(ano_grid), int(mes_grid))
+                if hist_db_grid:
+                    hist_db_grid = apply_overrides_to_hist(setor, int(ano_grid), int(mes_grid), hist_db_grid)
+                else:
+                    st.warning("Não há escala salva para esta competência. Gere na aba 🚀 Gerar Escala.")
+                    hist_db_grid = {}
+
+                # usa essas variáveis no restante da grade
+                ano = int(ano_grid)
+                mes = int(mes_grid)
+                hist_db = hist_db_grid
+
 
                 f1, f2, f3 = st.columns([1, 1, 2])
                 fil_sub = f1.selectbox("Filtrar subgrupo:", ["(todos)"] + sorted({(c.get("Subgrupo") or "").strip() or "SEM SUBGRUPO" for c in colaboradores}), key="grid_sub")
@@ -2135,7 +2157,8 @@ def page_app():
                                     delete_override(setor, ano, mes, chg, d, "status")
                                     removed += 1
 
-                        _regenerar_mes_inteiro(setor, ano, mes, seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
+                        if auto_readequar:
+                            _regenerar_mes_inteiro(setor, ano, mes, seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
 
                         st.success(f"Salvo! Criadas: {saved} | Removidas: {removed}. Escala readequada mantendo travas!")
                         st.rerun()
