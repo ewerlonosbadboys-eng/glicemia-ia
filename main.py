@@ -16,8 +16,7 @@
 # 5) enforce_max_5_consecutive_work conta WORK_STATUSES como trabalho para sequência
 #
 # ✅ ALTERAÇÃO PEDIDA AGORA:
-# - REMOVIDO TUDO RELACIONADO A "Balanço Madrugada" e ao ciclo "saída tarde"
-#   (status, horários, funções e AÇÕES da aba Ajustes)
+# - ✅ ABA COLABORADORES: OPÇÃO PARA EXCLUIR COLABORADOR (com limpeza opcional de dados vinculados)
 # =========================================================
 
 import streamlit as st
@@ -397,6 +396,47 @@ def update_colaborador_perfil(setor: str, chapa: str, subgrupo: str, entrada: st
         SET subgrupo=?, entrada=?, folga_sab=?
         WHERE setor=? AND chapa=?
     """, (subgrupo or "", entrada, 1 if folga_sab else 0, setor, chapa))
+    con.commit()
+    con.close()
+
+# ✅ NOVO: EXCLUIR COLABORADOR (+ limpar dados vinculados)
+def delete_colaborador(
+    setor: str,
+    chapa: str,
+    apagar_dados_mes: bool = True,
+    apagar_overrides: bool = True,
+    apagar_ferias: bool = True
+):
+    """
+    Exclui colaborador e (opcionalmente) limpa dados relacionados:
+    - escala_mes (histórico gerado)
+    - overrides (ajustes travados)
+    - ferias (lançamentos)
+    - estado_mes_anterior (memória do mês anterior)
+    - usuarios_sistema (se por algum motivo existir com mesma chapa no setor)
+    """
+    con = db_conn()
+    cur = con.cursor()
+
+    # 1) Remove colaborador
+    cur.execute("DELETE FROM colaboradores WHERE setor=? AND chapa=?", (setor, chapa))
+
+    # 2) Remove dados relacionados (opcionais)
+    if apagar_dados_mes:
+        cur.execute("DELETE FROM escala_mes WHERE setor=? AND chapa=?", (setor, chapa))
+
+    if apagar_overrides:
+        cur.execute("DELETE FROM overrides WHERE setor=? AND chapa=?", (setor, chapa))
+
+    if apagar_ferias:
+        cur.execute("DELETE FROM ferias WHERE setor=? AND chapa=?", (setor, chapa))
+
+    # Estado do mês anterior (evita herdar coisas)
+    cur.execute("DELETE FROM estado_mes_anterior WHERE setor=? AND chapa=?", (setor, chapa))
+
+    # Se existir usuário do sistema com mesma chapa no setor (raro), remove também
+    cur.execute("DELETE FROM usuarios_sistema WHERE setor=? AND chapa=?", (setor, chapa))
+
     con.commit()
     con.close()
 
@@ -790,9 +830,6 @@ def _all_weeks_seg_dom(datas: pd.DatetimeIndex):
 
 # =========================================================
 # ✅ DOMINGO 1x1 POR COLABORADOR (GLOBAL, RESPEITA LOCK/FÉRIAS)
-# Domingo sobrepõe status automático no domingo:
-# - WorkStatus no domingo conta como "Trabalho"
-# - Se for trabalho no domingo: vira "Trabalho" com entrada padrão
 # =========================================================
 def enforce_sundays_1x1_for_employee(
     df: pd.DataFrame,
@@ -942,7 +979,6 @@ def enforce_global_rest_keep_targets(df: pd.DataFrame, ent_padrao: str, locked_s
 
 # =========================================================
 # ✅ 5x2: máxima sequência de trabalho = 5
-# (corrigido para contar WORK_STATUSES como trabalho na contagem)
 # =========================================================
 def enforce_max_5_consecutive_work(df, ent_padrao, pode_folgar_sabado: bool):
     def can_make_folga(i):
@@ -1509,6 +1545,36 @@ def page_app():
                 update_colaborador_perfil(setor, ch_sel, sg, ent.strftime("%H:%M"), sab)
                 st.success("Salvo!")
                 st.rerun()
+
+        # ✅ NOVO: EXCLUIR COLABORADOR
+        st.markdown("---")
+        st.markdown("## 🗑️ Excluir colaborador")
+
+        if colaboradores:
+            ch_del = st.selectbox("Selecione a chapa para excluir:", [c["Chapa"] for c in colaboradores], key="del_chapa")
+
+            col_del_1, col_del_2, col_del_3 = st.columns(3)
+            apagar_escala = col_del_1.checkbox("Apagar escala gerada (escala_mes)", value=True, key="del_apagar_escala")
+            apagar_ajustes = col_del_2.checkbox("Apagar ajustes (overrides)", value=True, key="del_apagar_overrides")
+            apagar_ferias = col_del_3.checkbox("Apagar férias (ferias)", value=True, key="del_apagar_ferias")
+
+            confirma_txt = st.text_input("Digite EXCLUIR para confirmar:", key="del_confirm_txt")
+
+            if st.button("❌ Excluir definitivamente", key="del_btn"):
+                if confirma_txt.strip().upper() != "EXCLUIR":
+                    st.error("Confirmação inválida. Digite EXCLUIR.")
+                else:
+                    delete_colaborador(
+                        setor=setor,
+                        chapa=ch_del,
+                        apagar_dados_mes=bool(apagar_escala),
+                        apagar_overrides=bool(apagar_ajustes),
+                        apagar_ferias=bool(apagar_ferias),
+                    )
+                    st.success(f"Colaborador {ch_del} excluído com sucesso!")
+                    st.rerun()
+        else:
+            st.info("Sem colaboradores para excluir.")
 
     # ------------------------------------------------------
     # ABA 2: Gerar Escala
