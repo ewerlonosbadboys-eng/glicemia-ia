@@ -47,9 +47,235 @@ import secrets
 from openpyxl.styles import PatternFill, Alignment, Border, Side, Font
 from openpyxl.utils import get_column_letter
 
+# PDF (modelo oficial)
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
+from reportlab.lib.pagesizes import landscape, A4
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.units import mm
+
 st.set_page_config(page_title="Escala 5x2 Oficial", layout="wide")
 
 
+
+
+# =========================================================
+# PDF — MODELO OFICIAL (igual ao exemplo)
+# - 1 colaborador por página (landscape A4)
+# - "FOLG" em amarelo
+# - Horários calculados: refeição 6h após entrada, retorno +1h10
+# =========================================================
+def _calc_refeicao(ent_hhmm: str):
+    # padrão do modelo: 6h de trabalho antes da refeição + 1h10 de intervalo
+    if not ent_hhmm:
+        return ("", "", "")
+    saida_ref = _add_min(ent_hhmm, timedelta(hours=6))
+    entrada_ref = _add_min(saida_ref, timedelta(hours=1, minutes=10))
+    # saída final já existe no app (9:58) como padrão, mas vamos calcular por consistência
+    saida_final = _saida_from_entrada(ent_hhmm)
+    return (saida_ref, entrada_ref, saida_final)
+
+def _horas_trab_padrao(ent_hhmm: str):
+    # 9:58 - 1:10 = 8:48 (modelo)
+    if not ent_hhmm:
+        return ""
+    return "08:48"
+
+def gerar_pdf_modelo_oficial(setor: str, ano: int, mes: int, hist_db: dict[str, pd.DataFrame], colaboradores: list[dict]) -> bytes:
+    styles = getSampleStyleSheet()
+    normal = styles["Normal"]
+
+    # Mapa chapa -> colaborador
+    colab_by = {str(c["Chapa"]): c for c in (colaboradores or [])}
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=landscape(A4),
+        leftMargin=10*mm, rightMargin=10*mm,
+        topMargin=10*mm, bottomMargin=10*mm,
+        title=f"Escala {setor} {mes:02d}/{ano}"
+    )
+
+    emissao = datetime.now().strftime("%d/%m/%Y %H:%M")
+
+    def _draw_header(canvas, doc_):
+        canvas.saveState()
+        w, h = landscape(A4)
+
+        canvas.setFont("Helvetica", 9)
+        canvas.drawString(12*mm, h-8*mm, f"Loja:  {setor}")
+        canvas.drawRightString(w-12*mm, h-8*mm, f"Emissão :        {emissao}")
+
+        canvas.setFont("Helvetica-Bold", 10)
+        canvas.drawString(12*mm, h-14*mm, "ESCALA_PONTO_NEW")
+
+        canvas.setFont("Helvetica", 10)
+        canvas.drawCentredString(w/2, h-14*mm, f"Escala de DSR e Horário de Trabalho - Mês : {mes:02d}/{ano}")
+
+        canvas.setFont("Helvetica", 9)
+        canvas.drawRightString(w-12*mm, h-14*mm, f"Página:     {canvas.getPageNumber()}")
+
+        # linhas (caixas)
+        canvas.setLineWidth(1)
+        canvas.rect(10*mm, h-18*mm, w-20*mm, 14*mm, stroke=1, fill=0)
+
+        canvas.restoreState()
+
+    elements = []
+
+    # total páginas = colaboradores com df
+    chapas = list(hist_db.keys()) if hist_db else []
+    chapas = sorted(chapas, key=lambda ch: colab_by.get(ch, {}).get("Nome", ch))
+
+    for idx_p, ch in enumerate(chapas, start=1):
+        df = hist_db.get(ch)
+        if df is None or df.empty:
+            continue
+
+        nome = colab_by.get(ch, {}).get("Nome", ch)
+
+        # bloco do colaborador
+        # Linha superior do bloco (nome + mês + cliente)
+        top_row = [
+            Paragraph(f"<b>{nome}</b>  ({ch})", normal),
+            Paragraph(f"<b>Mês:</b> {mes:02d}/{ano}", normal),
+            Paragraph("<b>CLIENTE:</b>", normal)
+        ]
+        t_top = Table([top_row], colWidths=[120*mm, 50*mm, 80*mm])
+        t_top.setStyle(TableStyle([
+            ("GRID", (0,0), (-1,-1), 1, colors.black),
+            ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+            ("ALIGN", (1,0), (2,0), "CENTER"),
+            ("FONTSIZE", (0,0), (-1,-1), 9),
+        ]))
+        elements.append(Spacer(1, 2*mm))
+        elements.append(t_top)
+
+        # tabela principal
+        qtd_dias = len(df)
+        dias = [str(int(pd.to_datetime(d).day)) for d in df["Data"]]
+
+        # cabeçalhos
+        row_data_dia = ["Data / Dia"] + dias
+        row_dia_sem = ["Dia / Semana"] + [str(x).capitalize()[:3] for x in df["Dia"]]
+        # Mapear abreviações para modelo
+        map_sem = {"seg":"Seg","ter":"Ter","qua":"Qua","qui":"Qui","sex":"Sex","sáb":"Sáb","dom":"Dom"}
+        row_dia_sem = ["Dia / Semana"] + [map_sem.get(str(x), str(x)) for x in df["Dia"]]
+
+        row_ent = ["Entrada"]
+        row_sref = ["Saída Refeição"]
+        row_eref = ["Entrada"]
+        row_sai = ["Saída"]
+        row_ht = ["Horas Trab."]
+
+        total_min = 0
+
+        for i in range(qtd_dias):
+            stt = str(df.loc[i, "Status"])
+            ent = (df.loc[i, "H_Entrada"] or "").strip()
+            sai = (df.loc[i, "H_Saida"] or "").strip()
+
+            if stt == "Folga":
+                for r in (row_ent, row_sref, row_eref, row_sai):
+                    r.append("FOLG")
+                row_ht.append("")
+                continue
+
+            if stt == "Férias":
+                for r in (row_ent, row_sref, row_eref, row_sai):
+                    r.append("FER")
+                row_ht.append("")
+                continue
+
+            # trabalho / balanço
+            if not ent:
+                # fallback: tenta usar entrada padrão do colaborador
+                ent = colab_by.get(ch, {}).get("Entrada", "06:00")
+            if not sai:
+                sai = _saida_from_entrada(ent)
+
+            saida_ref, entrada_ref, saida_final = _calc_refeicao(ent)
+
+            row_ent.append(ent)
+            row_sref.append(saida_ref)
+            row_eref.append(entrada_ref)
+            row_sai.append(saida_final if saida_final else sai)
+
+            ht = _horas_trab_padrao(ent)
+            row_ht.append(ht)
+
+            if ht:
+                hh, mm_ = map(int, ht.split(":"))
+                total_min += hh*60 + mm_
+
+        total_h = total_min // 60
+        total_m = total_min % 60
+        total_str = f"{total_h:02d}:{total_m:02d}"
+
+        data_table = [row_data_dia, row_dia_sem, row_ent, row_sref, row_eref, row_sai, row_ht]
+
+        # dimensões
+        page_w, page_h = landscape(A4)
+        usable_w = page_w - 20*mm
+        first_col = 28*mm
+        day_w = (usable_w - first_col) / max(1, qtd_dias)
+        col_widths = [first_col] + [day_w]*qtd_dias
+
+        t = Table(data_table, colWidths=col_widths, repeatRows=2)
+        yellow = colors.HexColor("#FFFF00")
+        grey = colors.HexColor("#E6E6E6")
+
+        # Estilo base
+        ts = TableStyle([
+            ("GRID", (0,0), (-1,-1), 1, colors.black),
+            ("FONTSIZE", (0,0), (-1,-1), 7),
+            ("ALIGN", (0,0), (-1,-1), "CENTER"),
+            ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+            ("ALIGN", (0,0), (0,-1), "RIGHT"),
+            ("BACKGROUND", (0,0), (-1,1), colors.white),
+            ("BACKGROUND", (0,6), (-1,6), grey),  # horas trab row
+        ])
+
+        # pinta FOLG / FER
+        for r in range(2, 6):  # linhas de horários
+            for c in range(1, qtd_dias+1):
+                val = data_table[r][c]
+                if val == "FOLG":
+                    ts.add("BACKGROUND", (c,r), (c,r), yellow)
+                    ts.add("FONTSIZE", (c,r), (c,r), 7)
+                    ts.add("FONTNAME", (c,r), (c,r), "Helvetica-Bold")
+                elif val == "FER":
+                    ts.add("BACKGROUND", (c,r), (c,r), colors.HexColor("#92D050"))
+                    ts.add("FONTNAME", (c,r), (c,r), "Helvetica-Bold")
+
+        # também pinta a linha "Entrada" quando folga
+        for c in range(1, qtd_dias+1):
+            if data_table[2][c] == "FOLG":
+                ts.add("BACKGROUND", (c,2), (c,2), yellow)
+
+        t.setStyle(ts)
+        elements.append(t)
+
+        # rodapé do bloco
+        footer_row = [
+            Paragraph("É DE RESPONSABILIDADE DE CADA FUNCIONÁRIO CUMPRIR RIGOROSAMENTE ESTA ESCALA.", normal),
+            Paragraph(f"<b>TOTAL DE HORAS :</b> {total_str}", normal)
+        ]
+        t_footer = Table([footer_row], colWidths=[usable_w-60*mm, 60*mm])
+        t_footer.setStyle(TableStyle([
+            ("GRID", (0,0), (-1,-1), 1, colors.black),
+            ("FONTSIZE", (0,0), (-1,-1), 9),
+            ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+            ("ALIGN", (1,0), (1,0), "RIGHT"),
+        ]))
+        elements.append(t_footer)
+
+        if idx_p != len(chapas):
+            elements.append(PageBreak())
+
+    doc.build(elements, onFirstPage=_draw_header, onLaterPages=_draw_header)
+    return buf.getvalue()
 
 # =========================================================
 # UI THEME (CSS) — só visual
@@ -2274,35 +2500,41 @@ def page_app():
                 auto_readequar = st.checkbox("🔄 Readequar escala ao salvar", value=True, key="grid_auto_regen")
 
                 if st.button("💾 Salvar folgas manuais (e readequar mês)", key="grid_save"):
-                    set_folga = 0
-                    set_trab = 0
-                    for _, r in edited.iterrows():
-                        chg = str(r["Chapa"])
-                        dfh = hist_db.get(chg)
-                        ent_pad_local = colab_by.get(chg, {}).get("Entrada", "06:00")
-                        for d in dias:
-                            want_folga = bool(r[str(d)])
-                            if dfh is not None and len(dfh) >= d:
-                                if dfh.loc[d - 1, "Status"] == "Férias":
-                                    continue
+                        set_folga = 0
+                        set_trab = 0
+                        for _, r in edited.iterrows():
+                            chg = str(r["Chapa"])
+                            dfh = hist_db.get(chg)
+                            ent_pad_local = colab_by.get(chg, {}).get("Entrada", "06:00")
+                            sai_pad_local = _saida_from_entrada(ent_pad_local)
 
-                            if want_folga:
-                                set_override(setor, ano, mes, chg, d, "status", "Folga")
-                                set_folga += 1
-                            else:
-                                # ✅ regra pedida: desmarcado = TRABALHO (travado)
-                                set_override(setor, ano, mes, chg, d, "status", "Trabalho")
-                                # mantém horário padrão no banco via geração/descanso global; se quiser travar horário também,
-                                # descomente as linhas abaixo:
-                                # set_override(setor, ano, mes, chg, d, "h_entrada", ent_pad_local)
-                                # set_override(setor, ano, mes, chg, d, "h_saida", _saida_from_entrada(ent_pad_local))
-                                set_trab += 1
+                            for d in dias:
+                                want_folga = bool(r[str(d)])
 
-                    if auto_readequar:
-                        _regenerar_mes_inteiro(setor, ano, mes, seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
+                                # não mexe em férias
+                                if dfh is not None and len(dfh) >= d:
+                                    if dfh.loc[d - 1, "Status"] == "Férias":
+                                        continue
 
-                    st.success(f"Salvo! Folgas travadas: {set_folga} | Trabalhos travados: {set_trab}.")
-                    st.rerun()
+                                if want_folga:
+                                    # ✅ marcado = FOLGA (travado)
+                                    set_override(setor, ano, mes, chg, d, "status", "Folga")
+                                    # folga não tem horário
+                                    delete_override(setor, ano, mes, chg, d, "h_entrada")
+                                    delete_override(setor, ano, mes, chg, d, "h_saida")
+                                    set_folga += 1
+                                else:
+                                    # ✅ desmarcado = TRABALHO (travado) + horário padrão (nunca vazio)
+                                    set_override(setor, ano, mes, chg, d, "status", "Trabalho")
+                                    set_override(setor, ano, mes, chg, d, "h_entrada", ent_pad_local)
+                                    set_override(setor, ano, mes, chg, d, "h_saida", sai_pad_local)
+                                    set_trab += 1
+
+                        if auto_readequar:
+                            _regenerar_mes_inteiro(setor, ano, mes, seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
+
+                        st.success(f"Salvo! Folgas travadas: {set_folga} | Trabalhos travados: {set_trab}. Escala readequada mantendo travas!")
+                        st.rerun()
 
             with t2:
                 ch2 = st.selectbox("Chapa:", list(hist_db.keys()), key="adjm_ch")
@@ -2579,6 +2811,23 @@ def page_app():
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     key="xls_down"
                 )
+
+            st.markdown("---")
+            st.markdown("### 📄 PDF (modelo igual ao RH)")
+            if st.button("📄 Gerar PDF (modelo oficial)", key="pdf_btn"):
+                hist_db_pdf = load_escala_mes_db(setor, ano, mes)
+                if not hist_db_pdf:
+                    st.warning("Sem escala salva para gerar PDF.")
+                else:
+                    hist_db_pdf = apply_overrides_to_hist(setor, ano, mes, hist_db_pdf)
+                    pdf_bytes = gerar_pdf_modelo_oficial(setor, ano, mes, hist_db_pdf, colaboradores)
+                    st.download_button(
+                        "⬇️ Baixar PDF",
+                        data=pdf_bytes,
+                        file_name=f"escala_{setor}_{mes:02d}_{ano}.pdf",
+                        mime="application/pdf",
+                        key="pdf_down"
+                    )
 
     # ------------------------------------------------------
     # ABA 6: Admin (somente ADMIN)
