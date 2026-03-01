@@ -770,7 +770,7 @@ def _set_balanco_madrugada(df, idx, locked_status: set[int] | None = None):
     df.loc[idx, "H_Entrada"] = BALANCO_MADRUGADA_ENTRADA
     df.loc[idx, "H_Saida"] = BALANCO_MADRUGADA_SAIDA
 
-# ✅ NOVO: aplica o ciclo completo de "saída tarde" em D0..D4
+"Marcar Balanço Madrugada (saída tarde) ✅ (marque o DIA da madrugada)"
 def aplicar_ciclo_balanco_madrugada_saida_tarde_por_madrugada(
     df: pd.DataFrame,
     idx_madrugada: int,
