@@ -681,8 +681,13 @@ def _ajustar_para_intersticio(ent_desejada: str, saida_anterior: str) -> str:
 # Só permite se estiver travado (override/manual/"caixinha")
 # =========================================================
 def enforce_no_consecutive_folga(df: pd.DataFrame, locked_status: set[int] | None = None):
+    """
+    Proibir folga consecutiva automática (DOM+SEG etc.).
+    Robustez: garante índice 0..N-1 e usa iloc para não dar KeyError.
+    """
+    df.reset_index(drop=True, inplace=True)
     for i in range(1, len(df)):
-        if df.loc[i - 1, "Status"] == "Folga" and df.loc[i, "Status"] == "Folga":
+        if df.iloc[i - 1]["Status"] == "Folga" and df.iloc[i]["Status"] == "Folga":
             prev_locked = _locked(locked_status, i - 1)
             cur_locked = _locked(locked_status, i)
 
@@ -692,10 +697,9 @@ def enforce_no_consecutive_folga(df: pd.DataFrame, locked_status: set[int] | Non
 
             # prioriza manter o travado e desfazer o outro
             if not cur_locked:
-                df.loc[i, "Status"] = "Trabalho"
+                df.iloc[i, df.columns.get_loc("Status")] = "Trabalho"
             elif not prev_locked:
-                df.loc[i - 1, "Status"] = "Trabalho"
-
+                df.iloc[i - 1, df.columns.get_loc("Status")] = "Trabalho"
 # =========================================================
 # DB
 # =========================================================
