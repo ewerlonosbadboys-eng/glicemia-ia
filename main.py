@@ -2194,6 +2194,72 @@ def style_calendario(df: pd.DataFrame, mes: int, ano: int):
 
 
 
+
+# =========================================================
+# MAPA ANUAL DE FÉRIAS (visual tipo "grade")
+# =========================================================
+MESES_PT = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"]
+
+def _parse_date_ymd(s: str):
+    try:
+        return datetime.strptime(str(s), "%Y-%m-%d").date()
+    except Exception:
+        return None
+
+def ferias_mapa_ano_df(setor: str, ano: int, colaboradores: list[dict]) -> pd.DataFrame:
+    """
+    DF:
+      Nome | Chapa | Janeiro..Dezembro
+    Marca "FER" quando houver QUALQUER dia de férias no mês.
+    """
+    rows = list_ferias(setor)  # [(chapa,inicio,fim), ...]
+    fer_by = {}
+    for chapa, ini, fim in rows:
+        ini_d = _parse_date_ymd(ini)
+        fim_d = _parse_date_ymd(fim)
+        if not ini_d or not fim_d:
+            continue
+        fer_by.setdefault(str(chapa), []).append((ini_d, fim_d))
+
+    colabs_sorted = sorted(colaboradores, key=lambda c: ((c.get("Nome") or ""), (c.get("Chapa") or "")))
+    out = []
+    for c in colabs_sorted:
+        ch = str(c.get("Chapa") or "")
+        nome = str(c.get("Nome") or ch)
+        linha = {"Nome": nome, "Chapa": ch}
+        periods = fer_by.get(ch, [])
+        for m in range(1, 13):
+            first = date(int(ano), m, 1)
+            last = date(int(ano), m, calendar.monthrange(int(ano), m)[1])
+            marcou = False
+            for ini_d, fim_d in periods:
+                if ini_d <= last and fim_d >= first:
+                    marcou = True
+                    break
+            linha[MESES_PT[m-1]] = "FER" if marcou else ""
+        out.append(linha)
+
+    return pd.DataFrame(out, columns=["Nome","Chapa"] + MESES_PT)
+
+def style_ferias_mapa(df: pd.DataFrame):
+    if df is None or df.empty:
+        return df
+    meses = [c for c in df.columns if c in MESES_PT]
+
+    def cell(v, col):
+        if col in meses:
+            if str(v) == "FER":
+                return "background-color:#1F4E78; color:#FFFFFF; font-weight:800; text-align:center;"
+            return "background-color:#F2F2F2; color:#000000; text-align:center;"
+        if col == "Nome":
+            return "font-weight:700;"
+        return ""
+
+    styles = pd.DataFrame("", index=df.index, columns=df.columns)
+    for col in df.columns:
+        styles[col] = df[col].apply(lambda v: cell(v, col))
+    return df.style.apply(lambda _: styles, axis=None)
+
 # =========================================================
 # PDF UI helpers (filtro estilo "Impressão de Escala")
 # =========================================================
@@ -2776,6 +2842,17 @@ def page_app():
     # ------------------------------------------------------
     with abas[3]:
         st.subheader("🏖️ Controle de Férias")
+
+        st.markdown("---")
+        st.markdown("## 🗺️ Mapa anual de férias (visual)")
+        col_map1, col_map2 = st.columns([1, 3])
+        ano_mapa = col_map1.number_input("Ano do mapa", value=int(st.session_state.get("cfg_ano", datetime.now().year)), step=1, key="fer_mapa_ano")
+        col_map2.caption("Mostra em quais meses cada colaborador tem férias cadastradas (qualquer dia no mês marca o mês).")
+        df_mapa = ferias_mapa_ano_df(setor, int(ano_mapa), colaboradores)
+        show_chapa = st.checkbox("Mostrar coluna Chapa no mapa", value=False, key="fer_mapa_show_chapa")
+        df_mapa_show = df_mapa if show_chapa else df_mapa.drop(columns=["Chapa"])
+        st.dataframe(style_ferias_mapa(df_mapa_show), use_container_width=True, height=420)
+        st.markdown("---")
         colaboradores = load_colaboradores_setor(setor)
 
         if not colaboradores:
