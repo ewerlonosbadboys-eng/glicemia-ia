@@ -1401,43 +1401,72 @@ def _apply_overrides_to_df_inplace(df: pd.DataFrame, setor: str, chapa: str, ovm
 # ESCALA DB
 # =========================================================
 def save_escala_mes_db(setor: str, ano: int, mes: int, historico_df_por_chapa: dict[str, pd.DataFrame]):
-    """Grava escala no banco (robusto a NaT em Data)."""
+    """Grava escala no banco de forma robusta.
+    - Limpa a competência (setor/ano/mes) antes de gravar para evitar IntegrityError em DB antigo/corrompido.
+    - Robustez contra NaT/NaN.
+    """
     con = db_conn()
     cur = con.cursor()
+
+    # Limpa o mês inteiro do setor antes de inserir (evita conflito/duplicidade em DB antigo)
+    try:
+        cur.execute("DELETE FROM escala_mes WHERE setor=? AND ano=? AND mes=?", (setor, int(ano), int(mes)))
+        con.commit()
+    except Exception:
+        pass
+
     for chapa, df in historico_df_por_chapa.items():
         df2 = df.copy()
         df2.reset_index(drop=True, inplace=True)
+
         for j, row in df2.iterrows():
             dt = pd.to_datetime(row.get("Data", None), errors="coerce")
             max_day = calendar.monthrange(int(ano), int(mes))[1]
+
             if pd.isna(dt):
-                # fallback: usa o dia sequencial do mês (clamp 1..max_day)
                 dia = int(j) + 1
-                if dia < 1:
-                    dia = 1
-                if dia > max_day:
-                    dia = max_day
+                if dia < 1: dia = 1
+                if dia > max_day: dia = max_day
                 dt = pd.Timestamp(year=int(ano), month=int(mes), day=int(dia))
             else:
-                dia = int(dt.day)
-                # segurança: se por algum motivo vier fora do mês, clampa também
-                if dia < 1:
-                    dia = 1
+                dia = int(getattr(dt, "day", 1) or 1)
+                if dia < 1: dia = 1
                 if dia > max_day:
                     dia = max_day
                     dt = pd.Timestamp(year=int(ano), month=int(mes), day=int(dia))
 
-            cur.execute("""
-                INSERT OR REPLACE INTO escala_mes(setor, ano, mes, chapa, dia, data, dia_sem, status, h_entrada, h_saida)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                setor, int(ano), int(mes), chapa, int(dia),
-                pd.to_datetime(dt).strftime("%Y-%m-%d"),
-                row.get("Dia", ""),
-                row.get("Status", "Trabalho"),
-                row.get("H_Entrada", "") or "",
-                row.get("H_Saida", "") or "",
-            ))
+            dia_sem = row.get("Dia", "")
+            if pd.isna(dia_sem): dia_sem = ""
+            dia_sem = str(dia_sem)
+
+            status = row.get("Status", "Trabalho")
+            if pd.isna(status) or not str(status).strip():
+                status = "Trabalho"
+            status = str(status)
+
+            h_ent = row.get("H_Entrada", "")
+            h_sai = row.get("H_Saida", "")
+            if pd.isna(h_ent): h_ent = ""
+            if pd.isna(h_sai): h_sai = ""
+            h_ent = str(h_ent or "")
+            h_sai = str(h_sai or "")
+
+            try:
+                cur.execute("""
+                    INSERT OR REPLACE INTO escala_mes(setor, ano, mes, chapa, dia, data, dia_sem, status, h_entrada, h_saida)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    setor, int(ano), int(mes), str(chapa), int(dia),
+                    pd.to_datetime(dt).strftime("%Y-%m-%d"),
+                    dia_sem,
+                    status,
+                    h_ent,
+                    h_sai,
+                ))
+            except Exception:
+                # não derruba o app por causa de uma linha ruim
+                continue
+
     con.commit()
     con.close()
     try:
@@ -1445,7 +1474,6 @@ def save_escala_mes_db(setor: str, ano: int, mes: int, historico_df_por_chapa: d
     except Exception:
         pass
 
-@st.cache_data(show_spinner=False)
 def load_escala_mes_db(setor: str, ano: int, mes: int):
     con = db_conn()
     cur = con.cursor()
