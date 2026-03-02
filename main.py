@@ -1409,12 +1409,23 @@ def save_escala_mes_db(setor: str, ano: int, mes: int, historico_df_por_chapa: d
         df2.reset_index(drop=True, inplace=True)
         for j, row in df2.iterrows():
             dt = pd.to_datetime(row.get("Data", None), errors="coerce")
+            max_day = calendar.monthrange(int(ano), int(mes))[1]
             if pd.isna(dt):
-                # fallback: usa o dia sequencial do mês
+                # fallback: usa o dia sequencial do mês (clamp 1..max_day)
                 dia = int(j) + 1
+                if dia < 1:
+                    dia = 1
+                if dia > max_day:
+                    dia = max_day
                 dt = pd.Timestamp(year=int(ano), month=int(mes), day=int(dia))
             else:
                 dia = int(dt.day)
+                # segurança: se por algum motivo vier fora do mês, clampa também
+                if dia < 1:
+                    dia = 1
+                if dia > max_day:
+                    dia = max_day
+                    dt = pd.Timestamp(year=int(ano), month=int(mes), day=int(dia))
 
             cur.execute("""
                 INSERT OR REPLACE INTO escala_mes(setor, ano, mes, chapa, dia, data, dia_sem, status, h_entrada, h_saida)
