@@ -3159,7 +3159,7 @@ def page_app():
             
 
             st.markdown("---")
-            st.markdown("## 🖨️ Impressão de Escala (PDF) — estilo Savegnago")
+            st.markdown("## 🖨️ Impressão de Escala (PDF)")
 
             all_subgrupos = sorted({((c.get("Subgrupo") or "").strip() or "SEM SUBGRUPO") for c in colaboradores})
             cfx1, cfx2, cfx3 = st.columns([1.2, 1.2, 1.6])
