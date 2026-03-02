@@ -2260,6 +2260,41 @@ def style_ferias_mapa(df: pd.DataFrame):
         styles[col] = df[col].apply(lambda v: cell(v, col))
     return df.style.apply(lambda _: styles, axis=None)
 
+
+def ferias_resumo_mensal_df(setor: str, ano: int) -> pd.DataFrame:
+    """
+    Resumo mensal:
+      - Pessoas_em_ferias: qtd de colaboradores com QUALQUER dia de férias no mês
+      - Lancamentos: qtd de períodos (linhas) de férias que encostam no mês
+    """
+    rows = list_ferias(setor)  # [(chapa,inicio,fim), ...]
+    # map month -> set(chapa) and count launches touching month
+    people = {m: set() for m in range(1, 13)}
+    launches = {m: 0 for m in range(1, 13)}
+
+    for chapa, ini, fim in rows:
+        ini_d = _parse_date_ymd(ini)
+        fim_d = _parse_date_ymd(fim)
+        if not ini_d or not fim_d:
+            continue
+
+        for m in range(1, 13):
+            first = date(int(ano), m, 1)
+            last = date(int(ano), m, calendar.monthrange(int(ano), m)[1])
+            if ini_d <= last and fim_d >= first:
+                people[m].add(str(chapa))
+                launches[m] += 1
+
+    data = []
+    for m in range(1, 13):
+        data.append({
+            "Mês": MESES_PT[m-1],
+            "Pessoas_em_ferias": len(people[m]),
+            "Lancamentos": int(launches[m])
+        })
+    return pd.DataFrame(data)
+
+
 # =========================================================
 # PDF UI helpers (filtro estilo "Impressão de Escala")
 # =========================================================
