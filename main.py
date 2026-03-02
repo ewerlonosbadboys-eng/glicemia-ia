@@ -1,9 +1,4 @@
-import textwrap, os, re, json, math, random
-from pathlib import Path
-
-main_path = Path("/mnt/data/main.py")
-
-code = r'''# main.py
+# app.py
 # =========================================================
 # ESCALA 5x2 OFICIAL — COMPLETO (SUBGRUPO = REGRAS)
 # + Preferência "Evitar folga" por subgrupo
@@ -49,7 +44,6 @@ import calendar
 import sqlite3
 import hashlib
 import secrets
-from openpyxl import Workbook
 from openpyxl.styles import PatternFill, Alignment, Border, Side, Font
 from openpyxl.utils import get_column_letter
 
@@ -60,8 +54,9 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, 
 from reportlab.lib.pagesizes import landscape, A4
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib import colors
-
 st.set_page_config(page_title="Escala 5x2 Oficial", layout="wide")
+
+
 
 # =========================================================
 # UI THEME (CSS) — só visual
@@ -129,9 +124,9 @@ BALANCO_DIA_SAIDA = "11:50"
 HORARIOS_ENTRADA_PRESET = [
     "06:00",
     "06:45",
-    "06:50",
+    "06:50",  # novo
     "09:30",
-    "12:40",
+    "12:40",  # novo
     "12:45",
 ]
 
@@ -145,8 +140,12 @@ D_PT = {
     "Sunday": "dom",
 }
 
+
 # =========================================================
 # ESCALA MANUAL (BASE) — Fevereiro/2026 (DSR)
+# - Esta base serve para "iniciar" o mês com folgas pré-definidas.
+# - Ao clicar em "Aplicar base", o app cria overrides (Status=Folga) nesses dias.
+# - Depois, "Gerar agora (respeitando ajustes)" completa o restante mantendo as folgas travadas.
 # =========================================================
 MANUAL_BASES = {
     (2026, 2): [
@@ -209,8 +208,11 @@ def _sub_min(hhmm: str, delta: timedelta) -> str:
 def _saida_from_entrada(ent: str) -> str:
     return _add_min(ent, DURACAO_JORNADA)
 
+
+
 # =========================================================
 # PDF helpers (modelo de escala/ponto)
+# - Linha "Horas Trab." do modelo costuma ser 08:48 (jornada 9:58 com 1:10 de intervalo)
 # =========================================================
 DURACAO_TRABALHADA = timedelta(hours=8, minutes=48)   # 08:48 (modelo)
 
@@ -222,33 +224,59 @@ def _hhmm_add(hhmm: str, minutes: int) -> str:
     return f"{total//60:02d}:{total%60:02d}"
 
 def _montar_batidas_modelo(h_entrada: str):
+    """
+    Retorna (entrada1, saida_ref, entrada_ref, saida, horas_trab)
+
+    Modelo igual ao do PDF:
+      - Jornada (entrada->saída) = 9:58  (DURACAO_JORNADA)
+      - Intervalo refeição = 1:10
+      - Primeira parte (entrada -> saída refeição) = 5:10
+      - Resultado "Horas Trab." = 08:48 quando é jornada padrão.
+    """
     h_entrada = (h_entrada or "").strip()
     if not h_entrada:
         return "", "", "", "", ""
+
+    # Parte 1 = 5h10, Refeição = 1h10
     parte1 = 5 * 60 + 10
     refeicao = 1 * 60 + 10
+
     saida_ref = _hhmm_add(h_entrada, parte1)
     ent_ref = _hhmm_add(saida_ref, refeicao)
     saida = _hhmm_add(h_entrada, int(DURACAO_JORNADA.total_seconds() // 60))  # 9:58
+
+    # Horas trabalhadas no modelo = (9:58 - 1:10) = 8:48
     horas = "08:48"
     return h_entrada, saida_ref, ent_ref, saida, horas
 
-# =========================================================
-# PDF geradores
-# =========================================================
 def gerar_pdf_modelo_oficial(setor: str, ano: int, mes: int, hist_db: dict, colaboradores: list[dict]) -> bytes:
+    """
+    Gera PDF (A4 paisagem) com **4 colaboradores por página** (como o modelo enviado).
+    - Folga: "FOLG" com destaque amarelo.
+    - Férias: "FER" (sem destaque).
+    - Manual supremo: o PDF reflete exatamente o que está salvo em hist_db.
+    """
     from io import BytesIO
     from reportlab.pdfgen import canvas
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
+    from reportlab.lib.pagesizes import landscape, A4
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib import colors
     from reportlab.lib.units import mm
     import re
 
+    # -----------------------------
+    # Canvas com contagem total de páginas (X / Y)
+    # -----------------------------
     class _NumberedCanvas(canvas.Canvas):
         def __init__(self, *args, **kwargs):
             canvas.Canvas.__init__(self, *args, **kwargs)
             self._saved_page_states = []
+
         def showPage(self):
             self._saved_page_states.append(dict(self.__dict__))
             self._startPage()
+
         def save(self):
             num_pages = len(self._saved_page_states)
             for state in self._saved_page_states:
@@ -256,7 +284,9 @@ def gerar_pdf_modelo_oficial(setor: str, ano: int, mes: int, hist_db: dict, cola
                 self._draw_page_number(num_pages)
                 canvas.Canvas.showPage(self)
             canvas.Canvas.save(self)
+
         def _draw_page_number(self, page_count):
+            # no topo direito
             self.setFont("Helvetica", 7)
             self.drawRightString(landscape(A4)[0] - 12*mm, landscape(A4)[1] - 10*mm, f"Página: {self._pageNumber} / {page_count}")
 
@@ -266,25 +296,31 @@ def gerar_pdf_modelo_oficial(setor: str, ano: int, mes: int, hist_db: dict, cola
     normal.fontSize = 7
     normal.leading = 8
 
+    # Ordena colaboradores pelo nome (igual na tela)
     colab_by = {c["Chapa"]: c for c in colaboradores}
     chapas = sorted([ch for ch in hist_db.keys()], key=lambda ch: (colab_by.get(ch, {}).get("Nome", ch) or ch))
 
+    # Config páginas
     buffer = BytesIO()
     doc = SimpleDocTemplate(
         buffer,
         pagesize=landscape(A4),
-        leftMargin=10,
-        rightMargin=10,
-        topMargin=14,
-        bottomMargin=10,
+        leftMargin=10*mm,
+        rightMargin=10*mm,
+        topMargin=14*mm,
+        bottomMargin=10*mm,
         title=f"Escala DSR {setor} {mes:02d}/{ano}"
     )
 
     W, H = landscape(A4)
     usable_w = W - doc.leftMargin - doc.rightMargin
 
+    # ----- helpers
     def _pt_weekday(ts: pd.Timestamp) -> str:
-        return {"seg": "Seg","ter": "Ter","qua": "Qua","qui": "Qui","sex": "Sex","sáb": "Sáb","dom": "Dom"}.get(D_PT[ts.day_name()], D_PT[ts.day_name()])
+        # usa D_PT já definido no app: Monday->seg...
+        return {
+            "seg": "Seg", "ter": "Ter", "qua": "Qua", "qui": "Qui", "sex": "Sex", "sáb": "Sáb", "dom": "Dom"
+        }.get(D_PT[ts.day_name()], D_PT[ts.day_name()])
 
     def _format_mes():
         return f"Mês: {mes:02d}/{ano}"
@@ -314,6 +350,7 @@ def gerar_pdf_modelo_oficial(setor: str, ano: int, mes: int, hist_db: dict, cola
             return 0
 
     def _sum_total_horas(df: pd.DataFrame) -> str:
+        # soma horas trabalhadas no modelo (primeira parte + segunda parte), respeitando horários reais quando existirem.
         total_min = 0
         for _, r in df.iterrows():
             stt = str(r.get("Status", ""))
@@ -323,10 +360,13 @@ def gerar_pdf_modelo_oficial(setor: str, ano: int, mes: int, hist_db: dict, cola
             sai = (r.get("H_Saida") or "").strip()
             if not ent or not sai:
                 continue
+            # tenta modelo com refeição
             ent1, sref, entref, sai2, _ = _montar_batidas_modelo(ent)
             if sai2 == sai and sref and entref:
+                # 8:48 padrão
                 total_min += 8*60 + 48
             else:
+                # fallback: duração bruta
                 dur = _hhmm_diff_min(ent, sai)
                 if dur > 0:
                     total_min += dur
@@ -338,10 +378,12 @@ def gerar_pdf_modelo_oficial(setor: str, ano: int, mes: int, hist_db: dict, cola
         sg = (colab_by.get(ch, {}).get("Subgrupo", "") or "").strip() or "COLABORADOR"
         sg_title = str(sg).upper()
 
+        # tabela por dia
         qtd = len(df)
         dias_nums = [str(int(d.day)) for d in pd.to_datetime(df["Data"])]
         dias_sem = [_pt_weekday(pd.to_datetime(d)) for d in pd.to_datetime(df["Data"])]
 
+        # constrói matriz 7 x (1+qtd)
         data = []
         data.append(["Data / Dia"] + dias_nums)
         data.append(["Dia / Semana"] + dias_sem)
@@ -364,7 +406,7 @@ def gerar_pdf_modelo_oficial(setor: str, ano: int, mes: int, hist_db: dict, cola
                 row_entref.append("FOLG")
                 row_sai.append("FOLG")
                 row_h.append("")
-                folg_cols.append(i+1)
+                folg_cols.append(i+1)  # +1 por causa do label col
             elif stt == "Férias":
                 row_ent.append("FER")
                 row_sref.append("FER")
@@ -377,11 +419,14 @@ def gerar_pdf_modelo_oficial(setor: str, ano: int, mes: int, hist_db: dict, cola
                     row_sref.append("")
                     row_entref.append("")
                     row_sai.append(sai)
+                    # horas brutas
                     dm = _hhmm_diff_min(ent, sai) if ent and sai else 0
                     row_h.append(f"{dm//60:02d}:{dm%60:02d}" if dm else "")
                 else:
                     ent1, sref, entref, saida2, horas = _montar_batidas_modelo(ent or colab_by.get(ch, {}).get("Entrada", "06:00"))
+                    # respeita saída real do DF se diferente
                     if sai and saida2 and _hhmm_norm(sai) != _hhmm_norm(saida2):
+                        # se alterado manualmente, mantém o do DF e deixa refeição em branco
                         row_ent.append(ent or "")
                         row_sref.append("")
                         row_entref.append("")
@@ -395,6 +440,7 @@ def gerar_pdf_modelo_oficial(setor: str, ano: int, mes: int, hist_db: dict, cola
                         row_sai.append(saida2)
                         row_h.append(horas)
             else:
+                # status desconhecido
                 row_ent.append("")
                 row_sref.append("")
                 row_entref.append("")
@@ -403,10 +449,14 @@ def gerar_pdf_modelo_oficial(setor: str, ano: int, mes: int, hist_db: dict, cola
 
         data += [row_ent, row_sref, row_entref, row_sai, row_h]
 
-        label_w = 34
+        label_w = 34*mm
         day_w = (usable_w - label_w) / max(1, qtd)
 
-        tbl = Table(data, colWidths=[label_w] + [day_w]*qtd, rowHeights=[10,10,10,10,10,10,10])
+        tbl = Table(
+            data,
+            colWidths=[label_w] + [day_w]*qtd,
+            rowHeights=[10, 10, 10, 10, 10, 10, 10]
+        )
 
         ts = TableStyle([
             ("FONTNAME", (0,0), (-1,-1), "Helvetica"),
@@ -419,12 +469,15 @@ def gerar_pdf_modelo_oficial(setor: str, ano: int, mes: int, hist_db: dict, cola
             ("FONTNAME", (0,0), (0,-1), "Helvetica-Bold"),
         ])
 
+        # destaque FOLG (linhas 2..5)
         for c in folg_cols:
             for r in [2,3,4,5]:
                 ts.add("BACKGROUND", (c, r), (c, r), colors.HexColor("#FFE699"))
                 ts.add("FONTNAME", (c, r), (c, r), "Helvetica-Bold")
+
         tbl.setStyle(ts)
 
+        # Barra cinza (cargo)
         bar = Table([[sg_title]], colWidths=[usable_w], rowHeights=[10])
         bar.setStyle(TableStyle([
             ("BACKGROUND", (0,0), (-1,-1), colors.HexColor("#D9D9D9")),
@@ -435,8 +488,12 @@ def gerar_pdf_modelo_oficial(setor: str, ano: int, mes: int, hist_db: dict, cola
             ("BOX", (0,0), (-1,-1), 0.8, colors.black),
         ]))
 
-        header2 = Table([[f"{nome} ({ch})", _format_mes(), "CLIENTE:"]],
-                        colWidths=[usable_w*0.55, usable_w*0.20, usable_w*0.25], rowHeights=[10])
+        # Linha Nome / Mês / Cliente
+        header2 = Table(
+            [[f"{nome} ({ch})", _format_mes(), "CLIENTE:"]],
+            colWidths=[usable_w*0.55, usable_w*0.20, usable_w*0.25],
+            rowHeights=[10]
+        )
         header2.setStyle(TableStyle([
             ("FONTNAME", (0,0), (-1,-1), "Helvetica-Bold"),
             ("FONTSIZE", (0,0), (-1,-1), 7),
@@ -447,9 +504,13 @@ def gerar_pdf_modelo_oficial(setor: str, ano: int, mes: int, hist_db: dict, cola
             ("BOX", (0,0), (-1,-1), 0.8, colors.black),
         ]))
 
+        # Rodapé do bloco
         total_horas = _sum_total_horas(df)
-        footer = Table([["É DE RESPONSABILIDADE DE CADA FUNCIONÁRIO CUMPRIR RIGOROSAMENTE ESTA ESCALA.", f"TOTAL DE HORAS : {total_horas}"]],
-                       colWidths=[usable_w*0.78, usable_w*0.22], rowHeights=[10])
+        footer = Table(
+            [["É DE RESPONSABILIDADE DE CADA FUNCIONÁRIO CUMPRIR RIGOROSAMENTE ESTA ESCALA.", f"TOTAL DE HORAS : {total_horas}"]],
+            colWidths=[usable_w*0.78, usable_w*0.22],
+            rowHeights=[10]
+        )
         footer.setStyle(TableStyle([
             ("FONTNAME", (0,0), (-1,-1), "Helvetica-Bold"),
             ("FONTSIZE", (0,0), (-1,-1), 7),
@@ -461,24 +522,33 @@ def gerar_pdf_modelo_oficial(setor: str, ano: int, mes: int, hist_db: dict, cola
 
         return [bar, header2, tbl, footer, Spacer(1, 6)]
 
+    # Cabeçalho de página (desenhado pelo onPage)
     emissao = datetime.now().strftime("%d/%m/%Y %H:%M")
 
     def _draw_header(canv, doc_):
         canv.saveState()
         canv.setStrokeColor(colors.black)
         canv.setFillColor(colors.black)
-        y = H - 30
+
+        # caixas do topo
+        y = H - 12*mm
         canv.setFont("Helvetica-Bold", 9)
         canv.drawString(doc.leftMargin, y, f"Loja: {setor}")
         canv.drawCentredString(W/2, y, "Escala de DSR e Horário de Trabalho - Mês : {:02d}/{:04d}".format(mes, ano))
         canv.setFont("Helvetica", 7)
         canv.drawRightString(W - doc.rightMargin, y, f"Emissão: {emissao}")
+
+        # título grande
         canv.setFont("Helvetica-Bold", 10)
         canv.drawString(doc.leftMargin, y - 10, "ESCALA_PONTO_NEW")
+
+        # linha separadora
         canv.setLineWidth(1)
         canv.line(doc.leftMargin, y - 12, W - doc.rightMargin, y - 12)
+
         canv.restoreState()
 
+    # Monta story: 4 blocos por página
     story = []
     per_page = 4
     for i, ch in enumerate(chapas):
@@ -489,7 +559,14 @@ def gerar_pdf_modelo_oficial(setor: str, ano: int, mes: int, hist_db: dict, cola
     doc.build(story, onFirstPage=_draw_header, onLaterPages=_draw_header, canvasmaker=_NumberedCanvas)
     return buffer.getvalue()
 
+def _is_fixed_day(status: str) -> bool:
+    # FIXO: balanço
+    return str(status) == BALANCO_STATUS
+
+
+
 def gerar_pdf_trabalhando_no_dia(setor: str, ano: int, mes: int, dia: int, hist_db: dict, colaboradores: list) -> bytes:
+    """Gera um PDF simples (A4) listando apenas quem TRABALHA no dia escolhido, com horários."""
     from io import BytesIO
     from reportlab.lib.pagesizes import A4
     from reportlab.lib import colors
@@ -497,6 +574,7 @@ def gerar_pdf_trabalhando_no_dia(setor: str, ano: int, mes: int, dia: int, hist_
     from reportlab.lib.styles import getSampleStyleSheet
     from reportlab.lib.units import cm
 
+    # Mapa rápido chapa->(nome, subgrupo)
     meta = {}
     for c in colaboradores:
         meta[str(c.get("Chapa", "")).strip()] = (str(c.get("Nome", "")).strip(), str(c.get("Subgrupo", "")).strip())
@@ -508,6 +586,7 @@ def gerar_pdf_trabalhando_no_dia(setor: str, ano: int, mes: int, dia: int, hist_
         try:
             linha = df.loc[df["Data"].dt.day == int(dia)].head(1)
         except Exception:
+            # fallback: Data pode estar como string
             linha = df.loc[pd.to_datetime(df["Data"], errors="coerce").dt.day == int(dia)].head(1)
         if linha.empty:
             continue
@@ -520,13 +599,21 @@ def gerar_pdf_trabalhando_no_dia(setor: str, ano: int, mes: int, dia: int, hist_
         nome, subg = meta.get(str(chapa).strip(), ("", ""))
         rows.append([str(chapa).strip(), nome, subg, ent, sai])
 
+    # Ordena por subgrupo e nome (mantendo cabeçalho)
     if len(rows) > 1:
         body = rows[1:]
         body.sort(key=lambda x: (x[2], x[1]))
         rows = [rows[0]] + body
 
     buf = BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=1.2*cm, rightMargin=1.2*cm, topMargin=1.2*cm, bottomMargin=1.2*cm)
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=A4,
+        leftMargin=1.2*cm,
+        rightMargin=1.2*cm,
+        topMargin=1.2*cm,
+        bottomMargin=1.2*cm,
+    )
     styles = getSampleStyleSheet()
     story = []
 
@@ -541,10 +628,13 @@ def gerar_pdf_trabalhando_no_dia(setor: str, ano: int, mes: int, dia: int, hist_
         ("FONTSIZE", (0,0), (-1,0), 9),
         ("BACKGROUND", (0,0), (-1,0), colors.lightgrey),
         ("TEXTCOLOR", (0,0), (-1,0), colors.black),
+
         ("FONTNAME", (0,1), (-1,-1), "Helvetica"),
         ("FONTSIZE", (0,1), (-1,-1), 8),
+
         ("ALIGN", (0,0), (0,-1), "LEFT"),
         ("ALIGN", (3,1), (4,-1), "CENTER"),
+
         ("GRID", (0,0), (-1,-1), 0.5, colors.black),
         ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
         ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.whitesmoke, colors.white]),
@@ -558,6 +648,8 @@ def gerar_pdf_trabalhando_no_dia(setor: str, ano: int, mes: int, dia: int, hist_
     doc.build(story)
     return buf.getvalue()
 
+
+
 def is_work_status(status: str) -> bool:
     return str(status) in WORK_STATUSES
 
@@ -565,34 +657,49 @@ def _locked(locked_status: set[int] | None, idx: int) -> bool:
     return bool(locked_status and idx in locked_status)
 
 def _ajustar_para_intersticio(ent_desejada: str, saida_anterior: str) -> str:
+    """
+    Entrada >= desejada respeitando 11:10 após saída anterior
+    (considera dia seguinte quando necessário)
+    """
     if not ent_desejada or not saida_anterior:
         return ent_desejada
+
     s = _to_min(saida_anterior)
     e_des = _to_min(ent_desejada)
     e_min = _to_min(_add_min(saida_anterior, INTERSTICIO_MIN))
+
     if e_des <= s:
         e_des += 1440
     if e_min <= s:
         e_min += 1440
+
     e_ok = max(e_des, e_min)
     return _min_to_hhmm(e_ok)
 
 # =========================================================
 # ✅ Proibir folga consecutiva AUTOMÁTICA (DOM+SEG etc.)
+# Só permite se estiver travado (override/manual/"caixinha")
 # =========================================================
 def enforce_no_consecutive_folga(df: pd.DataFrame, locked_status: set[int] | None = None):
+    """
+    Proibir folga consecutiva automática (DOM+SEG etc.).
+    Robustez: garante índice 0..N-1 e usa iloc para não dar KeyError.
+    """
     df.reset_index(drop=True, inplace=True)
     for i in range(1, len(df)):
         if df.iloc[i - 1]["Status"] == "Folga" and df.iloc[i]["Status"] == "Folga":
             prev_locked = _locked(locked_status, i - 1)
             cur_locked = _locked(locked_status, i)
+
+            # ambos travados => foi decisão manual, mantém
             if prev_locked and cur_locked:
                 continue
+
+            # prioriza manter o travado e desfazer o outro
             if not cur_locked:
                 df.iloc[i, df.columns.get_loc("Status")] = "Trabalho"
             elif not prev_locked:
                 df.iloc[i - 1, df.columns.get_loc("Status")] = "Trabalho"
-
 # =========================================================
 # DB
 # =========================================================
@@ -716,13 +823,16 @@ def db_init():
     )
     """)
 
-    # migração defensiva
+    # --- MIGRAÇÃO defensiva (Streamlit Cloud pode manter DB antigo)
+    # Garante que a tabela escala_mes tenha todas as colunas esperadas
     try:
         cur.execute("PRAGMA table_info(escala_mes)")
-        cols = {r[1] for r in cur.fetchall()}
+        cols = {r[1] for r in cur.fetchall()}  # r[1] = name
+        # colunas esperadas (além das já existentes)
         expected = {"setor","ano","mes","chapa","dia","data","dia_sem","status","h_entrada","h_saida"}
         missing = expected - cols
         for c in sorted(missing):
+            # tipos simples (compatível com SQLite)
             if c in ("ano","mes","dia"):
                 cur.execute(f"ALTER TABLE escala_mes ADD COLUMN {c} INTEGER")
             else:
@@ -748,7 +858,6 @@ def db_init():
     con.commit()
     _safe_exec(cur, "INSERT OR IGNORE INTO setores(nome) VALUES (?)", ("GERAL",))
     _safe_exec(cur, "INSERT OR IGNORE INTO setores(nome) VALUES (?)", ("ADMIN",))
-    _safe_exec(cur, "INSERT OR IGNORE INTO setores(nome) VALUES (?)", ("GERENCIA",))
     con.commit()
 
     cur.execute("SELECT 1 FROM usuarios_sistema WHERE setor=? AND chapa=? LIMIT 1", ("ADMIN", "admin"))
@@ -763,9 +872,12 @@ def db_init():
 
     con.close()
 
+
 def is_past_competencia(ano: int, mes: int) -> bool:
+    """Meses anteriores ao mês atual (no fuso do servidor)."""
     today = date.today()
     return (int(ano), int(mes)) < (int(today.year), int(today.month))
+
 
 # =========================================================
 # AUTH
@@ -877,7 +989,13 @@ def create_colaborador(nome: str, setor: str, chapa: str):
     except Exception:
         pass
 
+
 def upsert_colaborador_nome(setor: str, chapa: str, nome: str):
+    """
+    Garante que existe o colaborador (SEM senha) e atualiza o nome pelo que veio na base manual.
+    - Se a chapa existir: atualiza nome.
+    - Se não existir: cria.
+    """
     nome = (nome or "").strip()
     chapa = (chapa or "").strip()
     if not chapa:
@@ -895,6 +1013,10 @@ def upsert_colaborador_nome(setor: str, chapa: str, nome: str):
     con.close()
 
 def apply_manual_base_folgas(setor: str, ano: int, mes: int, base_rows: list[dict], limpar_overrides_mes: bool = False):
+    """
+    Aplica uma base manual criando overrides Status=Folga.
+    - Opcional: limpar_overrides_mes = True remove TODOS os overrides do mês antes de aplicar.
+    """
     con = db_conn()
     cur = con.cursor()
     if limpar_overrides_mes:
@@ -902,6 +1024,7 @@ def apply_manual_base_folgas(setor: str, ano: int, mes: int, base_rows: list[dic
         con.commit()
     con.close()
 
+    # garante colaboradores e aplica folgas como override
     for r in base_rows:
         ch = str(r.get("Chapa","")).strip()
         nm = str(r.get("Nome","")).strip()
@@ -917,6 +1040,14 @@ def apply_manual_base_folgas(setor: str, ano: int, mes: int, base_rows: list[dic
             set_override(setor, int(ano), int(mes), ch, dd, "status", "Folga")
 
 def delete_colaborador_total(setor: str, chapa: str):
+    """
+    Exclui colaborador e tudo do setor relacionado a ele:
+    - colaboradores
+    - ferias
+    - overrides
+    - escala_mes
+    - estado_mes_anterior
+    """
     con = db_conn()
     cur = con.cursor()
     cur.execute("DELETE FROM ferias WHERE setor=? AND chapa=?", (setor, chapa))
@@ -1230,6 +1361,10 @@ def _is_status_locked(ovmap: dict, chapa: str, data_ts: pd.Timestamp) -> bool:
     return bool(ovmap.get(chapa, {}).get(dia, {}).get("status"))
 
 def _apply_overrides_to_df_inplace(df: pd.DataFrame, setor: str, chapa: str, ovmap: dict):
+    """
+    Aplica overrides, MAS:
+    - status 'Férias' só é aceito se estiver na tabela ferias (aba Férias).
+    """
     if chapa not in ovmap:
         return df
     for i in range(len(df)):
@@ -1237,20 +1372,26 @@ def _apply_overrides_to_df_inplace(df: pd.DataFrame, setor: str, chapa: str, ovm
         rule = ovmap.get(chapa, {}).get(dia_num, {})
         if not rule:
             continue
+
         data_obj = pd.to_datetime(df.loc[i, "Data"]).date()
+
         if "status" in rule:
             stt = str(rule["status"])
             if stt == "Férias" and not is_de_ferias(setor, chapa, data_obj):
+                # ignora este override
                 pass
             else:
                 df.loc[i, "Status"] = stt
                 if stt not in WORK_STATUSES:
                     df.loc[i, "H_Entrada"] = ""
                     df.loc[i, "H_Saida"] = ""
+
         if "h_entrada" in rule:
             df.loc[i, "H_Entrada"] = rule["h_entrada"]
+
         if "h_saida" in rule:
             df.loc[i, "H_Saida"] = rule["h_saida"]
+
         if df.loc[i, "Status"] in WORK_STATUSES:
             if (df.loc[i, "H_Entrada"] or "") and not (df.loc[i, "H_Saida"] or ""):
                 df.loc[i, "H_Saida"] = _saida_from_entrada(df.loc[i, "H_Entrada"])
@@ -1260,8 +1401,14 @@ def _apply_overrides_to_df_inplace(df: pd.DataFrame, setor: str, chapa: str, ovm
 # ESCALA DB
 # =========================================================
 def save_escala_mes_db(setor: str, ano: int, mes: int, historico_df_por_chapa: dict[str, pd.DataFrame]):
+    """Grava escala no banco de forma robusta.
+    - Limpa a competência (setor/ano/mes) antes de gravar para evitar IntegrityError em DB antigo/corrompido.
+    - Robustez contra NaT/NaN.
+    """
     con = db_conn()
     cur = con.cursor()
+
+    # Limpa o mês inteiro do setor antes de inserir (evita conflito/duplicidade em DB antigo)
     try:
         cur.execute("DELETE FROM escala_mes WHERE setor=? AND ano=? AND mes=?", (setor, int(ano), int(mes)))
         con.commit()
@@ -1271,9 +1418,11 @@ def save_escala_mes_db(setor: str, ano: int, mes: int, historico_df_por_chapa: d
     for chapa, df in historico_df_por_chapa.items():
         df2 = df.copy()
         df2.reset_index(drop=True, inplace=True)
+
         for j, row in df2.iterrows():
             dt = pd.to_datetime(row.get("Data", None), errors="coerce")
             max_day = calendar.monthrange(int(ano), int(mes))[1]
+
             if pd.isna(dt):
                 dia = int(j) + 1
                 if dia < 1: dia = 1
@@ -1309,9 +1458,13 @@ def save_escala_mes_db(setor: str, ano: int, mes: int, historico_df_por_chapa: d
                 """, (
                     setor, int(ano), int(mes), str(chapa), int(dia),
                     pd.to_datetime(dt).strftime("%Y-%m-%d"),
-                    dia_sem, status, h_ent, h_sai
+                    dia_sem,
+                    status,
+                    h_ent,
+                    h_sai,
                 ))
             except Exception:
+                # não derruba o app por causa de uma linha ruim
                 continue
 
     con.commit()
@@ -1337,14 +1490,24 @@ def load_escala_mes_db(setor: str, ano: int, mes: int):
     hist = {}
     for chapa, data_s, dia_sem, status, h_ent, h_sai in rows:
         dt = pd.to_datetime(data_s)
-        hist.setdefault(chapa, []).append({"Data": dt, "Dia": dia_sem, "Status": status, "H_Entrada": h_ent or "", "H_Saida": h_sai or ""})
+        hist.setdefault(chapa, []).append({
+            "Data": dt, "Dia": dia_sem, "Status": status,
+            "H_Entrada": h_ent or "", "H_Saida": h_sai or ""
+        })
     return {ch: pd.DataFrame(items) for ch, items in hist.items()}
 
 def apply_overrides_to_hist(setor: str, ano: int, mes: int, hist_db: dict[str, pd.DataFrame]):
+    """
+    Aplica overrides no histórico carregado do banco.
+    REGRA GERAL:
+    - "Férias" só existe se estiver na tabela ferias.
+    - Se encontrar "Férias" no banco mas NÃO estiver na tabela, vira "Trabalho".
+    """
     ov = load_overrides(setor, ano, mes)
     if (ov is None or ov.empty) and not hist_db:
         return hist_db
 
+    # aplica overrides (se houver)
     if ov is not None and not ov.empty and hist_db:
         for _, r in ov.iterrows():
             ch = str(r["chapa"])
@@ -1353,10 +1516,12 @@ def apply_overrides_to_hist(setor: str, ano: int, mes: int, hist_db: dict[str, p
             valor = str(r["valor"])
             if ch not in hist_db:
                 continue
+
             df = hist_db[ch].copy()
             idx = dia - 1
             if idx < 0 or idx >= len(df):
                 continue
+
             data_obj = pd.to_datetime(df.loc[idx, "Data"]).date()
 
             if campo == "status":
@@ -1367,24 +1532,29 @@ def apply_overrides_to_hist(setor: str, ano: int, mes: int, hist_db: dict[str, p
                     if valor not in WORK_STATUSES:
                         df.loc[idx, "H_Entrada"] = ""
                         df.loc[idx, "H_Saida"] = ""
+
             elif campo == "h_entrada":
                 df.loc[idx, "H_Entrada"] = valor
                 if df.loc[idx, "Status"] in WORK_STATUSES:
                     df.loc[idx, "H_Saida"] = _saida_from_entrada(valor)
+
             elif campo == "h_saida":
                 df.loc[idx, "H_Saida"] = valor
 
             hist_db[ch] = df
 
+    # ✅ SANITIZA: força férias SOMENTE pela tabela ferias
     if hist_db:
         colaboradores = load_colaboradores_setor(setor)
         colab_by = {c["Chapa"]: c for c in colaboradores}
+
         for ch, df in list(hist_db.items()):
             ent_pad = colab_by.get(ch, {}).get("Entrada", "06:00")
             df2 = df.copy()
             for i in range(len(df2)):
                 data_obj = pd.to_datetime(df2.loc[i, "Data"]).date()
                 in_ferias = is_de_ferias(setor, ch, data_obj)
+
                 if in_ferias:
                     df2.loc[i, "Status"] = "Férias"
                     df2.loc[i, "H_Entrada"] = ""
@@ -1394,6 +1564,7 @@ def apply_overrides_to_hist(setor: str, ano: int, mes: int, hist_db: dict[str, p
                         df2.loc[i, "Status"] = "Trabalho"
                         df2.loc[i, "H_Entrada"] = ent_pad
                         df2.loc[i, "H_Saida"] = _saida_from_entrada(ent_pad)
+
             hist_db[ch] = df2
 
     return hist_db
@@ -1486,6 +1657,7 @@ def enforce_sundays_1x1_for_employee(
 ):
     domingos = [i for i in range(len(df)) if df.loc[i, "Data"].day_name() == "Sunday"]
     # 🔥 REGRA SUPREMA: se existir domingo travado por override, não aplicar domingo 1x1.
+    # Manual manda (pode trabalhar/folgar quantos domingos quiser).
     if locked_status and any(i in locked_status for i in domingos):
         return
     if not domingos:
@@ -1650,9 +1822,11 @@ def enforce_global_rest_keep_targets(df: pd.DataFrame, ent_padrao: str, locked_s
 # ✅ 5x2: máxima sequência de trabalho = 5
 # =========================================================
 def enforce_max_5_consecutive_work(df, ent_padrao, pode_folgar_sabado: bool, initial_consec: int = 0, locked_status: set[int] | None = None):
+    # Segurança: garante índice 0..N-1 (evita KeyError por índice quebrado)
     df.reset_index(drop=True, inplace=True)
 
     def can_make_folga(i):
+        # Só converte TRABALHO normal em folga (não mexe em Balanço)
         if _locked(locked_status, i):
             return False
         if df.iloc[i]["Status"] != "Trabalho":
@@ -1701,6 +1875,7 @@ def enforce_weekly_folga_targets(df: pd.DataFrame, df_ref: pd.DataFrame, pode_fo
       - Se DOM = Trabalho/Balanço => 2 folgas SEG-SÁB
       - Sábado só se permitido
       - Não cria folga consecutiva (exceto travado)
+    Ajusta semana para cumprir o alvo (se outras regras mexerem depois).
     """
     datas = pd.to_datetime(df["Data"])
     weeks = _all_weeks_seg_dom(pd.DatetimeIndex(datas))
@@ -1734,6 +1909,7 @@ def enforce_weekly_folga_targets(df: pd.DataFrame, df_ref: pd.DataFrame, pode_fo
 
         cur = int((df.loc[weekdays, "Status"] == "Folga").sum())
 
+        # excesso => remove
         if cur > t:
             cands = [i for i in weekdays if can_turn_trabalho(i)]
             def pr(i):
@@ -1741,9 +1917,10 @@ def enforce_weekly_folga_targets(df: pd.DataFrame, df_ref: pd.DataFrame, pode_fo
             cands.sort(key=pr)
             for i in cands:
                 if cur <= t: break
-                _set_trabalho(df, i, ent_padrao="", locked_status=locked_status)
+                _set_trabalho(df, i, ent_padrao="", locked_status=locked_status)  # entrada será re-setada depois pelo descanso global
                 cur -= 1
 
+        # falta => adiciona
         if cur < t:
             cands = [i for i in weekdays if can_turn_folga(i)]
             def pr2(i):
@@ -1784,6 +1961,11 @@ def rebalance_folgas_dia(
     past_flag: bool = False,
     max_iters=2200
 ):
+    """
+    Correções:
+    - NÃO usa variável global: estado_prev é parâmetro (evita NameError)
+    - Não faz swap em células travadas por override (locked_idx)
+    """
     estado_prev = estado_prev or {}
     locked_idx = locked_idx or {}
 
@@ -1859,6 +2041,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
     datas = _dias_mes(ano, mes)
     weeks = _all_weeks_seg_dom(datas)
     df_ref = pd.DataFrame({"Data": datas, "Dia": [D_PT[d.day_name()] for d in datas]})
+    # Meses passados: não aplicar continuidade/travamentos do mês anterior.
     _past = is_past_competencia(ano, mes)
     estado_prev = {} if _past else load_estado_prev(setor, ano, mes)
 
@@ -1880,6 +2063,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
     colab_by_chapa = {c["Chapa"]: c for c in colaboradores}
     locked_idx = {}
 
+    # base de cada colaborador
     for c in colaboradores:
         ch = c["Chapa"]
         df = df_ref.copy()
@@ -1888,6 +2072,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
         df["H_Entrada"] = ""
         df["H_Saida"] = ""
 
+        # ✅ férias só via tabela ferias
         for i, d in enumerate(datas):
             if is_de_ferias(setor, ch, d.date()):
                 df.loc[i, "Status"] = "Férias"
@@ -1905,6 +2090,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
         locked_idx[ch] = locked
         hist_all[ch] = df
 
+    # ✅ Domingo 1x1 por colaborador COM CONTINUIDADE ENTRE MESES
     for ch, df in hist_all.items():
         ent = colab_by_chapa[ch].get("Entrada", "06:00")
         locked = locked_idx.get(ch, set())
@@ -1923,6 +2109,9 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
         enforce_sundays_1x1_for_employee(df, ent, locked_status=locked, base_first=base_first)
         hist_all[ch] = df
 
+    # =====================================================
+    # ✅ REGRA SEMANAL NOVA (SEG->DOM) DEPENDE DO DOMINGO
+    # =====================================================
     for sg, membros in grupos.items():
         chapas = [m["Chapa"] for m in membros]
         if not chapas:
@@ -1946,6 +2135,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
                 if is_first_week_after_return(setor, ch, segunda_date):
                     continue
 
+                # candidatos seg-sex e sábado só se permitido
                 cand_days = []
                 for i in idxs_week:
                     dia = df_ref.loc[i, "Dia"]
@@ -2002,6 +2192,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
                     folgas_sem += 1
                     hist_all[ch] = df
 
+    # Pós: aplica regras globais por colaborador
     for ch, df in hist_all.items():
         ent = colab_by_chapa[ch].get("Entrada", "06:00")
         locked = locked_idx.get(ch, set())
@@ -2019,6 +2210,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
                 base_first = None
         enforce_sundays_1x1_for_employee(df, ent, locked_status=locked, base_first=base_first)
 
+        # 1) Garante 5 dias seguidos antes de mexer em metas semanais
         enforce_max_5_consecutive_work(
             df, ent, pode_sab,
             initial_consec=(0 if _past else int((estado_prev.get(ch, {}) or {}).get('consec_trab_final', 0))),
@@ -2026,8 +2218,10 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
         )
         enforce_no_consecutive_folga(df, locked_status=locked)
 
+        # 2) Metas semanais podem REMOVER folga => pode criar >5 de novo
         enforce_weekly_folga_targets(df, df_ref=df_ref, pode_folgar_sabado=pode_sab, locked_status=locked)
 
+        # 3) Reforça novamente o limite de 5 depois das metas semanais
         enforce_max_5_consecutive_work(
             df, ent, pode_sab,
             initial_consec=(0 if _past else int((estado_prev.get(ch, {}) or {}).get('consec_trab_final', 0))),
@@ -2038,6 +2232,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
         ultima_saida_prev = "" if _past else (estado_prev.get(ch, {}).get("ultima_saida", "") or "")
         enforce_global_rest_keep_targets(df, ent, locked_status=locked, ultima_saida_prev=ultima_saida_prev)
 
+        # limpeza
         enforce_no_consecutive_folga(df, locked_status=locked)
         enforce_global_rest_keep_targets(df, ent, locked_status=locked, ultima_saida_prev=ultima_saida_prev)
 
@@ -2046,6 +2241,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
 
         hist_all[ch] = df
 
+    # rebalance por grupo (com estado_prev e travas)
     for sg, membros in grupos.items():
         chapas = [m["Chapa"] for m in membros]
         if chapas:
@@ -2057,6 +2253,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
                 max_iters=2200
             )
 
+    # ✅ Pós-rebalance: re-garante regra dos 5 dias por colaborador
     for ch, df in hist_all.items():
         ent = colab_by_chapa[ch].get("Entrada", "06:00")
         locked = locked_idx.get(ch, set())
@@ -2070,6 +2267,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
         enforce_no_consecutive_folga(df, locked_status=locked)
         hist_all[ch] = df
 
+    # Pós final (garantia)
     for ch, df in hist_all.items():
         ent = colab_by_chapa[ch].get("Entrada", "06:00")
         locked = locked_idx.get(ch, set())
@@ -2089,6 +2287,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
         enforce_no_consecutive_folga(df, locked_status=locked)
         enforce_weekly_folga_targets(df, df_ref=df_ref, pode_folgar_sabado=bool(colab_by_chapa[ch].get('Folga_Sab', False)), locked_status=locked)
 
+        # ✅ garante 5 dias depois do weekly (porque weekly pode remover folga)
         enforce_max_5_consecutive_work(
             df, ent, bool(colab_by_chapa[ch].get('Folga_Sab', False)),
             initial_consec=(0 if _past else int((estado_prev.get(ch, {}) or {}).get('consec_trab_final', 0))),
@@ -2103,6 +2302,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
 
         hist_all[ch] = df
 
+    # Estado do mês
     estado_out = {}
     for ch, df in hist_all.items():
         consec = 0
@@ -2133,8 +2333,10 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
     return hist_all, estado_out
 
 # =========================================================
-# RELATÓRIOS (Banco de Horas / Calendário RH / Férias mapa)
+# DASHBOARD / CALENDÁRIO / BANCO DE HORAS
+# (resto do arquivo igual ao seu original — UI completa)
 # =========================================================
+
 def banco_horas_df(hist_db: dict[str, pd.DataFrame], colab_by: dict, base_min: int):
     rows = []
     for ch, df in hist_db.items():
@@ -2177,6 +2379,22 @@ def calendario_rh_df(hist_db: dict[str, pd.DataFrame], colab_by: dict):
     out = pd.DataFrame(rows, columns=cols)
     return out.sort_values(["Subgrupo", "Nome"]).reset_index(drop=True)
 
+def style_calendario(df: pd.DataFrame, mes: int, ano: int):
+    if df.empty:
+        return df
+    dias_cols = df.columns[3:]
+    qtd = calendar.monthrange(int(ano), int(mes))[1]
+    dsem = {}
+    for d in range(1, qtd + 1):
+        ds = pd.Timestamp(year=int(ano), month=int(mes), day=int(d)).day_name()
+        dsem[str(d)] = D_PT[ds]
+
+
+
+
+# =========================================================
+# MAPA ANUAL DE FÉRIAS (visual tipo "grade")
+# =========================================================
 MESES_PT = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"]
 
 def _parse_date_ymd(s: str):
@@ -2186,7 +2404,12 @@ def _parse_date_ymd(s: str):
         return None
 
 def ferias_mapa_ano_df(setor: str, ano: int, colaboradores: list[dict]) -> pd.DataFrame:
-    rows = list_ferias(setor)
+    """
+    DF:
+      Nome | Chapa | Janeiro..Dezembro
+    Marca "FER" quando houver QUALQUER dia de férias no mês.
+    """
+    rows = list_ferias(setor)  # [(chapa,inicio,fim), ...]
     fer_by = {}
     for chapa, ini, fim in rows:
         ini_d = _parse_date_ymd(ini)
@@ -2212,12 +2435,14 @@ def ferias_mapa_ano_df(setor: str, ano: int, colaboradores: list[dict]) -> pd.Da
                     break
             linha[MESES_PT[m-1]] = "FER" if marcou else ""
         out.append(linha)
+
     return pd.DataFrame(out, columns=["Nome","Chapa"] + MESES_PT)
 
 def style_ferias_mapa(df: pd.DataFrame):
     if df is None or df.empty:
         return df
     meses = [c for c in df.columns if c in MESES_PT]
+
     def cell(v, col):
         if col in meses:
             if str(v) == "FER":
@@ -2226,148 +2451,140 @@ def style_ferias_mapa(df: pd.DataFrame):
         if col == "Nome":
             return "font-weight:700;"
         return ""
+
     styles = pd.DataFrame("", index=df.index, columns=df.columns)
     for col in df.columns:
         styles[col] = df[col].apply(lambda v: cell(v, col))
     return df.style.apply(lambda _: styles, axis=None)
 
+
+# =========================================================
+# ÚLTIMAS FÉRIAS + ALERTA (1 ano e 11 meses) + DURAÇÃO
+# =========================================================
+def _months_between(d1: date, d2: date) -> int:
+    """Meses inteiros aproximados entre datas (d2 >= d1)."""
+    if not d1 or not d2:
+        return 0
+    if d2 < d1:
+        d1, d2 = d2, d1
+    return (d2.year - d1.year) * 12 + (d2.month - d1.month)
+
+def get_ultima_ferias_info(setor: str, chapa: str):
+    """
+    Retorna dict com:
+      - ultima_inicio (date|None)
+      - ultima_fim (date|None)
+      - dias_ultima (int|None)
+      - meses_desde_ultima_fim (int|None)  # até hoje
+    Considera o período com maior 'fim' como a última.
+    """
+    chapa = str(chapa or "").strip()
+    if not chapa:
+        return {"ultima_inicio": None, "ultima_fim": None, "dias_ultima": None, "meses_desde_ultima_fim": None}
+
+    rows = list_ferias(setor)  # [(chapa,inicio,fim), ...]
+    last = None  # (fim_date, ini_date)
+    for ch, ini, fim in rows:
+        if str(ch) != chapa:
+            continue
+        ini_d = _parse_date_ymd(ini)
+        fim_d = _parse_date_ymd(fim)
+        if not ini_d or not fim_d:
+            continue
+        if last is None or fim_d > last[0]:
+            last = (fim_d, ini_d)
+
+    if not last:
+        return {"ultima_inicio": None, "ultima_fim": None, "dias_ultima": None, "meses_desde_ultima_fim": None}
+
+    ultima_fim, ultima_ini = last[0], last[1]
+    dias = (ultima_fim - ultima_ini).days + 1
+    meses = _months_between(ultima_fim, date.today())
+    return {"ultima_inicio": ultima_ini, "ultima_fim": ultima_fim, "dias_ultima": dias, "meses_desde_ultima_fim": meses}
+
+def _classificar_duracao_ferias(qtd_dias: int) -> str:
+    if qtd_dias == 15:
+        return "15 dias"
+    if qtd_dias == 30:
+        return "30 dias"
+    if qtd_dias and qtd_dias > 0:
+        return f"{qtd_dias} dias"
+    return "-"
+
+
+
 def ferias_resumo_mensal_df(setor: str, ano: int) -> pd.DataFrame:
-    rows = list_ferias(setor)
+    """
+    Resumo mensal:
+      - Pessoas_em_ferias: qtd de colaboradores com QUALQUER dia de férias no mês
+      - Lancamentos: qtd de períodos (linhas) de férias que encostam no mês
+    """
+    rows = list_ferias(setor)  # [(chapa,inicio,fim), ...]
+    # map month -> set(chapa) and count launches touching month
     people = {m: set() for m in range(1, 13)}
     launches = {m: 0 for m in range(1, 13)}
+
     for chapa, ini, fim in rows:
         ini_d = _parse_date_ymd(ini)
         fim_d = _parse_date_ymd(fim)
         if not ini_d or not fim_d:
             continue
+
         for m in range(1, 13):
             first = date(int(ano), m, 1)
             last = date(int(ano), m, calendar.monthrange(int(ano), m)[1])
             if ini_d <= last and fim_d >= first:
                 people[m].add(str(chapa))
                 launches[m] += 1
+
     data = []
     for m in range(1, 13):
-        data.append({"Mês": MESES_PT[m-1], "Pessoas_em_ferias": len(people[m]), "Lancamentos": int(launches[m])})
+        data.append({
+            "Mês": MESES_PT[m-1],
+            "Pessoas_em_ferias": len(people[m]),
+            "Lancamentos": int(launches[m])
+        })
     return pd.DataFrame(data)
 
-# =========================================================
-# ✅ GESTÃO (GERENCIA): helpers
-# =========================================================
-@st.cache_data(show_spinner=False)
-def list_setores():
-    con = db_conn()
-    df = pd.read_sql_query("SELECT nome FROM setores ORDER BY nome ASC", con)
-    con.close()
-    return df["nome"].tolist() if not df.empty else []
-
-def _is_gestao(auth: dict) -> bool:
-    return str((auth or {}).get("setor", "")).strip().upper() == "GERENCIA"
-
-def _gestao_setor_ctx_sidebar(auth: dict) -> str:
-    setor_auth = str((auth or {}).get("setor", "GERAL")).strip().upper()
-    if setor_auth != "GERENCIA":
-        return setor_auth
-    setores = [s for s in list_setores() if s and s.upper() not in ("ADMIN", "GERENCIA")]
-    if not setores:
-        return "GERAL"
-    if "gestao_setor_alvo" not in st.session_state:
-        st.session_state["gestao_setor_alvo"] = setores[0]
-    st.sidebar.subheader("🏢 Gestão — Setor em análise")
-    alvo = st.sidebar.selectbox(
-        "Selecione o setor:",
-        setores,
-        index=setores.index(st.session_state["gestao_setor_alvo"]) if st.session_state["gestao_setor_alvo"] in setores else 0,
-        key="gestao_setor_picker"
-    )
-    st.session_state["gestao_setor_alvo"] = alvo
-    return str(alvo).strip().upper()
 
 # =========================================================
-# EXPORTAÇÃO XLSX
+# PDF UI helpers (filtro estilo "Impressão de Escala")
 # =========================================================
-def export_escala_xlsx(setor: str, ano: int, mes: int, hist_db: dict[str, pd.DataFrame], colaboradores: list[dict]) -> bytes:
-    wb = Workbook()
-    ws = wb.active
-    ws.title = f"{setor}_{mes:02d}{ano}"
+def _filtrar_colaboradores(colaboradores: list[dict], subgrupos_sel: list[str] | None, busca: str | None):
+    subgrupos_sel = subgrupos_sel or []
+    busca = (busca or "").strip().lower()
+    out = []
+    for c in colaboradores:
+        sg = (c.get("Subgrupo") or "").strip() or "SEM SUBGRUPO"
+        nome = (c.get("Nome") or "").strip()
+        ch = (c.get("Chapa") or "").strip()
+        if subgrupos_sel and sg not in subgrupos_sel:
+            continue
+        if busca:
+            key = f"{nome} {ch} {sg}".lower()
+            if busca not in key:
+                continue
+        out.append(c)
+    return out
 
-    colab_by = {c["Chapa"]: c for c in colaboradores}
-    chapas = sorted(list(hist_db.keys()), key=lambda ch: (colab_by.get(ch, {}).get("Subgrupo",""), colab_by.get(ch, {}).get("Nome", ch)))
+    def cell_style(v, col):
+        if col in dias_cols:
+            dia_sem = dsem.get(col, "")
+            if str(v) == "F":
+                return "background-color:#FFF2CC; color:#000000; font-weight:700;"
+            if str(v) == "FER":
+                return "background-color:#92D050; color:#000000; font-weight:700;"
+            if dia_sem == "dom":
+                return "background-color:#BDD7EE; color:#000000;"
+        return ""
 
-    max_day = calendar.monthrange(int(ano), int(mes))[1]
-    header = ["Subgrupo", "Nome", "Chapa"] + [str(d) for d in range(1, max_day+1)]
-    ws.append(header)
-
-    bold = Font(bold=True)
-    center = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    thin = Side(style="thin", color="999999")
-    border = Border(left=thin, right=thin, top=thin, bottom=thin)
-
-    fill_folga = PatternFill("solid", fgColor="FFE699")
-    fill_fer = PatternFill("solid", fgColor="1F4E78")
-    fill_hdr = PatternFill("solid", fgColor="E7E6E6")
-
-    for c in range(1, len(header)+1):
-        cell = ws.cell(row=1, column=c)
-        cell.font = bold
-        cell.alignment = center
-        cell.fill = fill_hdr
-        cell.border = border
-
-    for ch in chapas:
-        df = hist_db[ch].copy()
-        sg = (colab_by.get(ch, {}).get("Subgrupo","") or "").strip() or "SEM SUBGRUPO"
-        nome = colab_by.get(ch, {}).get("Nome", ch)
-        row = [sg, nome, ch]
-        for i in range(max_day):
-            try:
-                stt = str(df.loc[i, "Status"])
-                ent = str(df.loc[i, "H_Entrada"] or "")
-            except Exception:
-                stt, ent = "Trabalho", ""
-            if stt == "Folga":
-                row.append("F")
-            elif stt == "Férias":
-                row.append("FER")
-            elif stt in WORK_STATUSES:
-                row.append(ent or "T")
-            else:
-                row.append("")
-        ws.append(row)
-
-    # style body
-    for r in range(2, ws.max_row+1):
-        for c in range(1, ws.max_column+1):
-            cell = ws.cell(row=r, column=c)
-            cell.border = border
-            if c <= 3:
-                cell.alignment = Alignment(horizontal="left", vertical="center")
-            else:
-                cell.alignment = center
-            v = str(cell.value or "")
-            if v == "F":
-                cell.fill = fill_folga
-                cell.font = Font(bold=True)
-            elif v == "FER":
-                cell.fill = fill_fer
-                cell.font = Font(bold=True, color="FFFFFF")
-
-    # column widths
-    ws.column_dimensions["A"].width = 18
-    ws.column_dimensions["B"].width = 34
-    ws.column_dimensions["C"].width = 14
-    for c in range(4, ws.max_column+1):
-        ws.column_dimensions[get_column_letter(c)].width = 4
-
-    # Freeze panes
-    ws.freeze_panes = "D2"
-
-    bio = io.BytesIO()
-    wb.save(bio)
-    return bio.getvalue()
+    styles = pd.DataFrame("", index=df.index, columns=df.columns)
+    for c in df.columns:
+        styles[c] = df[c].apply(lambda v: cell_style(v, c))
+    return df.style.apply(lambda _: styles, axis=None)
 
 # =========================================================
-# UI — LOGIN / APP
+# UI
 # =========================================================
 if "auth" not in st.session_state:
     st.session_state["auth"] = None
@@ -2378,10 +2595,11 @@ if "cfg_ano" not in st.session_state:
 if "last_seed" not in st.session_state:
     st.session_state["last_seed"] = 0
 
+
 db_init()
 
 def page_login():
-    st.title("🔐 Login por Setor (Usuário / Líder / Admin / Gestão)")
+    st.title("🔐 Login por Setor (Usuário / Líder / Admin)")
     tab_login, tab_cadastrar, tab_esqueci = st.tabs(["Entrar", "Cadastrar Usuário do Sistema", "Esqueci a senha"])
 
     with tab_login:
@@ -2447,19 +2665,101 @@ def page_login():
             elif not system_user_exists(setor, chapa):
                 st.error("Usuário não encontrado.")
             elif not is_lider_chapa(setor, chapa_lider):
-                st.error("Chapa do líder inválidos.")
+                st.error("Chapa do líder inválida.")
             else:
                 update_password(setor, chapa, nova)
                 st.success("Senha alterada.")
                 st.rerun()
 
-def _kpis_top(setor_ctx: str, ano: int, mes: int):
-    colaboradores_k = load_colaboradores_setor(setor_ctx)
+def _regenerar_mes_inteiro(setor: str, ano: int, mes: int, seed: int = 0, respeitar_ajustes: bool = True):
+    """
+    Regera a escala do mês inteiro para TODO o setor.
+
+    ✅ Garantias:
+    - Se respeitar_ajustes=True, TODAS as folgas/alterações manuais (overrides) são reaplicadas
+      no final e gravadas novamente no banco (escala_mes). Isso evita “sumir” folga manual ao gerar.
+    """
+    colaboradores = load_colaboradores_setor(setor)
+    if not colaboradores:
+        return False
+
+    random.seed(int(seed))
+    hist, estado_out = gerar_escala_setor_por_subgrupo(
+        setor, colaboradores, int(ano), int(mes),
+        respeitar_ajustes=bool(respeitar_ajustes)
+    )
+
+    # 1) grava a geração
+    save_escala_mes_db(setor, int(ano), int(mes), hist)
+    save_estado_mes(setor, int(ano), int(mes), estado_out)
+
+    # 2) “pós-fix”: reaplica overrides do banco e grava de novo
+    if bool(respeitar_ajustes):
+        hist_db = load_escala_mes_db(setor, int(ano), int(mes))
+        hist_db = apply_overrides_to_hist(setor, int(ano), int(mes), hist_db)
+        if hist_db:
+            save_escala_mes_db(setor, int(ano), int(mes), hist_db)
+
+    return True
+
+
+
+def page_app():
+    auth = st.session_state.get("auth") or {}
+    setor = auth.get("setor", "GERAL")
+
+    # ---- Competência (mês/ano) compartilhada
+    ano_cfg = int(st.session_state.get("cfg_ano", datetime.now().year))
+    mes_cfg = int(st.session_state.get("cfg_mes", datetime.now().month))
+    st.session_state["cfg_ano"] = ano_cfg
+    st.session_state["cfg_mes"] = mes_cfg
+
+    if "last_seed" not in st.session_state:
+        st.session_state["last_seed"] = 0
+
+    # =========================
+    # SIDEBAR — Sessão + Competência
+    # =========================
+    with st.sidebar:
+        st.title("👤 Sessão")
+        st.caption("Acesso por setor (usuário / líder / admin)")
+
+        cA, cB = st.columns([1, 1])
+        cA.write(f"**Nome:** {auth.get('nome','-')}")
+        cB.write(f"**Perfil:** {'ADMIN' if auth.get('is_admin', False) else ('LÍDER' if auth.get('is_lider', False) else 'USUÁRIO')}")
+
+        st.write(f"**Setor:** {setor}")
+        st.write(f"**Chapa:** {auth.get('chapa','-')}")
+
+        st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
+
+        st.subheader("🗓️ Competência")
+        m1, m2 = st.columns(2)
+        mes_cfg = m1.selectbox("Mês", list(range(1, 13)), index=mes_cfg - 1, key="sb_mes")
+        ano_cfg = m2.number_input("Ano", value=ano_cfg, step=1, key="sb_ano")
+        st.session_state["cfg_mes"] = int(mes_cfg)
+        st.session_state["cfg_ano"] = int(ano_cfg)
+
+        st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
+
+        if st.button("🚪 Sair", use_container_width=True, key="logout_btn"):
+            st.session_state["auth"] = None
+            st.rerun()
+
+        
+
+    # =========================
+    # KPIs
+    # =========================
+    ano_k = int(st.session_state["cfg_ano"])
+    mes_k = int(st.session_state["cfg_mes"])
+
+    colaboradores_k = load_colaboradores_setor(setor)
     total_colab = len(colaboradores_k)
 
-    hist_db_kpi = load_escala_mes_db(setor_ctx, ano, mes)
+    hist_db_kpi = load_escala_mes_db(setor, ano_k, mes_k)
     if hist_db_kpi:
-        hist_db_kpi = apply_overrides_to_hist(setor_ctx, ano, mes, hist_db_kpi)
+        hist_db_kpi = apply_overrides_to_hist(setor, ano_k, mes_k, hist_db_kpi)
 
     folgas_mes = ferias_mes = trabalhos_mes = 0
     if hist_db_kpi:
@@ -2489,311 +2789,726 @@ def _kpis_top(setor_ctx: str, ano: int, mes: int):
         f"<p class='kpi-value'>{trabalhos_mes}</p></div>",
         unsafe_allow_html=True
     )
+
     st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
 
-def page_app():
-    auth = st.session_state.get("auth") or {}
-    setor_auth = str(auth.get("setor", "GERAL")).strip().upper()
-    is_gestao = _is_gestao(auth)
-    setor_ctx = _gestao_setor_ctx_sidebar(auth) if is_gestao else setor_auth
-
-    ano_cfg = int(st.session_state.get("cfg_ano", datetime.now().year))
-    mes_cfg = int(st.session_state.get("cfg_mes", datetime.now().month))
-    st.session_state["cfg_ano"] = ano_cfg
-    st.session_state["cfg_mes"] = mes_cfg
-
-    with st.sidebar:
-        st.title("👤 Sessão")
-        cA, cB = st.columns([1, 1])
-        cA.write(f"**Nome:** {auth.get('nome','-')}")
-        cB.write(f"**Perfil:** {'GESTÃO' if is_gestao else ('ADMIN' if auth.get('is_admin', False) else ('LÍDER' if auth.get('is_lider', False) else 'USUÁRIO'))}")
-
-        if is_gestao:
-            st.write(f"**Setor (login):** {setor_auth}")
-            st.write(f"**Setor (em análise):** {setor_ctx}")
-        else:
-            st.write(f"**Setor:** {setor_auth}")
-        st.write(f"**Chapa:** {auth.get('chapa','-')}")
-
-        st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
-        st.subheader("🗓️ Competência")
-        m1, m2 = st.columns(2)
-        mes_cfg = m1.selectbox("Mês", list(range(1, 13)), index=mes_cfg - 1, key="sb_mes")
-        ano_cfg = m2.number_input("Ano", value=ano_cfg, step=1, key="sb_ano")
-        st.session_state["cfg_mes"] = int(mes_cfg)
-        st.session_state["cfg_ano"] = int(ano_cfg)
-
-        st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
-        if st.button("🚪 Sair", use_container_width=True, key="logout_btn"):
-            st.session_state["auth"] = None
-            st.rerun()
-
-    ano = int(st.session_state["cfg_ano"])
-    mes = int(st.session_state["cfg_mes"])
-
-    _kpis_top(setor_ctx, ano, mes)
-
-    # =====================================================
-    # MODO GESTÃO (somente leitura)
-    # =====================================================
-    if is_gestao:
-        tabs = ["📊 Gestão (Geral)", "🏷️ Seções (Subgrupos)", "🏖️ Férias (Setor)", "📈 Banco de Horas", "📥 Exportações"]
-        abas = st.tabs(tabs)
-
-        with abas[0]:
-            st.subheader(f"📊 Gestão — {setor_ctx}")
-            colaboradores = load_colaboradores_setor(setor_ctx)
-            hist_db = load_escala_mes_db(setor_ctx, ano, mes)
-            if hist_db:
-                hist_db = apply_overrides_to_hist(setor_ctx, ano, mes, hist_db)
-
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Colaboradores", len(colaboradores))
-            if hist_db:
-                folgas = sum(int((df["Status"] == "Folga").sum()) for df in hist_db.values())
-                ferias = sum(int((df["Status"] == "Férias").sum()) for df in hist_db.values())
-                trab = sum(int(df["Status"].isin(WORK_STATUSES).sum()) for df in hist_db.values())
-                c2.metric("Folgas (mês)", folgas)
-                c3.metric("Férias (mês)", ferias)
-                c4.metric("Trabalho (mês)", trab)
-
-                st.markdown("### 📅 Calendário RH (Setor)")
-                colab_by = {c["Chapa"]: c for c in colaboradores}
-                cal = calendario_rh_df(hist_db, colab_by)
-                st.dataframe(cal, use_container_width=True, height=520)
-            else:
-                st.warning("Sem escala gravada nesse mês para o setor analisado.")
-
-        with abas[1]:
-            st.subheader(f"🏷️ Seções (Subgrupos) — {setor_ctx}")
-            colaboradores = load_colaboradores_setor(setor_ctx)
-            if not colaboradores:
-                st.info("Sem colaboradores no setor.")
-            else:
-                subgrupos = sorted({((c.get("Subgrupo") or "").strip() or "SEM SUBGRUPO") for c in colaboradores})
-                st.caption("As abas abaixo aparecem conforme os Subgrupos cadastrados (ex.: Frios, FLV, Açougue...).")
-
-                hist_db = load_escala_mes_db(setor_ctx, ano, mes)
-                if hist_db:
-                    hist_db = apply_overrides_to_hist(setor_ctx, ano, mes, hist_db)
-
-                colab_by = {c["Chapa"]: c for c in colaboradores}
-                sg_tabs = st.tabs([f"📌 {sg}" for sg in subgrupos])
-
-                for i, sg in enumerate(subgrupos):
-                    with sg_tabs[i]:
-                        colabs_sg = [c for c in colaboradores if (((c.get("Subgrupo") or "").strip() or "SEM SUBGRUPO") == sg)]
-                        st.write(f"**Colaboradores na seção:** {len(colabs_sg)}")
-
-                        if not hist_db:
-                            st.warning("Sem escala gravada nesse mês para este setor.")
-                            continue
-
-                        chapas_sg = {str(c["Chapa"]).strip() for c in colabs_sg}
-                        hist_sg = {ch: df for ch, df in hist_db.items() if str(ch).strip() in chapas_sg}
-
-                        if not hist_sg:
-                            st.info("Nenhum colaborador desse subgrupo possui escala no mês.")
-                            continue
-
-                        folgas = sum(int((df["Status"] == "Folga").sum()) for df in hist_sg.values())
-                        ferias = sum(int((df["Status"] == "Férias").sum()) for df in hist_sg.values())
-                        trab = sum(int(df["Status"].isin(WORK_STATUSES).sum()) for df in hist_sg.values())
-
-                        k1, k2, k3 = st.columns(3)
-                        k1.metric("Folgas", folgas)
-                        k2.metric("Férias", ferias)
-                        k3.metric("Trabalho", trab)
-
-                        st.markdown("#### 📅 Calendário RH (Seção)")
-                        cal = calendario_rh_df(hist_sg, colab_by)
-                        st.dataframe(cal, use_container_width=True, height=520)
-
-                        st.markdown("#### 👤 Detalhe por colaborador")
-                        ch_view = st.selectbox(
-                            "Chapa:",
-                            sorted(list(hist_sg.keys()), key=lambda ch: (colab_by.get(ch, {}).get("Nome", ch) or ch)),
-                            key=f"gest_sg_ch_{sg}"
-                        )
-                        st.dataframe(hist_sg[ch_view], use_container_width=True, height=420)
-
-        with abas[2]:
-            st.subheader(f"🏖️ Férias — {setor_ctx}")
-            colaboradores = load_colaboradores_setor(setor_ctx)
-            if not colaboradores:
-                st.info("Sem colaboradores.")
-            else:
-                ano_mapa = int(st.session_state.get("cfg_ano", datetime.now().year))
-                st.markdown("### 🗺️ Mapa anual (visual)")
-                df_mapa = ferias_mapa_ano_df(setor_ctx, ano_mapa, colaboradores)
-                st.dataframe(style_ferias_mapa(df_mapa.drop(columns=["Chapa"])), use_container_width=True, height=520)
-
-                st.markdown("### 📊 Resumo mensal (ano)")
-                df_res = ferias_resumo_mensal_df(setor_ctx, ano_mapa)
-                st.dataframe(df_res, use_container_width=True, height=420)
-
-                st.info("🔒 Gestão: somente consulta. Lançamento/remoção é feito no setor operacional.")
-
-        with abas[3]:
-            st.subheader(f"📈 Banco de Horas — {setor_ctx}")
-            colaboradores = load_colaboradores_setor(setor_ctx)
-            hist_db = load_escala_mes_db(setor_ctx, ano, mes)
-            if hist_db:
-                hist_db = apply_overrides_to_hist(setor_ctx, ano, mes, hist_db)
-
-            if not hist_db:
-                st.warning("Sem escala gravada para calcular banco de horas.")
-            else:
-                colab_by = {c["Chapa"]: c for c in colaboradores}
-                base_min = int(DURACAO_JORNADA.total_seconds() // 60)
-                bh = banco_horas_df(hist_db, colab_by, base_min=base_min)
-                st.dataframe(bh, use_container_width=True, height=520)
-
-        with abas[4]:
-            st.subheader(f"📥 Exportações — {setor_ctx}")
-            st.caption("Exportações em modo leitura (sem alterar base).")
-            colaboradores = load_colaboradores_setor(setor_ctx)
-            hist_db = load_escala_mes_db(setor_ctx, ano, mes)
-            if hist_db:
-                hist_db = apply_overrides_to_hist(setor_ctx, ano, mes, hist_db)
-
-            if not hist_db:
-                st.warning("Sem escala gravada para exportar.")
-            else:
-                st.markdown("### 🖨️ PDF (Modelo Oficial) — setor inteiro")
-                if st.button("📄 Gerar PDF do setor (modelo oficial)", key="gest_pdf_setor"):
-                    pdf_bytes = gerar_pdf_modelo_oficial(setor_ctx, ano, mes, hist_db, colaboradores)
-                    st.session_state["gest_pdf_bytes"] = pdf_bytes
-                    st.success("PDF pronto.")
-
-                if st.session_state.get("gest_pdf_bytes"):
-                    st.download_button(
-                        "⬇️ Baixar PDF do setor",
-                        data=st.session_state["gest_pdf_bytes"],
-                        file_name=f"escala_{setor_ctx}_{mes:02d}_{ano}.pdf",
-                        mime="application/pdf",
-                        key="gest_pdf_down"
-                    )
-        return
-
-    # =====================================================
-    # MODO OPERACIONAL
-    # =====================================================
-    setor = setor_auth
-
-    tabs = ["👥 Colaboradores", "🏷️ Subgrupos & Regras", "🏖️ Férias", "⚙️ Gerar Escala", "🧷 Ajustes", "📅 Calendário RH", "📈 Banco de Horas", "📥 Exportações"]
-    if auth.get("is_admin", False) or setor_auth == "ADMIN":
-        tabs.append("🛡️ Admin")
+    # =========================
+    # ABAS
+    # =========================
+    tabs = ["👥 Colaboradores", "🚀 Gerar Escala", "⚙️ Ajustes", "🏖️ Férias", "📥 Excel"]
+    is_admin_area = bool(auth.get("is_admin", False)) and setor == "ADMIN"
+    if is_admin_area:
+        tabs.append("🔒 Admin")
 
     abas = st.tabs(tabs)
 
-    # 0) Colaboradores
+    # ------------------------------------------------------
+    # ABA 1: Colaboradores
+    # ------------------------------------------------------
     with abas[0]:
-        st.subheader(f"👥 Colaboradores — {setor}")
-        st.caption("Cadastro e perfil do colaborador (sem senha).")
-
-        c1, c2 = st.columns([1.15, 0.85])
-        with c1:
-            st.markdown("### ➕ Cadastrar colaborador")
-            nome = st.text_input("Nome", key="op_add_nome")
-            chapa = st.text_input("Chapa", key="op_add_chapa")
-            if st.button("Adicionar", key="op_add_btn"):
-                if not nome or not chapa:
-                    st.error("Informe Nome e Chapa.")
-                else:
-                    create_colaborador(nome.strip(), setor, chapa.strip())
-                    st.success("Colaborador cadastrado.")
-                    st.rerun()
-
-            st.markdown("### 📌 Aplicar base manual (quando existir)")
-            if (ano, mes) in MANUAL_BASES:
-                limpar = st.checkbox("Limpar overrides do mês antes de aplicar", value=False, key="op_base_limpar")
-                if st.button(f"Aplicar base manual {mes:02d}/{ano}", key="op_aplicar_base"):
-                    apply_manual_base_folgas(setor, ano, mes, MANUAL_BASES[(ano, mes)], limpar_overrides_mes=limpar)
-                    st.success("Base manual aplicada como overrides de Folga.")
-                    st.rerun()
-            else:
-                st.info("Sem base manual cadastrada para esta competência.")
-
-        with c2:
-            st.markdown("### 🔎 Lista do setor")
-            colaboradores = load_colaboradores_setor(setor)
-            if not colaboradores:
-                st.warning("Nenhum colaborador cadastrado.")
-            else:
-                dfc = pd.DataFrame(colaboradores)[["Nome","Chapa","Subgrupo","Entrada","Folga_Sab"]]
-                st.dataframe(dfc, use_container_width=True, height=520)
-
-        st.markdown("### ✏️ Editar perfil")
+        st.subheader("👥 Colaboradores (SEM senha)")
         colaboradores = load_colaboradores_setor(setor)
+
         if colaboradores:
-            colab_by = {c["Chapa"]: c for c in colaboradores}
-            chapas = sorted([c["Chapa"] for c in colaboradores], key=lambda ch: (colab_by.get(ch, {}).get("Nome", ch) or ch))
-            ch_sel = st.selectbox("Selecione a chapa", chapas, key="op_edit_chapa")
+            st.dataframe(pd.DataFrame([{
+                "Nome": c["Nome"],
+                "Chapa": c["Chapa"],
+                "Subgrupo": c["Subgrupo"] or "SEM SUBGRUPO",
+                "Entrada": c["Entrada"],
+                "Folga Sábado": "Sim" if c["Folga_Sab"] else "Não",
+            } for c in colaboradores]), use_container_width=True, height=420)
+        else:
+            st.info("Sem colaboradores.")
 
-            perfil = colab_by.get(ch_sel, {})
-            subgrupos = [""] + list_subgrupos(setor)
-            sg = st.selectbox("Subgrupo", [""] + [s for s in subgrupos if s != ""], index=0, key="op_edit_sg")
-            if perfil.get("Subgrupo","") and perfil.get("Subgrupo","") in subgrupos:
-                # best effort: keep selected in UI
-                pass
-            ent = st.selectbox("Entrada padrão", HORARIOS_ENTRADA_PRESET, index=(HORARIOS_ENTRADA_PRESET.index(perfil.get("Entrada","06:00")) if perfil.get("Entrada","06:00") in HORARIOS_ENTRADA_PRESET else 0), key="op_edit_ent")
-            folga_sab = st.checkbox("Pode folgar sábado?", value=bool(perfil.get("Folga_Sab", False)), key="op_edit_sab")
-
-            b1, b2 = st.columns(2)
-            if b1.button("Salvar perfil", key="op_save_perfil"):
-                update_colaborador_perfil(setor, ch_sel, sg, ent, folga_sab)
-                st.success("Perfil salvo.")
-                st.rerun()
-
-            if b2.button("Excluir colaborador (tudo)", key="op_del_colab"):
-                delete_colaborador_total(setor, ch_sel)
-                st.warning("Colaborador removido do setor (incluindo férias/ajustes/escala).")
-                st.rerun()
-
-    # 1) Subgrupos & Regras
-    with abas[1]:
-        st.subheader(f"🏷️ Subgrupos & Regras — {setor}")
-        st.caption("Subgrupo = seção. Regras = 'Evitar folga' por dia (penaliza na geração).")
-
-        left, right = st.columns([0.55, 0.45])
-        with left:
-            st.markdown("### ➕ Criar subgrupo")
-            nome_sg = st.text_input("Nome do subgrupo", key="sg_nome")
-            if st.button("Criar", key="sg_add_btn"):
-                if not nome_sg.strip():
-                    st.error("Informe o nome.")
+        st.markdown("---")
+        with st.form("form_add_colaborador", clear_on_submit=True):
+            c1, c2 = st.columns(2)
+            nome_n = c1.text_input("Nome:", key="col_nome")
+            chapa_n = c2.text_input("Chapa:", key="col_chapa")
+            submitted = st.form_submit_button("Cadastrar colaborador", use_container_width=True)
+            if submitted:
+                if not nome_n or not chapa_n:
+                    st.error("Preencha nome e chapa.")
+                elif colaborador_exists(setor, chapa_n.strip()):
+                    st.error("Já existe essa chapa.")
                 else:
-                    add_subgrupo(setor, nome_sg.strip())
-                    st.success("Subgrupo criado.")
+                    create_colaborador(nome_n.strip(), setor, chapa_n.strip())
+                    st.success("Cadastrado!")
                     st.rerun()
 
-            st.markdown("### 🗑️ Excluir subgrupo")
-            sgs = list_subgrupos(setor)
-            if sgs:
-                del_sg = st.selectbox("Selecione", sgs, key="sg_del_pick")
-                if st.button("Excluir", key="sg_del_btn"):
-                    delete_subgrupo(setor, del_sg)
-                    st.warning("Subgrupo excluído (colaboradores voltaram para vazio).")
+        st.markdown("---")
+        st.markdown("## 🗑️ Excluir colaborador")
+        if colaboradores:
+            ch_del = st.selectbox("Escolha a chapa para excluir:", [c["Chapa"] for c in colaboradores], key="del_chapa")
+            st.warning("⚠️ Excluir remove também férias, ajustes, escala e estado desse colaborador no setor.")
+            confirm = st.checkbox("Confirmo que quero excluir definitivamente", key="del_confirm")
+            if st.button("Excluir colaborador", key="del_btn"):
+                if not confirm:
+                    st.error("Marque a confirmação para excluir.")
+                else:
+                    delete_colaborador_total(setor, ch_del)
+                    st.success("Colaborador excluído!")
+                    st.rerun()
+
+        st.markdown("---")
+        st.markdown("## ✏️ Editar perfil do colaborador")
+        if colaboradores:
+            chapas = [c["Chapa"] for c in colaboradores]
+            nome_by_chapa = {c["Chapa"]: c.get("Nome", "") for c in colaboradores}
+            ch_sel = st.selectbox(
+                "Colaborador (Nome — Chapa):",
+                chapas,
+                key="pf_chapa",
+                format_func=lambda ch: f"{(nome_by_chapa.get(ch, ch) or ch)} — {ch}",
+            )
+            csel = next(x for x in colaboradores if x["Chapa"] == ch_sel)
+
+            colp1, colp2, colp3 = st.columns(3)
+            # Entrada: usar presets (inclui 06:50 e 12:40) para facilitar
+            ent_atual = (csel.get("Entrada") or BALANCO_DIA_ENTRADA).strip()
+            if ent_atual not in HORARIOS_ENTRADA_PRESET:
+                opcoes_ent = HORARIOS_ENTRADA_PRESET + [ent_atual]
+            else:
+                opcoes_ent = HORARIOS_ENTRADA_PRESET
+            ent_sel = colp1.selectbox(
+                "Entrada:",
+                options=opcoes_ent,
+                index=opcoes_ent.index(ent_atual),
+                key="pf_ent_sel",
+            )
+            sg_opts = [""] + list_subgrupos(setor)
+            idx_default = sg_opts.index(csel["Subgrupo"]) if csel["Subgrupo"] in sg_opts else 0
+            sg = colp2.selectbox("Subgrupo:", sg_opts, index=idx_default, key="pf_sg")
+            sab = colp3.checkbox("Permitir folga sábado", value=bool(csel["Folga_Sab"]), key="pf_sab")
+
+            if st.button("Salvar perfil", key="pf_save"):
+                update_colaborador_perfil(setor, ch_sel, sg, ent_sel, sab)
+                st.success("Salvo!")
+                st.rerun()
+
+    # ------------------------------------------------------
+    # ABA 2: Gerar Escala
+    # ------------------------------------------------------
+    with abas[1]:
+        st.subheader("🚀 Gerar escala")
+        st.caption(f"Competência ativa: **{int(st.session_state['cfg_mes']):02d}/{int(st.session_state['cfg_ano'])}**")
+
+        with st.container(border=True):
+            c1, c2, c3 = st.columns([1, 1, 2])
+            mes = c1.selectbox("Mês:", list(range(1, 13)), index=int(st.session_state["cfg_mes"]) - 1, key="gen_mes")
+            ano = c2.number_input("Ano:", value=int(st.session_state["cfg_ano"]), step=1, key="gen_ano")
+            seed = c3.number_input("Semente", min_value=0, max_value=999999, value=int(st.session_state.get("last_seed", 0)), key="gen_seed")
+
+        st.session_state["cfg_mes"] = int(mes)
+        st.session_state["cfg_ano"] = int(ano)
+
+        colaboradores = load_colaboradores_setor(setor)
+        if not colaboradores:
+            st.warning("Cadastre colaboradores.")
+        else:
+            b1, b2, _ = st.columns([1, 1, 6])
+            if b1.button("🚀 Gerar agora (respeita ajustes)", use_container_width=True, key="gen_btn"):
+                st.session_state["last_seed"] = int(seed)
+                ok = _regenerar_mes_inteiro(setor, int(ano), int(mes), seed=int(seed), respeitar_ajustes=True)
+                if ok:
+                    st.success("Escala gerada (ajustes/travas preservados)!")
+                else:
+                    st.warning("Sem colaboradores.")
+                st.rerun()
+
+            if b2.button("🔄 Recarregar do banco", use_container_width=True, key="gen_reload_btn"):
+                st.rerun()
+
+            hist_db = load_escala_mes_db(setor, int(ano), int(mes))
+            hist_db = apply_overrides_to_hist(setor, int(ano), int(mes), hist_db)
+
+            if hist_db:
+                colab_by = {c["Chapa"]: c for c in colaboradores}
+                st.markdown("### 📅 Calendário RH (visual por colaborador)")
+                cal = calendario_rh_df(hist_db, colab_by)
+                show_color = st.checkbox("🎨 Mostrar cores no calendário (pode deixar lento)", value=False, key="cal_color")
+                if show_color:
+                    st.dataframe(style_calendario(cal, int(mes), int(ano)), use_container_width=True)
+                else:
+                    st.dataframe(cal, use_container_width=True)
+
+                st.markdown("---")
+                st.markdown("### 👤 Visualizar colaborador (detalhado)")
+                ch_view = st.selectbox("Chapa:", list(hist_db.keys()), key="view_ch")
+                st.dataframe(hist_db[ch_view], use_container_width=True, height=420)
+            else:
+                st.info("Sem escala no mês. Clique em **Gerar agora**.")
+
+    # ------------------------------------------------------
+    # ABA 3: Ajustes
+    # ------------------------------------------------------
+    with abas[2]:
+        st.subheader("⚙️ Ajustes (travas) — sempre entram na geração")
+
+        with st.container(border=True):
+            c1, c2, c3 = st.columns([1, 1, 2])
+            mes = c1.selectbox("Mês (ajustes)", list(range(1, 13)), index=int(st.session_state["cfg_mes"]) - 1, key="adj_mes")
+            ano = c2.number_input("Ano (ajustes)", value=int(st.session_state["cfg_ano"]), step=1, key="adj_ano")
+            c3.caption("Dica: deixe o mês/ano aqui igual ao mês/ano da aba 🚀 Gerar Escala.")
+
+        st.session_state["cfg_mes"] = int(mes)
+        st.session_state["cfg_ano"] = int(ano)
+
+        hist_db = load_escala_mes_db(setor, ano, mes)
+        colaboradores = load_colaboradores_setor(setor)
+        colab_by = {c["Chapa"]: c for c in colaboradores}
+
+        if not hist_db:
+            st.info("Gere a escala primeiro na aba 🚀 Gerar Escala.")
+        else:
+            hist_db = apply_overrides_to_hist(setor, ano, mes, hist_db)
+
+            tgrid, t2, t3, t4 = st.tabs([
+                "🧩 Folgas manuais em grade",
+                "📅 Trocar horário mês inteiro",
+                "✅ Preferência por subgrupo",
+                "📌 Subgrupos (editável)"
+            ])
+
+            with tgrid:
+                st.markdown("### 🧩 Folgas manuais em grade (por colaborador)")
+                st.caption("Marque/desmarque as folgas do mês. Isso cria/remove travas (overrides) de Status=Folga. Domingo é editável aqui (manual é soberano).")
+
+                qtd = calendar.monthrange(int(ano), int(mes))[1]
+                dias = list(range(1, qtd + 1))
+
+                # pega overrides existentes
+                ovdf = load_overrides(setor, ano, mes)
+                ov_status = {}
+                if ovdf is not None and not ovdf.empty:
+                    od = ovdf[ovdf["campo"] == "status"]
+                    for _, r in od.iterrows():
+                        if str(r["valor"]) == "Folga":
+                            ov_status.setdefault(str(r["chapa"]), set()).add(int(r["dia"]))
+
+                # monta grade
+                rows = []
+                for c in colaboradores:
+                    chg = str(c["Chapa"])
+                    row = {"Nome": c["Nome"], "Chapa": chg}
+                    dfh = hist_db.get(chg)
+                    for d in dias:
+                        if dfh is not None and len(dfh) >= d:
+                            if dfh.loc[d - 1, "Status"] == "Férias":
+                                row[str(d)] = False
+                            else:
+                                row[str(d)] = (dfh.loc[d - 1, "Status"] == "Folga") or (d in ov_status.get(chg, set()))
+                        else:
+                            row[str(d)] = False
+                    rows.append(row)
+
+                df_grid = pd.DataFrame(rows)
+                edited = st.data_editor(
+                    df_grid,
+                    use_container_width=True,
+                    hide_index=True,
+                    num_rows="fixed",
+                    column_config={str(d): st.column_config.CheckboxColumn(str(d), width="small") for d in dias},
+                    key="grid_editor"
+                )
+
+                auto_readequar = st.checkbox("🔄 Readequar escala ao salvar", value=True, key="grid_auto_regen")
+
+                if st.button("💾 Salvar folgas manuais (e readequar mês)", key="grid_save"):
+                    set_folga = 0
+                    set_trab = 0
+                    for _, r in edited.iterrows():
+                        chg = str(r["Chapa"])
+                        dfh = hist_db.get(chg)
+                        ent_pad_local = colab_by.get(chg, {}).get("Entrada", "06:00")
+                        for d in dias:
+                            want_folga = bool(r[str(d)])
+                            if dfh is not None and len(dfh) >= d:
+                                if dfh.loc[d - 1, "Status"] == "Férias":
+                                    continue
+
+                            if want_folga:
+                                set_override(setor, ano, mes, chg, d, "status", "Folga")
+                                set_folga += 1
+                            else:
+                                # ✅ regra pedida: desmarcado = TRABALHO (travado)
+                                set_override(setor, ano, mes, chg, d, "status", "Trabalho")
+                                # mantém horário padrão no banco via geração/descanso global; se quiser travar horário também,
+                                # descomente as linhas abaixo:
+                                # set_override(setor, ano, mes, chg, d, "h_entrada", ent_pad_local)
+                                # set_override(setor, ano, mes, chg, d, "h_saida", _saida_from_entrada(ent_pad_local))
+                                set_trab += 1
+
+                    if auto_readequar:
+                        _regenerar_mes_inteiro(setor, ano, mes, seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
+
+                    st.success(f"Salvo! Folgas travadas: {set_folga} | Trabalhos travados: {set_trab}.")
+                    st.rerun()
+
+            with t2:
+                ch2 = st.selectbox("Chapa:", list(hist_db.keys()), key="adjm_ch")
+                dfm = hist_db[ch2].copy()
+                ent_pad2 = colab_by.get(ch2, {}).get("Entrada", "06:00")
+                pode_sab2 = bool(colab_by.get(ch2, {}).get("Folga_Sab", False))
+                subgrupo2 = (colab_by.get(ch2, {}).get("Subgrupo", "") or "").strip()
+
+                nova_ent_mes = st.time_input("Nova entrada:", value=datetime.strptime(ent_pad2, "%H:%M").time(), key="adjm_ent")
+
+                if st.button("Aplicar mês inteiro (e readequar)", key="adjm_apply"):
+                    e = nova_ent_mes.strftime("%H:%M")
+                    s = _saida_from_entrada(e)
+
+                    for i in range(len(dfm)):
+                        stt = dfm.loc[i, "Status"]
+                        dia_num = int(pd.to_datetime(dfm.loc[i, "Data"]).day)
+                        if stt in WORK_STATUSES:
+                            dfm.loc[i, "Status"] = "Trabalho"
+                            dfm.loc[i, "H_Entrada"] = e
+                            dfm.loc[i, "H_Saida"] = s
+                            set_override(setor, ano, mes, ch2, dia_num, "status", "Trabalho")
+                            set_override(setor, ano, mes, ch2, dia_num, "h_entrada", e)
+                            set_override(setor, ano, mes, ch2, dia_num, "h_saida", s)
+                        else:
+                            dfm.loc[i, "H_Entrada"] = ""
+                            dfm.loc[i, "H_Saida"] = ""
+
+                    update_colaborador_perfil(setor, ch2, subgrupo2, e, bool(pode_sab2))
+                    save_escala_mes_db(setor, ano, mes, {ch2: dfm})
+                    _regenerar_mes_inteiro(setor, ano, mes, seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
+                    st.success("Horário do mês inteiro FORÇADO e escala readequada.")
+                    st.rerun()
+
+                st.dataframe(dfm, use_container_width=True, height=420)
+
+            with t3:
+                st.markdown("### ✅ Preferência por subgrupo (Evitar folga se possível)")
+                subgrupos = list_subgrupos(setor)
+                if subgrupos:
+                    sg_sel = st.selectbox("Escolha o subgrupo:", subgrupos, key="pref_sg_sel")
+                    regras = get_subgrupo_regras(setor, sg_sel)
+
+                    p1, p2, p3 = st.columns(3)
+                    ev_seg = p1.checkbox("Evitar SEG", value=bool(regras["seg"]), key=f"ev_seg_{sg_sel}")
+                    ev_ter = p1.checkbox("Evitar TER", value=bool(regras["ter"]), key=f"ev_ter_{sg_sel}")
+                    ev_qua = p2.checkbox("Evitar QUA", value=bool(regras["qua"]), key=f"ev_qua_{sg_sel}")
+                    ev_qui = p2.checkbox("Evitar QUI", value=bool(regras["qui"]), key=f"ev_qui_{sg_sel}")
+                    ev_sex = p3.checkbox("Evitar SEX", value=bool(regras["sex"]), key=f"ev_sex_{sg_sel}")
+                    ev_sab = p3.checkbox("Evitar SÁB", value=bool(regras["sáb"]), key=f"ev_sab_{sg_sel}")
+
+                    if st.button("Salvar preferência do subgrupo (e readequar mês)", key="pref_save"):
+                        set_subgrupo_regras(setor, sg_sel, {
+                            "seg": int(ev_seg), "ter": int(ev_ter), "qua": int(ev_qua),
+                            "qui": int(ev_qui), "sex": int(ev_sex), "sáb": int(ev_sab)
+                        })
+                        _regenerar_mes_inteiro(setor, ano, mes, seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
+                        st.success("Preferência salva e escala readequada!")
+                        st.rerun()
+                else:
+                    st.info("Crie pelo menos 1 subgrupo na aba 👥 Colaboradores.")
+
+            with t4:
+                st.markdown("## 📌 Subgrupos (editável)")
+                subgrupos = list_subgrupos(setor)
+
+                cA, cB = st.columns([1, 1])
+                with cA:
+                    novo_sub = st.text_input("Novo subgrupo:", key="sg_new")
+                    if st.button("Adicionar subgrupo", key="sg_add"):
+                        if novo_sub.strip():
+                            add_subgrupo(setor, novo_sub.strip())
+                            st.success("Subgrupo adicionado!")
+                            st.rerun()
+                        else:
+                            st.error("Digite o nome do subgrupo.")
+
+                with cB:
+                    if subgrupos:
+                        del_sel = st.selectbox("Remover subgrupo:", ["(nenhum)"] + subgrupos, key="sg_del")
+                        if del_sel != "(nenhum)" and st.button("Remover", key="sg_del_btn"):
+                            delete_subgrupo(setor, del_sel)
+                            _regenerar_mes_inteiro(setor, ano, mes, seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
+                            st.success("Subgrupo removido e escala readequada!")
+                            st.rerun()
+                    else:
+                        st.caption("Nenhum subgrupo cadastrado.")
+
+    # ------------------------------------------------------
+    # ABA 4: Férias
+    # ------------------------------------------------------
+    with abas[3]:
+        st.subheader("🏖️ Controle de Férias")
+
+        st.markdown("---")
+        st.markdown("## 🗺️ Mapa anual de férias (visual)")
+        col_map1, col_map2 = st.columns([1, 3])
+        ano_mapa = col_map1.number_input("Ano do mapa", value=int(st.session_state.get("cfg_ano", datetime.now().year)), step=1, key="fer_mapa_ano")
+        col_map2.caption("Mostra em quais meses cada colaborador tem férias cadastradas (qualquer dia no mês marca o mês).")
+        df_mapa = ferias_mapa_ano_df(setor, int(ano_mapa), colaboradores)
+        show_chapa = st.checkbox("Mostrar coluna Chapa no mapa", value=False, key="fer_mapa_show_chapa")
+        df_mapa_show = df_mapa if show_chapa else df_mapa.drop(columns=["Chapa"])
+        st.dataframe(style_ferias_mapa(df_mapa_show), use_container_width=True, height=420)
+        st.markdown("---")
+        colaboradores = load_colaboradores_setor(setor)
+
+        if not colaboradores:
+            st.warning("Sem colaboradores cadastrados.")
+        else:
+            chapas = [c["Chapa"] for c in colaboradores]
+            st.markdown("### ➕ Lançar Férias")
+            ch = st.selectbox("Chapa:", chapas, key="fer_ch")
+
+            nome_sel = next((x.get("Nome","") for x in colaboradores if str(x.get("Chapa","")) == str(ch)), "")
+            st.write(f"**Colaborador:** {nome_sel}  \n**Chapa:** {ch}")
+
+            info_ult = get_ultima_ferias_info(setor, ch)
+            ult_fim = info_ult.get("ultima_fim")
+            meses_sem = info_ult.get("meses_desde_ultima_fim")
+
+            if ult_fim:
+                st.write(
+                    f"**Últimas férias:** {info_ult.get('ultima_inicio').strftime('%d/%m/%Y')} até {ult_fim.strftime('%d/%m/%Y')}  \n"
+                    f"**Duração:** {_classificar_duracao_ferias(int(info_ult.get('dias_ultima') or 0))}  \n"
+                    f"**Tempo desde o fim:** {int(meses_sem)} mês(es)"
+                )
+            else:
+                st.warning("⚠️ Este colaborador ainda NÃO tem férias cadastradas no sistema.")
+
+            if meses_sem is not None and int(meses_sem) >= 23:
+                st.error("🚨 ALERTA: colaborador está sem férias há 1 ano e 11 meses (ou mais). Priorize agendamento!")
+
+            col1, col2 = st.columns(2)
+            ini = col1.date_input("Início:", key="fer_ini")
+            fim = col2.date_input("Fim:", key="fer_fim")
+
+            try:
+                qtd_dias_sel = (fim - ini).days + 1
+            except Exception:
+                qtd_dias_sel = 0
+            st.info(f"📌 Duração selecionada: **{_classificar_duracao_ferias(int(qtd_dias_sel))}**")
+
+            if st.button("Adicionar férias (e readequar mês)", key="fer_add"):
+                if fim < ini:
+                    st.error("Data final não pode ser menor que a inicial.")
+                else:
+                    add_ferias(setor, ch, ini, fim)
+                    _regenerar_mes_inteiro(setor, int(st.session_state["cfg_ano"]), int(st.session_state["cfg_mes"]), seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
+                    st.success("Férias adicionadas e escala readequada!")
+                    st.rerun()
+
+            st.markdown("---")
+            st.markdown("### 📋 Férias cadastradas")
+
+            rows = list_ferias(setor)
+
+            if rows:
+                df_f = pd.DataFrame(rows, columns=["Chapa", "Início", "Fim"])
+                st.dataframe(df_f, use_container_width=True, height=420)
+
+                st.markdown("### ❌ Remover férias")
+                rem_idx = st.number_input("Linha para remover (1,2,3...)", min_value=1, max_value=len(df_f), value=1, key="fer_rem_idx")
+
+                if st.button("Remover linha (e readequar mês)", key="fer_rem_btn"):
+                    r = df_f.iloc[int(rem_idx) - 1]
+                    delete_ferias_row(setor, r["Chapa"], r["Início"], r["Fim"])
+                    _regenerar_mes_inteiro(setor, int(st.session_state["cfg_ano"]), int(st.session_state["cfg_mes"]), seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
+                    st.success("Férias removidas e escala readequada!")
                     st.rerun()
             else:
-                st.info("Sem subgrupos ainda.")
+                st.info("Nenhuma férias cadastrada.")
 
-        with right:
-            st.markdown("### ⚙️ Regras do subgrupo")
-            sgs = list_subgrupos(setor)
-            if not sgs:
-                st.info("Crie um subgrupo para editar regras.")
-            else:
-                sg_pick = st.selectbox("Subgrupo", sgs, key="sg_rules_pick")
-                regras = get_subgrupo_regras(setor, sg_pick)
-                st.write("Marque os dias onde você quer **evitar folga** para este subgrupo:")
-                c1, c2, c3 = st.columns(3)
-                regras_new = {}
-                regras_new["seg"] = 1 if c1.checkbox("Evitar SEG", value=bool(regras.get("seg",0)), key="r_seg") else 0
-                regras_new["ter"] = 1 if c1.checkbox("Evitar TER", value=bool(regras.get("ter",0)), key="r_ter") else 0
-                regras_new["qua"] = 1 if c2.checkbox("Evitar QUA", value=bool(regras.get("qua",0)), key="r_qua") else 0
-                regras_new["qui"] = 1 if c2.checkbox("Evitar QUI", value=bool(regras.get("qui",0)), key="r_qui") else 0
-                regras_new["sex"] = 1 if c3.checkbox("Evitar SEX", value=bool(regras.get("sex",0)), key="r_sex") else 0
-                regras_new["sáb"] = 1 if c3.checkbox("Evitar SÁB", value=bool(regras.get("sáb",0)), key="r_sab") else 0
+    # ------------------------------------------------------
+    # ABA 5: Excel
+    # ------------------------------------------------------
+    with abas[4]:
+        st.subheader("📥 Excel modelo RH (separado por subgrupo)")
+        ano = int(st.session_state["cfg_ano"])
+        mes = int(st.session_state["cfg_mes"])
+        hist_db = load_escala_mes_db(setor, ano, mes)
+        colaboradores = load_colaboradores_setor(setor)
+        colab_by = {c["Chapa"]: c for c in colaboradores}
 
+        if not hist_db:
+            st.info("Gere a escala.")
+        else:
+            hist_db = apply_overrides_to_hist(setor, ano, mes, hist_db)
+
+            if st.button("📊 Gerar Excel", key="xls_btn"):
+                output = io.BytesIO()
+                with pd.ExcelWriter(output, engine="openpyxl") as writer:
+                    wb = writer.book
+                    ws = wb.create_sheet("Escala Mensal", index=0)
+
+                    fill_header = PatternFill(start_color="1F4E78", end_color="1F4E78", patternType="solid")
+                    fill_dom = PatternFill(start_color="C00000", end_color="C00000", patternType="solid")
+                    fill_folga = PatternFill(start_color="FFF2CC", end_color="FFF2CC", patternType="solid")
+                    fill_nome = PatternFill(start_color="D9E1F2", end_color="D9E1F2", patternType="solid")
+                    fill_ferias = PatternFill(start_color="92D050", end_color="92D050", patternType="solid")
+                    fill_group = PatternFill(start_color="BDD7EE", end_color="BDD7EE", patternType="solid")
+
+                    font_header = Font(color="FFFFFF", bold=True)
+                    font_dom = Font(color="FFFFFF", bold=True)
+
+                    border = Border(left=Side(style="thin"), right=Side(style="thin"), top=Side(style="thin"), bottom=Side(style="thin"))
+                    center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+                    ch0 = list(hist_db.keys())[0]
+                    df_ref_xls = hist_db[ch0]
+                    total_dias = len(df_ref_xls)
+
+                    ws.cell(1, 1, "COLABORADOR").fill = fill_header
+                    ws.cell(1, 1).font = font_header
+                    ws.cell(1, 1).alignment = center
+                    ws.cell(1, 1).border = border
+                    ws.cell(2, 1, "").fill = fill_header
+                    ws.cell(2, 1).alignment = center
+                    ws.cell(2, 1).border = border
+
+                    for i in range(total_dias):
+                        dia_num = df_ref_xls.iloc[i]["Data"].day
+                        dia_sem = df_ref_xls.iloc[i]["Dia"]
+                        cA = ws.cell(1, i + 2, dia_num)
+                        cB = ws.cell(2, i + 2, dia_sem)
+
+                        if dia_sem == "dom":
+                            cA.fill = fill_dom
+                            cB.fill = fill_dom
+                            cA.font = font_dom
+                            cB.font = font_dom
+                        else:
+                            cA.fill = fill_header
+                            cB.fill = fill_header
+                            cA.font = font_header
+                            cB.font = font_header
+
+                        cA.alignment = center
+                        cB.alignment = center
+                        cA.border = border
+                        cB.border = border
+                        ws.column_dimensions[get_column_letter(i + 2)].width = 7
+
+                    ws.column_dimensions["A"].width = 36
+
+                    subgrupo_map = {}
+                    for chx in hist_db.keys():
+                        sg = (colab_by.get(chx, {}).get("Subgrupo", "") or "").strip() or "SEM SUBGRUPO"
+                        subgrupo_map.setdefault(sg, []).append(chx)
+
+                    subgrupos_ordenados = sorted(subgrupo_map.keys())
+                    row_idx = 3
+
+                    for sg in subgrupos_ordenados:
+                        ws.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx, end_column=total_dias + 1)
+                        t = ws.cell(row_idx, 1, f"SUBGRUPO: {sg}")
+                        t.fill = fill_group
+                        t.font = Font(bold=True)
+                        t.alignment = Alignment(horizontal="left", vertical="center")
+                        t.border = border
+                        row_idx += 1
+
+                        chapas_sg = sorted(subgrupo_map[sg], key=lambda chx: colab_by.get(chx, {}).get("Nome", chx))
+                        for chx in chapas_sg:
+                            df_f = hist_db[chx]
+                            nome = colab_by.get(chx, {}).get("Nome", chx)
+
+                            c_nome = ws.cell(row_idx, 1, f"{nome}\nCHAPA: {chx}")
+                            c_nome.fill = fill_nome
+                            c_nome.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+                            c_nome.border = border
+                            ws.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx + 1, end_column=1)
+
+                            for i, row in df_f.iterrows():
+                                dia_sem = row["Dia"]
+                                status = row["Status"]
+                                if status == "Férias":
+                                    v1, v2 = "FÉRIAS", ""
+                                elif status == "Folga":
+                                    v1, v2 = "F", ""
+                                else:
+                                    v1, v2 = row["H_Entrada"], row["H_Saida"]
+
+                                cell1 = ws.cell(row_idx, i + 2, v1)
+                                cell2 = ws.cell(row_idx + 1, i + 2, v2)
+
+                                cell1.alignment = center
+                                cell2.alignment = center
+                                cell1.border = border
+                                cell2.border = border
+
+                                if status == "Férias":
+                                    cell1.fill = fill_ferias
+                                    cell2.fill = fill_ferias
+                                elif status == "Folga":
+                                    if dia_sem == "dom":
+                                        cell1.fill = fill_dom
+                                        cell2.fill = fill_dom
+                                    else:
+                                        cell1.fill = fill_folga
+                                        cell2.fill = fill_folga
+
+                            row_idx += 2
+                        row_idx += 1
+
+                    if "Sheet" in wb.sheetnames and len(wb.sheetnames) > 1:
+                        wb.remove(wb["Sheet"])
+
+                st.download_button(
+                    "📥 Baixar Excel",
+                    data=output.getvalue(),
+                    file_name=f"escala_{setor}_{mes:02d}_{ano}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="xls_down"
+                )
+
+
+        # --- Lista (e PDF) de quem TRABALHA no dia escolhido ---
+        st.markdown("### 🗓️ Quem trabalha no dia (para impressão)")
+        try:
+            dias_mes = calendar.monthrange(int(ano), int(mes))[1]
+        except Exception:
+            dias_mes = 31
+        dia_sel = st.number_input("Dia do mês", min_value=1, max_value=int(dias_mes), value=1, step=1)
+
+        # Monta tabela para visualização
+        linhas = []
+        for _chapa, _df in (hist_db or {}).items():
+            if _df is None or _df.empty:
+                continue
+            try:
+                _linha = _df.loc[_df["Data"].dt.day == int(dia_sel)].head(1)
+            except Exception:
+                _linha = _df.loc[pd.to_datetime(_df["Data"], errors="coerce").dt.day == int(dia_sel)].head(1)
+            if _linha.empty:
+                continue
+            _r = _linha.iloc[0].to_dict()
+            _stt = str(_r.get("Status", "")).strip()
+            if _stt not in WORK_STATUSES:
+                continue
+            _ent = str(_r.get("H_Entrada", "") or "").strip()
+            _sai = str(_r.get("H_Saida", "") or "").strip()
+            # metadados do colaborador
+            _nome = ""
+            _subg = ""
+            for c in colaboradores:
+                if str(c.get("Chapa", "")).strip() == str(_chapa).strip():
+                    _nome = str(c.get("Nome", "")).strip()
+                    _subg = str(c.get("Subgrupo", "")).strip()
+                    break
+            linhas.append({"Chapa": str(_chapa).strip(), "Nome": _nome, "Subgrupo": _subg, "Entrada": _ent, "Saída": _sai})
+
+        df_dia = pd.DataFrame(linhas).sort_values(["Subgrupo", "Nome"]) if linhas else pd.DataFrame(columns=["Chapa","Nome","Subgrupo","Entrada","Saída"])
+        st.dataframe(df_dia, use_container_width=True, hide_index=True)
+
+        colp1, colp2 = st.columns([1, 2])
+        with colp1:
+            if st.button("📄 Gerar PDF (quem trabalha no dia)"):
+                if df_dia.empty:
+                    st.warning("Não há colaboradores trabalhando nesse dia (ou ainda não foi gerado para este mês).")
+                else:
+                    pdf_bytes_dia = gerar_pdf_trabalhando_no_dia(setor, int(ano), int(mes), int(dia_sel), hist_db, colaboradores)
+                    st.session_state["pdf_dia_trabalho_bytes"] = pdf_bytes_dia
+                    st.success("PDF pronto.")
+        with colp2:
+            if st.session_state.get("pdf_dia_trabalho_bytes"):
+                st.download_button(
+                    "⬇️ Baixar PDF (quem trabalha no dia)",
+                    data=st.session_state["pdf_dia_trabalho_bytes"],
+                    file_name=f"escala_trabalhando_dia_{int(dia_sel):02d}_{int(mes):02d}_{int(ano)}.pdf",
+                    mime="application/pdf",
+                )
+
+
+    
+
+            
+
+            st.markdown("---")
+            st.markdown("## 🖨️ Impressão de Escala (PDF)")
+
+            all_subgrupos = sorted({((c.get("Subgrupo") or "").strip() or "SEM SUBGRUPO") for c in colaboradores})
+            cfx1, cfx2, cfx3 = st.columns([1.2, 1.2, 1.6])
+            loja_txt = cfx1.text_input("Loja:", value=str(setor), key="pdf_loja_txt")
+            secoes_sel = cfx2.multiselect("Seções (Subgrupo):", options=all_subgrupos, default=[], key="pdf_secoes_sel")
+            busca_txt = cfx3.text_input("Filtro (nome/chapa/subgrupo):", value="", key="pdf_busca")
+
+            cols_dates = st.columns([1,1,2])
+            data_ini = cols_dates[0].date_input("Dia inicial:", value=date(int(ano), int(mes), 1), key="pdf_dt_ini")
+            data_fim = cols_dates[1].date_input("Dia final:", value=date(int(ano), int(mes), calendar.monthrange(int(ano), int(mes))[1]), key="pdf_dt_fim")
+            cols_dates[2].caption("Obs.: o PDF segue o modelo oficial do mês. Aqui o filtro é para escolher colaboradores/Seções como no sistema.")
+
+            colabs_filtrados = _filtrar_colaboradores(colaboradores, secoes_sel, busca_txt)
+
+            opcoes = [
+                f"{(c.get('Nome') or '').strip()} — Chapa: {str(c.get('Chapa') or '').strip()} — {((c.get('Subgrupo') or '').strip() or 'SEM SUBGRUPO')}"
+                for c in colabs_filtrados
+            ]
+            mapa_idx = {opcoes[i]: colabs_filtrados[i] for i in range(len(opcoes))}
+
+            st.markdown("### 👥 Colaboradores")
+            sel = st.multiselect(
+                "Selecione (se vazio, imprime TODOS do filtro):",
+                options=opcoes,
+                default=[],
+                key="pdf_colabs_sel"
+            )
+
+            cbtn1, cbtn2 = st.columns([1, 3])
+            gerar = cbtn1.button("🖨️ Imprimir (gerar PDF)", key="pdf_print_btn", use_container_width=True)
+            cbtn2.caption("Dica: selecione uma seção, depois marque os colaboradores. Se não marcar nenhum, imprime todos os filtrados.")
+
+            if gerar:
+                hist_db_pdf = load_escala_mes_db(setor, ano, mes)
+                if not hist_db_pdf:
+                    st.warning("Gere a escala antes na aba 🚀 Gerar Escala.")
+                else:
+                    hist_db_pdf = apply_overrides_to_hist(setor, ano, mes, hist_db_pdf)
+
+                    if sel:
+                        chapas_sel = [str(mapa_idx[x].get("Chapa")) for x in sel if x in mapa_idx]
+                    else:
+                        chapas_sel = [str(c.get("Chapa")) for c in colabs_filtrados]
+
+                    hist_db_pdf = {ch: df for ch, df in hist_db_pdf.items() if ch in set(chapas_sel)}
+
+                    if not hist_db_pdf:
+                        st.warning("Nenhum colaborador para imprimir com os filtros atuais.")
+                    else:
+                        pdf_bytes = gerar_pdf_modelo_oficial(loja_txt.strip() or str(setor), ano, mes, hist_db_pdf, colaboradores)
+                        st.download_button(
+                            "⬇️ Baixar PDF",
+                            data=pdf_bytes,
+                            file_name=f"escala_{(loja_txt.strip() or str(setor))}_{mes:02d}_{ano}.pdf",
+                            mime="application/pdf",
+                            key="pdf_down"
+                        )
+
+    # ------------------------------------------------------
+    # ABA 6: Admin (somente ADMIN)
+    # ------------------------------------------------------
+    if is_admin_area:
+        with abas[5]:
+            st.subheader("🔒 Admin do Sistema (somente ADMIN)")
+            dfu = admin_list_users()
+            st.dataframe(dfu, use_container_width=True, height=420)
+
+            st.markdown("### Resetar senha de um usuário")
+            if not dfu.empty:
+                uid = st.selectbox("ID do usuário", dfu["id"].tolist(), key="adm_uid")
+                newp = st.text_input("Nova senha", type="password", key="adm_newp")
+                if st.button("Resetar senha", key="adm_reset"):
+                    if not newp:
+                        st.error("Digite a senha.")
+                    else:
+                        ok = admin_reset_user_password(int(uid), newp)
+                        st.success("Senha resetada!" if ok else "Falha.")
+                        st.rerun()
+
+
+# =========================================================
+# MAIN
+# =========================================================
+db_init()
+
+if st.session_state["auth"] is None:
+    page_login()
+else:
+    page_app()
