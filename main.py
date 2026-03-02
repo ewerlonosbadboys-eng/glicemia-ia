@@ -553,6 +553,93 @@ def _is_fixed_day(status: str) -> bool:
     # FIXO: balanço
     return str(status) == BALANCO_STATUS
 
+
+
+def gerar_pdf_trabalhando_no_dia(setor: str, ano: int, mes: int, dia: int, hist_db: dict, colaboradores: list) -> bytes:
+    """Gera um PDF simples (A4) listando apenas quem TRABALHA no dia escolhido, com horários."""
+    from io import BytesIO
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib import colors
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib.units import cm
+
+    # Mapa rápido chapa->(nome, subgrupo)
+    meta = {}
+    for c in colaboradores:
+        meta[str(c.get("Chapa", "")).strip()] = (str(c.get("Nome", "")).strip(), str(c.get("Subgrupo", "")).strip())
+
+    rows = [["Chapa", "Nome", "Subgrupo", "Entrada", "Saída"]]
+    for chapa, df in (hist_db or {}).items():
+        if df is None or df.empty:
+            continue
+        try:
+            linha = df.loc[df["Data"].dt.day == int(dia)].head(1)
+        except Exception:
+            # fallback: Data pode estar como string
+            linha = df.loc[pd.to_datetime(df["Data"], errors="coerce").dt.day == int(dia)].head(1)
+        if linha.empty:
+            continue
+        r = linha.iloc[0].to_dict()
+        stt = str(r.get("Status", "")).strip()
+        if stt not in WORK_STATUSES:
+            continue
+        ent = str(r.get("H_Entrada", "") or "").strip()
+        sai = str(r.get("H_Saida", "") or "").strip()
+        nome, subg = meta.get(str(chapa).strip(), ("", ""))
+        rows.append([str(chapa).strip(), nome, subg, ent, sai])
+
+    # Ordena por subgrupo e nome (mantendo cabeçalho)
+    if len(rows) > 1:
+        body = rows[1:]
+        body.sort(key=lambda x: (x[2], x[1]))
+        rows = [rows[0]] + body
+
+    buf = BytesIO()
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=A4,
+        leftMargin=1.2*cm,
+        rightMargin=1.2*cm,
+        topMargin=1.2*cm,
+        bottomMargin=1.2*cm,
+    )
+    styles = getSampleStyleSheet()
+    story = []
+
+    titulo = f"Escala - Quem trabalha no dia {dia:02d}/{mes:02d}/{ano}"
+    story.append(Paragraph(f"<b>{titulo}</b>", styles["Title"]))
+    story.append(Paragraph(f"Setor: <b>{setor}</b>", styles["Normal"]))
+    story.append(Spacer(1, 8))
+
+    table = Table(rows, colWidths=[2.3*cm, 8.2*cm, 4.0*cm, 2.3*cm, 2.3*cm])
+    table.setStyle(TableStyle([
+        ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
+        ("FONTSIZE", (0,0), (-1,0), 9),
+        ("BACKGROUND", (0,0), (-1,0), colors.lightgrey),
+        ("TEXTCOLOR", (0,0), (-1,0), colors.black),
+
+        ("FONTNAME", (0,1), (-1,-1), "Helvetica"),
+        ("FONTSIZE", (0,1), (-1,-1), 8),
+
+        ("ALIGN", (0,0), (0,-1), "LEFT"),
+        ("ALIGN", (3,1), (4,-1), "CENTER"),
+
+        ("GRID", (0,0), (-1,-1), 0.5, colors.black),
+        ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+        ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.whitesmoke, colors.white]),
+        ("LEFTPADDING", (0,0), (-1,-1), 4),
+        ("RIGHTPADDING", (0,0), (-1,-1), 4),
+        ("TOPPADDING", (0,0), (-1,-1), 2),
+        ("BOTTOMPADDING", (0,0), (-1,-1), 2),
+    ]))
+    story.append(table)
+
+    doc.build(story)
+    return buf.getvalue()
+
+
+
 def is_work_status(status: str) -> bool:
     return str(status) in WORK_STATUSES
 
@@ -3166,6 +3253,64 @@ def page_app():
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     key="xls_down"
                 )
+
+
+        # --- Lista (e PDF) de quem TRABALHA no dia escolhido ---
+        st.markdown("### 🗓️ Quem trabalha no dia (para impressão)")
+        try:
+            dias_mes = calendar.monthrange(int(ano_x), int(mes_x))[1]
+        except Exception:
+            dias_mes = 31
+        dia_sel = st.number_input("Dia do mês", min_value=1, max_value=int(dias_mes), value=1, step=1)
+
+        # Monta tabela para visualização
+        linhas = []
+        for _chapa, _df in (hist_db or {}).items():
+            if _df is None or _df.empty:
+                continue
+            try:
+                _linha = _df.loc[_df["Data"].dt.day == int(dia_sel)].head(1)
+            except Exception:
+                _linha = _df.loc[pd.to_datetime(_df["Data"], errors="coerce").dt.day == int(dia_sel)].head(1)
+            if _linha.empty:
+                continue
+            _r = _linha.iloc[0].to_dict()
+            _stt = str(_r.get("Status", "")).strip()
+            if _stt not in WORK_STATUSES:
+                continue
+            _ent = str(_r.get("H_Entrada", "") or "").strip()
+            _sai = str(_r.get("H_Saida", "") or "").strip()
+            # metadados do colaborador
+            _nome = ""
+            _subg = ""
+            for c in colaboradores:
+                if str(c.get("Chapa", "")).strip() == str(_chapa).strip():
+                    _nome = str(c.get("Nome", "")).strip()
+                    _subg = str(c.get("Subgrupo", "")).strip()
+                    break
+            linhas.append({"Chapa": str(_chapa).strip(), "Nome": _nome, "Subgrupo": _subg, "Entrada": _ent, "Saída": _sai})
+
+        df_dia = pd.DataFrame(linhas).sort_values(["Subgrupo", "Nome"]) if linhas else pd.DataFrame(columns=["Chapa","Nome","Subgrupo","Entrada","Saída"])
+        st.dataframe(df_dia, use_container_width=True, hide_index=True)
+
+        colp1, colp2 = st.columns([1, 2])
+        with colp1:
+            if st.button("📄 Gerar PDF (quem trabalha no dia)"):
+                if df_dia.empty:
+                    st.warning("Não há colaboradores trabalhando nesse dia (ou ainda não foi gerado para este mês).")
+                else:
+                    pdf_bytes_dia = gerar_pdf_trabalhando_no_dia(setor, int(ano_x), int(mes_x), int(dia_sel), hist_db, colaboradores)
+                    st.session_state["pdf_dia_trabalho_bytes"] = pdf_bytes_dia
+                    st.success("PDF pronto.")
+        with colp2:
+            if st.session_state.get("pdf_dia_trabalho_bytes"):
+                st.download_button(
+                    "⬇️ Baixar PDF (quem trabalha no dia)",
+                    data=st.session_state["pdf_dia_trabalho_bytes"],
+                    file_name=f"escala_trabalhando_dia_{int(dia_sel):02d}_{int(mes_x):02d}_{int(ano_x)}.pdf",
+                    mime="application/pdf",
+                )
+
 
     
 
