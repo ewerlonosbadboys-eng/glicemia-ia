@@ -1549,10 +1549,22 @@ def _set_balanco(df, idx, locked_status: set[int] | None = None):
     df.loc[idx, "H_Saida"] = BALANCO_DIA_SAIDA
 
 def _semana_seg_dom_indices(datas: pd.DatetimeIndex, idx_any: int):
+    """Retorna índices da semana SEG->DOM do item idx_any.
+    Robustez: ignora NaT para evitar TypeError em comparações.
+    """
     d = datas[idx_any]
-    monday = d - timedelta(days=d.weekday())
+    if pd.isna(d):
+        return []
+    monday = d - timedelta(days=int(d.weekday()))
     sunday = monday + timedelta(days=6)
-    return [i for i, dd in enumerate(datas) if monday.date() <= dd.date() <= sunday.date()]
+
+    out = []
+    for i, dd in enumerate(datas):
+        if pd.isna(dd):
+            continue
+        if monday.date() <= dd.date() <= sunday.date():
+            out.append(i)
+    return out
 
 def _all_weeks_seg_dom(datas: pd.DatetimeIndex):
     weeks, seen = [], set()
@@ -1984,6 +1996,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
     for c in colaboradores:
         ch = c["Chapa"]
         df = df_ref.copy()
+        df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
         df["Status"] = "Trabalho"
         df["H_Entrada"] = ""
         df["H_Saida"] = ""
