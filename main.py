@@ -3258,7 +3258,7 @@ def page_app():
         # --- Lista (e PDF) de quem TRABALHA no dia escolhido ---
         st.markdown("### 🗓️ Quem trabalha no dia (para impressão)")
         try:
-            dias_mes = calendar.monthrange(int(ano_x), int(mes_x))[1]
+            dias_mes = calendar.monthrange(int(ano), int(mes))[1]
         except Exception:
             dias_mes = 31
         dia_sel = st.number_input("Dia do mês", min_value=1, max_value=int(dias_mes), value=1, step=1)
@@ -3299,7 +3299,7 @@ def page_app():
                 if df_dia.empty:
                     st.warning("Não há colaboradores trabalhando nesse dia (ou ainda não foi gerado para este mês).")
                 else:
-                    pdf_bytes_dia = gerar_pdf_trabalhando_no_dia(setor, int(ano_x), int(mes_x), int(dia_sel), hist_db, colaboradores)
+                    pdf_bytes_dia = gerar_pdf_trabalhando_no_dia(setor, int(ano), int(mes), int(dia_sel), hist_db, colaboradores)
                     st.session_state["pdf_dia_trabalho_bytes"] = pdf_bytes_dia
                     st.success("PDF pronto.")
         with colp2:
@@ -3307,7 +3307,7 @@ def page_app():
                 st.download_button(
                     "⬇️ Baixar PDF (quem trabalha no dia)",
                     data=st.session_state["pdf_dia_trabalho_bytes"],
-                    file_name=f"escala_trabalhando_dia_{int(dia_sel):02d}_{int(mes_x):02d}_{int(ano_x)}.pdf",
+                    file_name=f"escala_trabalhando_dia_{int(dia_sel):02d}_{int(mes):02d}_{int(ano)}.pdf",
                     mime="application/pdf",
                 )
 
