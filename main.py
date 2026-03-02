@@ -2295,7 +2295,6 @@ def ferias_resumo_mensal_df(setor: str, ano: int) -> pd.DataFrame:
     return pd.DataFrame(data)
 
 
-
 def _months_between(d1: date, d2: date) -> int:
     """Meses cheios aproximados entre datas (d2 >= d1)."""
     if not d1 or not d2:
@@ -2946,47 +2945,51 @@ def page_app():
         if not colaboradores:
             st.warning("Sem colaboradores cadastrados.")
         else:
-            chapas = [c["Chapa"] for c in colaboradores]
-            st.markdown("### ➕ Lançar Férias")
-            ch = st.selectbox("Chapa:", chapas, key="fer_ch")
+            chapas = [c["Chapa"] for c in colaboradores]        st.markdown("### ➕ Lançar Férias")
+        ch = st.selectbox("Chapa:", chapas, key="fer_ch")
 
-# --- Info do colaborador + alerta de última férias
-nome_sel = next((x.get("Nome","") for x in colaboradores if str(x.get("Chapa","")) == str(ch)), "")
-st.write(f"**Colaborador:** {nome_sel}  \n**Chapa:** {ch}")
+        nome_sel = next((x.get("Nome","") for x in colaboradores if str(x.get("Chapa","")) == str(ch)), "")
+        st.write(f"**Colaborador:** {nome_sel}  
+**Chapa:** {ch}")
 
-info_ult = get_ultima_ferias_info(setor, ch)
-ult_fim = info_ult.get("ultima_fim")
-meses_sem = info_ult.get("meses_desde_ultima_fim")
+        info_ult = get_ultima_ferias_info(setor, ch)
+        ult_fim = info_ult.get("ultima_fim")
+        meses_sem = info_ult.get("meses_desde_ultima_fim")
 
-if ult_fim:
-    st.write(f"**Últimas férias:** {info_ult.get('ultima_inicio').strftime('%d/%m/%Y')} até {ult_fim.strftime('%d/%m/%Y')}  \n"
-             f"**Duração:** {_classificar_duracao_ferias(int(info_ult.get('dias_ultima') or 0))}  \n"
-             f"**Tempo desde o fim:** {int(meses_sem)} mês(es)")
-else:
-    st.warning("⚠️ Este colaborador ainda NÃO tem férias cadastradas no sistema.")
+        if ult_fim:
+            st.write(
+                f"**Últimas férias:** {info_ult.get('ultima_inicio').strftime('%d/%m/%Y')} até {ult_fim.strftime('%d/%m/%Y')}  
+"
+                f"**Duração:** {_classificar_duracao_ferias(int(info_ult.get('dias_ultima') or 0))}  
+"
+                f"**Tempo desde o fim:** {int(meses_sem)} mês(es)"
+            )
+        else:
+            st.warning("⚠️ Este colaborador ainda NÃO tem férias cadastradas no sistema.")
 
-# Alerta se estiver sem férias por ~1 ano e 11 meses (23 meses) ou mais
-if meses_sem is not None and int(meses_sem) >= 23:
-    st.error("🚨 ALERTA: colaborador está sem férias há 1 ano e 11 meses (ou mais). Priorize agendamento!")
-            col1, col2 = st.columns(2)
-            ini = col1.date_input("Início:", key="fer_ini")
-            fim = col2.date_input("Fim:", key="fer_fim")
+        if meses_sem is not None and int(meses_sem) >= 23:
+            st.error("🚨 ALERTA: colaborador está sem férias há 1 ano e 11 meses (ou mais). Priorize agendamento!")
 
-# --- Duração escolhida (automática)
-try:
-    qtd_dias_sel = (fim - ini).days + 1
-except Exception:
-    qtd_dias_sel = 0
-st.info(f"📌 Duração selecionada: **{_classificar_duracao_ferias(int(qtd_dias_sel))}**")
+        col1, col2 = st.columns(2)
+        ini = col1.date_input("Início:", key="fer_ini")
+        fim = col2.date_input("Fim:", key="fer_fim")
 
-            if st.button("Adicionar férias (e readequar mês)", key="fer_add"):
-                if fim < ini:
-                    st.error("Data final não pode ser menor que a inicial.")
-                else:
-                    add_ferias(setor, ch, ini, fim)
-                    _regenerar_mes_inteiro(setor, int(st.session_state["cfg_ano"]), int(st.session_state["cfg_mes"]), seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
-                    st.success("Férias adicionadas e escala readequada!")
-                    st.rerun()
+        try:
+            qtd_dias_sel = (fim - ini).days + 1
+        except Exception:
+            qtd_dias_sel = 0
+        st.info(f"📌 Duração selecionada: **{_classificar_duracao_ferias(int(qtd_dias_sel))}**")
+
+        if st.button("Adicionar férias (e readequar mês)", key="fer_add"):
+            if fim < ini:
+                st.error("Data final não pode ser menor que a inicial.")
+            else:
+                add_ferias(setor, ch, ini, fim)
+                _regenerar_mes_inteiro(setor, int(st.session_state["cfg_ano"]), int(st.session_state["cfg_mes"]), seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
+                st.success("Férias adicionadas e escala readequada!")
+                st.rerun()
+
+
 
             st.markdown("---")
             st.markdown("### 📋 Férias cadastradas")
