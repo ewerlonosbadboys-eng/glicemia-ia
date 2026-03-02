@@ -2549,10 +2549,7 @@ def page_app():
             st.session_state["auth"] = None
             st.rerun()
 
-        st.caption(
-            " Descanso 11:10 + Domingo 1x1 + Sem folga consecutiva automática + "
-            "Férias só via Aba Férias + Regra semanal depende do domingo + Máx 5 dias seguidos."
-        )
+        
 
     # =========================
     # KPIs
