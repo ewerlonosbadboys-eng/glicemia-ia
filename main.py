@@ -2627,31 +2627,10 @@ def page_app():
             st.info("Sem colaboradores.")
 
         st.markdown("---")
-                with st.form("form_add_colaborador", clear_on_submit=True):
-            st.markdown("### ➕ Cadastrar colaborador (com perfil)")
-            c1, c2, c3 = st.columns([2, 1, 1])
+        with st.form("form_add_colaborador", clear_on_submit=True):
+            c1, c2 = st.columns(2)
             nome_n = c1.text_input("Nome:", key="col_nome")
             chapa_n = c2.text_input("Chapa:", key="col_chapa")
-            ent_n = c3.time_input("Entrada padrão:", value=datetime.strptime("06:00", "%H:%M").time(), key="col_ent")
-
-            c4, c5, c6 = st.columns([1.3, 1.2, 1])
-            sg_opts_new = [""] + list_subgrupos(setor)
-            sg_n = c4.selectbox("Subgrupo:", sg_opts_new, index=0, key="col_sg")
-            folga_sab_n = c5.checkbox("Permitir folga sábado", value=False, key="col_sab")
-            aplicar_folgas = c6.checkbox("Aplicar folgas do mês agora", value=True, key="col_aplicar_folgas")
-
-            # Folgas iniciais (competência atual do app)
-            ano_cur = int(st.session_state.get("cfg_ano", datetime.now().year))
-            mes_cur = int(st.session_state.get("cfg_mes", datetime.now().month))
-            qtd_dias = calendar.monthrange(int(ano_cur), int(mes_cur))[1]
-            dias_list = list(range(1, qtd_dias + 1))
-            st.caption(f"Competência atual: **{mes_cur:02d}/{ano_cur}**")
-
-            with st.expander("🗓️ Definir folgas iniciais (opcional)", expanded=False):
-                st.caption("Selecione os dias de folga para este colaborador na competência atual. "
-                           "Isso cria ajustes (overrides) e readequará a escala (mantendo travas).")
-                dias_folga = st.multiselect("Dias de folga (1..N):", dias_list, default=[], key="col_dias_folga")
-
             submitted = st.form_submit_button("Cadastrar colaborador", use_container_width=True)
             if submitted:
                 if not nome_n or not chapa_n:
@@ -2659,32 +2638,10 @@ def page_app():
                 elif colaborador_exists(setor, chapa_n.strip()):
                     st.error("Já existe essa chapa.")
                 else:
-                    # 1) cria colaborador
                     create_colaborador(nome_n.strip(), setor, chapa_n.strip())
-
-                    # 2) salva perfil (subgrupo/entrada/folga sábado)
-                    update_colaborador_perfil(setor, chapa_n.strip(), sg_n, ent_n.strftime("%H:%M"), bool(folga_sab_n))
-
-                    # 3) aplica folgas escolhidas (overrides) na competência atual
-                    if aplicar_folgas and dias_folga:
-                        chx = chapa_n.strip()
-                        # limpa overrides de status do colaborador no mês (somente status)
-                        for d in range(1, qtd_dias + 1):
-                            delete_override(setor, ano_cur, mes_cur, chx, d, "status")
-
-                        for d in dias_folga:
-                            try:
-                                dd = int(d)
-                            except Exception:
-                                continue
-                            if 1 <= dd <= qtd_dias:
-                                set_override(setor, ano_cur, mes_cur, chx, dd, "status", "Folga")
-
-                        _regenerar_mes_inteiro(setor, ano_cur, mes_cur, seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
-
-                    st.success("Cadastrado! Perfil salvo." + (" Folgas aplicadas na competência atual." if (aplicar_folgas and dias_folga) else ""))
+                    st.success("Cadastrado!")
                     st.rerun()
-        st.markdown("---")
+
         st.markdown("---")
         st.markdown("## 🗑️ Excluir colaborador")
         if colaboradores:
