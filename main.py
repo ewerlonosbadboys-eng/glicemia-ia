@@ -823,6 +823,24 @@ def db_init():
     )
     """)
 
+    # --- MIGRAÇÃO defensiva (Streamlit Cloud pode manter DB antigo)
+    # Garante que a tabela escala_mes tenha todas as colunas esperadas
+    try:
+        cur.execute("PRAGMA table_info(escala_mes)")
+        cols = {r[1] for r in cur.fetchall()}  # r[1] = name
+        # colunas esperadas (além das já existentes)
+        expected = {"setor","ano","mes","chapa","dia","data","dia_sem","status","h_entrada","h_saida"}
+        missing = expected - cols
+        for c in sorted(missing):
+            # tipos simples (compatível com SQLite)
+            if c in ("ano","mes","dia"):
+                cur.execute(f"ALTER TABLE escala_mes ADD COLUMN {c} INTEGER")
+            else:
+                cur.execute(f"ALTER TABLE escala_mes ADD COLUMN {c} TEXT")
+        con.commit()
+    except Exception:
+        pass
+
     _safe_exec(cur, """
     CREATE TABLE IF NOT EXISTS overrides (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
