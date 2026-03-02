@@ -3024,24 +3024,7 @@ def page_app():
                             key="pdf_down"
                         )
 
-st.markdown("---")
-            st.markdown("### 📄 PDF (modelo oficial)")
-            if st.button("📄 Gerar PDF (modelo oficial)", key="pdf_btn"):
-                hist_db_pdf = load_escala_mes_db(setor, ano, mes)
-                if not hist_db_pdf:
-                    st.warning("Gere a escala antes.")
-                else:
-                    hist_db_pdf = apply_overrides_to_hist(setor, ano, mes, hist_db_pdf)
-                    pdf_bytes = gerar_pdf_modelo_oficial(setor, ano, mes, hist_db_pdf, colaboradores)
-                    st.download_button(
-                        "⬇️ Baixar PDF",
-                        data=pdf_bytes,
-                        file_name=f"escala_{setor}_{mes:02d}_{ano}.pdf",
-                        mime="application/pdf",
-                        key="pdf_down"
-                    )
-
-# ------------------------------------------------------
+    # ------------------------------------------------------
     # ABA 6: Admin (somente ADMIN)
     # ------------------------------------------------------
     if is_admin_area:
