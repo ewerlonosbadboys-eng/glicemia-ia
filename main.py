@@ -63,24 +63,40 @@ st.set_page_config(page_title="Escala 5x2 Oficial", layout="wide")
 # =========================================================
 st.markdown("""
 <style>
-/* largura e respiro geral */
-.block-container { padding-top: 1.2rem; padding-bottom: 2rem; }
-
-/* títulos mais compactos */
+/* layout geral */
+.block-container { padding-top: .6rem; padding-bottom: 2rem; max-width: 1600px; }
 h1, h2, h3 { letter-spacing: -0.2px; }
 
-/* cards */
-.kpi-card {
-  border: 1px solid rgba(49, 51, 63, 0.12);
-  border-radius: 14px;
-  padding: 14px 16px;
-  background: rgba(250, 250, 252, 0.6);
+/* KPI cards (topo) */
+.kpi-card{
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 16px;
+  padding: 12px 14px;
+  background: rgba(255,255,255,0.06);
+  box-shadow: 0 6px 18px rgba(0,0,0,0.18);
+  backdrop-filter: blur(6px);
 }
-.kpi-title { font-size: 0.85rem; opacity: 0.75; margin-bottom: 2px; }
-.kpi-value { font-size: 1.3rem; font-weight: 800; margin: 0; }
+.kpi-card:hover{ transform: translateY(-1px); transition: 120ms ease; border-color: rgba(255,255,255,0.18); }
+.kpi-title{ font-size: .78rem; opacity: .72; margin: 0 0 4px 0; text-transform: uppercase; letter-spacing: .4px; }
+.kpi-value{ font-size: 1.35rem; font-weight: 800; margin: 0; line-height: 1.05; }
 
-/* caixas e divisórias */
-.hr { height:1px; background: rgba(49, 51, 63, 0.12); margin: 14px 0; }
+/* divisória */
+.hr{ height:1px; background: rgba(255,255,255,0.08); margin: 14px 0; }
+
+/* Tabs (menu superior) */
+div[data-testid="stTabs"] { margin-top: .25rem; }
+div[data-testid="stTabs"] button {
+  font-size: .92rem;
+  padding: 10px 14px;
+  border-radius: 12px;
+}
+div[data-testid="stTabs"] button[aria-selected="true"]{
+  background: rgba(255,255,255,0.07);
+  border-bottom: 2px solid rgba(255,255,255,0.35);
+}
+div[data-testid="stTabs"] button:hover{
+  background: rgba(255,255,255,0.06);
+}
 
 /* sidebar mais limpa */
 section[data-testid="stSidebar"] .block-container { padding-top: 1rem; }
