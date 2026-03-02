@@ -120,6 +120,16 @@ WORK_STATUSES = {"Trabalho", BALANCO_STATUS}
 BALANCO_DIA_ENTRADA = "06:00"
 BALANCO_DIA_SAIDA = "11:50"
 
+# Presets de horários (facilita seleção no app)
+HORARIOS_ENTRADA_PRESET = [
+    "06:00",
+    "06:45",
+    "06:50",  # novo
+    "09:30",
+    "12:40",  # novo
+    "12:45",
+]
+
 D_PT = {
     "Monday": "seg",
     "Tuesday": "ter",
@@ -2770,14 +2780,25 @@ def page_app():
             csel = next(x for x in colaboradores if x["Chapa"] == ch_sel)
 
             colp1, colp2, colp3 = st.columns(3)
-            ent = colp1.time_input("Entrada:", value=datetime.strptime(csel["Entrada"], "%H:%M").time(), key="pf_ent")
+            # Entrada: usar presets (inclui 06:50 e 12:40) para facilitar
+            ent_atual = (csel.get("Entrada") or BALANCO_DIA_ENTRADA).strip()
+            if ent_atual not in HORARIOS_ENTRADA_PRESET:
+                opcoes_ent = HORARIOS_ENTRADA_PRESET + [ent_atual]
+            else:
+                opcoes_ent = HORARIOS_ENTRADA_PRESET
+            ent_sel = colp1.selectbox(
+                "Entrada:",
+                options=opcoes_ent,
+                index=opcoes_ent.index(ent_atual),
+                key="pf_ent_sel",
+            )
             sg_opts = [""] + list_subgrupos(setor)
             idx_default = sg_opts.index(csel["Subgrupo"]) if csel["Subgrupo"] in sg_opts else 0
             sg = colp2.selectbox("Subgrupo:", sg_opts, index=idx_default, key="pf_sg")
             sab = colp3.checkbox("Permitir folga sábado", value=bool(csel["Folga_Sab"]), key="pf_sab")
 
             if st.button("Salvar perfil", key="pf_save"):
-                update_colaborador_perfil(setor, ch_sel, sg, ent.strftime("%H:%M"), sab)
+                update_colaborador_perfil(setor, ch_sel, sg, ent_sel, sab)
                 st.success("Salvo!")
                 st.rerun()
 
