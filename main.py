@@ -2295,6 +2295,59 @@ def ferias_resumo_mensal_df(setor: str, ano: int) -> pd.DataFrame:
     return pd.DataFrame(data)
 
 
+
+def _months_between(d1: date, d2: date) -> int:
+    """Meses cheios aproximados entre datas (d2 >= d1)."""
+    if not d1 or not d2:
+        return 0
+    if d2 < d1:
+        d1, d2 = d2, d1
+    return (d2.year - d1.year) * 12 + (d2.month - d1.month)
+
+def get_ultima_ferias_info(setor: str, chapa: str):
+    """
+    Retorna dict com:
+      - ultima_inicio (date|None)
+      - ultima_fim (date|None)
+      - dias_ultima (int|None)
+      - meses_desde_ultima_fim (int|None)  # até hoje
+    Considera o período com maior 'fim' como a última.
+    """
+    chapa = str(chapa or "").strip()
+    if not chapa:
+        return {"ultima_inicio": None, "ultima_fim": None, "dias_ultima": None, "meses_desde_ultima_fim": None}
+
+    rows = list_ferias(setor)  # [(chapa,inicio,fim), ...]
+    last = None  # (fim_date, ini_date)
+    for ch, ini, fim in rows:
+        if str(ch) != chapa:
+            continue
+        ini_d = _parse_date_ymd(ini)
+        fim_d = _parse_date_ymd(fim)
+        if not ini_d or not fim_d:
+            continue
+        if last is None or fim_d > last[0]:
+            last = (fim_d, ini_d)
+
+    if not last:
+        return {"ultima_inicio": None, "ultima_fim": None, "dias_ultima": None, "meses_desde_ultima_fim": None}
+
+    ultima_fim, ultima_ini = last[0], last[1]
+    dias = (ultima_fim - ultima_ini).days + 1
+    meses = _months_between(ultima_fim, date.today())
+    return {"ultima_inicio": ultima_ini, "ultima_fim": ultima_fim, "dias_ultima": dias, "meses_desde_ultima_fim": meses}
+
+def _classificar_duracao_ferias(qtd_dias: int) -> str:
+    if qtd_dias == 15:
+        return "15 dias"
+    if qtd_dias == 30:
+        return "30 dias"
+    if qtd_dias > 0:
+        return f"{qtd_dias} dias"
+    return "-"
+
+
+
 # =========================================================
 # PDF UI helpers (filtro estilo "Impressão de Escala")
 # =========================================================
@@ -2896,9 +2949,35 @@ def page_app():
             chapas = [c["Chapa"] for c in colaboradores]
             st.markdown("### ➕ Lançar Férias")
             ch = st.selectbox("Chapa:", chapas, key="fer_ch")
+
+# --- Info do colaborador + alerta de última férias
+nome_sel = next((x.get("Nome","") for x in colaboradores if str(x.get("Chapa","")) == str(ch)), "")
+st.write(f"**Colaborador:** {nome_sel}  \n**Chapa:** {ch}")
+
+info_ult = get_ultima_ferias_info(setor, ch)
+ult_fim = info_ult.get("ultima_fim")
+meses_sem = info_ult.get("meses_desde_ultima_fim")
+
+if ult_fim:
+    st.write(f"**Últimas férias:** {info_ult.get('ultima_inicio').strftime('%d/%m/%Y')} até {ult_fim.strftime('%d/%m/%Y')}  \n"
+             f"**Duração:** {_classificar_duracao_ferias(int(info_ult.get('dias_ultima') or 0))}  \n"
+             f"**Tempo desde o fim:** {int(meses_sem)} mês(es)")
+else:
+    st.warning("⚠️ Este colaborador ainda NÃO tem férias cadastradas no sistema.")
+
+# Alerta se estiver sem férias por ~1 ano e 11 meses (23 meses) ou mais
+if meses_sem is not None and int(meses_sem) >= 23:
+    st.error("🚨 ALERTA: colaborador está sem férias há 1 ano e 11 meses (ou mais). Priorize agendamento!")
             col1, col2 = st.columns(2)
             ini = col1.date_input("Início:", key="fer_ini")
             fim = col2.date_input("Fim:", key="fer_fim")
+
+# --- Duração escolhida (automática)
+try:
+    qtd_dias_sel = (fim - ini).days + 1
+except Exception:
+    qtd_dias_sel = 0
+st.info(f"📌 Duração selecionada: **{_classificar_duracao_ferias(int(qtd_dias_sel))}**")
 
             if st.button("Adicionar férias (e readequar mês)", key="fer_add"):
                 if fim < ini:
