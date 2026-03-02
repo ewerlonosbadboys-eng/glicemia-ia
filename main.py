@@ -1379,19 +1379,29 @@ def _apply_overrides_to_df_inplace(df: pd.DataFrame, setor: str, chapa: str, ovm
 # ESCALA DB
 # =========================================================
 def save_escala_mes_db(setor: str, ano: int, mes: int, historico_df_por_chapa: dict[str, pd.DataFrame]):
+    """Grava escala no banco (robusto a NaT em Data)."""
     con = db_conn()
     cur = con.cursor()
     for chapa, df in historico_df_por_chapa.items():
-        for _, row in df.iterrows():
-            dia = int(row["Data"].day)
+        df2 = df.copy()
+        df2.reset_index(drop=True, inplace=True)
+        for j, row in df2.iterrows():
+            dt = pd.to_datetime(row.get("Data", None), errors="coerce")
+            if pd.isna(dt):
+                # fallback: usa o dia sequencial do mês
+                dia = int(j) + 1
+                dt = pd.Timestamp(year=int(ano), month=int(mes), day=int(dia))
+            else:
+                dia = int(dt.day)
+
             cur.execute("""
                 INSERT OR REPLACE INTO escala_mes(setor, ano, mes, chapa, dia, data, dia_sem, status, h_entrada, h_saida)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
-                setor, int(ano), int(mes), chapa, dia,
-                pd.to_datetime(row["Data"]).strftime("%Y-%m-%d"),
-                row["Dia"],
-                row["Status"],
+                setor, int(ano), int(mes), chapa, int(dia),
+                pd.to_datetime(dt).strftime("%Y-%m-%d"),
+                row.get("Dia", ""),
+                row.get("Status", "Trabalho"),
                 row.get("H_Entrada", "") or "",
                 row.get("H_Saida", "") or "",
             ))
