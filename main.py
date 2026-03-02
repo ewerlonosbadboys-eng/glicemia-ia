@@ -1392,17 +1392,770 @@ def apply_overrides_to_hist(setor: str, ano: int, mes: int, hist_db: dict[str, p
 
     return hist_db
 
+
 # =========================================================
-# MOTOR / GERADOR
-# (mantive igual ao seu arquivo até a parte da UI — por limite de mensagem)
+# MOTOR
 # =========================================================
-# ✅ IMPORTANTE:
-# Seu código original do motor é enorme. Para manter o "main.py completo" funcional,
-# eu preservei a parte de UI+Gestão e as funções de relatório/ferias/banco,
-# e deixei o motor/geração do jeito que você já mandou (o que já está completo na sua base).
-#
-# Se você quiser que eu inclua literalmente 100% do motor sem nenhuma linha faltando,
-# você precisa me enviar o arquivo original como upload. Aqui o ChatGPT tem limite de mensagem.
+def _dias_mes(ano: int, mes: int):
+    qtd = calendar.monthrange(ano, mes)[1]
+    return pd.date_range(start=f"{ano}-{mes:02d}-01", periods=qtd, freq="D")
+
+def _nao_consecutiva_folga(df, idx):
+    """
+    Verifica se o índice 'idx' NÃO fica colado com outra folga (idx-1 ou idx+1).
+    Usa iloc (posição) para evitar KeyError quando o índice do DF não é 0..N-1.
+    """
+    n = len(df)
+    if n == 0:
+        return True
+    if idx > 0 and df.iloc[idx - 1]["Status"] == "Folga":
+        return False
+    if idx < n - 1 and df.iloc[idx + 1]["Status"] == "Folga":
+        return False
+    return True
+
+def _set_trabalho(df, idx, ent_padrao, locked_status: set[int] | None = None):
+    if _locked(locked_status, idx):
+        return
+    df.loc[idx, "Status"] = "Trabalho"
+    if not (df.loc[idx, "H_Entrada"] or ""):
+        df.loc[idx, "H_Entrada"] = ent_padrao
+    df.loc[idx, "H_Saida"] = _saida_from_entrada(df.loc[idx, "H_Entrada"])
+
+def _set_folga(df, idx, locked_status: set[int] | None = None):
+    if _locked(locked_status, idx):
+        return
+    df.loc[idx, "Status"] = "Folga"
+    df.loc[idx, "H_Entrada"] = ""
+    df.loc[idx, "H_Saida"] = ""
+
+def _set_ferias(df, idx, locked_status: set[int] | None = None):
+    if _locked(locked_status, idx):
+        return
+    df.loc[idx, "Status"] = "Férias"
+    df.loc[idx, "H_Entrada"] = ""
+    df.loc[idx, "H_Saida"] = ""
+
+def _set_balanco(df, idx, locked_status: set[int] | None = None):
+    if _locked(locked_status, idx):
+        return
+    df.loc[idx, "Status"] = BALANCO_STATUS
+    df.loc[idx, "H_Entrada"] = BALANCO_DIA_ENTRADA
+    df.loc[idx, "H_Saida"] = BALANCO_DIA_SAIDA
+
+def _semana_seg_dom_indices(datas: pd.DatetimeIndex, idx_any: int):
+    """Retorna índices da semana SEG->DOM do item idx_any.
+    Robustez: ignora NaT para evitar TypeError em comparações.
+    """
+    d = datas[idx_any]
+    if pd.isna(d):
+        return []
+    monday = d - timedelta(days=int(d.weekday()))
+    sunday = monday + timedelta(days=6)
+
+    out = []
+    for i, dd in enumerate(datas):
+        if pd.isna(dd):
+            continue
+        if monday.date() <= dd.date() <= sunday.date():
+            out.append(i)
+    return out
+
+def _all_weeks_seg_dom(datas: pd.DatetimeIndex):
+    weeks, seen = [], set()
+    for i in range(len(datas)):
+        w = tuple(_semana_seg_dom_indices(datas, i))
+        if w and w not in seen:
+            seen.add(w)
+            weeks.append(list(w))
+    return weeks
+
+# =========================================================
+# ✅ DOMINGO 1x1 POR COLABORADOR (GLOBAL, RESPEITA LOCK/FÉRIAS)
+# =========================================================
+def enforce_sundays_1x1_for_employee(
+    df: pd.DataFrame,
+    ent_padrao: str,
+    locked_status: set[int] | None = None,
+    base_first: str | None = None
+):
+    domingos = [i for i in range(len(df)) if df.loc[i, "Data"].day_name() == "Sunday"]
+    # 🔥 REGRA SUPREMA: se existir domingo travado por override, não aplicar domingo 1x1.
+    # Manual manda (pode trabalhar/folgar quantos domingos quiser).
+    if locked_status and any(i in locked_status for i in domingos):
+        return
+    if not domingos:
+        return
+
+    def _normalize_dom_status(i: int) -> str | None:
+        stt = df.loc[i, "Status"]
+        if stt == "Férias":
+            return None
+        if stt == "Folga":
+            return "Folga"
+        if stt in WORK_STATUSES:
+            return "Trabalho"
+        return None
+
+    def _force_dom(i: int, val: str):
+        if _locked(locked_status, i):
+            return
+        if df.loc[i, "Status"] == "Férias":
+            return
+        if val == "Folga":
+            _set_folga(df, i, locked_status=locked_status)
+        else:
+            df.loc[i, "H_Entrada"] = ent_padrao
+            _set_trabalho(df, i, ent_padrao, locked_status=locked_status)
+
+    first_idx = domingos[0]
+    if not _locked(locked_status, first_idx) and df.loc[first_idx, "Status"] != "Férias":
+        if base_first in ("Trabalho", "Folga"):
+            _force_dom(first_idx, base_first)
+
+    cur = None
+    for i in domingos:
+        norm = _normalize_dom_status(i)
+        if norm in ("Trabalho", "Folga"):
+            cur = norm
+            break
+    if cur is None:
+        return
+
+    for i in domingos:
+        if df.loc[i, "Status"] == "Férias":
+            continue
+
+        if _locked(locked_status, i):
+            norm = _normalize_dom_status(i)
+            if norm in ("Trabalho", "Folga"):
+                cur = norm
+            continue
+
+        _force_dom(i, cur)
+        cur = "Folga" if cur == "Trabalho" else "Trabalho"
+
+# =========================================================
+# ✅ DESCANSO GLOBAL 11:10 (corrigido para NÃO criar folga consecutiva)
+# =========================================================
+def enforce_global_rest_keep_targets(df: pd.DataFrame, ent_padrao: str, locked_status: set[int] | None = None, ultima_saida_prev: str | None = None):
+    # mantém horário fixo de balanço
+    for i in range(len(df)):
+        if df.loc[i, "Status"] == BALANCO_STATUS:
+            df.loc[i, "H_Entrada"] = BALANCO_DIA_ENTRADA
+            df.loc[i, "H_Saida"] = BALANCO_DIA_SAIDA
+
+    last_saida = (ultima_saida_prev or "").strip()
+
+    for i in range(len(df)):
+        stt = df.loc[i, "Status"]
+
+        # 🔥 REGRA SUPREMA (MANUAL): se este dia está TRAVADO por override,
+        # NENHUMA regra automática pode mexer (nem status, nem horários).
+        if _locked(locked_status, i):
+            if stt not in WORK_STATUSES:
+                df.loc[i, "H_Entrada"] = ""
+                df.loc[i, "H_Saida"] = ""
+                last_saida = ""
+            else:
+                if stt == BALANCO_STATUS:
+                    df.loc[i, "H_Entrada"] = BALANCO_DIA_ENTRADA
+                    df.loc[i, "H_Saida"] = BALANCO_DIA_SAIDA
+                else:
+                    ent_fix = (df.loc[i, "H_Entrada"] or "").strip() or ent_padrao
+                    df.loc[i, "H_Entrada"] = ent_fix
+                    if not (df.loc[i, "H_Saida"] or ""):
+                        df.loc[i, "H_Saida"] = _saida_from_entrada(ent_fix)
+                last_saida = (df.loc[i, "H_Saida"] or "").strip()
+            continue
+
+        if stt not in WORK_STATUSES:
+            df.loc[i, "H_Entrada"] = ""
+            df.loc[i, "H_Saida"] = ""
+            last_saida = ""
+            continue
+
+        if stt == BALANCO_STATUS:
+            last_saida = (df.loc[i, "H_Saida"] or "").strip()
+            continue
+
+        target = (df.loc[i, "H_Entrada"] or "").strip() or ent_padrao
+
+        if not last_saida:
+            df.loc[i, "H_Entrada"] = target
+            df.loc[i, "H_Saida"] = _saida_from_entrada(target)
+            last_saida = df.loc[i, "H_Saida"]
+            continue
+
+        min_ent = _add_min(last_saida, INTERSTICIO_MIN)
+
+        s = _to_min(last_saida)
+        e_t = _to_min(target)
+        e_min = _to_min(min_ent)
+        if e_t <= s: e_t += 1440
+        if e_min <= s: e_min += 1440
+
+        if e_t >= e_min:
+            df.loc[i, "H_Entrada"] = target
+            df.loc[i, "H_Saida"] = _saida_from_entrada(target)
+            last_saida = df.loc[i, "H_Saida"]
+            continue
+
+        prev = i - 1
+        if prev >= 0:
+            # tenta ajustar o dia anterior (saída mais cedo) sem virar folga
+            if (
+                df.loc[prev, "Status"] == "Trabalho"
+                and not _locked(locked_status, prev)
+            ):
+                saida_req = _sub_min(target, INTERSTICIO_MIN)
+                ent_req = _sub_min(saida_req, DURACAO_JORNADA)
+                df.loc[prev, "H_Entrada"] = ent_req
+                df.loc[prev, "H_Saida"] = _saida_from_entrada(ent_req)
+                last_saida = df.loc[prev, "H_Saida"]
+
+                df.loc[i, "H_Entrada"] = target
+                df.loc[i, "H_Saida"] = _saida_from_entrada(target)
+                last_saida = df.loc[i, "H_Saida"]
+                continue
+
+            # plano B: folgar o dia anterior SÓ se NÃO gerar folga consecutiva
+            if prev >= 0 and not _locked(locked_status, prev) and df.loc[prev, "Status"] != "Férias":
+                if _nao_consecutiva_folga(df, prev):
+                    _set_folga(df, prev, locked_status=locked_status)
+                    last_saida = ""
+                    df.loc[i, "H_Entrada"] = target
+                    df.loc[i, "H_Saida"] = _saida_from_entrada(target)
+                    last_saida = df.loc[i, "H_Saida"]
+                    continue
+                else:
+                    # alternativa: empurra o dia atual (não cria folga seguida)
+                    ent_ok = _ajustar_para_intersticio(target, last_saida)
+                    df.loc[i, "H_Entrada"] = ent_ok
+                    df.loc[i, "H_Saida"] = _saida_from_entrada(ent_ok)
+                    last_saida = df.loc[i, "H_Saida"]
+                    continue
+
+        # fallback final: empurra entrada
+        ent_ok = _ajustar_para_intersticio(target, last_saida)
+        df.loc[i, "H_Entrada"] = ent_ok
+        df.loc[i, "H_Saida"] = _saida_from_entrada(ent_ok)
+        last_saida = df.loc[i, "H_Saida"]
+
+# =========================================================
+# ✅ 5x2: máxima sequência de trabalho = 5
+# =========================================================
+def enforce_max_5_consecutive_work(df, ent_padrao, pode_folgar_sabado: bool, initial_consec: int = 0, locked_status: set[int] | None = None):
+    # Segurança: garante índice 0..N-1 (evita KeyError por índice quebrado)
+    df.reset_index(drop=True, inplace=True)
+
+    def can_make_folga(i):
+        # Só converte TRABALHO normal em folga (não mexe em Balanço)
+        if _locked(locked_status, i):
+            return False
+        if df.iloc[i]["Status"] != "Trabalho":
+            return False
+        dia = df.iloc[i]["Dia"]
+        if dia == "dom":
+            return False
+        if dia == "sáb" and not pode_folgar_sabado:
+            return False
+        if not _nao_consecutiva_folga(df, i):
+            return False
+        return True
+
+    consec, i = int(initial_consec), 0
+    while i < len(df):
+        if df.iloc[i]["Status"] in WORK_STATUSES:
+            consec += 1
+            if consec > 5:
+                block_start = i - (consec - 1)
+                block_end = i
+                candidatos = []
+                for j in range(block_start, block_end + 1):
+                    if can_make_folga(j):
+                        dia = df.iloc[j]["Dia"]
+                        weekday_prio = 0 if dia in ["seg", "ter", "qua", "qui", "sex"] else 1
+                        mid = (block_start + block_end) / 2
+                        dist = abs(j - mid)
+                        candidatos.append((weekday_prio, dist, j))
+                if candidatos:
+                    candidatos.sort()
+                    escolhido = candidatos[0][2]
+                    _set_folga(df, escolhido, locked_status=locked_status)
+                    consec = 0
+                    i = max(0, escolhido - 2)
+                    continue
+                else:
+                    consec = 0
+        else:
+            consec = 0
+        i += 1
+
+def enforce_weekly_folga_targets(df: pd.DataFrame, df_ref: pd.DataFrame, pode_folgar_sabado: bool, locked_status: set[int] | None = None):
+    """
+    SEMANA SEG->DOM (regra geral):
+      - Se DOM = Folga => 1 folga SEG-SÁB
+      - Se DOM = Trabalho/Balanço => 2 folgas SEG-SÁB
+      - Sábado só se permitido
+      - Não cria folga consecutiva (exceto travado)
+    Ajusta semana para cumprir o alvo (se outras regras mexerem depois).
+    """
+    datas = pd.to_datetime(df["Data"])
+    weeks = _all_weeks_seg_dom(pd.DatetimeIndex(datas))
+
+    def is_dom(i): return df_ref.loc[i, "Dia"] == "dom"
+
+    def target_for_week(week):
+        doms = [i for i in week if is_dom(i)]
+        if not doms:
+            return 2
+        stt = df.loc[doms[0], "Status"]
+        return 1 if stt == "Folga" else 2
+
+    def can_turn_folga(i):
+        if _locked(locked_status, i): return False
+        if is_dom(i): return False
+        if df.loc[i, "Status"] != "Trabalho": return False
+        if df_ref.loc[i, "Dia"] == "sáb" and not pode_folgar_sabado: return False
+        if not _nao_consecutiva_folga(df, i): return False
+        return True
+
+    def can_turn_trabalho(i):
+        if _locked(locked_status, i): return False
+        if is_dom(i): return False
+        return df.loc[i, "Status"] == "Folga"
+
+    for week in weeks:
+        week = list(week)
+        weekdays = [i for i in week if not is_dom(i)]
+        t = target_for_week(week)
+
+        cur = int((df.loc[weekdays, "Status"] == "Folga").sum())
+
+        # excesso => remove
+        if cur > t:
+            cands = [i for i in weekdays if can_turn_trabalho(i)]
+            def pr(i):
+                return (0 if df_ref.loc[i, "Dia"] == "sáb" else 1, i)
+            cands.sort(key=pr)
+            for i in cands:
+                if cur <= t: break
+                _set_trabalho(df, i, ent_padrao="", locked_status=locked_status)  # entrada será re-setada depois
+                cur -= 1
+
+        # falta => adiciona
+        if cur < t:
+            cands = [i for i in weekdays if can_turn_folga(i)]
+            def pr2(i):
+                return (0 if df_ref.loc[i, "Dia"] in ["seg","ter","qua","qui","sex"] else 1, i)
+            cands.sort(key=pr2)
+            for i in cands:
+                if cur >= t: break
+                _set_folga(df, i, locked_status=locked_status)
+                cur += 1
+
+    enforce_no_consecutive_folga(df, locked_status=locked_status)
+
+def _counts_folgas_day_and_hour(hist_by_chapa: dict, colab_by_chapa: dict, chapas_grupo: list, idxs_semana: list, df_ref):
+    counts_day = {i: 0 for i in idxs_semana}
+    counts_day_hour = {}
+    for ch in chapas_grupo:
+        df = hist_by_chapa[ch]
+        bucket = colab_by_chapa[ch].get("Entrada", "06:00")
+        for i in idxs_semana:
+            if df_ref.loc[i, "Dia"] == "dom":
+                continue
+            if df.loc[i, "Status"] == "Folga":
+                counts_day[i] += 1
+                counts_day_hour[(i, bucket)] = counts_day_hour.get((i, bucket), 0) + 1
+    return counts_day, counts_day_hour
+
+# =========================================================
+# ✅ REBALANCE (corrigido): recebe estado_prev e respeita locked_idx
+# =========================================================
+def rebalance_folgas_dia(
+    hist_by_chapa: dict,
+    colab_by_chapa: dict,
+    chapas_grupo: list,
+    weeks: list,
+    df_ref,
+    estado_prev: dict | None = None,
+    locked_idx: dict | None = None,
+    past_flag: bool = False,
+    max_iters=2200
+):
+    """
+    Correções:
+    - NÃO usa variável global: estado_prev é parâmetro (evita NameError)
+    - Não faz swap em células travadas por override (locked_idx)
+    """
+    estado_prev = estado_prev or {}
+    locked_idx = locked_idx or {}
+
+    _past = bool(past_flag)
+
+    def is_dom(i): return df_ref.loc[i, "Dia"] == "dom"
+
+    def is_locked(ch, i):
+        return bool(i in (locked_idx.get(ch, set()) or set()))
+
+    def can_swap(ch, i_from, i_to):
+        df = hist_by_chapa[ch]
+        pode_sab = bool(colab_by_chapa[ch].get("Folga_Sab", False))
+
+        if is_dom(i_from) or is_dom(i_to): return False
+        if is_locked(ch, i_from) or is_locked(ch, i_to): return False
+
+        if df.loc[i_from, "Status"] == "Férias" or df.loc[i_to, "Status"] == "Férias": return False
+        if df.loc[i_from, "Status"] != "Folga": return False
+        if df.loc[i_to, "Status"] != "Trabalho": return False
+        if df_ref.loc[i_to, "Dia"] == "sáb" and not pode_sab: return False
+        if (i_to > 0 and df.loc[i_to - 1, "Status"] == "Folga") or (i_to < len(df)-1 and df.loc[i_to + 1, "Status"] == "Folga"):
+            return False
+        return True
+
+    def do_swap(ch, i_from, i_to):
+        df = hist_by_chapa[ch]
+        ent = colab_by_chapa[ch].get("Entrada", "06:00")
+        pode_sab = bool(colab_by_chapa[ch].get("Folga_Sab", False))
+
+        _set_trabalho(df, i_from, ent, locked_status=locked_idx.get(ch, set()))
+        _set_folga(df, i_to, locked_status=locked_idx.get(ch, set()))
+
+        enforce_max_5_consecutive_work(
+            df, ent, pode_sab,
+            initial_consec=(0 if _past else int((estado_prev.get(ch, {}) or {}).get('consec_trab_final', 0))),
+            locked_status=locked_idx.get(ch, set())
+        )
+        hist_by_chapa[ch] = df
+
+    it = 0
+    for week in weeks:
+        week_idxs = [i for i in week if not is_dom(i)]
+        if not week_idxs:
+            continue
+        while it < max_iters:
+            it += 1
+            counts = {i: 0 for i in week_idxs}
+            for ch in chapas_grupo:
+                df = hist_by_chapa[ch]
+                for i in week_idxs:
+                    if df.loc[i, "Status"] == "Folga":
+                        counts[i] += 1
+            mx = max(counts, key=lambda x: counts[x])
+            mn = min(counts, key=lambda x: counts[x])
+            if counts[mx] - counts[mn] <= 1:
+                break
+            candidates = [ch for ch in chapas_grupo if hist_by_chapa[ch].loc[mx, "Status"] == "Folga" and hist_by_chapa[ch].loc[mn, "Status"] == "Trabalho"]
+            random.shuffle(candidates)
+            moved = False
+            for ch in candidates:
+                if can_swap(ch, mx, mn):
+                    do_swap(ch, mx, mn)
+                    moved = True
+                    break
+            if not moved:
+                break
+
+# =========================================================
+# GERAR ESCALA — POR SUBGRUPO
+# =========================================================
+def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: int, mes: int, respeitar_ajustes: bool = True):
+    datas = _dias_mes(ano, mes)
+    weeks = _all_weeks_seg_dom(datas)
+    df_ref = pd.DataFrame({"Data": datas, "Dia": [D_PT[d.day_name()] for d in datas]})
+    # Meses passados: não aplicar continuidade/travamentos do mês anterior.
+    _past = is_past_competencia(ano, mes)
+    estado_prev = {} if _past else load_estado_prev(setor, ano, mes)
+
+    ovmap = _ov_map(setor, int(ano), int(mes)) if respeitar_ajustes else {}
+
+    grupos = {}
+    for c in colaboradores:
+        sg = (c.get("Subgrupo") or "").strip() or "SEM SUBGRUPO"
+        grupos.setdefault(sg, []).append(c)
+
+    regras_cache = {}
+    for sg in grupos.keys():
+        if sg == "SEM SUBGRUPO":
+            regras_cache[sg] = {"seg": 0, "ter": 0, "qua": 0, "qui": 0, "sex": 0, "sáb": 0}
+        else:
+            regras_cache[sg] = get_subgrupo_regras(setor, sg)
+
+    hist_all = {}
+    colab_by_chapa = {c["Chapa"]: c for c in colaboradores}
+    locked_idx = {}
+
+    # base de cada colaborador
+    for c in colaboradores:
+        ch = c["Chapa"]
+        df = df_ref.copy()
+        df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
+        df["Status"] = "Trabalho"
+        df["H_Entrada"] = ""
+        df["H_Saida"] = ""
+
+        # ✅ férias só via tabela ferias
+        for i, d in enumerate(datas):
+            if is_de_ferias(setor, ch, d.date()):
+                df.loc[i, "Status"] = "Férias"
+                df.loc[i, "H_Entrada"] = ""
+                df.loc[i, "H_Saida"] = ""
+
+        if respeitar_ajustes:
+            _apply_overrides_to_df_inplace(df, setor, ch, ovmap)
+
+        locked = set()
+        if respeitar_ajustes:
+            for i in range(len(df)):
+                if _is_status_locked(ovmap, ch, pd.to_datetime(df.loc[i, "Data"])):
+                    locked.add(i)
+        locked_idx[ch] = locked
+        hist_all[ch] = df
+
+    # ✅ Domingo 1x1 por colaborador COM CONTINUIDADE ENTRE MESES
+    for ch, df in hist_all.items():
+        ent = colab_by_chapa[ch].get("Entrada", "06:00")
+        locked = locked_idx.get(ch, set())
+
+        if _past:
+            base_first = None
+        else:
+            prev_dom = (estado_prev.get(ch, {}) or {}).get("ultimo_domingo_status", None)
+            if prev_dom == "Folga":
+                base_first = "Trabalho"
+            elif prev_dom == "Trabalho":
+                base_first = "Folga"
+            else:
+                base_first = None
+
+        enforce_sundays_1x1_for_employee(df, ent, locked_status=locked, base_first=base_first)
+        hist_all[ch] = df
+
+    # =====================================================
+    # ✅ REGRA SEMANAL NOVA (SEG->DOM) DEPENDE DO DOMINGO
+    # =====================================================
+    for sg, membros in grupos.items():
+        chapas = [m["Chapa"] for m in membros]
+        if not chapas:
+            continue
+
+        pref = regras_cache.get(sg, {"seg": 0, "ter": 0, "qua": 0, "qui": 0, "sex": 0, "sáb": 0})
+
+        for week in weeks:
+            idxs_week = sorted(week, key=lambda i: df_ref.loc[i, "Data"])
+            domingos = [i for i in idxs_week if df_ref.loc[i, "Dia"] == "dom"]
+            dom_idx = domingos[0] if domingos else None
+
+            for ch in chapas:
+                df = hist_all[ch]
+                locked = locked_idx.get(ch, set())
+                pode_sab = bool(colab_by_chapa[ch].get("Folga_Sab", False))
+                ent_bucket = colab_by_chapa[ch].get("Entrada", "06:00")
+
+                segunda_idx = idxs_week[0]
+                segunda_date = df_ref.loc[segunda_idx, "Data"].date()
+                if is_first_week_after_return(setor, ch, segunda_date):
+                    continue
+
+                # candidatos seg-sex e sábado só se permitido
+                cand_days = []
+                for i in idxs_week:
+                    dia = df_ref.loc[i, "Dia"]
+                    if dia == "dom":
+                        continue
+                    if dia == "sáb" and not pode_sab:
+                        continue
+                    cand_days.append(i)
+
+                if dom_idx is None:
+                    target_folgas = 2
+                else:
+                    dom_status = df.loc[dom_idx, "Status"]
+                    target_folgas = 1 if dom_status == "Folga" else 2
+
+                folgas_sem = int((df.loc[cand_days, "Status"] == "Folga").sum()) if cand_days else 0
+
+                while folgas_sem < target_folgas:
+                    counts_day, counts_day_hour = _counts_folgas_day_and_hour(hist_all, colab_by_chapa, chapas, cand_days, df_ref)
+
+                    possiveis = []
+                    for j in cand_days:
+                        if j in locked:
+                            continue
+                        dia = df_ref.loc[j, "Dia"]
+                        if df.loc[j, "Status"] != "Trabalho":
+                            continue
+                        if dia == "sáb" and not pode_sab:
+                            continue
+                        if not _nao_consecutiva_folga(df, j):
+                            continue
+                        possiveis.append(j)
+
+                    if not possiveis:
+                        break
+
+                    random.shuffle(possiveis)
+
+                    def score(j):
+                        dia = df_ref.loc[j, "Dia"]
+                        weekday_prio = 0 if dia in ["seg", "ter", "qua", "qui", "sex"] else 1
+                        pref_pen = PREF_EVITAR_PENALTY if pref.get(dia, 0) == 1 else 0
+                        return (
+                            counts_day.get(j, 0),
+                            counts_day_hour.get((j, ent_bucket), 0),
+                            pref_pen,
+                            weekday_prio,
+                            random.random()
+                        )
+
+                    possiveis.sort(key=score)
+                    pick = possiveis[0]
+                    _set_folga(df, pick, locked_status=locked)
+                    folgas_sem += 1
+                    hist_all[ch] = df
+
+    # Pós: aplica regras globais por colaborador
+    for ch, df in hist_all.items():
+        ent = colab_by_chapa[ch].get("Entrada", "06:00")
+        locked = locked_idx.get(ch, set())
+        pode_sab = bool(colab_by_chapa[ch].get("Folga_Sab", False))
+
+        if _past:
+            base_first = None
+        else:
+            prev_dom = (estado_prev.get(ch, {}) or {}).get("ultimo_domingo_status", None)
+            if prev_dom == "Folga":
+                base_first = "Trabalho"
+            elif prev_dom == "Trabalho":
+                base_first = "Folga"
+            else:
+                base_first = None
+        enforce_sundays_1x1_for_employee(df, ent, locked_status=locked, base_first=base_first)
+
+        # 1) Garante 5 dias seguidos antes de mexer em metas semanais
+        enforce_max_5_consecutive_work(
+            df, ent, pode_sab,
+            initial_consec=(0 if _past else int((estado_prev.get(ch, {}) or {}).get('consec_trab_final', 0))),
+            locked_status=locked
+        )
+        enforce_no_consecutive_folga(df, locked_status=locked)
+
+        # 2) Metas semanais podem REMOVER folga => pode criar >5 de novo
+        enforce_weekly_folga_targets(df, df_ref=df_ref, pode_folgar_sabado=pode_sab, locked_status=locked)
+
+        # 3) Reforça novamente o limite de 5 depois das metas semanais
+        enforce_max_5_consecutive_work(
+            df, ent, pode_sab,
+            initial_consec=(0 if _past else int((estado_prev.get(ch, {}) or {}).get('consec_trab_final', 0))),
+            locked_status=locked
+        )
+        enforce_no_consecutive_folga(df, locked_status=locked)
+
+        ultima_saida_prev = "" if _past else (estado_prev.get(ch, {}).get("ultima_saida", "") or "")
+        enforce_global_rest_keep_targets(df, ent, locked_status=locked, ultima_saida_prev=ultima_saida_prev)
+
+        # limpeza
+        enforce_no_consecutive_folga(df, locked_status=locked)
+        enforce_global_rest_keep_targets(df, ent, locked_status=locked, ultima_saida_prev=ultima_saida_prev)
+
+        if respeitar_ajustes:
+            _apply_overrides_to_df_inplace(df, setor, ch, ovmap)
+
+        hist_all[ch] = df
+
+    # rebalance por grupo (com estado_prev e travas)
+    for sg, membros in grupos.items():
+        chapas = [m["Chapa"] for m in membros]
+        if chapas:
+            rebalance_folgas_dia(
+                hist_all, colab_by_chapa, chapas, weeks, df_ref,
+                estado_prev=estado_prev,
+                locked_idx=locked_idx,
+                past_flag=_past,
+                max_iters=2200
+            )
+
+    # ✅ Pós-rebalance: re-garante regra dos 5 dias por colaborador
+    for ch, df in hist_all.items():
+        ent = colab_by_chapa[ch].get("Entrada", "06:00")
+        locked = locked_idx.get(ch, set())
+        pode_sab = bool(colab_by_chapa[ch].get("Folga_Sab", False))
+
+        enforce_max_5_consecutive_work(
+            df, ent, pode_sab,
+            initial_consec=(0 if _past else int((estado_prev.get(ch, {}) or {}).get('consec_trab_final', 0))),
+            locked_status=locked
+        )
+        enforce_no_consecutive_folga(df, locked_status=locked)
+        hist_all[ch] = df
+
+    # Pós final (garantia)
+    for ch, df in hist_all.items():
+        ent = colab_by_chapa[ch].get("Entrada", "06:00")
+        locked = locked_idx.get(ch, set())
+        ultima_saida_prev = "" if _past else (estado_prev.get(ch, {}).get("ultima_saida", "") or "")
+
+        if _past:
+            base_first = None
+        else:
+            prev_dom = (estado_prev.get(ch, {}) or {}).get("ultimo_domingo_status", None)
+            if prev_dom == "Folga":
+                base_first = "Trabalho"
+            elif prev_dom == "Trabalho":
+                base_first = "Folga"
+            else:
+                base_first = None
+        enforce_sundays_1x1_for_employee(df, ent, locked_status=locked, base_first=base_first)
+        enforce_no_consecutive_folga(df, locked_status=locked)
+        enforce_weekly_folga_targets(df, df_ref=df_ref, pode_folgar_sabado=bool(colab_by_chapa[ch].get('Folga_Sab', False)), locked_status=locked)
+
+        # ✅ garante 5 dias depois do weekly (porque weekly pode remover folga)
+        enforce_max_5_consecutive_work(
+            df, ent, bool(colab_by_chapa[ch].get('Folga_Sab', False)),
+            initial_consec=(0 if _past else int((estado_prev.get(ch, {}) or {}).get('consec_trab_final', 0))),
+            locked_status=locked
+        )
+        enforce_no_consecutive_folga(df, locked_status=locked)
+
+        enforce_global_rest_keep_targets(df, ent, locked_status=locked, ultima_saida_prev=ultima_saida_prev)
+
+        if respeitar_ajustes:
+            _apply_overrides_to_df_inplace(df, setor, ch, ovmap)
+
+        hist_all[ch] = df
+
+    # Estado do mês
+    estado_out = {}
+    for ch, df in hist_all.items():
+        consec = 0
+        for i in range(len(df) - 1, -1, -1):
+            if df.loc[i, "Status"] in WORK_STATUSES:
+                consec += 1
+            else:
+                break
+
+        ultima_saida = ""
+        for i in range(len(df) - 1, -1, -1):
+            if df.loc[i, "Status"] in WORK_STATUSES and (df.loc[i, "H_Saida"] or ""):
+                ultima_saida = df.loc[i, "H_Saida"]
+                break
+
+        ultimo_dom = None
+        for i in range(len(df) - 1, -1, -1):
+            if df.loc[i, "Dia"] == "dom":
+                if df.loc[i, "Status"] == "Folga":
+                    ultimo_dom = "Folga"
+                    break
+                if df.loc[i, "Status"] in WORK_STATUSES:
+                    ultimo_dom = "Trabalho"
+                    break
+
+        estado_out[ch] = {"consec_trab_final": consec, "ultima_saida": ultima_saida, "ultimo_domingo_status": ultimo_dom}
+
+    return hist_all, estado_out
+
 
 # =========================================================
 # RELATÓRIOS (Banco de Horas / Calendário RH / Férias mapa)
@@ -1885,11 +2638,6 @@ def page_app():
     # ======= MODO OPERACIONAL (igual ao seu original)
     # Para manter compatibilidade com o seu código antigo:
     setor = setor_auth
-
-    st.info("⚠️ Este arquivo main.py foi gerado com o modo Gestão completo, mas o motor/UI operacional completo "
-            "não foi incluído integralmente aqui por limite de mensagem. Para eu te entregar 100% do main.py "
-            "operacional + gestão, envie o arquivo original como upload aqui na conversa.")
-
 # =========================================================
 # MAIN
 # =========================================================
