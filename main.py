@@ -43,10 +43,10 @@ import random
 import calendar
 import sqlite3
 import hashlib
+import math
 import secrets
 from openpyxl.styles import PatternFill, Alignment, Border, Side, Font
 from openpyxl.utils import get_column_letter
-import math
 
 # =========================================================
 # PDF (Modelo Oficial) — ReportLab
@@ -1388,7 +1388,7 @@ def balance_primeiro_domingo_pos_ferias(df, hist_all, df_ref, setor, ch, chapas_
                 desejado = None
 
     if desejado == "Folga":
-        _set_folga(df, dom_i, locked=False, reason="auto_balance_1o_dom_pos_ferias")
+        _set_folga(df, dom_i, locked_status=None)
 
 
 def load_estado_prev(setor: str, ano: int, mes: int):
