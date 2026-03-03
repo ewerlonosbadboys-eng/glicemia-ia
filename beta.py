@@ -794,8 +794,47 @@ else:
 
         with c2:
             if not dfg.empty:
-                fig = px.line(dfg.tail(20), x="Hora", y="Valor", markers=True, title="Tendência (últimas)")
+                st.write("### Tendência")
+
+                # Selecionar dia específico (inclui 'Geral (últimas 25)')
+                datas = sorted(dfg["Data"].astype(str).unique().tolist())
+                opcoes = ["Geral (últimas 25)"] + datas
+
+                hoje_str = agora_br().strftime("%d/%m/%Y")
+                ontem_str = (agora_br() - timedelta(days=1)).strftime("%d/%m/%Y")
+
+                if ontem_str in opcoes:
+                    idx_default = opcoes.index(ontem_str)
+                elif hoje_str in opcoes:
+                    idx_default = opcoes.index(hoje_str)
+                else:
+                    idx_default = len(opcoes) - 1
+
+                dia_sel = st.selectbox("📅 Ver tendência do dia:", opcoes, index=idx_default, key="trend_day_sel")
+
+                if dia_sel == "Geral (últimas 25)":
+                    df_plot = dfg.copy().tail(25)
+                    titulo = "Tendência (últimas 25)"
+                else:
+                    df_plot = dfg[dfg["Data"].astype(str) == dia_sel].copy()
+                    titulo = f"Tendência do dia {dia_sel}"
+
+                # Ordena por data/hora real e mostra eixo em HH:MM
+                try:
+                    df_plot["DT"] = pd.to_datetime(
+                        df_plot["Data"].astype(str) + " " + df_plot["Hora"].astype(str),
+                        dayfirst=True,
+                        errors="coerce"
+                    )
+                    df_plot = df_plot.dropna(subset=["DT"]).sort_values("DT")
+                    x_col = "DT"
+                except Exception:
+                    x_col = "Hora"
+
+                fig = px.line(df_plot, x=x_col, y="Valor", markers=True, title=titulo)
                 fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font_color="white")
+                if x_col == "DT":
+                    fig.update_xaxes(tickformat="%H:%M")
                 st.plotly_chart(fig, use_container_width=True)
             else:
                 st.info("Sem dados para gráfico ainda.")
