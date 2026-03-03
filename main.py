@@ -2051,21 +2051,7 @@ def rebalance_folgas_dia(
 # GERAR ESCALA — POR SUBGRUPO
 # =========================================================
 def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: int, mes: int, respeitar_ajustes: bool = True):
-    # =========================================================
-    # Datas estendidas para cobrir SEMANA COMPLETA (SEG→DOM)
-    # Garante que regras semanais (especialmente domingo) sejam
-    # aplicadas corretamente quando o mês começa/termina no meio
-    # da semana (ex.: mês termina na quarta).
-    # =========================================================
-    datas_mes = _dias_mes(ano, mes)  # apenas o mês (Timestamps)
-    mes_start = datas_mes[0]
-    mes_end = datas_mes[-1]
-    start_ext = mes_start - timedelta(days=int(mes_start.weekday()))          # volta para a SEG
-    end_ext   = mes_end   + timedelta(days=int(6 - mes_end.weekday()))        # avança até o DOM
-    datas = list(pd.date_range(start_ext, end_ext, freq="D"))                 # SEG→DOM
-    in_month_mask = [(d.year == ano and d.month == mes) for d in datas]
-    month_end_i = max(i for i, ok in enumerate(in_month_mask) if ok)
-
+    datas = _dias_mes(ano, mes)
     weeks = _all_weeks_seg_dom(datas)
     df_ref = pd.DataFrame({"Data": datas, "Dia": [D_PT[d.day_name()] for d in datas]})
     # Meses passados: não aplicar continuidade/travamentos do mês anterior.
@@ -2357,18 +2343,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
 
         estado_out[ch] = {"consec_trab_final": consec, "ultima_saida": ultima_saida, "ultimo_domingo_status": ultimo_dom}
 
-    # Retorna apenas linhas do mês (remove dias estendidos)
-    hist_out = {}
-    for _ch, _df in hist_all.items():
-        if "Data" in _df.columns:
-            # robusto: não assume mesmo tamanho do df_ref/datas
-            _mask = [(d.year == ano and d.month == mes) for d in _df["Data"]]
-            _dfm = _df.loc[_mask].reset_index(drop=True).copy()
-        else:
-            # fallback raro
-            _dfm = _df.iloc[:0].copy()
-        hist_out[_ch] = _dfm
-    return hist_out, estado_out
+    return hist_all, estado_out
 
 # =========================================================
 # DASHBOARD / CALENDÁRIO / BANCO DE HORAS
@@ -2933,15 +2908,11 @@ def page_app():
 
         with st.container(border=True):
             c1, c2 = st.columns([2, 1])
-            mes = int(st.session_state["cfg_mes"])
-            ano = int(st.session_state["cfg_ano"])
-            c1.text_input("Competência (mês/ano):", value=f"{mes:02d}/{ano}", disabled=True, key="gen_comp_readonly")
+            # Competência é a "data mãe" (vem da sidebar). Aqui só exibimos e usamos; não mostramos inputs separados.
+            mes = int(st.session_state.get("cfg_mes", datetime.now().month))
+            ano = int(st.session_state.get("cfg_ano", datetime.now().year))
+            c1.markdown(f"**Competência:** {mes:02d}/{ano}")
             seed = c2.number_input("Semente", min_value=0, max_value=999999, value=int(st.session_state.get("last_seed", 0)), key="gen_seed")
-
-
-        st.session_state["cfg_mes"] = int(mes)
-        st.session_state["cfg_ano"] = int(ano)
-
         colaboradores = load_colaboradores_setor(setor)
         if not colaboradores:
             st.warning("Cadastre colaboradores.")
@@ -2986,15 +2957,10 @@ def page_app():
         st.subheader("⚙️ Ajustes (travas) — sempre entram na geração")
 
         with st.container(border=True):
-            mes = int(st.session_state["cfg_mes"])
-            ano = int(st.session_state["cfg_ano"])
-            st.text_input("Competência (mês/ano):", value=f"{mes:02d}/{ano}", disabled=True, key="adj_comp_readonly")
-
-            ("Dica: deixe o mês/ano aqui igual ao mês/ano da aba 🚀 Gerar Escala.")
-
-        st.session_state["cfg_mes"] = int(mes)
-        st.session_state["cfg_ano"] = int(ano)
-
+            # Competência é a "data mãe" (vem da sidebar). Aqui só exibimos e usamos; não mostramos inputs separados.
+            mes = int(st.session_state.get("cfg_mes", datetime.now().month))
+            ano = int(st.session_state.get("cfg_ano", datetime.now().year))
+            st.markdown(f"**Competência (ajustes):** {mes:02d}/{ano}")
         hist_db = load_escala_mes_db(setor, ano, mes)
         colaboradores = load_colaboradores_setor(setor)
         colab_by = {c["Chapa"]: c for c in colaboradores}
