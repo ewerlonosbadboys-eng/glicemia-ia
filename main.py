@@ -2945,12 +2945,10 @@ def page_app():
                 value=bool(st.session_state.get("pf_sab", sab_atual)),
                 key="pf_sab",
             )
-
         if st.button("Salvar perfil", key="pf_save"):
-
-                update_colaborador_perfil(setor, ch_sel, sg, ent_sel, sab)
-                st.success("Salvo!")
-                st.rerun()
+            update_colaborador_perfil(setor, ch_sel, sg_sel, ent_sel, pode_sab)
+            st.success("Salvo!")
+            st.rerun()
 
     # ------------------------------------------------------
     # ABA 2: Gerar Escala
