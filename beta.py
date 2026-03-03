@@ -1038,20 +1038,30 @@ else:
                 except Exception:
                     sug_num = 0
 
-                dose_r_edit = st.number_input(
-                    "✍️ Dose Rápida (UI)",
-                    min_value=0, max_value=50, value=int(sug_num),
-                    key="dose_rapida_edit"
-                )
+                # --- RÁPIDA: mostra sugestão primeiro; editar é opcional ---
+                dose_r_final = dose_r_sug  # padrão = sugestão
 
-                dose_r_final = f"{int(dose_r_edit)} UI"
-
-                # sincroniza sugestão e manual
                 st.markdown(
-                    f'<div class="metric-box"><small>Rápida (sugestão sincronizada)</small><br>'
+                    f'<div class="metric-box"><small>Rápida (sugestão)</small><br>'
                     f'<span class="dose-destaque">{dose_r_final}</span></div>',
                     unsafe_allow_html=True
                 )
+
+                editar_r = st.checkbox("✍️ Editar dose Rápida antes de salvar", value=False, key="editar_rapida")
+                if editar_r:
+                    dose_r_edit = st.number_input(
+                        "Dose Rápida (UI)",
+                        min_value=0, max_value=50, value=int(sug_num),
+                        key="dose_rapida_edit"
+                    )
+                    dose_r_final = f"{int(dose_r_edit)} UI"
+
+                    # mantém o card igual ao valor final
+                    st.markdown(
+                        f'<div class="metric-box" style="margin-top:10px;"><small>Rápida (ajustada)</small><br>'
+                        f'<span class="dose-destaque">{dose_r_final}</span></div>',
+                        unsafe_allow_html=True
+                    )
             else:
                 st.caption("Rápida: não aplicável neste momento.")
                 dose_r_final = ""
@@ -1073,12 +1083,23 @@ else:
                     unsafe_allow_html=True
                 )
 
-                dose_l_edit = st.number_input(
-                    "✍️ Ajustar dose Longa (UI) antes de salvar",
-                    min_value=0, max_value=100, value=int(sug_l),
-                    key="dose_longa_edit"
-                )
-                dose_l_final = f"{int(dose_l_edit)} UI"
+                # --- LONGA: mostra sugestão primeiro; editar é opcional ---
+                dose_l_final = dose_l_sug  # padrão = sugestão
+
+                editar_l = st.checkbox("✍️ Editar dose Longa antes de salvar", value=False, key="editar_longa")
+                if editar_l:
+                    dose_l_edit = st.number_input(
+                        "Dose Longa (UI)",
+                        min_value=0, max_value=100, value=int(sug_l),
+                        key="dose_longa_edit"
+                    )
+                    dose_l_final = f"{int(dose_l_edit)} UI"
+
+                    st.markdown(
+                        f'<div class="metric-box" style="margin-top:10px;"><small>Longa (ajustada)</small><br>'
+                        f'<span class="dose-destaque">{dose_l_final}</span></div>',
+                        unsafe_allow_html=True
+                    )
             else:
                 st.caption("Longa: não aplicável neste momento.")
                 dose_l_final = ""
