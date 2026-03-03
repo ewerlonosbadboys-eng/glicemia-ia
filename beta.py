@@ -479,20 +479,33 @@ def proxima_medida_apos(momento: str, dt_base: datetime):
     dt_apos = dt_base + timedelta(hours=2)
     return mapa[momento], dt_apos.strftime("%H:%M")
 
+
 def link_whatsapp_lembrete(momento: str, valor_glicemia: int, dose_rapida: str, dose_longa: str) -> str:
     dt_agora = agora_br()
     momento_apos, hora_apos = proxima_medida_apos(momento, dt_agora)
 
-    linhas = ["🧪 Saúde Kids", "", f"✅ Medida AGORA: {momento}", f"📍 Glicemia: {int(valor_glicemia)}"]
+    linhas = [
+        "🧪 Saúde Kids",
+        "",
+        f"✅ Medida AGORA: {momento}",
+        f"📍 Glicemia: {int(valor_glicemia)}"
+    ]
+
     if dose_rapida and dose_rapida != "—":
         linhas.append(f"⚡ Rápida: {dose_rapida}")
+
     if dose_longa and dose_longa != "—":
         linhas.append(f"🩸 Longa: {dose_longa}")
-    if momento_apos and hora_apos:
-        linhas += ["", f"⏰ Próxima medida: {momento_apos} às {hora_apos} (2h após)"]
 
-    return "https://wa.me/?text=" + quote("
-".join(linhas))
+    if momento_apos and hora_apos:
+        linhas.extend([
+            "",
+            f"⏰ Próxima medida: {momento_apos} às {hora_apos} (2h após)"
+        ])
+
+    mensagem = "\n".join(linhas)
+    return "https://wa.me/?text=" + quote(mensagem)
+
 
 MOMENTOS_ORDEM = ["Antes Café", "Após Café", "Antes Almoço", "Após Almoço", "Antes Merenda", "Antes Janta", "Após Janta", "Madrugada"]
 
@@ -628,239 +641,4 @@ else:
         with c1:
             v_gl = st.number_input("Valor Glicemia", 0, 600, 100)
 
-            MOMENTOS_BASE = MOMENTOS_ORDEM + ["Outro (personalizado)"]
-            m_sel = st.selectbox("Momento", MOMENTOS_BASE)
-            momento_extra = ""
-            if m_sel == "Outro (personalizado)":
-                momento_extra = (st.text_input("Digite o momento (ex: 'Antes Academia', 'Após Treino', 'Após Remédio')") or "").strip()
-            m_gl = momento_extra if m_sel == "Outro (personalizado)" else m_sel
-
-            MOMENTOS_RAPIDA = ["Antes Café", "Antes Almoço", "Antes Janta"]
-            MOMENTOS_LONGA = ["Antes Café", "Antes Janta"]
-
-            dt_agora = agora_br()
-            momento_apos, hora_apos = proxima_medida_apos(m_gl, dt_agora)
-            if momento_apos and hora_apos:
-                st.info(f"⏰ Próxima medida: **{momento_apos}** às **{hora_apos}** (2 horas após)")
-
-            if m_gl in MOMENTOS_RAPIDA:
-                dose_r, msg_r = calc_insulina_rapida(v_gl, m_gl)
-                st.markdown(f'<div class="metric-box"><small>Rápida: {msg_r}</small><br><span class="dose-destaque">{dose_r}</span></div>', unsafe_allow_html=True)
-            else:
-                dose_r, msg_r = "—", "Rápida não aplicável neste momento"
-
-            if m_gl in MOMENTOS_LONGA:
-                dose_l, msg_l = calc_glargina(m_gl)
-                st.markdown(f'<div class="metric-box" style="margin-top:10px;"><small>{msg_l}</small><br><span class="dose-destaque">{dose_l}</span></div>', unsafe_allow_html=True)
-            else:
-                dose_l, msg_l = "—", "Longa só: Antes Café / Antes Janta"
-
-            st.link_button("📲 Abrir WhatsApp com mensagem pronta", link_whatsapp_lembrete(m_gl, int(v_gl), dose_r, dose_l), use_container_width=True)
-
-            if st.button("💾 Salvar Glicemia", use_container_width=True):
-                agora = agora_br()
-                dose_para_salvar = dose_r if m_gl in MOMENTOS_RAPIDA else ""
-                salvar_registro_glicemia(int(v_gl), m_gl, dose_para_salvar, agora)
-                st.rerun()
-
-        with c2:
-            if not dfg.empty:
-                fig = px.line(dfg.tail(10), x="Hora", y="Valor", markers=True, title="Tendência")
-                fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font_color="white")
-                st.plotly_chart(fig, use_container_width=True)
-
-        st.markdown("### 🧾 Histórico (editar / excluir)")
-        if not dfg.empty:
-            df_hist = dfg.copy()
-            if "Excluir" not in df_hist.columns:
-                df_hist["Excluir"] = False
-
-            cols_order = ["Excluir", "ID", "Data", "Hora", "Valor", "Momento", "Dose"]
-            for c in cols_order:
-                if c not in df_hist.columns:
-                    df_hist[c] = ""
-
-            df_hist = df_hist[cols_order].tail(50).reset_index(drop=True)
-
-            df_edit = st.data_editor(
-                df_hist,
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "Excluir": st.column_config.CheckboxColumn("Excluir"),
-                    "ID": st.column_config.TextColumn("ID", disabled=True),
-                    "Valor": st.column_config.NumberColumn("Valor", min_value=0, max_value=600, step=1),
-                },
-                key="glicemia_editor"
-            )
-
-            c_a, c_b = st.columns(2)
-            with c_a:
-                if st.button("✅ Salvar alterações do histórico", use_container_width=True):
-                    aplicar_edicoes_e_exclusoes_glicemia(df_edit)
-                    st.success("Histórico atualizado!")
-                    st.rerun()
-            with c_b:
-                st.caption("Marque 'Excluir' e clique em salvar para remover.")
-        else:
-            st.info("Sem registros ainda.")
-
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    with tab2:
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        dfn = carregar_dados_seguro(ARQ_N)
-
-        m_nutri = st.selectbox("Refeição", MOMENTOS_ORDEM, key="n_m")
-        sel = st.multiselect("Alimentos", options=list(ALIMENTOS.keys()))
-
-        c_tot = sum(ALIMENTOS[x][0] for x in sel)
-        p_tot = sum(ALIMENTOS[x][1] for x in sel)
-        g_tot = sum(ALIMENTOS[x][2] for x in sel)
-
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Carbos", f"{c_tot}g")
-        col2.metric("Proteínas", f"{p_tot}g")
-        col3.metric("Gorduras", f"{g_tot}g")
-
-        if st.button("💾 Salvar Refeição", use_container_width=True):
-            agora = agora_br()
-            novo_n = pd.DataFrame([[st.session_state.user_email, agora.strftime("%d/%m/%Y"), m_nutri, ", ".join(sel), c_tot, p_tot, g_tot]],
-                                 columns=["Usuario", "Data", "Momento", "Info", "C", "P", "G"])
-            base = pd.read_csv(ARQ_N) if os.path.exists(ARQ_N) else pd.DataFrame(columns=novo_n.columns)
-            pd.concat([base, novo_n], ignore_index=True).to_csv(ARQ_N, index=False)
-            st.rerun()
-
-        st.dataframe(dfn.tail(10), use_container_width=True)
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    with tab3:
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-
-        df_r_all = pd.read_csv(ARQ_R) if os.path.exists(ARQ_R) else pd.DataFrame()
-        r_u = df_r_all[df_r_all["Usuario"] == st.session_state.user_email] if (not df_r_all.empty and "Usuario" in df_r_all.columns) else pd.DataFrame()
-        v = r_u.iloc[0] if not r_u.empty else {}
-
-        st.subheader("⚡ Receita Rápida (por faixas)")
-
-        st.markdown("**🌞 Manhã**")
-        cm1, cm2, cm3 = st.columns(3)
-        with cm1:
-            m1_min = st.number_input("Faixa 1 - Mín", value=int(v.get("manha_f1_min", 70)), key="m1_min_u")
-            m1_max = st.number_input("Faixa 1 - Máx", value=int(v.get("manha_f1_max", 150)), key="m1_max_u")
-            m1_dose = st.number_input("Dose Faixa 1 (UI)", value=int(v.get("manha_f1_dose", 3)), key="m1_dose_u")
-        with cm2:
-            m2_min = st.number_input("Faixa 2 - Mín", value=int(v.get("manha_f2_min", 151)), key="m2_min_u")
-            m2_max = st.number_input("Faixa 2 - Máx", value=int(v.get("manha_f2_max", 300)), key="m2_max_u")
-            m2_dose = st.number_input("Dose Faixa 2 (UI)", value=int(v.get("manha_f2_dose", 5)), key="m2_dose_u")
-        with cm3:
-            m3_min = st.number_input("Faixa 3 - Mín", value=int(v.get("manha_f3_min", 301)), key="m3_min_u")
-            m3_max = st.number_input("Faixa 3 - Máx", value=int(v.get("manha_f3_max", 600)), key="m3_max_u")
-            m3_dose = st.number_input("Dose Faixa 3 (UI)", value=int(v.get("manha_f3_dose", 8)), key="m3_dose_u")
-
-        st.markdown("---")
-        st.markdown("**🌙 Noite**")
-        cn1, cn2, cn3 = st.columns(3)
-        with cn1:
-            n1_min = st.number_input("Faixa 1 - Mín", value=int(v.get("noite_f1_min", 70)), key="n1_min_u")
-            n1_max = st.number_input("Faixa 1 - Máx", value=int(v.get("noite_f1_max", 150)), key="n1_max_u")
-            n1_dose = st.number_input("Dose Faixa 1 (UI)", value=int(v.get("noite_f1_dose", 3)), key="n1_dose_u")
-        with cn2:
-            n2_min = st.number_input("Faixa 2 - Mín", value=int(v.get("noite_f2_min", 151)), key="n2_min_u")
-            n2_max = st.number_input("Faixa 2 - Máx", value=int(v.get("noite_f2_max", 300)), key="n2_max_u")
-            n2_dose = st.number_input("Dose Faixa 2 (UI)", value=int(v.get("noite_f2_dose", 5)), key="n2_dose_u")
-        with cn3:
-            n3_min = st.number_input("Faixa 3 - Mín", value=int(v.get("noite_f3_min", 301)), key="n3_min_u")
-            n3_max = st.number_input("Faixa 3 - Máx", value=int(v.get("noite_f3_max", 600)), key="n3_max_u")
-            n3_dose = st.number_input("Dose Faixa 3 (UI)", value=int(v.get("noite_f3_dose", 8)), key="n3_dose_u")
-
-        st.markdown("---")
-        st.subheader("🩸 Longa (dose fixa)")
-        gl1, gl2 = st.columns(2)
-        with gl1:
-            glargina_cafe_ui = st.number_input("Longa - Antes Café (UI)", value=int(float(v.get("glargina_cafe_ui", 0) or 0)), key="gl_cafe")
-        with gl2:
-            glargina_janta_ui = st.number_input("Longa - Antes Janta (UI)", value=int(float(v.get("glargina_janta_ui", 0) or 0)), key="gl_janta")
-
-        if st.button("💾 Salvar Receita", use_container_width=True):
-            nova_rec = pd.DataFrame([{
-                "Usuario": st.session_state.user_email,
-                "manha_f1_min": m1_min, "manha_f1_max": m1_max, "manha_f1_dose": m1_dose,
-                "manha_f2_min": m2_min, "manha_f2_max": m2_max, "manha_f2_dose": m2_dose,
-                "manha_f3_min": m3_min, "manha_f3_max": m3_max, "manha_f3_dose": m3_dose,
-                "noite_f1_min": n1_min, "noite_f1_max": n1_max, "noite_f1_dose": n1_dose,
-                "noite_f2_min": n2_min, "noite_f2_max": n2_max, "noite_f2_dose": n2_dose,
-                "noite_f3_min": n3_min, "noite_f3_max": n3_max, "noite_f3_dose": n3_dose,
-                "glargina_cafe_ui": glargina_cafe_ui,
-                "glargina_janta_ui": glargina_janta_ui,
-            }])
-            df_r_all2 = df_r_all[df_r_all.get("Usuario","") != st.session_state.user_email] if not df_r_all.empty else pd.DataFrame()
-            pd.concat([df_r_all2, nova_rec], ignore_index=True).to_csv(ARQ_R, index=False)
-            st.success("Receita salva com sucesso!")
-
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    with tab4:
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        txt = st.text_area("Sugestão de Melhoria:")
-        if st.button("Enviar Sugestão"):
-            if txt:
-                agora = agora_br().strftime("%d/%m/%Y %H:%M")
-                novo_m = pd.DataFrame([[st.session_state.user_email, agora, txt]], columns=["Usuario", "Data", "Sugestão"])
-                base_m = pd.read_csv(ARQ_M) if os.path.exists(ARQ_M) else pd.DataFrame(columns=novo_m.columns)
-                pd.concat([base_m, novo_m], ignore_index=True).to_csv(ARQ_M, index=False)
-                st.success("Enviado com sucesso!")
-        st.markdown("</div>", unsafe_allow_html=True)
-
-# ================= EXCEL =================
-st.sidebar.markdown("---")
-if st.sidebar.button("📥 Gerar Excel Completo"):
-    df_e_g = carregar_glicemia_com_id()
-    df_e_n = carregar_dados_seguro(ARQ_N)
-
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        if not df_e_g.empty:
-            df_e_g = _ensure_id_column(df_e_g.copy(), col_name="ID", prefix="GL")
-            df_e_g.to_excel(writer, sheet_name="Glicemia_Tabela", index=False)
-            wsT = writer.sheets["Glicemia_Tabela"]
-            for cell in wsT[1]:
-                cell.alignment = Alignment(horizontal="center")
-
-            pivot = df_e_g.pivot_table(index="Data", columns="Momento", values="Valor", aggfunc="last")
-            pivot.to_excel(writer, sheet_name="Glicemia_Resumo")
-            ws1 = writer.sheets["Glicemia_Resumo"]
-
-            f_ok = PatternFill("solid", fgColor="C8E6C9")
-            f_hi = PatternFill("solid", fgColor="FFB6C1")
-            f_lo = PatternFill("solid", fgColor="FFFFE0")
-
-            for row in ws1.iter_rows(min_row=2, min_col=2):
-                for cell in row:
-                    if cell.value is not None and str(cell.value) != "nan":
-                        try:
-                            val = int(cell.value)
-                            cell.alignment = Alignment(horizontal="center")
-                            if val < 70:
-                                cell.fill = f_lo
-                            elif val > 180:
-                                cell.fill = f_hi
-                            else:
-                                cell.fill = f_ok
-                        except:
-                            pass
-
-        if not df_e_n.empty:
-            df_e_n.to_excel(writer, sheet_name="Nutrição", index=False)
-            ws2 = writer.sheets["Nutrição"]
-            for cell in ws2[1]:
-                cell.alignment = Alignment(horizontal="center")
-
-    st.sidebar.download_button("Baixar Agora", output.getvalue(), file_name="Relatorio_Saude_Kids.xlsx")
-
-# ================= SAIR =================
-if st.sidebar.button("🚪 Sair"):
-    st.session_state.logado = False
-    st.session_state.user_email = ""
-    cookie_clear()
-    st.rerun()
+            MOMENTOS_BASE = 
