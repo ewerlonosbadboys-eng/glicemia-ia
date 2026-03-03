@@ -2990,7 +2990,7 @@ def page_app():
             ano = int(st.session_state["cfg_ano"])
             st.text_input("Competência (mês/ano):", value=f"{mes:02d}/{ano}", disabled=True, key="adj_comp_readonly")
 
-            c3.caption("Dica: deixe o mês/ano aqui igual ao mês/ano da aba 🚀 Gerar Escala.")
+            ("Dica: deixe o mês/ano aqui igual ao mês/ano da aba 🚀 Gerar Escala.")
 
         st.session_state["cfg_mes"] = int(mes)
         st.session_state["cfg_ano"] = int(ano)
