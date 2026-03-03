@@ -2233,6 +2233,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
         locked_idx[ch] = locked
         hist_all[ch] = df
 
+    chapas_all = list(hist_all.keys())  # lista de chapas no setor (para balanceamento pós-férias)
     # ✅ Domingo 1x1 por colaborador COM CONTINUIDADE ENTRE MESES
     for ch, df in hist_all.items():
         ent = colab_by_chapa[ch].get("Entrada", "06:00")
@@ -2251,7 +2252,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
 
         enforce_sundays_1x1_for_employee(df, ent, locked_status=locked, base_first=base_first)
 
-        balance_primeiro_domingo_pos_ferias(df, df_ref, setor, ch, chapas, {ch: locked}, ate_data=pd.to_datetime(df_ref.loc[len(df_ref)-1, "Data"]).date())
+        balance_primeiro_domingo_pos_ferias(df, df_ref, setor, ch, chapas_all, locked_idx, ate_data=pd.to_datetime(df_ref.loc[len(df_ref)-1, "Data"]).date())
         hist_all[ch] = df
 
     # =====================================================
@@ -2355,7 +2356,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
                 base_first = None
         enforce_sundays_1x1_for_employee(df, ent, locked_status=locked, base_first=base_first)
 
-        balance_primeiro_domingo_pos_ferias(df, df_ref, setor, ch, chapas, {ch: locked}, ate_data=pd.to_datetime(df_ref.loc[len(df_ref)-1, "Data"]).date())
+        balance_primeiro_domingo_pos_ferias(df, df_ref, setor, ch, chapas_all, locked_idx, ate_data=pd.to_datetime(df_ref.loc[len(df_ref)-1, "Data"]).date())
 
         # 1) Garante 5 dias seguidos antes de mexer em metas semanais
         enforce_max_5_consecutive_work(
@@ -2432,7 +2433,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
                 base_first = None
         enforce_sundays_1x1_for_employee(df, ent, locked_status=locked, base_first=base_first)
 
-        balance_primeiro_domingo_pos_ferias(df, df_ref, setor, ch, chapas, {ch: locked}, ate_data=pd.to_datetime(df_ref.loc[len(df_ref)-1, "Data"]).date())
+        balance_primeiro_domingo_pos_ferias(df, df_ref, setor, ch, chapas_all, locked_idx, ate_data=pd.to_datetime(df_ref.loc[len(df_ref)-1, "Data"]).date())
         enforce_no_consecutive_folga(df, locked_status=locked)
         enforce_weekly_folga_targets(df, df_ref=df_ref, pode_folgar_sabado=bool(colab_by_chapa[ch].get('Folga_Sab', False)), locked_status=locked)
 
