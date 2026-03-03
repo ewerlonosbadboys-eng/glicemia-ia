@@ -38,6 +38,7 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta, date
+import datetime as dt
 import io
 import random
 import calendar
@@ -2278,10 +2279,24 @@ def rebalance_folgas_dia(
 # GERAR ESCALA — POR SUBGRUPO
 # =========================================================
 def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: int, mes: int, respeitar_ajustes: bool = True):
-    datas = _dias_mes(ano, mes)
+    # --- Datas base do mês (competência)
+    datas_mes = _dias_mes(ano, mes)
+
+    # --- Janela semanal (SEG->DOM) para aplicar regras por semana mesmo cruzando mês
+    _first = pd.to_datetime(datas_mes[0])
+    _last  = pd.to_datetime(datas_mes[-1])
+    _start = _first - pd.Timedelta(days=int(_first.weekday()))              # segunda-feira
+    _end   = _last  + pd.Timedelta(days=int(6 - _last.weekday()))           # domingo
+    datas  = pd.date_range(_start, _end, freq="D")
+
     weeks = _all_weeks_seg_dom(datas)
-    df_ref = pd.DataFrame({"Data": datas, "Dia": [D_PT[d.day_name()] for d in datas]})
-    # Meses passados: não aplicar continuidade/travamentos do mês anterior.
+
+    df_ref = pd.DataFrame({
+        "Data": datas,
+        "Dia": [d.day for d in datas],
+        "DiaSem": [D_PT.get(pd.to_datetime(d).day_name(), pd.to_datetime(d).day_name()) for d in datas],
+    })
+# Meses passados: não aplicar continuidade/travamentos do mês anterior.
     _past = is_past_competencia(ano, mes)
     estado_prev = {} if _past else load_estado_prev(setor, ano, mes)
 
@@ -2591,8 +2606,17 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
 
         estado_out[ch] = {"consec_trab_final": consec, "ultima_saida": ultima_saida, "ultimo_domingo_status": ultimo_dom}
 
+    
+    # --- Saída: salvar/mostrar apenas a competência (mês/ano), mas regras foram aplicadas na janela SEG->DOM
+    for _ch in list(hist_all.keys()):
+        _dfch = hist_all[_ch]
+        try:
+            _mask = (pd.to_datetime(_dfch["Data"]).dt.year == ano) & (pd.to_datetime(_dfch["Data"]).dt.month == mes)
+            hist_all[_ch] = _dfch.loc[_mask].reset_index(drop=True).copy()
+        except Exception:
+            # se por algum motivo não tiver coluna Data, mantém como está
+            pass
     return hist_all, estado_out
-
 # =========================================================
 # DASHBOARD / CALENDÁRIO / BANCO DE HORAS
 # (resto do arquivo igual ao seu original — UI completa)
