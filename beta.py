@@ -24,6 +24,11 @@ import pytz
 import streamlit as st
 from email.mime.text import MIMEText
 from openpyxl.styles import Alignment, PatternFill
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import cm
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 
 # =========================================================
 # (OPCIONAL) LOGIN PERSISTENTE POR COOKIE (NÃO BUGA SE NÃO TIVER)
@@ -371,7 +376,7 @@ def calc_insulina(v: int, momento: str):
         return "0 UI", "Configurar Receita"
 
     rec = df_r.iloc[0]
-    periodo = "manha" if momento in ["Antes Café", "Após Café", "Antes Almoço", "Após Almoço", "Antes Merenda"] else "noite"
+    periodo = "manha" if momento in ["Antes Café", "Após Café", "Antes Almoço", "Após Almoço", ] else "noite"
 
     try:
         if not _schema_receita_nova(rec, periodo):
@@ -452,8 +457,7 @@ def link_whatsapp_lembrete(momento: str, valor_glicemia: int, dose_rapida: str, 
 MOMENTOS_ORDEM = [
     "Antes Café", "Após Café",
     "Antes Almoço", "Após Almoço",
-    "Antes Merenda",
-    "Antes Janta", "Após Janta",
+        "Antes Janta", "Após Janta",
     "Madrugada",
 ]
 
@@ -919,6 +923,91 @@ else:
             else:
                 st.warning("Digite uma sugestão antes de enviar.")
         st.markdown("</div>", unsafe_allow_html=True)
+
+
+def gerar_pdf_bytes(df_g: pd.DataFrame, df_n: pd.DataFrame) -> bytes:
+    """
+    Gera um PDF simples com resumo + últimas medições.
+    """
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, rightMargin=1.5*cm, leftMargin=1.5*cm, topMargin=1.5*cm, bottomMargin=1.5*cm)
+    styles = getSampleStyleSheet()
+    story = []
+
+    titulo = f"Relatório Saúde Kids - {st.session_state.user_email}"
+    story.append(Paragraph(titulo, styles["Title"]))
+    story.append(Spacer(1, 8))
+    story.append(Paragraph(f"Gerado em: {agora_br().strftime('%d/%m/%Y %H:%M')}", styles["Normal"]))
+    story.append(Spacer(1, 12))
+
+    # Resumo Glicemia
+    story.append(Paragraph("Glicemia - Resumo", styles["Heading2"]))
+    if df_g is None or df_g.empty:
+        story.append(Paragraph("Sem registros de glicemia.", styles["Normal"]))
+    else:
+        try:
+            vals = pd.to_numeric(df_g["Valor"], errors="coerce").dropna()
+            resumo = [
+                ["Registros", str(len(df_g))],
+                ["Mínimo", str(int(vals.min())) if not vals.empty else "-"],
+                ["Máximo", str(int(vals.max())) if not vals.empty else "-"],
+                ["Média", f"{vals.mean():.1f}" if not vals.empty else "-"],
+            ]
+            t = Table(resumo, colWidths=[6*cm, 9*cm])
+            t.setStyle(TableStyle([
+                ("BACKGROUND", (0,0), (-1,0), colors.lightgrey),
+                ("GRID", (0,0), (-1,-1), 0.5, colors.grey),
+                ("FONTNAME", (0,0), (-1,-1), "Helvetica"),
+                ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+            ]))
+            story.append(t)
+        except Exception:
+            story.append(Paragraph("Não foi possível gerar resumo de glicemia.", styles["Normal"]))
+
+        story.append(Spacer(1, 10))
+        story.append(Paragraph("Últimos registros de Glicemia", styles["Heading3"]))
+        ult = df_g.copy().tail(20)
+        cols = [c for c in ["Data", "Hora", "Momento", "Valor", "Dose"] if c in ult.columns]
+        data_tbl = [cols] + ult[cols].astype(str).values.tolist()
+        t2 = Table(data_tbl, repeatRows=1, colWidths=[3*cm, 2*cm, 5.5*cm, 2*cm, 2.5*cm])
+        t2.setStyle(TableStyle([
+            ("BACKGROUND", (0,0), (-1,0), colors.lightgrey),
+            ("GRID", (0,0), (-1,-1), 0.25, colors.grey),
+            ("FONTSIZE", (0,0), (-1,-1), 8),
+            ("VALIGN", (0,0), (-1,-1), "TOP"),
+        ]))
+        story.append(t2)
+
+    story.append(Spacer(1, 14))
+
+    # Resumo Nutrição
+    story.append(Paragraph("Nutrição - Resumo", styles["Heading2"]))
+    if df_n is None or df_n.empty:
+        story.append(Paragraph("Sem registros de nutrição.", styles["Normal"]))
+    else:
+        try:
+            story.append(Paragraph("Últimos registros de Nutrição", styles["Heading3"]))
+            ult_n = df_n.copy().tail(20)
+            cols_n = [c for c in ["Data", "Momento", "Info", "C", "P", "G"] if c in ult_n.columns]
+            data_tbl_n = [cols_n] + ult_n[cols_n].astype(str).values.tolist()
+            # larguras aproximadas
+            col_widths = [3*cm, 3*cm, 6*cm, 1.5*cm, 1.5*cm, 1.5*cm][:len(cols_n)]
+            t3 = Table(data_tbl_n, repeatRows=1, colWidths=col_widths)
+            t3.setStyle(TableStyle([
+                ("BACKGROUND", (0,0), (-1,0), colors.lightgrey),
+                ("GRID", (0,0), (-1,-1), 0.25, colors.grey),
+                ("FONTSIZE", (0,0), (-1,-1), 8),
+                ("VALIGN", (0,0), (-1,-1), "TOP"),
+            ]))
+            story.append(t3)
+        except Exception:
+            story.append(Paragraph("Não foi possível montar tabela de nutrição.", styles["Normal"]))
+
+    doc.build(story)
+    pdf = buf.getvalue()
+    buf.close()
+    return pdf
+
 
 # ================= EXCEL (SIDEBAR) =================
 st.sidebar.markdown("---")
