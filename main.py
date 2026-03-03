@@ -2360,7 +2360,13 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
     # Retorna apenas linhas do mês (remove dias estendidos)
     hist_out = {}
     for _ch, _df in hist_all.items():
-        _dfm = _df.loc[in_month_mask].reset_index(drop=True).copy()
+        if "Data" in _df.columns:
+            # robusto: não assume mesmo tamanho do df_ref/datas
+            _mask = [(d.year == ano and d.month == mes) for d in _df["Data"]]
+            _dfm = _df.loc[_mask].reset_index(drop=True).copy()
+        else:
+            # fallback raro
+            _dfm = _df.iloc[:0].copy()
         hist_out[_ch] = _dfm
     return hist_out, estado_out
 
