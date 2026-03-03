@@ -464,14 +464,45 @@ def link_whatsapp_lembrete(momento: str, valor_glicemia: int, dose_rapida: str, 
     mensagem = "\n".join(linhas)
     return "https://wa.me/?text=" + quote(mensagem)
 
+
+def ordenar_colunas_momentos(colunas):
+    """
+    Ordem fixa (nessa sequência):
+      Antes Café, Após Café, Antes Almoço, Após Almoço, Antes Janta, Após Janta, Madrugada
+    Depois: momentos extras (ordem alfabética).
+    """
+    base = [
+        "Antes Café", "Após Café",
+        "Antes Almoço", "Após Almoço",
+        "Antes Janta", "Após Janta",
+        "Madrugada",
+    ]
+    base_set = set(base)
+    extras = sorted([c for c in colunas if c not in base_set])
+    return [c for c in base if c in colunas] + extras
+
+def separar_momentos_extras(colunas):
+    base = [
+        "Antes Café", "Após Café",
+        "Antes Almoço", "Após Almoço",
+        "Antes Janta", "Após Janta",
+        "Madrugada",
+    ]
+    base_set = set(base)
+    extras = [c for c in colunas if c not in base_set]
+    return base, extras
+
+
 # ================= MOMENTOS / ALIMENTOS =================
 MOMENTOS_ORDEM = [
-    "Antes Café", "Após Café",
-    "Antes Almoço", "Após Almoço",
-        "Antes Janta", "Após Janta",
+    "Antes Café",
+    "Após Café",
+    "Antes Almoço",
+    "Após Almoço",
+    "Antes Janta",
+    "Após Janta",
     "Madrugada",
 ]
-
 ALIMENTOS = {
     "Pão Francês (1un)": [28, 4, 1],
     "Pão de Forma (2 fatias)": [24, 4, 2],
@@ -944,6 +975,7 @@ def gerar_pdf_bytes(df_g: pd.DataFrame, df_n: pd.DataFrame) -> bytes:
       - Tabela no formato 'Data x Momento' (igual ao Excel Glicemia_Resumo)
       - Gráfico de tendência (últimas medições)
     """
+    desired_order = ["Antes Café","Após Café","Antes Almoço","Após Almoço","Antes Janta","Após Janta","Madrugada"]
     if not HAS_REPORTLAB:
         return b""
 
@@ -999,18 +1031,25 @@ def gerar_pdf_bytes(df_g: pd.DataFrame, df_n: pd.DataFrame) -> bytes:
     else:
         # Pivot igual ao Excel
         pivot = df_g.pivot_table(index="Data", columns="Momento", values="Valor", aggfunc="last")
+        pivot = pivot.reindex(columns=ordenar_colunas_momentos(list(pivot.columns)))
         pivot = pivot.sort_index()
 
         # Limitar para caber no PDF (últimas 20 datas)
         if len(pivot) > 20:
-            pivot = pivot.tail(20)
+            pivot_show = pivot.tail(20).copy()
+        else:
+            pivot_show = pivot.copy()
 
-        # Cabeçalho + dados
-        cols = ["Data"] + [str(c) for c in pivot.columns.tolist()]
+        # Separar colunas base vs extras
+        base_order, extras_cols = separar_momentos_extras(list(pivot_show.columns))
+        base_cols_present = [c for c in desired_order if c in pivot_show.columns]
+
+        # ===== Tabela principal: só momentos base (na ordem correta) =====
+        cols = ["Data"] + base_cols_present
         data_tbl = [cols]
-        for idx, row in pivot.iterrows():
+        for idx, row in pivot_show.iterrows():
             line = [str(idx)]
-            for c in pivot.columns:
+            for c in base_cols_present:
                 v = row.get(c, "")
                 if pd.isna(v):
                     line.append("")
@@ -1021,7 +1060,7 @@ def gerar_pdf_bytes(df_g: pd.DataFrame, df_n: pd.DataFrame) -> bytes:
                         line.append(str(v))
             data_tbl.append(line)
 
-        # larguras: Data + demais colunas distribuídas
+        # larguras
         ncols = len(cols)
         total_w = 18.0 * cm
         w_data = 3.0 * cm
@@ -1040,7 +1079,7 @@ def gerar_pdf_bytes(df_g: pd.DataFrame, df_n: pd.DataFrame) -> bytes:
             ("PADDING", (0,0), (-1,-1), 3),
         ]
 
-        # cores por célula (mesmas regras do Excel)
+        # cores por célula
         for r in range(1, len(data_tbl)):
             for c in range(1, len(cols)):
                 txt = data_tbl[r][c]
@@ -1051,14 +1090,43 @@ def gerar_pdf_bytes(df_g: pd.DataFrame, df_n: pd.DataFrame) -> bytes:
                 except Exception:
                     continue
                 if val < 70:
-                    style_cmds.append(("BACKGROUND", (c, r), (c, r), colors.HexColor("#FFFFE0")))  # amarelo
+                    style_cmds.append(("BACKGROUND", (c, r), (c, r), colors.HexColor("#FFFFE0")))
                 elif val > 180:
-                    style_cmds.append(("BACKGROUND", (c, r), (c, r), colors.HexColor("#FFB6C1")))  # vermelho
+                    style_cmds.append(("BACKGROUND", (c, r), (c, r), colors.HexColor("#FFB6C1")))
                 else:
-                    style_cmds.append(("BACKGROUND", (c, r), (c, r), colors.HexColor("#C8E6C9")))  # verde
+                    style_cmds.append(("BACKGROUND", (c, r), (c, r), colors.HexColor("#C8E6C9")))
 
         table.setStyle(TableStyle(style_cmds))
         story.append(table)
+        story.append(Spacer(1, 10))
+
+        # ===== Medidas extras (abaixo) =====
+        if extras_cols:
+            story.append(Paragraph("Medidas extras", styles["Heading3"]))
+            # pega últimos 30 registros extras (independente do pivot)
+            df_extras = df_g.copy()
+            df_extras = df_extras[~df_extras["Momento"].isin(desired_order)].copy()
+
+            # Ordenar por datetime e pegar últimas 30
+            df_extras["DT"] = pd.to_datetime(df_extras["Data"].astype(str) + " " + df_extras["Hora"].astype(str),
+                                             dayfirst=True, errors="coerce")
+            df_extras = df_extras.dropna(subset=["DT"]).sort_values("DT").tail(30)
+
+            if df_extras.empty:
+                story.append(Paragraph("Sem medidas extras registradas.", styles["Normal"]))
+            else:
+                cols_e = ["Data", "Hora", "Momento", "Valor"]
+                data_e = [cols_e] + df_extras[cols_e].astype(str).values.tolist()
+                tE = Table(data_e, repeatRows=1, colWidths=[3*cm, 2*cm, 9*cm, 2*cm])
+                tE.setStyle(TableStyle([
+                    ("BACKGROUND", (0,0), (-1,0), colors.lightgrey),
+                    ("GRID", (0,0), (-1,-1), 0.25, colors.grey),
+                    ("FONTSIZE", (0,0), (-1,-1), 7),
+                    ("VALIGN", (0,0), (-1,-1), "TOP"),
+                    ("PADDING", (0,0), (-1,-1), 3),
+                ]))
+                story.append(tE)
+
         story.append(Spacer(1, 12))
 
     # ===== Gráfico Tendência (últimas medições) =====
@@ -1143,6 +1211,7 @@ if st.sidebar.button("📥 Gerar Excel Completo"):
 
             # 2) Aba Glicemia (Resumo pivot por Data x Momento)
             pivot = df_e_g.pivot_table(index="Data", columns="Momento", values="Valor", aggfunc="last")
+            pivot = pivot.reindex(columns=ordenar_colunas_momentos(list(pivot.columns)))
             pivot.to_excel(writer, sheet_name="Glicemia_Resumo")
             ws1 = writer.sheets["Glicemia_Resumo"]
 
