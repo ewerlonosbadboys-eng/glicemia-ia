@@ -2835,9 +2835,24 @@ def page_app():
 
         st.markdown("---")
         with st.form("form_add_colaborador", clear_on_submit=True):
-            c1, c2 = st.columns(2)
+            c1, c2, c3, c4 = st.columns(4)
             nome_n = c1.text_input("Nome:", key="col_nome")
             chapa_n = c2.text_input("Chapa:", key="col_chapa")
+
+            sub_opts = ["SEM SUBGRUPO"] + list_subgrupos(setor)
+            subgrupo_n = c3.selectbox("Subgrupo:", sub_opts, index=0, key="col_subgrupo")
+
+            ent_opts = HORARIOS_ENTRADA_PRESET
+            ent_default = "12:40" if "12:40" in ent_opts else (ent_opts[0] if ent_opts else "")
+            entrada_n = c4.selectbox(
+                "Entrada:",
+                options=ent_opts,
+                index=ent_opts.index(ent_default) if ent_default in ent_opts else 0,
+                key="col_entrada",
+            )
+
+            folga_sab_n = st.checkbox("Permitir folga sábado", value=False, key="col_folga_sab")
+
             submitted = st.form_submit_button("Cadastrar colaborador", use_container_width=True)
             if submitted:
                 if not nome_n or not chapa_n:
@@ -2845,7 +2860,15 @@ def page_app():
                 elif colaborador_exists(setor, chapa_n.strip()):
                     st.error("Já existe essa chapa.")
                 else:
-                    create_colaborador(nome_n.strip(), setor, chapa_n.strip())
+                    sg = None if subgrupo_n == "SEM SUBGRUPO" else subgrupo_n
+                    create_colaborador(
+                        nome_n.strip(),
+                        setor,
+                        chapa_n.strip(),
+                        subgrupo=sg,
+                        entrada=entrada_n,
+                        folga_sab=bool(folga_sab_n),
+                    )
                     st.success("Cadastrado!")
                     st.rerun()
 
@@ -2879,6 +2902,7 @@ def page_app():
             colp1, colp2, colp3 = st.columns(3)
             # Entrada: usar presets (inclui 06:50 e 12:40) para facilitar
             ent_atual = (csel.get("Entrada") or BALANCO_DIA_ENTRADA).strip()
+            st.caption(f"Atual: Entrada **{ent_atual}** | Subgrupo **{(csel.get('Subgrupo') or '—')}**")
             if ent_atual not in HORARIOS_ENTRADA_PRESET:
                 opcoes_ent = HORARIOS_ENTRADA_PRESET + [ent_atual]
             else:
