@@ -1265,6 +1265,108 @@ def is_first_week_after_return(setor: str, chapa: str, data_obj: date) -> bool:
     retorno = fim + timedelta(days=1)
     return retorno <= data_obj <= (retorno + timedelta(days=6))
 
+def get_last_ferias_fim(setor: str, chapa: str, ate_data: date) -> date | None:
+    """Retorna a data de FIM das últimas férias do colaborador antes (ou no) ate_data.
+    Usa apenas para regras de retorno/encaixe. Retorna None se não houver registro.
+    """
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT inicio, fim
+            FROM ferias
+            WHERE setor = ? AND chapa = ? AND date(fim) <= date(?)
+            ORDER BY date(fim) DESC
+            LIMIT 1
+            """,
+            (setor, str(chapa), ate_data.isoformat()),
+        )
+        row = cur.fetchone()
+    except Exception:
+        row = None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    if not row:
+        return None
+    try:
+        fim = datetime.strptime(row[1], "%Y-%m-%d").date()
+        return fim
+    except Exception:
+        return None
+
+
+def balance_primeiro_domingo_pos_ferias(
+    df: pd.DataFrame,
+    df_ref: pd.DataFrame,
+    setor: str,
+    ch: str,
+    chapas: list[str],
+    locked_idx: dict,
+    ate_data: date,
+):
+    """Balanceia o 1º domingo após retorno de férias, olhando cobertura do setor no domingo.
+
+    - Se o domingo já está "cheio" (muitos trabalhando), força FOLGA para o retornante.
+    - Se está "vazio" (poucos trabalhando), mantém TRABALHO (ou converte de Folga para Trabalho).
+    - Se está equilibrado, respeita o que já veio do 1x1 (não mexe).
+    - Nunca mexe em dias travados por override (locked).
+    - Só aplica para o PRIMEIRO domingo que cai dentro da 1ª semana pós-retorno (<= 6 dias após retorno).
+    """
+    # Descobrir retorno: fim + 1
+    fim = get_last_ferias_fim(setor, ch, ate_data=ate_data)
+    if not fim:
+        return
+    retorno = fim + timedelta(days=1)
+
+    # achar 1º domingo >= retorno
+    dom_idxs = []
+    for i in range(len(df_ref)):
+        try:
+            d = pd.to_datetime(df_ref.loc[i, "Data"]).date()
+        except Exception:
+            continue
+        if d >= retorno and str(df_ref.loc[i, "Dia"]).lower() == "dom":
+            dom_idxs.append(i)
+            break
+
+    if not dom_idxs:
+        return
+
+    dom_i = dom_idxs[0]
+    # Só na 1ª semana pós-retorno
+    dom_date = pd.to_datetime(df_ref.loc[dom_i, "Data"]).date()
+    if (dom_date - retorno).days < 0 or (dom_date - retorno).days > 6:
+        return
+
+    if dom_i in (locked_idx.get(ch) or set()):
+        return
+
+    # Cobertura atual do setor no domingo
+    total = max(1, len(chapas))
+    target_work = (total + 1) // 2  # ~metade trabalhando
+    work_count = 0
+    for ch2 in chapas:
+        if df.loc[dom_i, ch2] in WORK_STATUSES:
+            work_count += 1
+
+    # Regras:
+    # - Se já passou do alvo, força folga pro retornante (se ele estiver em trabalho)
+    # - Se está abaixo do alvo, força trabalho pro retornante (se ele estiver em folga)
+    # - Se está exatamente no alvo, não mexe
+    atual = df.loc[dom_i, ch]
+    if work_count > target_work:
+        if atual in WORK_STATUSES:
+            df.loc[dom_i, ch] = "Folga"
+    elif work_count < target_work:
+        if atual == "Folga":
+            df.loc[dom_i, ch] = "Trabalho"
+
+
 # =========================================================
 # ESTADO
 # =========================================================
@@ -1374,45 +1476,66 @@ def _is_status_locked(ovmap: dict, chapa: str, data_ts: pd.Timestamp) -> bool:
     return bool(ovmap.get(chapa, {}).get(dia, {}).get("status"))
 
 def _apply_overrides_to_df_inplace(df: pd.DataFrame, setor: str, chapa: str, ovmap: dict):
+    """Aplica ajustes manuais (overrides) no DataFrame.
+
+    Regras de FÉRIAS:
+    - Dias de férias são definidos SOMENTE pela tabela `ferias` (aba Férias).
+    - Em dia de férias, força: Status='Férias', H_Entrada='', H_Saida='' (ignora qualquer override).
+    - Override tentando marcar 'Férias' fora da tabela é ignorado.
+    - Override tentando mudar o Status / horários em um dia que está em férias também é ignorado.
     """
-    Aplica overrides, MAS:
-    - status 'Férias' só é aceito se estiver na tabela ferias (aba Férias).
-    """
-    if chapa not in ovmap:
+    ovmap = (ovmap or {})
+    if not ovmap:
         return df
-    for i in range(len(df)):
-        dia_num = int(pd.to_datetime(df.loc[i, "Data"]).day)
-        rule = ovmap.get(chapa, {}).get(dia_num, {})
-        if not rule:
+
+    # Garante tipo datetime na coluna Data
+    if "Data" in df.columns and not pd.api.types.is_datetime64_any_dtype(df["Data"]):
+        df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
+
+    for d_raw, payload in ovmap.items():
+        if not payload:
             continue
 
-        data_obj = pd.to_datetime(df.loc[i, "Data"]).date()
+        # Normaliza data (aceita date/datetime/str ISO)
+        dd = None
+        if isinstance(d_raw, dt.datetime):
+            dd = d_raw.date()
+        elif isinstance(d_raw, dt.date):
+            dd = d_raw
+        elif isinstance(d_raw, str):
+            try:
+                dd = dt.date.fromisoformat(d_raw[:10])
+            except Exception:
+                dd = None
+        if dd is None:
+            continue
 
-        if "status" in rule:
-            stt = str(rule["status"])
-            if stt == "Férias" and not is_de_ferias(setor, chapa, data_obj):
-                # ignora este override
-                pass
-            else:
-                df.loc[i, "Status"] = stt
-                if stt not in WORK_STATUSES:
-                    df.loc[i, "H_Entrada"] = ""
-                    df.loc[i, "H_Saida"] = ""
+        mask = df["Data"].dt.date == dd
+        if not bool(mask.any()):
+            continue
+        i = df.index[mask][0]
 
-        if "h_entrada" in rule:
-            df.loc[i, "H_Entrada"] = rule["h_entrada"]
+        # Se é férias (tabela), férias sempre vence
+        if is_de_ferias(setor, chapa, dd):
+            df.loc[i, "Status"] = "Férias"
+            df.loc[i, "H_Entrada"] = ""
+            df.loc[i, "H_Saida"] = ""
+            continue
 
-        if "h_saida" in rule:
-            df.loc[i, "H_Saida"] = rule["h_saida"]
+        # Status (exceto tentar marcar Férias)
+        st_new = str(payload.get("status") or "").strip()
+        if st_new and st_new.lower() not in ["férias", "ferias"]:
+            df.loc[i, "Status"] = st_new
 
-        if df.loc[i, "Status"] in WORK_STATUSES:
-            if (df.loc[i, "H_Entrada"] or "") and not (df.loc[i, "H_Saida"] or ""):
-                df.loc[i, "H_Saida"] = _saida_from_entrada(df.loc[i, "H_Entrada"])
+        # Entrada / Saída
+        ent_new = str(payload.get("h_entrada") or payload.get("entrada") or "").strip()
+        if ent_new:
+            df.loc[i, "H_Entrada"] = ent_new
+            df.loc[i, "H_Saida"] = _saida_from_entrada(ent_new)
+
     return df
 
-# =========================================================
-# ESCALA DB
-# =========================================================
+
 def save_escala_mes_db(setor: str, ano: int, mes: int, historico_df_por_chapa: dict[str, pd.DataFrame]):
     """Grava escala no banco de forma robusta.
     - Limpa a competência (setor/ano/mes) antes de gravar para evitar IntegrityError em DB antigo/corrompido.
@@ -1881,7 +2004,7 @@ def enforce_max_5_consecutive_work(df, ent_padrao, pode_folgar_sabado: bool, ini
             consec = 0
         i += 1
 
-def enforce_weekly_folga_targets(df: pd.DataFrame, df_ref: pd.DataFrame, pode_folgar_sabado: bool, locked_status: set[int] | None = None):
+def enforce_weekly_folga_targets(df: pd.DataFrame, df_ref: pd.DataFrame, pode_folgar_sabado: bool, locked_status: set[int] | None = None, setor: str | None = None, ch: str | None = None):
     """
     SEMANA SEG->DOM (regra geral):
       - Se DOM = Folga => 1 folga SEG-SÁB
@@ -1917,6 +2040,13 @@ def enforce_weekly_folga_targets(df: pd.DataFrame, df_ref: pd.DataFrame, pode_fo
 
     for week in weeks:
         week = list(week)
+
+        week_start = pd.to_datetime(df.loc[week[0], "Data"]).date()
+        if setor and ch and is_first_week_after_return(setor, ch, week_start):
+            # Semana de retorno de férias: não força folgas adicionais aqui.
+            # O balanceamento do 1º domingo pós-férias é tratado separadamente.
+            continue
+
         weekdays = [i for i in week if not is_dom(i)]
         t = target_for_week(week)
 
@@ -2120,6 +2250,8 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
                 base_first = None
 
         enforce_sundays_1x1_for_employee(df, ent, locked_status=locked, base_first=base_first)
+
+        balance_primeiro_domingo_pos_ferias(df, df_ref, setor, ch, chapas, {ch: locked}, ate_data=pd.to_datetime(df_ref.loc[len(df_ref)-1, "Data"]).date())
         hist_all[ch] = df
 
     # =====================================================
@@ -2223,6 +2355,8 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
                 base_first = None
         enforce_sundays_1x1_for_employee(df, ent, locked_status=locked, base_first=base_first)
 
+        balance_primeiro_domingo_pos_ferias(df, df_ref, setor, ch, chapas, {ch: locked}, ate_data=pd.to_datetime(df_ref.loc[len(df_ref)-1, "Data"]).date())
+
         # 1) Garante 5 dias seguidos antes de mexer em metas semanais
         enforce_max_5_consecutive_work(
             df, ent, pode_sab,
@@ -2297,6 +2431,8 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
             else:
                 base_first = None
         enforce_sundays_1x1_for_employee(df, ent, locked_status=locked, base_first=base_first)
+
+        balance_primeiro_domingo_pos_ferias(df, df_ref, setor, ch, chapas, {ch: locked}, ate_data=pd.to_datetime(df_ref.loc[len(df_ref)-1, "Data"]).date())
         enforce_no_consecutive_folga(df, locked_status=locked)
         enforce_weekly_folga_targets(df, df_ref=df_ref, pode_folgar_sabado=bool(colab_by_chapa[ch].get('Folga_Sab', False)), locked_status=locked)
 
