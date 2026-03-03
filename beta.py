@@ -24,11 +24,16 @@ import pytz
 import streamlit as st
 from email.mime.text import MIMEText
 from openpyxl.styles import Alignment, PatternFill
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.units import cm
-from reportlab.lib import colors
-from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+try:
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import cm
+    from reportlab.lib import colors
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    HAS_REPORTLAB = True
+except Exception:
+    HAS_REPORTLAB = False
+
 
 # =========================================================
 # (OPCIONAL) LOGIN PERSISTENTE POR COOKIE (NÃO BUGA SE NÃO TIVER)
@@ -1058,6 +1063,25 @@ if st.sidebar.button("📥 Gerar Excel Completo"):
                 cell.alignment = Alignment(horizontal="center")
 
     st.sidebar.download_button("⬇️ Baixar Agora", output.getvalue(), file_name="Relatorio_Saude_Kids.xlsx", use_container_width=True)
+
+
+# ================= PDF (SIDEBAR) =================
+st.sidebar.markdown("---")
+st.sidebar.subheader("🧾 Relatório em PDF")
+
+if not HAS_REPORTLAB:
+    st.sidebar.warning("Para gerar PDF, adicione **reportlab** no requirements.txt e faça deploy novamente.")
+else:
+    if st.sidebar.button("🧾 Gerar PDF Relatório", use_container_width=True):
+        df_pdf_g = carregar_glicemia_com_id()
+        df_pdf_n = carregar_dados_seguro(ARQ_N)
+        pdf_bytes = gerar_pdf_bytes(df_pdf_g, df_pdf_n)
+        if not pdf_bytes:
+            st.sidebar.error("Não foi possível gerar o PDF.")
+        else:
+            nome_pdf = f"Relatorio_Saude_Kids_{agora_br().strftime('%Y-%m-%d_%H-%M')}.pdf"
+            st.sidebar.download_button("⬇️ Baixar PDF", pdf_bytes, file_name=nome_pdf, use_container_width=True)
+
 
 # ================= SAIR =================
 if st.sidebar.button("🚪 Sair"):
