@@ -1946,6 +1946,173 @@ def enforce_weekly_folga_targets(df: pd.DataFrame, df_ref: pd.DataFrame, pode_fo
 
     enforce_no_consecutive_folga(df, locked_status=locked_status)
 
+
+def optimize_folgas_por_preferencia_e_espacamento(hist_by_chapa: dict, df_ref: pd.DataFrame, colab_by_chapa: dict, setor: str, locked_by_chapa: dict[str, set[int]] | None = None):
+    """
+    Pós-processamento leve:
+      - Para subgrupos com preferência "Evitar DIA", tenta realocar folgas (dentro da mesma semana SEG->DOM)
+        saindo de dias evitados para dias permitidos, sem quebrar:
+          * sábado permitido
+          * não criar folga consecutiva (exceto travados)
+      - Também tenta "espalhar" as 2 folgas na semana (ex.: TER/QUI em vez de QUA/SEX) quando possível.
+    """
+    locked_by_chapa = locked_by_chapa or {}
+
+    # agrupa chapas por subgrupo
+    grupos: dict[str, list[str]] = {}
+    for ch, info in colab_by_chapa.items():
+        sg = (info.get("Subgrupo") or "SEM SUBGRUPO").strip()
+        grupos.setdefault(sg, []).append(ch)
+
+    datas = pd.to_datetime(df_ref["Data"])
+    weeks = _all_weeks_seg_dom(pd.DatetimeIndex(datas))
+
+    def _is_avoided(dia: str, evitar: set[str]) -> bool:
+        return dia in evitar
+
+    for sg, chapas in grupos.items():
+        regras = get_subgrupo_regras(setor, sg) or {}
+        evitar = set((regras.get("evitar") or []))
+        if not evitar:
+            continue
+
+        for week in weeks:
+            week = list(week)
+            # SEG-SÁB (DOM não entra no alvo aqui)
+            idxs = [i for i in week if df_ref.loc[i, "Dia"] != "dom"]
+
+            # contagem de folgas no subgrupo por dia (para não concentrar demais)
+            folga_count = {i: 0 for i in idxs}
+            for ch in chapas:
+                df = hist_by_chapa.get(ch)
+                if df is None: 
+                    continue
+                for i in idxs:
+                    if df.loc[i, "Status"] == "Folga":
+                        folga_count[i] += 1
+            max_f = max(folga_count.values()) if folga_count else 0
+
+            for ch in chapas:
+                df = hist_by_chapa.get(ch)
+                if df is None:
+                    continue
+                locked = locked_by_chapa.get(ch, set())
+
+                pode_sab = bool(colab_by_chapa.get(ch, {}).get("PodeFolgarSabado", False))
+
+                def can_set_folga(i: int) -> bool:
+                    if i in locked: return False
+                    if df_ref.loc[i, "Dia"] == "dom": return False
+                    if df.loc[i, "Status"] != "Trabalho": return False
+                    if df_ref.loc[i, "Dia"] == "sáb" and not pode_sab: return False
+                    if not _nao_consecutiva_folga(df, i): return False
+                    return True
+
+                def can_set_trabalho(i: int) -> bool:
+                    if i in locked: return False
+                    if df_ref.loc[i, "Dia"] == "dom": return False
+                    return df.loc[i, "Status"] == "Folga"
+
+                def week_folgas() -> list[int]:
+                    return [i for i in idxs if df.loc[i, "Status"] == "Folga"]
+
+                def spacing_score(folgas: list[int]) -> int:
+                    # maior é melhor: distância mínima entre folgas na semana
+                    if len(folgas) < 2:
+                        return 999
+                    folgas = sorted(folgas)
+                    dmin = min((folgas[i+1]-folgas[i]) for i in range(len(folgas)-1))
+                    return dmin
+
+                # 1) tirar folga de dia evitado (se houver) => mover para um dia permitido
+                folgas = [i for i in week_folgas() if can_set_trabalho(i)]
+                for i in folgas:
+                    dia_i = df_ref.loc[i, "Dia"]
+                    if not _is_avoided(dia_i, evitar):
+                        continue
+
+                    best = None
+                    cur_folgas = week_folgas()
+                    cur_space = spacing_score(cur_folgas)
+
+                    for j in idxs:
+                        if not can_set_folga(j):
+                            continue
+                        dia_j = df_ref.loc[j, "Dia"]
+                        if _is_avoided(dia_j, evitar):
+                            continue
+                        # não concentrar muito: deixa no máximo (max_f + 1)
+                        if folga_count.get(j, 0) + 1 > (max_f + 1):
+                            continue
+
+                        # simula swap i(F)->T e j(T)->F
+                        df.loc[i, "Status"], df.loc[j, "Status"] = "Trabalho", "Folga"
+                        ok = _nao_consecutiva_folga(df, j)
+                        new_folgas = week_folgas()
+                        new_space = spacing_score(new_folgas)
+                        # reverte
+                        df.loc[i, "Status"], df.loc[j, "Status"] = "Folga", "Trabalho"
+
+                        if not ok:
+                            continue
+
+                        # objetivo: remover evitado + melhorar/maint spacing
+                        score = (0, -new_space, abs(j - i))
+                        if best is None or score < best[0]:
+                            best = (score, j, new_space)
+
+                    if best is not None:
+                        j = best[1]
+                        # aplica de fato
+                        df.loc[i, "Status"] = "Trabalho"
+                        df.loc[j, "Status"] = "Folga"
+                        # atualiza contagem
+                        folga_count[i] = max(0, folga_count.get(i, 0) - 1)
+                        folga_count[j] = folga_count.get(j, 0) + 1
+                        max_f = max(folga_count.values()) if folga_count else 0
+
+                # 2) espalhar folgas (se 2 folgas muito próximas) respeitando preferências
+                folgas2 = week_folgas()
+                if len(folgas2) >= 2 and spacing_score(folgas2) <= 1:
+                    # tenta mover uma das folgas para aumentar distância
+                    folgas2 = sorted([i for i in folgas2 if can_set_trabalho(i)])
+                    for i in folgas2:
+                        dia_i = df_ref.loc[i, "Dia"]
+                        # se já está em dia não-evitado, preferimos mover outra, mas tenta assim mesmo
+                        best = None
+                        cur_space = spacing_score(week_folgas())
+
+                        for j in idxs:
+                            if not can_set_folga(j):
+                                continue
+                            dia_j = df_ref.loc[j, "Dia"]
+                            if _is_avoided(dia_j, evitar):
+                                continue
+                            if folga_count.get(j, 0) + 1 > (max_f + 1):
+                                continue
+
+                            # simula
+                            df.loc[i, "Status"], df.loc[j, "Status"] = "Trabalho", "Folga"
+                            ok = _nao_consecutiva_folga(df, j)
+                            new_space = spacing_score(week_folgas())
+                            df.loc[i, "Status"], df.loc[j, "Status"] = "Folga", "Trabalho"
+                            if not ok:
+                                continue
+                            if new_space <= cur_space:
+                                continue
+                            score = (-new_space, abs(j - i))
+                            if best is None or score < best[0]:
+                                best = (score, j, new_space)
+
+                        if best is not None:
+                            j = best[1]
+                            df.loc[i, "Status"] = "Trabalho"
+                            df.loc[j, "Status"] = "Folga"
+                            folga_count[i] = max(0, folga_count.get(i, 0) - 1)
+                            folga_count[j] = folga_count.get(j, 0) + 1
+                            max_f = max(folga_count.values()) if folga_count else 0
+                            break
+
 def _counts_folgas_day_and_hour(hist_by_chapa: dict, colab_by_chapa: dict, chapas_grupo: list, idxs_semana: list, df_ref):
     counts_day = {i: 0 for i in idxs_semana}
     counts_day_hour = {}
@@ -2265,6 +2432,18 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
                 past_flag=_past,
                 max_iters=2200
             )
+
+    # ✅ Oportunidade de melhoria: após o balanceamento global, ajustar folgas dentro da semana
+    # para respeitar melhor a preferência "Evitar DIA" por subgrupo e espalhar as 2 folgas (quando possível).
+    optimize_folgas_por_preferencia_e_espacamento(hist_all, df_ref, colab_by_chapa, setor, locked_by_chapa=locked_idx)
+
+    # Re-enforça as regras críticas após otimizações locais (sem refazer o balanceamento semanal)
+    for ch, df in hist_all.items():
+        ent = colab_by_chapa[ch].get("Entrada", "06:00")
+        locked = locked_idx.get(ch, set())
+        pode_sab = bool(colab_by_chapa[ch].get("Folga_Sab", False))
+        enforce_max_5_consecutive_work(df, ent, pode_sab, initial_consec=0)
+        enforce_no_consecutive_folga(df, locked)
 
     # ✅ Pós-rebalance: re-garante regra dos 5 dias por colaborador
     for ch, df in hist_all.items():
@@ -3145,17 +3324,6 @@ def page_app():
                     sg_sel = st.selectbox("Escolha o subgrupo:", subgrupos, key="pref_sg_sel")
                     regras = get_subgrupo_regras(setor, sg_sel)
 
-                    # Mostrar o que já está salvo (para você não se confundir / sobrepor sem querer)
-                    dias_marcados_salvos = []
-                    _map_lbl = {"seg":"SEG","ter":"TER","qua":"QUA","qui":"QUI","sex":"SEX","sáb":"SÁB"}
-                    for _k, _lbl in _map_lbl.items():
-                        if bool(regras.get(_k, False)):
-                            dias_marcados_salvos.append(_lbl)
-                    if dias_marcados_salvos:
-                        st.info(f"✅ {sg_sel} está configurado para **evitar folga** em: {', '.join(dias_marcados_salvos)}", icon="ℹ️")
-                    else:
-                        st.caption(f"ℹ️ {sg_sel} não tem dias marcados para evitar folga (no momento).")
-
                     p1, p2, p3 = st.columns(3)
                     ev_seg = p1.checkbox("Evitar SEG", value=bool(regras["seg"]), key=f"ev_seg_{sg_sel}")
                     ev_ter = p1.checkbox("Evitar TER", value=bool(regras["ter"]), key=f"ev_ter_{sg_sel}")
@@ -3174,23 +3342,6 @@ def page_app():
                         st.rerun()
                 else:
                     st.info("Crie pelo menos 1 subgrupo na aba 👥 Colaboradores.")
-
-        # Resumo rápido de TODOS os subgrupos (ajuda a evitar sobrepor configurações)
-        with st.expander("📌 Ver resumo das preferências (todos os subgrupos)", expanded=False):
-            linhas = []
-            for _sg in subgrupos:
-                _r = get_subgrupo_regras(setor, _sg) or {}
-                _dias = []
-                for _k, _lbl in _map_lbl.items():
-                    if bool(_r.get(_k, False)):
-                        _dias.append(_lbl)
-                linhas.append({"Subgrupo": _sg, "Evitar folga em": (", ".join(_dias) if _dias else "—")})
-            try:
-                import pandas as _pd
-                st.dataframe(_pd.DataFrame(linhas), use_container_width=True, hide_index=True)
-            except Exception:
-                for _it in linhas:
-                    st.write(f"- **{_it['Subgrupo']}**: {_it['Evitar folga em']}")
 
             with t4:
                 st.markdown("## 📌 Subgrupos (editável)")
