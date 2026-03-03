@@ -2899,25 +2899,55 @@ def page_app():
             )
             csel = next(x for x in colaboradores if x["Chapa"] == ch_sel)
 
-            colp1, colp2, colp3 = st.columns(3)
-            # Entrada: usar presets (inclui 06:50 e 12:40) para facilitar
+            # 🔁 Sempre que trocar o colaborador selecionado, puxar os valores atuais do banco
+            # e atualizar os campos "Entrada", "Subgrupo" e "Folga sábado" automaticamente.
             ent_atual = (csel.get("Entrada") or BALANCO_DIA_ENTRADA).strip()
+            sg_atual = (csel.get("Subgrupo") or "").strip()
+            sab_atual = bool(int(csel.get("Folga_Sab", 0) or 0))
+            if st.session_state.get("_pf_loaded_chapa") != ch_sel:
+                st.session_state["pf_ent_sel"] = ent_atual
+                st.session_state["pf_sg"] = sg_atual
+                st.session_state["pf_sab"] = sab_atual
+                st.session_state["_pf_loaded_chapa"] = ch_sel
+
+            colp1, colp2, colp3 = st.columns(3)
+
+            # Entrada: usar presets (inclui 06:50 e 12:40) para facilitar
             if ent_atual not in HORARIOS_ENTRADA_PRESET:
                 opcoes_ent = HORARIOS_ENTRADA_PRESET + [ent_atual]
             else:
                 opcoes_ent = HORARIOS_ENTRADA_PRESET
+
+            # índice baseado no valor atual em session_state (para atualizar ao trocar colaborador)
+            _ent_val = st.session_state.get("pf_ent_sel", ent_atual)
+            if _ent_val not in opcoes_ent:
+                opcoes_ent = opcoes_ent + [_ent_val]
             ent_sel = colp1.selectbox(
                 "Entrada:",
                 options=opcoes_ent,
-                index=opcoes_ent.index(ent_atual),
+                index=opcoes_ent.index(_ent_val),
                 key="pf_ent_sel",
             )
-            sg_opts = [""] + list_subgrupos(setor)
-            idx_default = sg_opts.index(csel["Subgrupo"]) if csel["Subgrupo"] in sg_opts else 0
-            sg = colp2.selectbox("Subgrupo:", sg_opts, index=idx_default, key="pf_sg")
-            sab = colp3.checkbox("Permitir folga sábado", value=bool(csel["Folga_Sab"]), key="pf_sab")
 
-            if st.button("Salvar perfil", key="pf_save"):
+            sg_opts = [""] + list_subgrupos(setor)
+            _sg_val = st.session_state.get("pf_sg", sg_atual)
+            if _sg_val and _sg_val not in sg_opts:
+                sg_opts = sg_opts + [_sg_val]
+            sg_sel = colp2.selectbox(
+                "Subgrupo:",
+                options=sg_opts,
+                index=sg_opts.index(_sg_val) if _sg_val in sg_opts else 0,
+                key="pf_sg",
+            )
+
+            pode_sab = colp3.checkbox(
+                "Permitir folga sábado",
+                value=bool(st.session_state.get("pf_sab", sab_atual)),
+                key="pf_sab",
+            )
+
+        if st.button("Salvar perfil", key="pf_save"):
+
                 update_colaborador_perfil(setor, ch_sel, sg, ent_sel, sab)
                 st.success("Salvo!")
                 st.rerun()
