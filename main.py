@@ -2938,7 +2938,6 @@ def page_app():
             c1.text_input("Competência (mês/ano):", value=f"{mes:02d}/{ano}", disabled=True, key="gen_comp_readonly")
             seed = c2.number_input("Semente", min_value=0, max_value=999999, value=int(st.session_state.get("last_seed", 0)), key="gen_seed")
 
-            seed = c3.number_input("Semente", min_value=0, max_value=999999, value=int(st.session_state.get("last_seed", 0)), key="gen_seed")
 
         st.session_state["cfg_mes"] = int(mes)
         st.session_state["cfg_ano"] = int(ano)
