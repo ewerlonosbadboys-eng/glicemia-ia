@@ -757,39 +757,86 @@ else:
             momento_apos, hora_apos = proxima_medida_apos(m_gl, dt_agora)
             if momento_apos and hora_apos:
                 st.info(f"⏰ Próxima medida: **{momento_apos}** às **{hora_apos}** (2 horas após)")
+            # RÁPIDA / LONGA (SUGESTÃO + EDIÇÃO MANUAL)
 
-            # RÁPIDA
+            # ===== RÁPIDA =====
+            dose_r_sug, msg_r = "—", "Rápida não aplicável"
+            dose_r_final = ""
+
             if m_gl in MOMENTOS_RAPIDA:
-                dose_r, msg_r = calc_insulina_rapida(int(v_gl), m_gl)
+                dose_r_sug, msg_r = calc_insulina_rapida(int(v_gl), m_gl)  # ex: "3 UI"
+                try:
+                    sug_num = int(str(dose_r_sug).split()[0])
+                except Exception:
+                    sug_num = 0
+
                 st.markdown(
-                    f'<div class="metric-box"><small>Rápida: {msg_r}</small><br><span class="dose-destaque">{dose_r}</span></div>',
+                    f'<div class="metric-box"><small>Rápida (sugestão): {msg_r}</small><br>'
+                    f'<span class="dose-destaque">{dose_r_sug}</span></div>',
                     unsafe_allow_html=True
                 )
-            else:
-                dose_r, msg_r = "—", "Rápida não aplicável"
 
-            # LONGA
+                dose_r_edit = st.number_input(
+                    "✍️ Ajustar dose Rápida (UI) antes de salvar",
+                    min_value=0, max_value=50, value=int(sug_num),
+                    key="dose_rapida_edit"
+                )
+                dose_r_final = f"{int(dose_r_edit)} UI"
+            else:
+                st.caption("Rápida: não aplicável neste momento.")
+                dose_r_final = ""
+
+            # ===== LONGA =====
+            dose_l_sug, msg_l = "—", "Longa não aplicável"
+            dose_l_final = ""
+
             if m_gl in MOMENTOS_LONGA:
-                dose_l, msg_l = calc_glargina(m_gl)
+                dose_l_sug, msg_l = calc_glargina(m_gl)  # ex: "8 UI"
+                try:
+                    sug_l = int(str(dose_l_sug).split()[0])
+                except Exception:
+                    sug_l = 0
+
                 st.markdown(
-                    f'<div class="metric-box" style="margin-top:10px;"><small>{msg_l}</small><br><span class="dose-destaque">{dose_l}</span></div>',
+                    f'<div class="metric-box" style="margin-top:10px;"><small>{msg_l} (sugestão)</small><br>'
+                    f'<span class="dose-destaque">{dose_l_sug}</span></div>',
                     unsafe_allow_html=True
                 )
-            else:
-                dose_l, msg_l = "—", "Longa não aplicável"
 
-            # WhatsApp
+                dose_l_edit = st.number_input(
+                    "✍️ Ajustar dose Longa (UI) antes de salvar",
+                    min_value=0, max_value=100, value=int(sug_l),
+                    key="dose_longa_edit"
+                )
+                dose_l_final = f"{int(dose_l_edit)} UI"
+            else:
+                st.caption("Longa: não aplicável neste momento.")
+                dose_l_final = ""
+
+            # WhatsApp (usa as doses editadas)
+            dose_r_msg = dose_r_final if dose_r_final else (dose_r_sug if dose_r_sug else "—")
+            dose_l_msg = dose_l_final if dose_l_final else (dose_l_sug if dose_l_sug else "—")
+
             link_wpp = link_whatsapp_lembrete(
                 momento=m_gl,
                 valor_glicemia=int(v_gl),
-                dose_rapida=dose_r,
-                dose_longa=dose_l,
+                dose_rapida=dose_r_msg,
+                dose_longa=dose_l_msg,
             )
             st.link_button("📲 Abrir WhatsApp com mensagem pronta", link_wpp, use_container_width=True)
 
             if st.button("💾 Salvar Glicemia", use_container_width=True):
-                dose_para_salvar = dose_r if m_gl in MOMENTOS_RAPIDA else ""
+                # salva o que você ajustou (se aplicável)
+                dose_para_salvar = ""
+
+                if m_gl in MOMENTOS_RAPIDA and "dose_r_final" in locals() and dose_r_final:
+                    dose_para_salvar = dose_r_final
+
+                if m_gl in MOMENTOS_LONGA and "dose_l_final" in locals() and dose_l_final:
+                    dose_para_salvar = (dose_para_salvar + " | " if dose_para_salvar else "") + f"Longa: {dose_l_final}"
+
                 salvar_registro_glicemia(int(v_gl), m_gl, dose_para_salvar, agora_br())
+                st.rerun()
                 st.rerun()
 
         with c2:
