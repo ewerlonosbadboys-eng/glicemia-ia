@@ -1300,96 +1300,95 @@ def get_last_ferias_fim(setor: str, chapa: str, ate_data: date) -> date | None:
         return None
 
 
-def balance_primeiro_domingo_pos_ferias(
-    df: pd.DataFrame,
-    df_ref: pd.DataFrame,
-    setor: str,
-    ch: str,
-    chapas: list[str],
-    locked_idx: dict,
-    ate_data: date,
-):
-    """Balanceia o 1º domingo após retorno de férias, olhando cobertura do setor no domingo.
-
-    - Se o domingo já está "cheio" (muitos trabalhando), força FOLGA para o retornante.
-    - Se está "vazio" (poucos trabalhando), mantém TRABALHO (ou converte de Folga para Trabalho).
-    - Se está equilibrado, respeita o que já veio do 1x1 (não mexe).
-    - Nunca mexe em dias travados por override (locked).
-    - Só aplica para o PRIMEIRO domingo que cai dentro da 1ª semana pós-retorno (<= 6 dias após retorno).
+def balance_primeiro_domingo_pos_ferias(df, hist_all, df_ref, setor, ch, chapas_grupo, locked_idx, ate_data):
     """
-    # Descobrir retorno: fim + 1
-    fim = get_last_ferias_fim(setor, ch, ate_data=ate_data)
-    if not fim:
-        return
-    retorno = fim + timedelta(days=1)
+    Ajuste específico: após retorno de FÉRIAS, decidir o 1º DOMINGO (trabalha/folga)
+    com base no balanceamento de cobertura do DOMINGO dentro do mesmo grupo (subgrupo/setor).
 
-    # achar 1º domingo >= retorno
-    dom_idxs = []
-    for i in range(len(df_ref)):
-        try:
-            d = pd.to_datetime(df_ref.loc[i, "Data"]).date()
-        except Exception:
-            continue
-        if d >= retorno and str(df_ref.loc[i, "Dia"]).lower() == "dom":
-            dom_idxs.append(i)
+    - Identifica o retorno: primeiro dia NÃO-FÉRIAS após um bloco de FÉRIAS.
+    - Pega o primeiro domingo >= retorno.
+    - Se o domingo estiver "cheio" (muita gente trabalhando), força FOLGA no colaborador.
+      Se estiver "precisando" (pouca gente), mantém TRABALHO.
+    - Não sobrescreve dia travado por override (locked_idx).
+    """
+    if df is None or df_ref is None or len(df_ref) == 0:
+        return
+
+    # --- localizar data de retorno (primeiro dia não-FÉRIAS após FÉRIAS)
+    retorno_idx = None
+    for i in range(1, len(df_ref)):
+        prev_status = str(df.loc[i-1, "Status"]) if i-1 in df.index else ""
+        cur_status  = str(df.loc[i, "Status"])   if i in df.index else ""
+        if prev_status == "Férias" and cur_status != "Férias":
+            retorno_idx = i
             break
 
-    if not dom_idxs:
+    if retorno_idx is None:
         return
 
-    dom_i = dom_idxs[0]
-    # Só na 1ª semana pós-retorno
-    dom_date = pd.to_datetime(df_ref.loc[dom_i, "Data"]).date()
-    if (dom_date - retorno).days < 0 or (dom_date - retorno).days > 6:
+    retorno_data = pd.to_datetime(df_ref.loc[retorno_idx, "Data"]).date()
+
+    # --- achar primeiro domingo em/apos retorno
+    dom_i = None
+    for i in range(retorno_idx, len(df_ref)):
+        d = pd.to_datetime(df_ref.loc[i, "Data"]).date()
+        if d > ate_data:
+            break
+        dia = str(df_ref.loc[i, "Dia"]).lower()
+        if dia.startswith("dom"):
+            dom_i = i
+            break
+
+    if dom_i is None:
         return
 
-    if dom_i in (locked_idx.get(ch) or set()):
+    # não mexer se estiver travado por override
+    if dom_i in (locked_idx.get(ch, set()) or set()):
         return
 
-    # Cobertura atual do setor no domingo
-    total = max(1, len(chapas))
-    target_work = (total + 1) // 2  # ~metade trabalhando
+    # se no próprio domingo ainda é férias, não mexe
+    if str(df.loc[dom_i, "Status"]) == "Férias":
+        return
+
+    # --- contar cobertura do domingo no grupo
     work_count = 0
-    for ch2 in chapas:
-        if df.loc[dom_i, ch2] in WORK_STATUSES:
+    avail_count = 0
+    for ch2 in chapas_grupo:
+        df2 = df if ch2 == ch else hist_all.get(ch2)
+        if df2 is None:
+            continue
+        st2 = str(df2.loc[dom_i, "Status"])
+        if st2 == "Férias":
+            continue
+        avail_count += 1
+        if st2 in WORK_STATUSES:
             work_count += 1
 
-    # Regras:
-    # - Se já passou do alvo, força folga pro retornante (se ele estiver em trabalho)
-    # - Se está abaixo do alvo, força trabalho pro retornante (se ele estiver em folga)
-    # - Se está exatamente no alvo, não mexe
-    atual = df.loc[dom_i, ch]
-    if work_count > target_work:
-        if atual in WORK_STATUSES:
-            df.loc[dom_i, ch] = "Folga"
-    elif work_count < target_work:
-        if atual == "Folga":
-            df.loc[dom_i, ch] = "Trabalho"
+    if avail_count <= 1:
+        return
 
+    # alvo simples: ~50% trabalhando
+    target_work = int(math.ceil(avail_count / 2))
 
-# =========================================================
-# ESTADO
-# =========================================================
-def save_estado_mes(setor: str, ano: int, mes: int, estado: dict):
-    con = db_conn()
-    cur = con.cursor()
-    for chapa, stt in estado.items():
-        cur.execute("""
-            INSERT OR REPLACE INTO estado_mes_anterior(setor, chapa, consec_trab_final, ultima_saida, ultimo_domingo_status, ano, mes)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (
-            setor, chapa,
-            int(stt.get("consec_trab_final", 0)),
-            stt.get("ultima_saida", "") or "",
-            stt.get("ultimo_domingo_status", None),
-            int(ano), int(mes)
-        ))
-    con.commit()
-    con.close()
-    try:
-        st.cache_data.clear()
-    except Exception:
-        pass
+    # --- decidir status do colaborador no 1º domingo
+    desejado = "Folga" if work_count > target_work else None  # None = manter como está (trabalho)
+    if desejado == "Folga":
+        # evitar criar folga consecutiva automática (DOM+SEG), se SEG não está travado
+        if dom_i + 1 < len(df_ref):
+            prox_status = str(df.loc[dom_i + 1, "Status"])
+            prox_locked = (dom_i + 1) in (locked_idx.get(ch, set()) or set())
+            if (prox_status == "Folga") and (not prox_locked):
+                desejado = None  # não força folga; deixa trabalhar
+        # também evita folga consecutiva com sábado anterior
+        if dom_i - 1 >= 0:
+            ant_status = str(df.loc[dom_i - 1, "Status"])
+            ant_locked = (dom_i - 1) in (locked_idx.get(ch, set()) or set())
+            if (ant_status == "Folga") and (not ant_locked):
+                desejado = None
+
+    if desejado == "Folga":
+        _set_folga(df, dom_i, locked=False, reason="auto_balance_1o_dom_pos_ferias")
+
 
 def load_estado_prev(setor: str, ano: int, mes: int):
     prev_ano, prev_mes = ano, mes - 1
@@ -2252,7 +2251,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
 
         enforce_sundays_1x1_for_employee(df, ent, locked_status=locked, base_first=base_first)
 
-        balance_primeiro_domingo_pos_ferias(df, df_ref, setor, ch, chapas_all, locked_idx, ate_data=pd.to_datetime(df_ref.loc[len(df_ref)-1, "Data"]).date())
+        balance_primeiro_domingo_pos_ferias(df, hist_all, df_ref, setor, ch, chapas_all, locked_idx, ate_data=pd.to_datetime(df_ref.loc[len(df_ref)-1, "Data"]).date())
         hist_all[ch] = df
 
     # =====================================================
@@ -2356,7 +2355,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
                 base_first = None
         enforce_sundays_1x1_for_employee(df, ent, locked_status=locked, base_first=base_first)
 
-        balance_primeiro_domingo_pos_ferias(df, df_ref, setor, ch, chapas_all, locked_idx, ate_data=pd.to_datetime(df_ref.loc[len(df_ref)-1, "Data"]).date())
+        balance_primeiro_domingo_pos_ferias(df, hist_all, df_ref, setor, ch, chapas_all, locked_idx, ate_data=pd.to_datetime(df_ref.loc[len(df_ref)-1, "Data"]).date())
 
         # 1) Garante 5 dias seguidos antes de mexer em metas semanais
         enforce_max_5_consecutive_work(
@@ -2433,7 +2432,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
                 base_first = None
         enforce_sundays_1x1_for_employee(df, ent, locked_status=locked, base_first=base_first)
 
-        balance_primeiro_domingo_pos_ferias(df, df_ref, setor, ch, chapas_all, locked_idx, ate_data=pd.to_datetime(df_ref.loc[len(df_ref)-1, "Data"]).date())
+        balance_primeiro_domingo_pos_ferias(df, hist_all, df_ref, setor, ch, chapas_all, locked_idx, ate_data=pd.to_datetime(df_ref.loc[len(df_ref)-1, "Data"]).date())
         enforce_no_consecutive_folga(df, locked_status=locked)
         enforce_weekly_folga_targets(df, df_ref=df_ref, pode_folgar_sabado=bool(colab_by_chapa[ch].get('Folga_Sab', False)), locked_status=locked)
 
