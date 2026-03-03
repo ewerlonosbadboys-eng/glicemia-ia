@@ -2437,6 +2437,15 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
     # para respeitar melhor a preferência "Evitar DIA" por subgrupo e espalhar as 2 folgas (quando possível).
     optimize_folgas_por_preferencia_e_espacamento(hist_all, df_ref, colab_by_chapa, setor, locked_by_chapa=locked_idx)
 
+
+    # 🔒 Garantia: após otimização de preferências, re-aplicar a regra semanal de folgas
+    # (semana = SEG→DOM; se folga no DOM, deve haver +1 folga; se trabalha no DOM, deve haver 2 folgas na semana).
+    for ch, df in hist_all.items():
+        locked = locked_idx.get(ch, set())
+        pode_sab = bool(colab_by_chapa.get(ch, {}).get('Folga_Sab', False))
+        enforce_weekly_folga_targets(df, df_ref, pode_sab, locked)
+        hist_all[ch] = df
+
     # Re-enforça as regras críticas após otimizações locais (sem refazer o balanceamento semanal)
     for ch, df in hist_all.items():
         ent = colab_by_chapa[ch].get("Entrada", "06:00")
