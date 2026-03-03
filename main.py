@@ -44,6 +44,7 @@ import calendar
 import sqlite3
 import hashlib
 import math
+import json
 import secrets
 from openpyxl.styles import PatternFill, Alignment, Border, Side, Font
 from openpyxl.utils import get_column_letter
@@ -885,6 +886,47 @@ def db_init():
         con.commit()
 
     con.close()
+
+
+def save_estado_mes(setor: str, ano: int, mes: int, estado: dict):
+    """Persist state for month generation (e.g., last shift, counters).
+    Safe: if DB not available or estado is empty, it won't break the app.
+    """
+    try:
+        if not estado:
+            return
+        db_init()
+        con = sqlite3.connect(DB_PATH)
+        cur = con.cursor()
+        cur.execute(
+            """INSERT OR REPLACE INTO estado_mes(setor, ano, mes, estado_json, atualizado_em)
+               VALUES (?, ?, ?, ?, ?)""",
+            (str(setor), int(ano), int(mes), json.dumps(estado, ensure_ascii=False), datetime.now().isoformat())
+        )
+        con.commit()
+        con.close()
+    except Exception:
+        return
+
+
+def load_estado_mes(setor: str, ano: int, mes: int) -> dict:
+    """Load persisted state for month generation."""
+    try:
+        db_init()
+        con = sqlite3.connect(DB_PATH)
+        cur = con.cursor()
+        cur.execute(
+            """SELECT estado_json FROM estado_mes WHERE setor=? AND ano=? AND mes=?""",
+            (str(setor), int(ano), int(mes))
+        )
+        row = cur.fetchone()
+        con.close()
+        if not row:
+            return {}
+        return json.loads(row[0] or "{}")
+    except Exception:
+        return {}
+
 
 
 def is_past_competencia(ano: int, mes: int) -> bool:
