@@ -46,6 +46,7 @@ import hashlib
 import secrets
 from openpyxl.styles import PatternFill, Alignment, Border, Side, Font
 from openpyxl.utils import get_column_letter
+import math
 
 # =========================================================
 # PDF (Modelo Oficial) — ReportLab
