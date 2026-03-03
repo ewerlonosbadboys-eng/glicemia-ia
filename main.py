@@ -2932,9 +2932,12 @@ def page_app():
         st.caption(f"Competência ativa: **{int(st.session_state['cfg_mes']):02d}/{int(st.session_state['cfg_ano'])}**")
 
         with st.container(border=True):
-            c1, c2, c3 = st.columns([1, 1, 2])
-            mes = c1.selectbox("Mês:", list(range(1, 13)), index=int(st.session_state["cfg_mes"]) - 1, key="gen_mes")
-            ano = c2.number_input("Ano:", value=int(st.session_state["cfg_ano"]), step=1, key="gen_ano")
+            c1, c2 = st.columns([2, 1])
+            mes = int(st.session_state["cfg_mes"])
+            ano = int(st.session_state["cfg_ano"])
+            c1.text_input("Competência (mês/ano):", value=f"{mes:02d}/{ano}", disabled=True, key="gen_comp_readonly")
+            seed = c2.number_input("Semente", min_value=0, max_value=999999, value=int(st.session_state.get("last_seed", 0)), key="gen_seed")
+
             seed = c3.number_input("Semente", min_value=0, max_value=999999, value=int(st.session_state.get("last_seed", 0)), key="gen_seed")
 
         st.session_state["cfg_mes"] = int(mes)
@@ -2984,9 +2987,10 @@ def page_app():
         st.subheader("⚙️ Ajustes (travas) — sempre entram na geração")
 
         with st.container(border=True):
-            c1, c2, c3 = st.columns([1, 1, 2])
-            mes = c1.selectbox("Mês (ajustes)", list(range(1, 13)), index=int(st.session_state["cfg_mes"]) - 1, key="adj_mes")
-            ano = c2.number_input("Ano (ajustes)", value=int(st.session_state["cfg_ano"]), step=1, key="adj_ano")
+            mes = int(st.session_state["cfg_mes"])
+            ano = int(st.session_state["cfg_ano"])
+            st.text_input("Competência (mês/ano):", value=f"{mes:02d}/{ano}", disabled=True, key="adj_comp_readonly")
+
             c3.caption("Dica: deixe o mês/ano aqui igual ao mês/ano da aba 🚀 Gerar Escala.")
 
         st.session_state["cfg_mes"] = int(mes)
