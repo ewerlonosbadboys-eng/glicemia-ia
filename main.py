@@ -3145,6 +3145,17 @@ def page_app():
                     sg_sel = st.selectbox("Escolha o subgrupo:", subgrupos, key="pref_sg_sel")
                     regras = get_subgrupo_regras(setor, sg_sel)
 
+                    # Mostrar o que já está salvo (para você não se confundir / sobrepor sem querer)
+                    dias_marcados_salvos = []
+                    _map_lbl = {"seg":"SEG","ter":"TER","qua":"QUA","qui":"QUI","sex":"SEX","sáb":"SÁB"}
+                    for _k, _lbl in _map_lbl.items():
+                        if bool(regras.get(_k, False)):
+                            dias_marcados_salvos.append(_lbl)
+                    if dias_marcados_salvos:
+                        st.info(f"✅ {sg_sel} está configurado para **evitar folga** em: {', '.join(dias_marcados_salvos)}", icon="ℹ️")
+                    else:
+                        st.caption(f"ℹ️ {sg_sel} não tem dias marcados para evitar folga (no momento).")
+
                     p1, p2, p3 = st.columns(3)
                     ev_seg = p1.checkbox("Evitar SEG", value=bool(regras["seg"]), key=f"ev_seg_{sg_sel}")
                     ev_ter = p1.checkbox("Evitar TER", value=bool(regras["ter"]), key=f"ev_ter_{sg_sel}")
@@ -3163,6 +3174,23 @@ def page_app():
                         st.rerun()
                 else:
                     st.info("Crie pelo menos 1 subgrupo na aba 👥 Colaboradores.")
+
+        # Resumo rápido de TODOS os subgrupos (ajuda a evitar sobrepor configurações)
+        with st.expander("📌 Ver resumo das preferências (todos os subgrupos)", expanded=False):
+            linhas = []
+            for _sg in subgrupos:
+                _r = get_subgrupo_regras(setor, _sg) or {}
+                _dias = []
+                for _k, _lbl in _map_lbl.items():
+                    if bool(_r.get(_k, False)):
+                        _dias.append(_lbl)
+                linhas.append({"Subgrupo": _sg, "Evitar folga em": (", ".join(_dias) if _dias else "—")})
+            try:
+                import pandas as _pd
+                st.dataframe(_pd.DataFrame(linhas), use_container_width=True, hide_index=True)
+            except Exception:
+                for _it in linhas:
+                    st.write(f"- **{_it['Subgrupo']}**: {_it['Evitar folga em']}")
 
             with t4:
                 st.markdown("## 📌 Subgrupos (editável)")
