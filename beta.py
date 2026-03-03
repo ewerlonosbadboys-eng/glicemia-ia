@@ -674,7 +674,7 @@ if not st.session_state.logado:
 # =========================================================
 if st.session_state.user_email == "admin":
     st.title("🛡️ Painel Admin - Gestão Estratégica")
-        t_usuarios, t_metricas, t_sugestoes, t_mensal, t_backup = st.tabs(
+    t_usuarios, t_metricas, t_sugestoes, t_mensal, t_backup = st.tabs(
         ["👥 Pessoas Cadastradas", "📈 Crescimento e App", "📩 Sugestões", "💳 Mensalidades", "💾 Backup & Restauração"]
     )
 
