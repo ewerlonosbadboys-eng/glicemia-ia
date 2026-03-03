@@ -1918,7 +1918,7 @@ def enforce_weekly_folga_targets(df, df_ref, pode_folgar_sabado: bool, locked_st
     # montar semanas SEG->DOM pelos índices do df_ref
     weeks = {}
     for i, d in enumerate(datas):
-        monday = d - dt.timedelta(days=d.weekday())  # weekday: seg=0 ... dom=6
+        monday = d - timedelta(days=d.weekday())  # weekday: seg=0 ... dom=6
         weeks.setdefault(monday, []).append(i)
 
     for monday, idxs in weeks.items():
