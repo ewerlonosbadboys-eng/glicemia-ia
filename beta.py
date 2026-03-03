@@ -20,6 +20,12 @@ from urllib.parse import quote
 
 import pandas as pd
 import plotly.express as px
+try:
+    import matplotlib.pyplot as plt
+    HAS_MPL = True
+except Exception:
+    HAS_MPL = False
+
 import pytz
 import streamlit as st
 from email.mime.text import MIMEText
@@ -29,7 +35,7 @@ try:
     from reportlab.lib.units import cm
     from reportlab.lib import colors
     from reportlab.lib.styles import getSampleStyleSheet
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
     HAS_REPORTLAB = True
 except Exception:
     HAS_REPORTLAB = False
@@ -930,83 +936,188 @@ else:
         st.markdown("</div>", unsafe_allow_html=True)
 
 
+
 def gerar_pdf_bytes(df_g: pd.DataFrame, df_n: pd.DataFrame) -> bytes:
     """
-    Gera um PDF simples com resumo + últimas medições.
+    Gera um PDF com:
+      - Resumo
+      - Tabela no formato 'Data x Momento' (igual ao Excel Glicemia_Resumo)
+      - Gráfico de tendência (últimas medições)
     """
+    if not HAS_REPORTLAB:
+        return b""
+
     buf = BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=A4, rightMargin=1.5*cm, leftMargin=1.5*cm, topMargin=1.5*cm, bottomMargin=1.5*cm)
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=A4,
+        rightMargin=1.3*cm,
+        leftMargin=1.3*cm,
+        topMargin=1.2*cm,
+        bottomMargin=1.2*cm
+    )
     styles = getSampleStyleSheet()
     story = []
 
+    # ===== Cabeçalho =====
     titulo = f"Relatório Saúde Kids - {st.session_state.user_email}"
     story.append(Paragraph(titulo, styles["Title"]))
-    story.append(Spacer(1, 8))
+    story.append(Spacer(1, 6))
     story.append(Paragraph(f"Gerado em: {agora_br().strftime('%d/%m/%Y %H:%M')}", styles["Normal"]))
-    story.append(Spacer(1, 12))
+    story.append(Spacer(1, 10))
 
-    # Resumo Glicemia
+    # ===== Resumo Glicemia =====
     story.append(Paragraph("Glicemia - Resumo", styles["Heading2"]))
     if df_g is None or df_g.empty:
         story.append(Paragraph("Sem registros de glicemia.", styles["Normal"]))
-    else:
-        try:
-            vals = pd.to_numeric(df_g["Valor"], errors="coerce").dropna()
-            resumo = [
-                ["Registros", str(len(df_g))],
-                ["Mínimo", str(int(vals.min())) if not vals.empty else "-"],
-                ["Máximo", str(int(vals.max())) if not vals.empty else "-"],
-                ["Média", f"{vals.mean():.1f}" if not vals.empty else "-"],
-            ]
-            t = Table(resumo, colWidths=[6*cm, 9*cm])
-            t.setStyle(TableStyle([
-                ("BACKGROUND", (0,0), (-1,0), colors.lightgrey),
-                ("GRID", (0,0), (-1,-1), 0.5, colors.grey),
-                ("FONTNAME", (0,0), (-1,-1), "Helvetica"),
-                ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
-            ]))
-            story.append(t)
-        except Exception:
-            story.append(Paragraph("Não foi possível gerar resumo de glicemia.", styles["Normal"]))
-
         story.append(Spacer(1, 10))
-        story.append(Paragraph("Últimos registros de Glicemia", styles["Heading3"]))
-        ult = df_g.copy().tail(20)
-        cols = [c for c in ["Data", "Hora", "Momento", "Valor", "Dose"] if c in ult.columns]
-        data_tbl = [cols] + ult[cols].astype(str).values.tolist()
-        t2 = Table(data_tbl, repeatRows=1, colWidths=[3*cm, 2*cm, 5.5*cm, 2*cm, 2.5*cm])
-        t2.setStyle(TableStyle([
+    else:
+        vals = pd.to_numeric(df_g.get("Valor", pd.Series([], dtype=float)), errors="coerce").dropna()
+        resumo = [
+            ["Registros", str(len(df_g))],
+            ["Mínimo", str(int(vals.min())) if not vals.empty else "-"],
+            ["Máximo", str(int(vals.max())) if not vals.empty else "-"],
+            ["Média", f"{vals.mean():.1f}" if not vals.empty else "-"],
+        ]
+        t = Table(resumo, colWidths=[5.2*cm, 11.0*cm])
+        t.setStyle(TableStyle([
+            ("BACKGROUND", (0,0), (-1,0), colors.lightgrey),
+            ("GRID", (0,0), (-1,-1), 0.5, colors.grey),
+            ("FONTNAME", (0,0), (-1,-1), "Helvetica"),
+            ("FONTSIZE", (0,0), (-1,-1), 10),
+            ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+            ("PADDING", (0,0), (-1,-1), 6),
+        ]))
+        story.append(t)
+        story.append(Spacer(1, 10))
+
+    # ===== Tabela no formato Excel (Data x Momento) =====
+    story.append(Paragraph("Glicemia - Tabela (Data x Momento)", styles["Heading2"]))
+    if df_g is None or df_g.empty:
+        story.append(Paragraph("Sem dados para tabela.", styles["Normal"]))
+        story.append(Spacer(1, 10))
+    else:
+        # Pivot igual ao Excel
+        pivot = df_g.pivot_table(index="Data", columns="Momento", values="Valor", aggfunc="last")
+        pivot = pivot.sort_index()
+
+        # Limitar para caber no PDF (últimas 20 datas)
+        if len(pivot) > 20:
+            pivot = pivot.tail(20)
+
+        # Cabeçalho + dados
+        cols = ["Data"] + [str(c) for c in pivot.columns.tolist()]
+        data_tbl = [cols]
+        for idx, row in pivot.iterrows():
+            line = [str(idx)]
+            for c in pivot.columns:
+                v = row.get(c, "")
+                if pd.isna(v):
+                    line.append("")
+                else:
+                    try:
+                        line.append(str(int(v)))
+                    except Exception:
+                        line.append(str(v))
+            data_tbl.append(line)
+
+        # larguras: Data + demais colunas distribuídas
+        ncols = len(cols)
+        total_w = 18.0 * cm
+        w_data = 3.0 * cm
+        w_rest = (total_w - w_data) / max(1, ncols - 1)
+        col_widths = [w_data] + [w_rest] * (ncols - 1)
+
+        table = Table(data_tbl, repeatRows=1, colWidths=col_widths)
+        style_cmds = [
             ("BACKGROUND", (0,0), (-1,0), colors.lightgrey),
             ("GRID", (0,0), (-1,-1), 0.25, colors.grey),
-            ("FONTSIZE", (0,0), (-1,-1), 8),
-            ("VALIGN", (0,0), (-1,-1), "TOP"),
-        ]))
-        story.append(t2)
+            ("FONTSIZE", (0,0), (-1,-1), 7),
+            ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+            ("ALIGN", (0,0), (-1,0), "CENTER"),
+            ("ALIGN", (0,1), (0,-1), "LEFT"),
+            ("ALIGN", (1,1), (-1,-1), "CENTER"),
+            ("PADDING", (0,0), (-1,-1), 3),
+        ]
 
-    story.append(Spacer(1, 14))
+        # cores por célula (mesmas regras do Excel)
+        for r in range(1, len(data_tbl)):
+            for c in range(1, len(cols)):
+                txt = data_tbl[r][c]
+                if not txt:
+                    continue
+                try:
+                    val = int(float(txt))
+                except Exception:
+                    continue
+                if val < 70:
+                    style_cmds.append(("BACKGROUND", (c, r), (c, r), colors.HexColor("#FFFFE0")))  # amarelo
+                elif val > 180:
+                    style_cmds.append(("BACKGROUND", (c, r), (c, r), colors.HexColor("#FFB6C1")))  # vermelho
+                else:
+                    style_cmds.append(("BACKGROUND", (c, r), (c, r), colors.HexColor("#C8E6C9")))  # verde
 
-    # Resumo Nutrição
-    story.append(Paragraph("Nutrição - Resumo", styles["Heading2"]))
+        table.setStyle(TableStyle(style_cmds))
+        story.append(table)
+        story.append(Spacer(1, 12))
+
+    # ===== Gráfico Tendência (últimas medições) =====
+    story.append(Paragraph("Tendência (últimas medições)", styles["Heading2"]))
+    if df_g is None or df_g.empty:
+        story.append(Paragraph("Sem dados para gráfico.", styles["Normal"]))
+    elif not HAS_MPL:
+        story.append(Paragraph("Matplotlib não disponível para gerar gráfico.", styles["Normal"]))
+    else:
+        try:
+            df_plot = df_g.copy()
+            # cria timestamp para ordenar: Data dd/mm/YYYY + Hora HH:MM
+            df_plot["DT"] = pd.to_datetime(df_plot["Data"].astype(str) + " " + df_plot["Hora"].astype(str), dayfirst=True, errors="coerce")
+            df_plot = df_plot.dropna(subset=["DT"]).sort_values("DT").tail(25)
+            if df_plot.empty:
+                story.append(Paragraph("Sem dados válidos para gráfico.", styles["Normal"]))
+            else:
+                fig = plt.figure(figsize=(7.2, 2.4), dpi=150)
+                ax = fig.add_subplot(111)
+                ax.plot(df_plot["DT"], pd.to_numeric(df_plot["Valor"], errors="coerce"), marker="o")
+                ax.set_ylabel("Glicemia")
+                ax.set_xlabel("Hora")
+                ax.tick_params(axis="x", rotation=35, labelsize=7)
+                ax.tick_params(axis="y", labelsize=7)
+                ax.grid(True, alpha=0.2)
+                fig.tight_layout()
+
+                img_buf = BytesIO()
+                fig.savefig(img_buf, format="png")
+                plt.close(fig)
+                img_buf.seek(0)
+
+                img = Image(img_buf)
+                img.drawWidth = 18.0 * cm
+                img.drawHeight = 6.0 * cm
+                story.append(img)
+        except Exception:
+            story.append(Paragraph("Falha ao gerar gráfico de tendência.", styles["Normal"]))
+
+    story.append(Spacer(1, 10))
+
+    # ===== Nutrição (opcional) =====
+    story.append(Paragraph("Nutrição - Últimos registros", styles["Heading2"]))
     if df_n is None or df_n.empty:
         story.append(Paragraph("Sem registros de nutrição.", styles["Normal"]))
     else:
-        try:
-            story.append(Paragraph("Últimos registros de Nutrição", styles["Heading3"]))
-            ult_n = df_n.copy().tail(20)
-            cols_n = [c for c in ["Data", "Momento", "Info", "C", "P", "G"] if c in ult_n.columns]
-            data_tbl_n = [cols_n] + ult_n[cols_n].astype(str).values.tolist()
-            # larguras aproximadas
-            col_widths = [3*cm, 3*cm, 6*cm, 1.5*cm, 1.5*cm, 1.5*cm][:len(cols_n)]
-            t3 = Table(data_tbl_n, repeatRows=1, colWidths=col_widths)
-            t3.setStyle(TableStyle([
-                ("BACKGROUND", (0,0), (-1,0), colors.lightgrey),
-                ("GRID", (0,0), (-1,-1), 0.25, colors.grey),
-                ("FONTSIZE", (0,0), (-1,-1), 8),
-                ("VALIGN", (0,0), (-1,-1), "TOP"),
-            ]))
-            story.append(t3)
-        except Exception:
-            story.append(Paragraph("Não foi possível montar tabela de nutrição.", styles["Normal"]))
+        ult_n = df_n.copy().tail(15)
+        cols_n = [c for c in ["Data", "Momento", "Info", "C", "P", "G"] if c in ult_n.columns]
+        data_tbl_n = [cols_n] + ult_n[cols_n].astype(str).values.tolist()
+        col_widths = [3*cm, 3*cm, 7*cm, 1.5*cm, 1.5*cm, 1.5*cm][:len(cols_n)]
+        t3 = Table(data_tbl_n, repeatRows=1, colWidths=col_widths)
+        t3.setStyle(TableStyle([
+            ("BACKGROUND", (0,0), (-1,0), colors.lightgrey),
+            ("GRID", (0,0), (-1,-1), 0.25, colors.grey),
+            ("FONTSIZE", (0,0), (-1,-1), 7),
+            ("VALIGN", (0,0), (-1,-1), "TOP"),
+            ("PADDING", (0,0), (-1,-1), 3),
+        ]))
+        story.append(t3)
 
     doc.build(story)
     pdf = buf.getvalue()
