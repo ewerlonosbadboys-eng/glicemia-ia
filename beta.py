@@ -1038,18 +1038,20 @@ else:
                 except Exception:
                     sug_num = 0
 
-                st.markdown(
-                    f'<div class="metric-box"><small>Rápida (sugestão): {msg_r}</small><br>'
-                    f'<span class="dose-destaque">{dose_r_sug}</span></div>',
-                    unsafe_allow_html=True
-                )
-
                 dose_r_edit = st.number_input(
-                    "✍️ Ajustar dose Rápida (UI) antes de salvar",
+                    "✍️ Dose Rápida (UI)",
                     min_value=0, max_value=50, value=int(sug_num),
                     key="dose_rapida_edit"
                 )
+
                 dose_r_final = f"{int(dose_r_edit)} UI"
+
+                # sincroniza sugestão e manual
+                st.markdown(
+                    f'<div class="metric-box"><small>Rápida (sugestão sincronizada)</small><br>'
+                    f'<span class="dose-destaque">{dose_r_final}</span></div>',
+                    unsafe_allow_html=True
+                )
             else:
                 st.caption("Rápida: não aplicável neste momento.")
                 dose_r_final = ""
