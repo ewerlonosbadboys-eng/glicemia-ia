@@ -220,6 +220,10 @@ def enviar_senha_nova(email_destino, senha_nova):
         return False
 
 # ================= DB USERS =================
+# ================= DB USERS + PLANOS =================
+TESTE_DIAS = 20
+MENSALIDADE_DIAS = 30
+
 def init_db():
     conn = sqlite3.connect("usuarios.db")
     conn.execute("""
@@ -229,8 +233,134 @@ def init_db():
             senha TEXT
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS plans (
+            email TEXT PRIMARY KEY,
+            created_at TEXT,
+            trial_end TEXT,
+            paid_until TEXT
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS billing_msgs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT,
+            data_hora TEXT,
+            mensagem TEXT,
+            status TEXT DEFAULT 'novo'
+        )
+    """)
+
     if not conn.execute("SELECT 1 FROM users WHERE email='admin'").fetchone():
         conn.execute("INSERT INTO users VALUES ('Administrador', 'admin', '542820')")
+
+    # garante plano admin
+    if not conn.execute("SELECT 1 FROM plans WHERE email='admin'").fetchone():
+        now = agora_br()
+        conn.execute(
+            "INSERT INTO plans(email, created_at, trial_end, paid_until) VALUES (?,?,?,?)",
+            ('admin', now.isoformat(), now.isoformat(), '2099-12-31T23:59:59')
+        )
+
+    conn.commit()
+    conn.close()
+
+def _db_conn():
+    return sqlite3.connect("usuarios.db")
+
+def garantir_plano(email: str):
+    email = norm_email(email)
+    if not email or email == "admin":
+        return
+    conn = _db_conn()
+    cur = conn.cursor()
+    if not cur.execute("SELECT 1 FROM plans WHERE email=?", (email,)).fetchone():
+        now = agora_br()
+        trial_end = now + timedelta(days=TESTE_DIAS)
+        cur.execute(
+            "INSERT INTO plans(email, created_at, trial_end, paid_until) VALUES (?,?,?,?)",
+            (email, now.isoformat(), trial_end.isoformat(), "")
+        )
+        conn.commit()
+    conn.close()
+
+def get_plano_status(email: str):
+    email = norm_email(email)
+    if email == "admin":
+        return {"allowed": True, "motivo": "admin", "trial_end": None, "paid_until": None, "dias_restantes": None}
+
+    garantir_plano(email)
+
+    conn = _db_conn()
+    cur = conn.cursor()
+    r = cur.execute("SELECT trial_end, paid_until FROM plans WHERE email=?", (email,)).fetchone()
+    conn.close()
+
+    now = agora_br()
+    trial_end = None
+    paid_until = None
+    if r:
+        try:
+            trial_end = datetime.fromisoformat(r[0]) if r[0] else None
+        except Exception:
+            trial_end = None
+        try:
+            paid_until = datetime.fromisoformat(r[1]) if r[1] else None
+        except Exception:
+            paid_until = None
+
+    if paid_until and now <= paid_until:
+        dias = (paid_until.date() - now.date()).days
+        return {"allowed": True, "motivo": "pago", "trial_end": trial_end, "paid_until": paid_until, "dias_restantes": dias}
+
+    if trial_end and now <= trial_end:
+        dias = (trial_end.date() - now.date()).days
+        return {"allowed": True, "motivo": "teste", "trial_end": trial_end, "paid_until": paid_until, "dias_restantes": dias}
+
+    return {"allowed": False, "motivo": "expirado", "trial_end": trial_end, "paid_until": paid_until, "dias_restantes": 0}
+
+def registrar_mensagem_mensalidade(email: str, mensagem: str):
+    email = norm_email(email)
+    if not email:
+        return
+    conn = _db_conn()
+    conn.execute(
+        "INSERT INTO billing_msgs(email, data_hora, mensagem, status) VALUES (?,?,?,?)",
+        (email, agora_br().strftime("%d/%m/%Y %H:%M"), (mensagem or "").strip(), "novo")
+    )
+    conn.commit()
+    conn.close()
+
+def listar_mensagens_mensalidade():
+    conn = _db_conn()
+    try:
+        df = pd.read_sql_query("SELECT id, email, data_hora, mensagem, status FROM billing_msgs ORDER BY id DESC", conn)
+    except Exception:
+        df = pd.DataFrame(columns=["id","email","data_hora","mensagem","status"])
+    conn.close()
+    return df
+
+def marcar_mensagem_status(msg_id: int, status: str):
+    conn = _db_conn()
+    conn.execute("UPDATE billing_msgs SET status=? WHERE id=?", (status, int(msg_id)))
+    conn.commit()
+    conn.close()
+
+def excluir_mensagem(msg_id: int):
+    conn = _db_conn()
+    conn.execute("DELETE FROM billing_msgs WHERE id=?", (int(msg_id),))
+    conn.commit()
+    conn.close()
+
+def ativar_mensalidade(email: str, dias: int = MENSALIDADE_DIAS):
+    email = norm_email(email)
+    if not email or email == "admin":
+        return
+    garantir_plano(email)
+    now = agora_br()
+    paid_until = now + timedelta(days=int(dias))
+    conn = _db_conn()
+    conn.execute("UPDATE plans SET paid_until=? WHERE email=?", (paid_until.isoformat(), email))
     conn.commit()
     conn.close()
 
@@ -240,6 +370,8 @@ if "logado" not in st.session_state:
     st.session_state.logado = False
 if "user_email" not in st.session_state:
     st.session_state.user_email = ""
+if "pending_email" not in st.session_state:
+    st.session_state.pending_email = ""
 
 # ====== COOKIE (OPCIONAL) ======
 def cookie_get_email():
@@ -270,8 +402,14 @@ def cookie_clear():
 if not st.session_state.logado:
     ck = cookie_get_email()
     if ck:
-        st.session_state.logado = True
-        st.session_state.user_email = ck
+        stt = get_plano_status(ck)
+        if stt.get('allowed'):
+            st.session_state.logado = True
+            st.session_state.user_email = ck
+        else:
+            st.session_state.logado = False
+            st.session_state.user_email = ''
+            st.session_state.pending_email = ck
 
 # ================= ARQUIVOS (DADOS) =================
 def carregar_dados_seguro(arq: str) -> pd.DataFrame:
@@ -542,10 +680,17 @@ if not st.session_state.logado:
             ok = conn.execute("SELECT * FROM users WHERE email=? AND senha=?", (u, s)).fetchone()
             conn.close()
             if ok:
-                st.session_state.logado = True
-                st.session_state.user_email = u
-                cookie_set_email(u)
-                st.rerun()
+                stt = get_plano_status(u)
+                if stt.get('allowed'):
+                    st.session_state.logado = True
+                    st.session_state.user_email = u
+                    cookie_set_email(u)
+                    st.rerun()
+                else:
+                    st.session_state.logado = False
+                    st.session_state.user_email = ''
+                    st.session_state.pending_email = u
+                    st.rerun()
             else:
                 st.error("E-mail ou senha incorretos.")
 
@@ -564,6 +709,7 @@ if not st.session_state.logado:
                     conn.execute("INSERT INTO users VALUES (?,?,?)", (n_cad, e_cad, s_cad))
                     conn.commit()
                     conn.close()
+                    garantir_plano(e_cad)
                     st.success("Conta criada com sucesso!")
                 except Exception:
                     st.error("Este e-mail já está cadastrado.")
@@ -610,6 +756,33 @@ if not st.session_state.logado:
                 conn.close()
                 st.error("Dados atuais incorretos.")
 
+
+    # ====== TELA DE TESTE EXPIRADO / MENSALIDADE ======
+    if st.session_state.get("pending_email"):
+        email_p = st.session_state.pending_email
+        stt = get_plano_status(email_p)
+        st.markdown("---")
+        st.subheader("⏳ Seu teste acabou")
+        te = stt.get("trial_end")
+        if te:
+            try:
+                st.caption(f"Teste terminou em: {te.strftime('%d/%m/%Y')}")
+            except Exception:
+                pass
+        st.info("Para continuar usando, solicite a mensalidade de **30 dias** pelo aplicativo. O admin vai receber sua mensagem.")
+
+        msg = st.text_area("📩 Mensagem para o Admin (mensalidade)", value="Olá! Quero ativar minha mensalidade de 30 dias.")
+        c1b, c2b = st.columns(2)
+        with c1b:
+            if st.button("✅ Enviar solicitação", use_container_width=True):
+                registrar_mensagem_mensalidade(email_p, msg)
+                st.success("Solicitação enviada! Aguarde retorno do admin.")
+        with c2b:
+            if st.button("↩️ Voltar para login", use_container_width=True):
+                st.session_state.pending_email = ""
+                st.rerun()
+        st.stop()
+
     st.stop()
 
 # =========================================================
@@ -617,8 +790,8 @@ if not st.session_state.logado:
 # =========================================================
 if st.session_state.user_email == "admin":
     st.title("🛡️ Painel Admin - Gestão Estratégica")
-    t_usuarios, t_metricas, t_sugestoes, t_backup = st.tabs(
-        ["👥 Pessoas Cadastradas", "📈 Crescimento e App", "📩 Sugestões", "💾 Backup & Restauração"]
+    t_usuarios, t_metricas, t_sugestoes, t_mensal, t_backup = st.tabs(
+        ["👥 Pessoas Cadastradas", "📈 Crescimento e App", "📩 Sugestões", "💳 Mensalidades", "💾 Backup & Restauração"]
     )
 
     conn = sqlite3.connect("usuarios.db")
@@ -630,6 +803,37 @@ if st.session_state.user_email == "admin":
         st.dataframe(df_users, use_container_width=True)
         st.metric("Total de Cadastros", len(df_users))
         st.markdown("---")
+
+        st.markdown("---")
+        st.subheader("🗑️ Excluir Usuário")
+        st.caption("Remove o usuário do login e apaga os dados dele (Glicemia / Nutrição / Receita).")
+        del_email = st.selectbox("Selecione o usuário para excluir", df_users["email"].tolist(), key="del_user_email")
+        confirmar = st.checkbox("Confirmo que quero excluir este usuário e todos os dados", key="del_user_confirm")
+        if st.button("🗑️ Excluir Agora", use_container_width=True, disabled=not confirmar):
+            if del_email == "admin":
+                st.error("Não é permitido excluir o admin.")
+            else:
+                conn = sqlite3.connect("usuarios.db")
+                conn.execute("DELETE FROM users WHERE email=?", (del_email,))
+                conn.execute("DELETE FROM plans WHERE email=?", (del_email,))
+                conn.commit()
+                conn.close()
+
+                def _filtrar_csv(arq):
+                    if os.path.exists(arq):
+                        df0 = pd.read_csv(arq)
+                        if "Usuario" in df0.columns:
+                            df0 = df0[df0["Usuario"] != del_email].copy()
+                            df0.to_csv(arq, index=False)
+
+                _filtrar_csv(ARQ_G)
+                _filtrar_csv(ARQ_N)
+                _filtrar_csv(ARQ_R)
+                _filtrar_csv(ARQ_M)
+
+                st.success(f"Usuário {del_email} excluído.")
+                st.rerun()
+
         st.subheader("🔑 Alterar Senha de Usuário (Admin)")
         user_selecionado = st.selectbox("Selecione o E-mail do Usuário", df_users["email"].tolist())
         nova_senha_admin = norm_senha(st.text_input("Nova senha para este usuário", type="password"))
@@ -672,6 +876,70 @@ if st.session_state.user_email == "admin":
             st.dataframe(pd.read_csv(ARQ_M), use_container_width=True)
         else:
             st.info("Sem sugestões.")
+
+    
+    with t_mensal:
+        st.subheader("💳 Mensalidades (Teste 20 dias + Plano 30 dias)")
+
+        st.markdown("### Status de planos")
+        conn = sqlite3.connect("usuarios.db")
+        try:
+            df_pl = pd.read_sql_query("SELECT email, trial_end, paid_until FROM plans ORDER BY email", conn)
+        except Exception:
+            df_pl = pd.DataFrame(columns=["email","trial_end","paid_until"])
+        conn.close()
+
+        def _fmt_iso(x):
+            try:
+                if not x or str(x).strip()=="":
+                    return ""
+                return datetime.fromisoformat(str(x)).strftime("%d/%m/%Y")
+            except Exception:
+                return str(x)
+
+        if df_pl.empty:
+            st.info("Nenhum plano encontrado.")
+        else:
+            df_show = df_pl.copy()
+            df_show["trial_end"] = df_show["trial_end"].apply(_fmt_iso)
+            df_show["paid_until"] = df_show["paid_until"].apply(_fmt_iso)
+            st.dataframe(df_show, use_container_width=True)
+
+        st.markdown("---")
+        st.subheader("✅ Ativar / Renovar mensalidade")
+        emails = df_users["email"].tolist()
+        alvo = st.selectbox("Usuário", emails, key="pay_user")
+        dias = st.number_input("Dias de acesso", min_value=1, max_value=365, value=30, step=1, key="pay_days")
+        if st.button("Ativar / Renovar", use_container_width=True):
+            if alvo == "admin":
+                st.warning("Admin já tem acesso liberado.")
+            else:
+                ativar_mensalidade(alvo, int(dias))
+                st.success(f"Mensalidade ativada por {dias} dias para {alvo}.")
+                st.rerun()
+
+        st.markdown("---")
+        st.subheader("📩 Solicitações recebidas no app")
+        df_msgs = listar_mensagens_mensalidade()
+        if df_msgs.empty:
+            st.info("Sem solicitações ainda.")
+        else:
+            st.dataframe(df_msgs, use_container_width=True)
+
+            msg_id = st.selectbox("Selecionar mensagem (ID)", df_msgs["id"].tolist(), key="msg_id_sel")
+            colm1, colm2, colm3 = st.columns(3)
+            with colm1:
+                if st.button("Marcar como Visto", use_container_width=True):
+                    marcar_mensagem_status(int(msg_id), "visto")
+                    st.rerun()
+            with colm2:
+                if st.button("Marcar como Resolvido", use_container_width=True):
+                    marcar_mensagem_status(int(msg_id), "resolvido")
+                    st.rerun()
+            with colm3:
+                if st.button("Excluir Mensagem", use_container_width=True):
+                    excluir_mensagem(int(msg_id))
+                    st.rerun()
 
     with t_backup:
         st.subheader("💾 Backup Manual / Automático / Restauração")
