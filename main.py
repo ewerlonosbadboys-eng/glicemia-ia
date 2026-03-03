@@ -2902,7 +2902,6 @@ def page_app():
             colp1, colp2, colp3 = st.columns(3)
             # Entrada: usar presets (inclui 06:50 e 12:40) para facilitar
             ent_atual = (csel.get("Entrada") or BALANCO_DIA_ENTRADA).strip()
-            st.caption(f"Atual: Entrada **{ent_atual}** | Subgrupo **{(csel.get('Subgrupo') or '—')}**")
             if ent_atual not in HORARIOS_ENTRADA_PRESET:
                 opcoes_ent = HORARIOS_ENTRADA_PRESET + [ent_atual]
             else:
