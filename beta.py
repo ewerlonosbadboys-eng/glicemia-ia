@@ -64,6 +64,7 @@ ARQ_G = "dados_glicemia_BETA.csv"
 ARQ_N = "dados_nutricao_BETA.csv"
 ARQ_R = "config_receita_BETA.csv"
 ARQ_M = "mensagens_admin_BETA.csv"
+ARQ_P = "mensalidades_BETA.csv"  # solicitações de mensalidade
 
 # ================= NORMALIZAÇÃO =================
 def norm_email(x: str) -> str:
@@ -87,6 +88,7 @@ ARQUIVOS_BACKUP = [
     ARQ_N,
     ARQ_R,
     ARQ_M,
+    ARQ_P,
 ]
 
 def criar_backup_zip_em_bytes():
@@ -229,8 +231,32 @@ def init_db():
             senha TEXT
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS plans (
+            email TEXT PRIMARY KEY,
+            created_at TEXT,
+            trial_end TEXT,
+            paid_until TEXT
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS billing_msgs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT,
+            data_hora TEXT,
+            mensagem TEXT,
+            status TEXT DEFAULT 'novo'
+        )
+    """)
+
     if not conn.execute("SELECT 1 FROM users WHERE email='admin'").fetchone():
         conn.execute("INSERT INTO users VALUES ('Administrador', 'admin', '542820')")
+        now = agora_br()
+        conn.execute(
+            "INSERT OR IGNORE INTO plans(email, created_at, trial_end, paid_until) VALUES (?,?,?,?)",
+            ('admin', now.isoformat(), now.isoformat(), '2099-12-31T23:59:59')
+        )
+
     conn.commit()
     conn.close()
 
@@ -240,6 +266,8 @@ if "logado" not in st.session_state:
     st.session_state.logado = False
 if "user_email" not in st.session_state:
     st.session_state.user_email = ""
+if "pending_email" not in st.session_state:
+    st.session_state.pending_email = ""
 
 # ====== COOKIE (OPCIONAL) ======
 def cookie_get_email():
@@ -564,6 +592,7 @@ if not st.session_state.logado:
                     conn.execute("INSERT INTO users VALUES (?,?,?)", (n_cad, e_cad, s_cad))
                     conn.commit()
                     conn.close()
+                    garantir_plano(e_cad)
                     st.success("Conta criada com sucesso!")
                 except Exception:
                     st.error("Este e-mail já está cadastrado.")
@@ -610,6 +639,34 @@ if not st.session_state.logado:
                 conn.close()
                 st.error("Dados atuais incorretos.")
 
+
+    # ====== TELA DE TESTE EXPIRADO / MENSALIDADE ======
+    if st.session_state.get("pending_email"):
+        email_p = st.session_state.pending_email
+        stt = get_plano_status(email_p)
+        st.markdown("---")
+        st.subheader("⏳ Seu teste acabou")
+        te = stt.get("trial_end")
+        if te:
+            try:
+                st.caption(f"Teste terminou em: {te.strftime('%d/%m/%Y')}")
+            except Exception:
+                pass
+        st.info("Para continuar usando, solicite a mensalidade de **30 dias** pelo aplicativo. O admin vai receber sua mensagem.")
+
+        msg = st.text_area("📩 Mensagem para o Admin (mensalidade)", value="Olá! Quero ativar minha mensalidade de 30 dias.")
+        c1b, c2b = st.columns(2)
+        with c1b:
+            if st.button("✅ Enviar solicitação", use_container_width=True):
+                registrar_mensagem_mensalidade(email_p, msg)
+                st.success("Solicitação enviada! Aguarde retorno do admin.")
+        with c2b:
+            if st.button("↩️ Voltar para login", use_container_width=True):
+                st.session_state.pending_email = ""
+                st.rerun()
+
+        st.stop()
+
     st.stop()
 
 # =========================================================
@@ -617,8 +674,8 @@ if not st.session_state.logado:
 # =========================================================
 if st.session_state.user_email == "admin":
     st.title("🛡️ Painel Admin - Gestão Estratégica")
-    t_usuarios, t_metricas, t_sugestoes, t_backup = st.tabs(
-        ["👥 Pessoas Cadastradas", "📈 Crescimento e App", "📩 Sugestões", "💾 Backup & Restauração"]
+        t_usuarios, t_metricas, t_sugestoes, t_mensal, t_backup = st.tabs(
+        ["👥 Pessoas Cadastradas", "📈 Crescimento e App", "📩 Sugestões", "💳 Mensalidades", "💾 Backup & Restauração"]
     )
 
     conn = sqlite3.connect("usuarios.db")
@@ -630,6 +687,38 @@ if st.session_state.user_email == "admin":
         st.dataframe(df_users, use_container_width=True)
         st.metric("Total de Cadastros", len(df_users))
         st.markdown("---")
+
+        st.markdown("---")
+        st.subheader("🗑️ Excluir Usuário")
+        st.caption("Remove o usuário do login e apaga os dados dele (Glicemia / Nutrição / Receita).")
+        del_email = st.selectbox("Selecione o usuário para excluir", df_users["email"].tolist(), key="del_user_email")
+        confirmar = st.checkbox("Confirmo que quero excluir este usuário e todos os dados", key="del_user_confirm")
+        if st.button("🗑️ Excluir Agora", use_container_width=True, disabled=not confirmar):
+            if del_email == "admin":
+                st.error("Não é permitido excluir o admin.")
+            else:
+                conn = sqlite3.connect("usuarios.db")
+                conn.execute("DELETE FROM users WHERE email=?", (del_email,))
+                conn.execute("DELETE FROM plans WHERE email=?", (del_email,))
+                conn.commit()
+                conn.close()
+
+                def _filtrar_csv(arq):
+                    if os.path.exists(arq):
+                        df0 = pd.read_csv(arq)
+                        if "Usuario" in df0.columns:
+                            df0 = df0[df0["Usuario"] != del_email].copy()
+                            df0.to_csv(arq, index=False)
+
+                _filtrar_csv(ARQ_G)
+                _filtrar_csv(ARQ_N)
+                _filtrar_csv(ARQ_R)
+                _filtrar_csv(ARQ_M)
+                _filtrar_csv(ARQ_P)
+
+                st.success(f"Usuário {del_email} excluído.")
+                st.rerun()
+
         st.subheader("🔑 Alterar Senha de Usuário (Admin)")
         user_selecionado = st.selectbox("Selecione o E-mail do Usuário", df_users["email"].tolist())
         nova_senha_admin = norm_senha(st.text_input("Nova senha para este usuário", type="password"))
@@ -673,7 +762,71 @@ if st.session_state.user_email == "admin":
         else:
             st.info("Sem sugestões.")
 
-    with t_backup:
+    
+    with t_mensal:
+        st.subheader("💳 Mensalidades (Teste 20 dias + Plano 30 dias)")
+
+        st.markdown("### Status de planos")
+        conn = sqlite3.connect("usuarios.db")
+        try:
+            df_pl = pd.read_sql_query("SELECT email, created_at, trial_end, paid_until FROM plans ORDER BY email", conn)
+        except Exception:
+            df_pl = pd.DataFrame(columns=["email","created_at","trial_end","paid_until"])
+        conn.close()
+
+        def _fmt_iso(x):
+            try:
+                if not x or str(x).strip()=="":
+                    return ""
+                return datetime.fromisoformat(str(x)).strftime("%d/%m/%Y")
+            except Exception:
+                return str(x)
+
+        if df_pl.empty:
+            st.info("Nenhum plano encontrado.")
+        else:
+            df_show = df_pl.copy()
+            df_show["trial_end"] = df_show["trial_end"].apply(_fmt_iso)
+            df_show["paid_until"] = df_show["paid_until"].apply(_fmt_iso)
+            st.dataframe(df_show, use_container_width=True)
+
+        st.markdown("---")
+        st.subheader("✅ Ativar / Renovar mensalidade")
+        emails = df_users["email"].tolist()
+        alvo = st.selectbox("Usuário", emails, key="pay_user")
+        dias = st.number_input("Dias de acesso", min_value=1, max_value=365, value=30, step=1, key="pay_days")
+        if st.button("Ativar / Renovar", use_container_width=True):
+            if alvo == "admin":
+                st.warning("Admin já tem acesso liberado.")
+            else:
+                ativar_mensalidade(alvo, int(dias))
+                st.success(f"Mensalidade ativada por {dias} dias para {alvo}.")
+                st.rerun()
+
+        st.markdown("---")
+        st.subheader("📩 Solicitações recebidas no app")
+        df_msgs = listar_mensagens_mensalidade()
+        if df_msgs.empty:
+            st.info("Sem solicitações ainda.")
+        else:
+            st.dataframe(df_msgs, use_container_width=True)
+
+            msg_id = st.selectbox("Selecionar mensagem (ID)", df_msgs["id"].tolist(), key="msg_id_sel")
+            colm1, colm2, colm3 = st.columns(3)
+            with colm1:
+                if st.button("Marcar como Visto", use_container_width=True):
+                    marcar_mensagem_status(int(msg_id), "visto")
+                    st.rerun()
+            with colm2:
+                if st.button("Marcar como Resolvido", use_container_width=True):
+                    marcar_mensagem_status(int(msg_id), "resolvido")
+                    st.rerun()
+            with colm3:
+                if st.button("Excluir Mensagem", use_container_width=True):
+                    excluir_mensagem(int(msg_id))
+                    st.rerun()
+
+with t_backup:
         st.subheader("💾 Backup Manual / Automático / Restauração")
 
         st.write("### 📦 Gerar Backup Manual")
