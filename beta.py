@@ -1035,8 +1035,8 @@ def gerar_pdf_bytes(df_g: pd.DataFrame, df_n: pd.DataFrame) -> bytes:
         pivot = pivot.sort_index()
 
         # Limitar para caber no PDF (últimas 20 datas)
-        if len(pivot) > 20:
-            pivot_show = pivot.tail(20).copy()
+        if len(pivot) > 31:
+            pivot_show = pivot.tail(31).copy()
         else:
             pivot_show = pivot.copy()
 
@@ -1129,8 +1129,8 @@ def gerar_pdf_bytes(df_g: pd.DataFrame, df_n: pd.DataFrame) -> bytes:
 
         story.append(Spacer(1, 12))
 
-    # ===== Gráfico Tendência (últimas medições) =====
-    story.append(Paragraph("Tendência (últimas medições)", styles["Heading2"]))
+    # ===== Tendência por dia (últimos 30 dias) =====
+    story.append(Paragraph("Tendência por dia (últimos 30 dias)", styles["Heading2"]))
     if df_g is None or df_g.empty:
         story.append(Paragraph("Sem dados para gráfico.", styles["Normal"]))
     elif not HAS_MPL:
@@ -1138,33 +1138,71 @@ def gerar_pdf_bytes(df_g: pd.DataFrame, df_n: pd.DataFrame) -> bytes:
     else:
         try:
             df_plot = df_g.copy()
-            # cria timestamp para ordenar: Data dd/mm/YYYY + Hora HH:MM
-            df_plot["DT"] = pd.to_datetime(df_plot["Data"].astype(str) + " " + df_plot["Hora"].astype(str), dayfirst=True, errors="coerce")
-            df_plot = df_plot.dropna(subset=["DT"]).sort_values("DT").tail(25)
+            df_plot["DT"] = pd.to_datetime(
+                df_plot["Data"].astype(str) + " " + df_plot["Hora"].astype(str),
+                dayfirst=True,
+                errors="coerce"
+            )
+            df_plot = df_plot.dropna(subset=["DT"]).sort_values("DT")
+
+            # Filtra último mês (30 dias)
+            dt_max = df_plot["DT"].max()
+            dt_min = dt_max - pd.Timedelta(days=30)
+            df_plot = df_plot[df_plot["DT"] >= dt_min].copy()
+
             if df_plot.empty:
-                story.append(Paragraph("Sem dados válidos para gráfico.", styles["Normal"]))
+                story.append(Paragraph("Sem dados no período de 30 dias.", styles["Normal"]))
             else:
-                fig = plt.figure(figsize=(7.2, 2.4), dpi=150)
-                ax = fig.add_subplot(111)
-                ax.plot(df_plot["DT"], pd.to_numeric(df_plot["Valor"], errors="coerce"), marker="o")
-                ax.set_ylabel("Glicemia")
-                ax.set_xlabel("Hora")
-                ax.tick_params(axis="x", rotation=35, labelsize=7)
-                ax.tick_params(axis="y", labelsize=7)
-                ax.grid(True, alpha=0.2)
-                fig.tight_layout()
+                # Agrupa por dia (data)
+                df_plot["DIA"] = df_plot["DT"].dt.strftime("%d/%m/%Y")
+                dias = df_plot["DIA"].unique().tolist()
 
-                img_buf = BytesIO()
-                fig.savefig(img_buf, format="png")
-                plt.close(fig)
-                img_buf.seek(0)
+                # Para não ficar gigante, limita a 31 dias (máximo)
+                dias = dias[-31:]
 
-                img = Image(img_buf)
-                img.drawWidth = 18.0 * cm
-                img.drawHeight = 6.0 * cm
-                story.append(img)
+                import matplotlib.dates as mdates
+
+                for dia in dias:
+                    dfd = df_plot[df_plot["DIA"] == dia].copy()
+                    if dfd.empty:
+                        continue
+
+                    story.append(Paragraph(f"Dia {dia}", styles["Heading3"]))
+
+                    fig = plt.figure(figsize=(7.5, 2.6), dpi=150)
+                    ax = fig.add_subplot(111)
+
+                    vals = pd.to_numeric(dfd["Valor"], errors="coerce")
+                    ax.plot(dfd["DT"], vals, marker="o")
+
+                    ax.set_ylabel("Glicemia")
+                    ax.set_xlabel("Hora (HH:MM)")
+
+                    # Eixo X só com hora
+                    locator = mdates.AutoDateLocator(minticks=4, maxticks=8)
+                    formatter = mdates.DateFormatter("%H:%M")
+                    ax.xaxis.set_major_locator(locator)
+                    ax.xaxis.set_major_formatter(formatter)
+
+                    ax.tick_params(axis="x", rotation=45, labelsize=8)
+                    ax.tick_params(axis="y", labelsize=8)
+                    ax.grid(True, alpha=0.3)
+
+                    fig.tight_layout()
+
+                    img_buf = BytesIO()
+                    fig.savefig(img_buf, format="png")
+                    plt.close(fig)
+                    img_buf.seek(0)
+
+                    img = Image(img_buf)
+                    img.drawWidth = 18.0 * cm
+                    img.drawHeight = 6.0 * cm
+                    story.append(img)
+                    story.append(Spacer(1, 10))
+
         except Exception:
-            story.append(Paragraph("Falha ao gerar gráfico de tendência.", styles["Normal"]))
+            story.append(Paragraph("Falha ao gerar gráficos por dia.", styles["Normal"]))
 
     story.append(Spacer(1, 10))
 
