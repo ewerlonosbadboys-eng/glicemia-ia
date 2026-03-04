@@ -55,7 +55,6 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, 
 from reportlab.lib.pagesizes import landscape, A4
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib import colors
-import math
 st.set_page_config(page_title="Escala 5x2 Oficial", layout="wide")
 
 
@@ -3658,12 +3657,8 @@ def page_app():
                         cB = ws.cell(2, i + 2, dia_sem)
 
                         # Cabeçalho: mantém padrão (o vermelho será aplicado apenas no domingo quando Status=Folga)
-                        if dia_sem == 'dom':
-                            cA.fill = fill_dom
-                            cB.fill = fill_dom
-                        else:
-                            cA.fill = fill_header
-                            cB.fill = fill_header
+                        cA.fill = fill_header
+                        cB.fill = fill_header
                         cA.font = font_header
                         cB.font = font_header
 
