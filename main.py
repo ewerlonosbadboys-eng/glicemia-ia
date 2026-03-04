@@ -43,7 +43,8 @@ import random
 import calendar
 import sqlite3
 import shutil
-import os
+from pathlib import Path
+
 import hashlib
 import secrets
 from openpyxl.styles import PatternFill, Alignment, Border, Side, Font
@@ -110,179 +111,144 @@ div[data-testid="stDataFrame"] { border-radius: 12px; overflow: hidden; }
 
 DB_PATH = "escala.db"
 
-# ---- Backup / restauração do banco
+
+# =========================
+# ADMIN: Backup / Restore + Setores + Import
+# =========================
 BACKUP_DIR = "backups"
-AUTO_BACKUP_HOUR = 3  # 03:00 (horário local do app)
-
-
-def normalize_setor(s: str) -> str:
-    """Normaliza o nome do setor para comparação/armazenamento (ignora maiúsc/minúsc e espaços)."""
-    if s is None:
-        return ""
-    return str(s).strip().upper()
-
-def listar_setores(include_defaults: bool = True):
-    """Lista setores existentes (tabela setores + setores presentes em usuários/colaboradores)."""
-    setores = []
-    try:
-        con = sqlite3.connect(DB_PATH)
-        cur = con.cursor()
-        # tabela setores (preferencial)
-        try:
-            cur.execute("SELECT nome FROM setores")
-            setores += [r[0] for r in cur.fetchall() if r and r[0] is not None]
-        except Exception:
-            pass
-        # setores que aparecem em usuários (fallback / legado)
-        try:
-            cur.execute("SELECT DISTINCT setor FROM usuarios")
-            setores += [r[0] for r in cur.fetchall() if r and r[0] is not None]
-        except Exception:
-            pass
-        # setores que aparecem em colaboradores (se existir)
-        try:
-            cur.execute("SELECT DISTINCT setor FROM colaboradores")
-            setores += [r[0] for r in cur.fetchall() if r and r[0] is not None]
-        except Exception:
-            pass
-    finally:
-        try:
-            con.close()
-        except Exception:
-            pass
-
-    norm = []
-    for s in setores:
-        ns = normalize_setor(s)
-        if ns:
-            norm.append(ns)
-
-    # defaults sempre disponíveis
-    if include_defaults:
-        norm += ["ADMIN", "GERAL"]
-
-    # unique mantendo ordem
-    out = []
-    seen = set()
-    for s in norm:
-        if s not in seen:
-            out.append(s)
-            seen.add(s)
-    return sorted(out)
+AUTO_BACKUP_HOUR = 3  # 03:00
 
 
 def _ensure_backup_dir():
-    os.makedirs(BACKUP_DIR, exist_ok=True)
+    Path(BACKUP_DIR).mkdir(parents=True, exist_ok=True)
 
-def meta_get(key: str, default: str | None = None):
-    con = db_conn()
-    cur = con.cursor()
-    cur.execute("CREATE TABLE IF NOT EXISTS app_meta(key TEXT PRIMARY KEY, value TEXT)")
-    cur.execute("SELECT value FROM app_meta WHERE key=?", (key,))
-    row = cur.fetchone()
-    con.close()
-    return (row[0] if row else default)
 
-def meta_set(key: str, value: str):
-    con = db_conn()
-    cur = con.cursor()
-    cur.execute("CREATE TABLE IF NOT EXISTS app_meta(key TEXT PRIMARY KEY, value TEXT)")
-    cur.execute("INSERT OR REPLACE INTO app_meta(key, value) VALUES(?,?)", (key, value))
-    con.commit()
-    con.close()
-
-def make_backup_now(tag: str = "manual") -> str:
-    """Cria um backup do escala.db e retorna o caminho do arquivo."""
+def create_backup_now(prefix="manual") -> str:
     _ensure_backup_dir()
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    out = os.path.join(BACKUP_DIR, f"escala_{tag}_{ts}.db")
-    shutil.copyfile(DB_PATH, out)
-    return out
+    src = Path(DB_PATH)
+    if not src.exists():
+        raise FileNotFoundError(f"Banco não encontrado: {DB_PATH}")
+    dst = Path(BACKUP_DIR) / f"escala_{prefix}_{ts}.db"
+    shutil.copy2(src, dst)
+    return str(dst)
 
-def auto_daily_backup():
-    """
-    Streamlit Cloud não roda 'cron' de verdade.
-    Então a gente faz o backup automático quando o app é aberto/rodado,
-    mas só 1x por dia depois das 03:00.
-    """
+
+def list_backups() -> list:
+    _ensure_backup_dir()
+    files = sorted(Path(BACKUP_DIR).glob("*.db"), key=lambda p: p.stat().st_mtime, reverse=True)
+    return [p.name for p in files]
+
+
+def _auto_backup_marker_path() -> Path:
+    return Path(BACKUP_DIR) / ".last_auto_backup"
+
+
+def auto_backup_if_due():
+    """1 backup/dia após 03:00 (Streamlit não agenda sozinho; roda quando o app abre)."""
     try:
+        _ensure_backup_dir()
         now = datetime.now()
         if now.hour < AUTO_BACKUP_HOUR:
             return
+        marker = _auto_backup_marker_path()
+        last = marker.read_text(encoding="utf-8").strip() if marker.exists() else ""
         today = now.strftime("%Y-%m-%d")
-        last = meta_get("last_auto_backup_date", "")
         if last == today:
             return
-        out = make_backup_now(tag="auto")
-        meta_set("last_auto_backup_date", today)
-        meta_set("last_auto_backup_path", out)
+        create_backup_now(prefix=f"auto_{today.replace('-', '')}")
+        marker.write_text(today, encoding="utf-8")
     except Exception:
-        # Nunca quebrar o app por causa de backup automático
-        pass
+        return
 
-def list_backups() -> list[str]:
+
+def restore_backup_from_bytes(data: bytes) -> None:
     _ensure_backup_dir()
-    files = []
-    for fn in os.listdir(BACKUP_DIR):
-        if fn.lower().endswith(".db") and fn.startswith("escala_"):
-            files.append(os.path.join(BACKUP_DIR, fn))
-    files.sort(reverse=True)
-    return files
-
-def validate_db_file(path: str) -> bool:
+    # safety backup
     try:
-        import sqlite3
-        con = sqlite3.connect(path)
-        cur = con.cursor()
-        cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
-        tables = {r[0] for r in cur.fetchall()}
-        con.close()
-        # Tabelas essenciais
-        need = {"usuarios_sistema", "colaboradores", "ferias", "escala_mes", "setores"}
-        return need.issubset(tables)
+        create_backup_now(prefix="pre_restore")
     except Exception:
-        return False
+        pass
+    tmp = Path(BACKUP_DIR) / "_upload_restore_tmp.db"
+    tmp.write_bytes(data)
+    Path(DB_PATH).write_bytes(tmp.read_bytes())
+    tmp.unlink(missing_ok=True)
 
-def restore_db_from_bytes(data: bytes) -> bool:
-    """
-    Substitui o DB atual pelo upload. Faz backup do atual antes.
-    """
-    _ensure_backup_dir()
-    tmp = os.path.join(BACKUP_DIR, "_tmp_restore.db")
-    with open(tmp, "wb") as f:
-        f.write(data)
-    if not validate_db_file(tmp):
+
+def listar_setores_db() -> list:
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("CREATE TABLE IF NOT EXISTS setores (nome TEXT PRIMARY KEY)")
+    cur.execute("SELECT nome FROM setores ORDER BY nome")
+    rows = [r[0] for r in cur.fetchall()]
+    conn.close()
+    base_set = {"ADMIN", "GERAL"}
+    return sorted(list(base_set.union({(x or "").strip().upper() for x in rows if x})))
+
+
+def criar_setor_db(nome: str) -> None:
+    nome = (nome or "").strip().upper()
+    if not nome:
+        raise ValueError("Setor vazio")
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("CREATE TABLE IF NOT EXISTS setores (nome TEXT PRIMARY KEY)")
+    cur.execute("INSERT OR IGNORE INTO setores(nome) VALUES(?)", (nome,))
+    conn.commit(); conn.close()
+
+
+def importar_colaboradores_df(setor: str, df: pd.DataFrame) -> tuple[int,int]:
+    setor = (setor or "").strip().upper()
+    if not setor:
+        raise ValueError("Setor destino inválido")
+    cols = {c.lower().strip(): c for c in df.columns}
+    for r in ("nome", "chapa"):
+        if r not in cols:
+            raise ValueError(f"Coluna obrigatória faltando: {r}")
+
+    nome_s = df[cols["nome"]]
+    chapa_s = df[cols["chapa"]]
+    subgrupo_s = df[cols["subgrupo"]] if "subgrupo" in cols else pd.Series([""]*len(df))
+    entrada_s = df[cols["entrada"]] if "entrada" in cols else pd.Series(["06:00"]*len(df))
+    sab_s = df[cols["folga_sabado"]] if "folga_sabado" in cols else (df[cols["sabado"]] if "sabado" in cols else pd.Series([0]*len(df)))
+
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("""CREATE TABLE IF NOT EXISTS colaboradores (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome TEXT NOT NULL,
+        setor TEXT NOT NULL,
+        chapa TEXT NOT NULL,
+        subgrupo TEXT DEFAULT '',
+        entrada TEXT DEFAULT '06:00',
+        folga_sabado INTEGER DEFAULT 0,
+        criado_em TEXT DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(setor, chapa)
+    )""")
+
+    inserted=0; updated=0
+    for nome, chapa, sg, ent, sab in zip(nome_s, chapa_s, subgrupo_s, entrada_s, sab_s):
+        nome = str(nome).strip()
+        chapa = str(chapa).strip()
+        if not nome or not chapa:
+            continue
+        sg = str(sg).strip()
+        ent = str(ent).strip() if str(ent).strip() else "06:00"
         try:
-            os.remove(tmp)
+            sab_i = int(sab)
         except Exception:
-            pass
-        return False
-
-    # backup do atual antes de restaurar
-    try:
-        make_backup_now(tag="pre_restore")
-    except Exception:
-        pass
-
-    # troca atômica
-    bak = DB_PATH + ".bak"
-    try:
-        if os.path.exists(bak):
-            os.remove(bak)
-    except Exception:
-        pass
-    try:
-        if os.path.exists(DB_PATH):
-            shutil.copyfile(DB_PATH, bak)
-    except Exception:
-        pass
-    shutil.copyfile(tmp, DB_PATH)
-    try:
-        os.remove(tmp)
-    except Exception:
-        pass
-    return True
-
+            sab_i = 0
+        cur.execute("SELECT id FROM colaboradores WHERE setor=? AND chapa=?", (setor, chapa))
+        if cur.fetchone():
+            cur.execute("UPDATE colaboradores SET nome=?, subgrupo=?, entrada=?, folga_sabado=? WHERE setor=? AND chapa=?",
+                        (nome, sg, ent, sab_i, setor, chapa))
+            updated += 1
+        else:
+            cur.execute("INSERT INTO colaboradores(nome,setor,chapa,subgrupo,entrada,folga_sabado) VALUES(?,?,?,?,?,?)",
+                        (nome, setor, chapa, sg, ent, sab_i))
+            inserted += 1
+    conn.commit(); conn.close()
+    return inserted, updated
 
 # ---- Regras fixas
 INTERSTICIO_MIN = timedelta(hours=11, minutes=10)   # 11:10
@@ -1550,45 +1516,66 @@ def _is_status_locked(ovmap: dict, chapa: str, data_ts: pd.Timestamp) -> bool:
     return bool(ovmap.get(chapa, {}).get(dia, {}).get("status"))
 
 def _apply_overrides_to_df_inplace(df: pd.DataFrame, setor: str, chapa: str, ovmap: dict):
+    """Aplica ajustes manuais (overrides) no DataFrame.
+
+    Regras de FÉRIAS:
+    - Dias de férias são definidos SOMENTE pela tabela `ferias` (aba Férias).
+    - Em dia de férias, força: Status='Férias', H_Entrada='', H_Saida='' (ignora qualquer override).
+    - Override tentando marcar 'Férias' fora da tabela é ignorado.
+    - Override tentando mudar o Status / horários em um dia que está em férias também é ignorado.
     """
-    Aplica overrides, MAS:
-    - status 'Férias' só é aceito se estiver na tabela ferias (aba Férias).
-    """
-    if chapa not in ovmap:
+    ovmap = (ovmap or {})
+    if not ovmap:
         return df
-    for i in range(len(df)):
-        dia_num = int(pd.to_datetime(df.loc[i, "Data"]).day)
-        rule = ovmap.get(chapa, {}).get(dia_num, {})
-        if not rule:
+
+    # Garante tipo datetime na coluna Data
+    if "Data" in df.columns and not pd.api.types.is_datetime64_any_dtype(df["Data"]):
+        df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
+
+    for d_raw, payload in ovmap.items():
+        if not payload:
             continue
 
-        data_obj = pd.to_datetime(df.loc[i, "Data"]).date()
+        # Normaliza data (aceita date/datetime/str ISO)
+        dd = None
+        if isinstance(d_raw, dt.datetime):
+            dd = d_raw.date()
+        elif isinstance(d_raw, dt.date):
+            dd = d_raw
+        elif isinstance(d_raw, str):
+            try:
+                dd = dt.date.fromisoformat(d_raw[:10])
+            except Exception:
+                dd = None
+        if dd is None:
+            continue
 
-        if "status" in rule:
-            stt = str(rule["status"])
-            if stt == "Férias" and not is_de_ferias(setor, chapa, data_obj):
-                # ignora este override
-                pass
-            else:
-                df.loc[i, "Status"] = stt
-                if stt not in WORK_STATUSES:
-                    df.loc[i, "H_Entrada"] = ""
-                    df.loc[i, "H_Saida"] = ""
+        mask = df["Data"].dt.date == dd
+        if not bool(mask.any()):
+            continue
+        i = df.index[mask][0]
 
-        if "h_entrada" in rule:
-            df.loc[i, "H_Entrada"] = rule["h_entrada"]
+        # Se é férias (tabela), férias sempre vence
+        if is_de_ferias(setor, chapa, dd):
+            df.loc[i, "Status"] = "Férias"
+            df.loc[i, "H_Entrada"] = ""
+            df.loc[i, "H_Saida"] = ""
+            continue
 
-        if "h_saida" in rule:
-            df.loc[i, "H_Saida"] = rule["h_saida"]
+        # Status (exceto tentar marcar Férias)
+        st_new = str(payload.get("status") or "").strip()
+        if st_new and st_new.lower() not in ["férias", "ferias"]:
+            df.loc[i, "Status"] = st_new
 
-        if df.loc[i, "Status"] in WORK_STATUSES:
-            if (df.loc[i, "H_Entrada"] or "") and not (df.loc[i, "H_Saida"] or ""):
-                df.loc[i, "H_Saida"] = _saida_from_entrada(df.loc[i, "H_Entrada"])
+        # Entrada / Saída
+        ent_new = str(payload.get("h_entrada") or payload.get("entrada") or "").strip()
+        if ent_new:
+            df.loc[i, "H_Entrada"] = ent_new
+            df.loc[i, "H_Saida"] = _saida_from_entrada(ent_new)
+
     return df
 
-# =========================================================
-# ESCALA DB
-# =========================================================
+
 def save_escala_mes_db(setor: str, ano: int, mes: int, historico_df_por_chapa: dict[str, pd.DataFrame]):
     """Grava escala no banco de forma robusta.
     - Limpa a competência (setor/ano/mes) antes de gravar para evitar IntegrityError em DB antigo/corrompido.
@@ -2057,97 +2044,70 @@ def enforce_max_5_consecutive_work(df, ent_padrao, pode_folgar_sabado: bool, ini
             consec = 0
         i += 1
 
-def enforce_weekly_folga_targets(df, df_ref, pode_folgar_sabado, locked_status, ent_padrao, prev_status_by_date=None):
-    """Regra SUPREMA semanal (SEG->DOM): cada colaborador deve ter exatamente 2 folgas na semana.
-    Corrige também a semana de virada de mês usando o histórico do mês anterior (prev_status_by_date).
-    - Não altera dias travados (locked_status).
-    - Ajusta apenas dentro do mês atual (df), usando prev_status_by_date só para CONTAR.
+def enforce_weekly_folga_targets(df: pd.DataFrame, df_ref: pd.DataFrame, pode_folgar_sabado: bool, locked_status: set[int] | None = None):
     """
-    prev_status_by_date = prev_status_by_date or {}
+    SEMANA SEG->DOM (regra geral):
+      - Se DOM = Folga => 1 folga SEG-SÁB
+      - Se DOM = Trabalho/Balanço => 2 folgas SEG-SÁB
+      - Sábado só se permitido
+      - Não cria folga consecutiva (exceto travado)
+    Ajusta semana para cumprir o alvo (se outras regras mexerem depois).
+    """
+    datas = pd.to_datetime(df["Data"])
+    weeks = _all_weeks_seg_dom(pd.DatetimeIndex(datas))
 
-    # Datas do mês atual (df_ref) e mapeamento Data->índice
-    datas = [pd.to_datetime(x).date() for x in df_ref["Data"].tolist()]
-    date_to_idx = {d: i for i, d in enumerate(datas)}
+    def is_dom(i): return df_ref.loc[i, "Dia"] == "dom"
 
-    # Agrupa por semana (âncora = segunda-feira)
-    weeks = {}
-    for d in datas:
-        monday = d - timedelta(days=d.weekday())  # seg=0 ... dom=6
-        weeks.setdefault(monday, []).append(d)
+    def target_for_week(week):
+        doms = [i for i in week if is_dom(i)]
+        if not doms:
+            return 2
+        stt = df.loc[doms[0], "Status"]
+        return 1 if stt == "Folga" else 2
 
-    # Helpers locais
-    def _get_status_for_date(d):
-        if d in date_to_idx:
-            return df.loc[date_to_idx[d], "Status"]
-        return prev_status_by_date.get(d, None)
+    def can_turn_folga(i):
+        if _locked(locked_status, i): return False
+        if is_dom(i): return False
+        if df.loc[i, "Status"] != "Trabalho": return False
+        if df_ref.loc[i, "Dia"] == "sáb" and not pode_folgar_sabado: return False
+        if not _nao_consecutiva_folga(df, i): return False
+        return True
 
-    def _is_folga_status(s):
-        return (s == "Folga")
+    def can_turn_trabalho(i):
+        if _locked(locked_status, i): return False
+        if is_dom(i): return False
+        return df.loc[i, "Status"] == "Folga"
 
-    for monday in sorted(weeks.keys()):
-        week_dates = [monday + timedelta(days=i) for i in range(7)]
+    for week in weeks:
+        week = list(week)
+        weekdays = [i for i in week if not is_dom(i)]
+        t = target_for_week(week)
 
-        # conta folgas na semana COMPLETA (incluindo dias do mês anterior se houver)
-        folga_count = 0
-        for wd in week_dates:
-            if _is_folga_status(_get_status_for_date(wd)):
-                folga_count += 1
+        cur = int((df.loc[weekdays, "Status"] == "Folga").sum())
 
-        target = 2  # 5x2 = 2 folgas por semana (SEG->DOM)
+        # excesso => remove
+        if cur > t:
+            cands = [i for i in weekdays if can_turn_trabalho(i)]
+            def pr(i):
+                return (0 if df_ref.loc[i, "Dia"] == "sáb" else 1, i)
+            cands.sort(key=pr)
+            for i in cands:
+                if cur <= t: break
+                _set_trabalho(df, i, ent_padrao="", locked_status=locked_status)  # entrada será re-setada depois pelo descanso global
+                cur -= 1
 
-        # 1) Se tem folga demais (>2), transformar folga extra em trabalho (somente dentro do mês atual)
-        if folga_count > target:
-            # candidatos: folgas no mês atual não travadas
-            cand = []
-            for wd in week_dates:
-                if wd not in date_to_idx:
-                    continue
-                i = date_to_idx[wd]
-                if _locked(locked_status, i):
-                    continue
-                if df.loc[i, "Status"] == "Folga":
-                    # preferência: tirar folga em dias úteis antes de mexer no domingo
-                    score = 0
-                    if wd.weekday() == 6:  # domingo
-                        score += 100
-                    if wd.weekday() == 5:  # sábado
-                        score += 10
-                    cand.append((score, i))
-            cand.sort()
+        # falta => adiciona
+        if cur < t:
+            cands = [i for i in weekdays if can_turn_folga(i)]
+            def pr2(i):
+                return (0 if df_ref.loc[i, "Dia"] in ["seg","ter","qua","qui","sex"] else 1, i)
+            cands.sort(key=pr2)
+            for i in cands:
+                if cur >= t: break
+                _set_folga(df, i, locked_status=locked_status)
+                cur += 1
 
-            need = folga_count - target
-            for _, i in cand:
-                if need <= 0:
-                    break
-                _set_trabalho(df, i, ent_padrao, locked=False, reason="weekly_fix_remove_extra_folga")
-                need -= 1
-
-        # 2) Se falta folga (<2), transformar trabalho em folga (somente dentro do mês atual)
-        elif folga_count < target:
-            need = target - folga_count
-            cand = []
-            for wd in week_dates:
-                if wd not in date_to_idx:
-                    continue
-                i = date_to_idx[wd]
-                if _locked(locked_status, i):
-                    continue
-                st = df.loc[i, "Status"]
-                if st == "Trabalho":
-                    # preferência: sábado (se puder) e dias longe do domingo para evitar encostar com folga de domingo
-                    score = 0
-                    if wd.weekday() == 5 and pode_folgar_sabado:
-                        score -= 5
-                    if wd.weekday() == 6:  # evitar criar folga no domingo (a menos que precise)
-                        score += 50
-                    cand.append((score, i))
-            cand.sort()
-
-            for _, i in cand:
-                if need <= 0:
-                    break
-                _set_folga(df, i, locked=False, reason="weekly_fix_add_missing_folga")
-                need -= 1
+    enforce_no_consecutive_folga(df, locked_status=locked_status)
 
 def _counts_folgas_day_and_hour(hist_by_chapa: dict, colab_by_chapa: dict, chapas_grupo: list, idxs_semana: list, df_ref):
     counts_day = {i: 0 for i in idxs_semana}
@@ -2257,315 +2217,301 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
     datas = _dias_mes(ano, mes)
     weeks = _all_weeks_seg_dom(datas)
     df_ref = pd.DataFrame({"Data": datas, "Dia": [D_PT[d.day_name()] for d in datas]})
+    # Meses passados: não aplicar continuidade/travamentos do mês anterior.
+    _past = is_past_competencia(ano, mes)
+    estado_prev = {} if _past else load_estado_prev(setor, ano, mes)
 
-    # --- Semana SEG->DOM atravessa virada de mês:
-    # Para NÃO gerar 3 folgas na semana da virada, carregamos o mês anterior (se existir)
-    prev_status_by_chapa = {}
-    try:
-        first_day = date(int(ano), int(mes), 1)
-        prev_day = first_day - timedelta(days=1)
-        _hist_prev = load_escala_mes_db(setor, int(prev_day.year), int(prev_day.month))
-        for _ch, _dfp in (_hist_prev or {}).items():
-            if _dfp is None or len(_dfp) == 0 or "Data" not in _dfp.columns:
-                continue
-            _tmp = _dfp.copy()
-            _tmp["Data"] = pd.to_datetime(_tmp["Data"])
-            prev_status_by_chapa[_ch] = {d.date(): s for d, s in zip(_tmp["Data"], _tmp.get("Status", []))}
-    except Exception:
-        prev_status_by_chapa = {}
-        # Meses passados: não aplicar continuidade/travamentos do mês anterior.
-        _past = is_past_competencia(ano, mes)
-        estado_prev = {} if _past else load_estado_prev(setor, ano, mes)
+    ovmap = _ov_map(setor, int(ano), int(mes)) if respeitar_ajustes else {}
 
-        ovmap = _ov_map(setor, int(ano), int(mes)) if respeitar_ajustes else {}
+    grupos = {}
+    for c in colaboradores:
+        sg = (c.get("Subgrupo") or "").strip() or "SEM SUBGRUPO"
+        grupos.setdefault(sg, []).append(c)
 
-        grupos = {}
-        for c in colaboradores:
-            sg = (c.get("Subgrupo") or "").strip() or "SEM SUBGRUPO"
-            grupos.setdefault(sg, []).append(c)
+    regras_cache = {}
+    for sg in grupos.keys():
+        if sg == "SEM SUBGRUPO":
+            regras_cache[sg] = {"seg": 0, "ter": 0, "qua": 0, "qui": 0, "sex": 0, "sáb": 0}
+        else:
+            regras_cache[sg] = get_subgrupo_regras(setor, sg)
 
-        regras_cache = {}
-        for sg in grupos.keys():
-            if sg == "SEM SUBGRUPO":
-                regras_cache[sg] = {"seg": 0, "ter": 0, "qua": 0, "qui": 0, "sex": 0, "sáb": 0}
+    hist_all = {}
+    colab_by_chapa = {c["Chapa"]: c for c in colaboradores}
+    locked_idx = {}
+
+    # base de cada colaborador
+    for c in colaboradores:
+        ch = c["Chapa"]
+        df = df_ref.copy()
+        df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
+        df["Status"] = "Trabalho"
+        df["H_Entrada"] = ""
+        df["H_Saida"] = ""
+
+        # ✅ férias só via tabela ferias
+        for i, d in enumerate(datas):
+            if is_de_ferias(setor, ch, d.date()):
+                df.loc[i, "Status"] = "Férias"
+                df.loc[i, "H_Entrada"] = ""
+                df.loc[i, "H_Saida"] = ""
+
+        if respeitar_ajustes:
+            _apply_overrides_to_df_inplace(df, setor, ch, ovmap)
+
+        locked = set()
+        if respeitar_ajustes:
+            for i in range(len(df)):
+                if _is_status_locked(ovmap, ch, pd.to_datetime(df.loc[i, "Data"])):
+                    locked.add(i)
+        locked_idx[ch] = locked
+        hist_all[ch] = df
+
+    # ✅ Domingo 1x1 por colaborador COM CONTINUIDADE ENTRE MESES
+    for ch, df in hist_all.items():
+        ent = colab_by_chapa[ch].get("Entrada", "06:00")
+        locked = locked_idx.get(ch, set())
+
+        if _past:
+            base_first = None
+        else:
+            prev_dom = (estado_prev.get(ch, {}) or {}).get("ultimo_domingo_status", None)
+            if prev_dom == "Folga":
+                base_first = "Trabalho"
+            elif prev_dom == "Trabalho":
+                base_first = "Folga"
             else:
-                regras_cache[sg] = get_subgrupo_regras(setor, sg)
-
-        hist_all = {}
-        colab_by_chapa = {c["Chapa"]: c for c in colaboradores}
-        locked_idx = {}
-
-        # base de cada colaborador
-        for c in colaboradores:
-            ch = c["Chapa"]
-            df = df_ref.copy()
-            df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
-            df["Status"] = "Trabalho"
-            df["H_Entrada"] = ""
-            df["H_Saida"] = ""
-
-            # ✅ férias só via tabela ferias
-            for i, d in enumerate(datas):
-                if is_de_ferias(setor, ch, d.date()):
-                    df.loc[i, "Status"] = "Férias"
-                    df.loc[i, "H_Entrada"] = ""
-                    df.loc[i, "H_Saida"] = ""
-
-            if respeitar_ajustes:
-                _apply_overrides_to_df_inplace(df, setor, ch, ovmap)
-
-            locked = set()
-            if respeitar_ajustes:
-                for i in range(len(df)):
-                    if _is_status_locked(ovmap, ch, pd.to_datetime(df.loc[i, "Data"])):
-                        locked.add(i)
-            locked_idx[ch] = locked
-            hist_all[ch] = df
-
-        # ✅ Domingo 1x1 por colaborador COM CONTINUIDADE ENTRE MESES
-        for ch, df in hist_all.items():
-            ent = colab_by_chapa[ch].get("Entrada", "06:00")
-            locked = locked_idx.get(ch, set())
-
-            if _past:
                 base_first = None
-            else:
-                prev_dom = (estado_prev.get(ch, {}) or {}).get("ultimo_domingo_status", None)
-                if prev_dom == "Folga":
-                    base_first = "Trabalho"
-                elif prev_dom == "Trabalho":
-                    base_first = "Folga"
-                else:
-                    base_first = None
 
-            enforce_sundays_1x1_for_employee(df, ent, locked_status=locked, base_first=base_first)
-            hist_all[ch] = df
+        enforce_sundays_1x1_for_employee(df, ent, locked_status=locked, base_first=base_first)
+        hist_all[ch] = df
 
-        # =====================================================
-        # ✅ REGRA SEMANAL NOVA (SEG->DOM) DEPENDE DO DOMINGO
-        # =====================================================
-        for sg, membros in grupos.items():
-            chapas = [m["Chapa"] for m in membros]
-            if not chapas:
-                continue
+    # =====================================================
+    # ✅ REGRA SEMANAL NOVA (SEG->DOM) DEPENDE DO DOMINGO
+    # =====================================================
+    for sg, membros in grupos.items():
+        chapas = [m["Chapa"] for m in membros]
+        if not chapas:
+            continue
 
-            pref = regras_cache.get(sg, {"seg": 0, "ter": 0, "qua": 0, "qui": 0, "sex": 0, "sáb": 0})
+        pref = regras_cache.get(sg, {"seg": 0, "ter": 0, "qua": 0, "qui": 0, "sex": 0, "sáb": 0})
 
-            for week in weeks:
-                idxs_week = sorted(week, key=lambda i: df_ref.loc[i, "Data"])
-                domingos = [i for i in idxs_week if df_ref.loc[i, "Dia"] == "dom"]
-                dom_idx = domingos[0] if domingos else None
+        for week in weeks:
+            idxs_week = sorted(week, key=lambda i: df_ref.loc[i, "Data"])
+            domingos = [i for i in idxs_week if df_ref.loc[i, "Dia"] == "dom"]
+            dom_idx = domingos[0] if domingos else None
 
-                for ch in chapas:
-                    df = hist_all[ch]
-                    locked = locked_idx.get(ch, set())
-                    pode_sab = bool(colab_by_chapa[ch].get("Folga_Sab", False))
-                    ent_bucket = colab_by_chapa[ch].get("Entrada", "06:00")
+            for ch in chapas:
+                df = hist_all[ch]
+                locked = locked_idx.get(ch, set())
+                pode_sab = bool(colab_by_chapa[ch].get("Folga_Sab", False))
+                ent_bucket = colab_by_chapa[ch].get("Entrada", "06:00")
 
-                    segunda_idx = idxs_week[0]
-                    segunda_date = df_ref.loc[segunda_idx, "Data"].date()
-                    if is_first_week_after_return(setor, ch, segunda_date):
+                segunda_idx = idxs_week[0]
+                segunda_date = df_ref.loc[segunda_idx, "Data"].date()
+                if is_first_week_after_return(setor, ch, segunda_date):
+                    continue
+
+                # candidatos seg-sex e sábado só se permitido
+                cand_days = []
+                for i in idxs_week:
+                    dia = df_ref.loc[i, "Dia"]
+                    if dia == "dom":
                         continue
+                    if dia == "sáb" and not pode_sab:
+                        continue
+                    cand_days.append(i)
 
-                    # candidatos seg-sex e sábado só se permitido
-                    cand_days = []
-                    for i in idxs_week:
-                        dia = df_ref.loc[i, "Dia"]
-                        if dia == "dom":
+                if dom_idx is None:
+                    target_folgas = 2
+                else:
+                    dom_status = df.loc[dom_idx, "Status"]
+                    target_folgas = 1 if dom_status == "Folga" else 2
+
+                folgas_sem = int((df.loc[cand_days, "Status"] == "Folga").sum()) if cand_days else 0
+
+                while folgas_sem < target_folgas:
+                    counts_day, counts_day_hour = _counts_folgas_day_and_hour(hist_all, colab_by_chapa, chapas, cand_days, df_ref)
+
+                    possiveis = []
+                    for j in cand_days:
+                        if j in locked:
+                            continue
+                        dia = df_ref.loc[j, "Dia"]
+                        if df.loc[j, "Status"] != "Trabalho":
                             continue
                         if dia == "sáb" and not pode_sab:
                             continue
-                        cand_days.append(i)
+                        if not _nao_consecutiva_folga(df, j):
+                            continue
+                        possiveis.append(j)
 
-                    if dom_idx is None:
-                        target_folgas = 2
-                    else:
-                        dom_status = df.loc[dom_idx, "Status"]
-                        target_folgas = 1 if dom_status == "Folga" else 2
+                    if not possiveis:
+                        break
 
-                    folgas_sem = int((df.loc[cand_days, "Status"] == "Folga").sum()) if cand_days else 0
+                    random.shuffle(possiveis)
 
-                    while folgas_sem < target_folgas:
-                        counts_day, counts_day_hour = _counts_folgas_day_and_hour(hist_all, colab_by_chapa, chapas, cand_days, df_ref)
+                    def score(j):
+                        dia = df_ref.loc[j, "Dia"]
+                        weekday_prio = 0 if dia in ["seg", "ter", "qua", "qui", "sex"] else 1
+                        pref_pen = PREF_EVITAR_PENALTY if pref.get(dia, 0) == 1 else 0
+                        return (
+                            counts_day.get(j, 0),
+                            counts_day_hour.get((j, ent_bucket), 0),
+                            pref_pen,
+                            weekday_prio,
+                            random.random()
+                        )
 
-                        possiveis = []
-                        for j in cand_days:
-                            if j in locked:
-                                continue
-                            dia = df_ref.loc[j, "Dia"]
-                            if df.loc[j, "Status"] != "Trabalho":
-                                continue
-                            if dia == "sáb" and not pode_sab:
-                                continue
-                            if not _nao_consecutiva_folga(df, j):
-                                continue
-                            possiveis.append(j)
+                    possiveis.sort(key=score)
+                    pick = possiveis[0]
+                    _set_folga(df, pick, locked_status=locked)
+                    folgas_sem += 1
+                    hist_all[ch] = df
 
-                        if not possiveis:
-                            break
+    # Pós: aplica regras globais por colaborador
+    for ch, df in hist_all.items():
+        ent = colab_by_chapa[ch].get("Entrada", "06:00")
+        locked = locked_idx.get(ch, set())
+        pode_sab = bool(colab_by_chapa[ch].get("Folga_Sab", False))
 
-                        random.shuffle(possiveis)
-
-                        def score(j):
-                            dia = df_ref.loc[j, "Dia"]
-                            weekday_prio = 0 if dia in ["seg", "ter", "qua", "qui", "sex"] else 1
-                            pref_pen = PREF_EVITAR_PENALTY if pref.get(dia, 0) == 1 else 0
-                            return (
-                                counts_day.get(j, 0),
-                                counts_day_hour.get((j, ent_bucket), 0),
-                                pref_pen,
-                                weekday_prio,
-                                random.random()
-                            )
-
-                        possiveis.sort(key=score)
-                        pick = possiveis[0]
-                        _set_folga(df, pick, locked_status=locked)
-                        folgas_sem += 1
-                        hist_all[ch] = df
-
-        # Pós: aplica regras globais por colaborador
-        for ch, df in hist_all.items():
-            ent = colab_by_chapa[ch].get("Entrada", "06:00")
-            locked = locked_idx.get(ch, set())
-            pode_sab = bool(colab_by_chapa[ch].get("Folga_Sab", False))
-
-            if _past:
-                base_first = None
+        if _past:
+            base_first = None
+        else:
+            prev_dom = (estado_prev.get(ch, {}) or {}).get("ultimo_domingo_status", None)
+            if prev_dom == "Folga":
+                base_first = "Trabalho"
+            elif prev_dom == "Trabalho":
+                base_first = "Folga"
             else:
-                prev_dom = (estado_prev.get(ch, {}) or {}).get("ultimo_domingo_status", None)
-                if prev_dom == "Folga":
-                    base_first = "Trabalho"
-                elif prev_dom == "Trabalho":
-                    base_first = "Folga"
-                else:
-                    base_first = None
-            enforce_sundays_1x1_for_employee(df, ent, locked_status=locked, base_first=base_first)
-
-            # 1) Garante 5 dias seguidos antes de mexer em metas semanais
-            enforce_max_5_consecutive_work(
-                df, ent, pode_sab,
-                initial_consec=(0 if _past else int((estado_prev.get(ch, {}) or {}).get('consec_trab_final', 0))),
-                locked_status=locked
-            )
-            enforce_no_consecutive_folga(df, locked_status=locked)
-
-            # 2) Metas semanais podem REMOVER folga => pode criar >5 de novo
-            enforce_weekly_folga_targets(df, df_ref=df_ref, pode_folgar_sabado=pode_sab, locked_status=locked, ent_padrao=ent, prev_status_by_date=prev_status_by_chapa.get(ch, {}))
-
-            # 3) Reforça novamente o limite de 5 depois das metas semanais
-            enforce_max_5_consecutive_work(
-                df, ent, pode_sab,
-                initial_consec=(0 if _past else int((estado_prev.get(ch, {}) or {}).get('consec_trab_final', 0))),
-                locked_status=locked
-            )
-            enforce_no_consecutive_folga(df, locked_status=locked)
-
-            ultima_saida_prev = "" if _past else (estado_prev.get(ch, {}).get("ultima_saida", "") or "")
-            enforce_global_rest_keep_targets(df, ent, locked_status=locked, ultima_saida_prev=ultima_saida_prev)
-
-            # limpeza
-            enforce_no_consecutive_folga(df, locked_status=locked)
-            enforce_global_rest_keep_targets(df, ent, locked_status=locked, ultima_saida_prev=ultima_saida_prev)
-
-            if respeitar_ajustes:
-                _apply_overrides_to_df_inplace(df, setor, ch, ovmap)
-
-            hist_all[ch] = df
-
-        # rebalance por grupo (com estado_prev e travas)
-        for sg, membros in grupos.items():
-            chapas = [m["Chapa"] for m in membros]
-            if chapas:
-                rebalance_folgas_dia(
-                    hist_all, colab_by_chapa, chapas, weeks, df_ref,
-                    estado_prev=estado_prev,
-                    locked_idx=locked_idx,
-                    past_flag=_past,
-                    max_iters=2200
-                )
-
-        # ✅ Pós-rebalance: re-garante regra dos 5 dias por colaborador
-        for ch, df in hist_all.items():
-            ent = colab_by_chapa[ch].get("Entrada", "06:00")
-            locked = locked_idx.get(ch, set())
-            pode_sab = bool(colab_by_chapa[ch].get("Folga_Sab", False))
-
-            enforce_max_5_consecutive_work(
-                df, ent, pode_sab,
-                initial_consec=(0 if _past else int((estado_prev.get(ch, {}) or {}).get('consec_trab_final', 0))),
-                locked_status=locked
-            )
-            enforce_no_consecutive_folga(df, locked_status=locked)
-            hist_all[ch] = df
-
-        # Pós final (garantia)
-        for ch, df in hist_all.items():
-            ent = colab_by_chapa[ch].get("Entrada", "06:00")
-            locked = locked_idx.get(ch, set())
-            ultima_saida_prev = "" if _past else (estado_prev.get(ch, {}).get("ultima_saida", "") or "")
-
-            if _past:
                 base_first = None
-            else:
-                prev_dom = (estado_prev.get(ch, {}) or {}).get("ultimo_domingo_status", None)
-                if prev_dom == "Folga":
-                    base_first = "Trabalho"
-                elif prev_dom == "Trabalho":
-                    base_first = "Folga"
-                else:
-                    base_first = None
-            enforce_sundays_1x1_for_employee(df, ent, locked_status=locked, base_first=base_first)
-            enforce_no_consecutive_folga(df, locked_status=locked)
-            enforce_weekly_folga_targets(df, df_ref=df_ref, pode_folgar_sabado=bool(colab_by_chapa[ch].get('Folga_Sab', False)), locked_status=locked)
+        enforce_sundays_1x1_for_employee(df, ent, locked_status=locked, base_first=base_first)
 
-            # ✅ garante 5 dias depois do weekly (porque weekly pode remover folga)
-            enforce_max_5_consecutive_work(
-                df, ent, bool(colab_by_chapa[ch].get('Folga_Sab', False)),
-                initial_consec=(0 if _past else int((estado_prev.get(ch, {}) or {}).get('consec_trab_final', 0))),
-                locked_status=locked
+        # 1) Garante 5 dias seguidos antes de mexer em metas semanais
+        enforce_max_5_consecutive_work(
+            df, ent, pode_sab,
+            initial_consec=(0 if _past else int((estado_prev.get(ch, {}) or {}).get('consec_trab_final', 0))),
+            locked_status=locked
+        )
+        enforce_no_consecutive_folga(df, locked_status=locked)
+
+        # 2) Metas semanais podem REMOVER folga => pode criar >5 de novo
+        enforce_weekly_folga_targets(df, df_ref=df_ref, pode_folgar_sabado=pode_sab, locked_status=locked)
+
+        # 3) Reforça novamente o limite de 5 depois das metas semanais
+        enforce_max_5_consecutive_work(
+            df, ent, pode_sab,
+            initial_consec=(0 if _past else int((estado_prev.get(ch, {}) or {}).get('consec_trab_final', 0))),
+            locked_status=locked
+        )
+        enforce_no_consecutive_folga(df, locked_status=locked)
+
+        ultima_saida_prev = "" if _past else (estado_prev.get(ch, {}).get("ultima_saida", "") or "")
+        enforce_global_rest_keep_targets(df, ent, locked_status=locked, ultima_saida_prev=ultima_saida_prev)
+
+        # limpeza
+        enforce_no_consecutive_folga(df, locked_status=locked)
+        enforce_global_rest_keep_targets(df, ent, locked_status=locked, ultima_saida_prev=ultima_saida_prev)
+
+        if respeitar_ajustes:
+            _apply_overrides_to_df_inplace(df, setor, ch, ovmap)
+
+        hist_all[ch] = df
+
+    # rebalance por grupo (com estado_prev e travas)
+    for sg, membros in grupos.items():
+        chapas = [m["Chapa"] for m in membros]
+        if chapas:
+            rebalance_folgas_dia(
+                hist_all, colab_by_chapa, chapas, weeks, df_ref,
+                estado_prev=estado_prev,
+                locked_idx=locked_idx,
+                past_flag=_past,
+                max_iters=2200
             )
-            enforce_no_consecutive_folga(df, locked_status=locked)
 
-            enforce_global_rest_keep_targets(df, ent, locked_status=locked, ultima_saida_prev=ultima_saida_prev)
+    # ✅ Pós-rebalance: re-garante regra dos 5 dias por colaborador
+    for ch, df in hist_all.items():
+        ent = colab_by_chapa[ch].get("Entrada", "06:00")
+        locked = locked_idx.get(ch, set())
+        pode_sab = bool(colab_by_chapa[ch].get("Folga_Sab", False))
 
-            if respeitar_ajustes:
-                _apply_overrides_to_df_inplace(df, setor, ch, ovmap)
+        enforce_max_5_consecutive_work(
+            df, ent, pode_sab,
+            initial_consec=(0 if _past else int((estado_prev.get(ch, {}) or {}).get('consec_trab_final', 0))),
+            locked_status=locked
+        )
+        enforce_no_consecutive_folga(df, locked_status=locked)
+        hist_all[ch] = df
 
-            hist_all[ch] = df
+    # Pós final (garantia)
+    for ch, df in hist_all.items():
+        ent = colab_by_chapa[ch].get("Entrada", "06:00")
+        locked = locked_idx.get(ch, set())
+        ultima_saida_prev = "" if _past else (estado_prev.get(ch, {}).get("ultima_saida", "") or "")
 
-        # Estado do mês
-        estado_out = {}
-        for ch, df in hist_all.items():
-            consec = 0
-            for i in range(len(df) - 1, -1, -1):
+        if _past:
+            base_first = None
+        else:
+            prev_dom = (estado_prev.get(ch, {}) or {}).get("ultimo_domingo_status", None)
+            if prev_dom == "Folga":
+                base_first = "Trabalho"
+            elif prev_dom == "Trabalho":
+                base_first = "Folga"
+            else:
+                base_first = None
+        enforce_sundays_1x1_for_employee(df, ent, locked_status=locked, base_first=base_first)
+        enforce_no_consecutive_folga(df, locked_status=locked)
+        enforce_weekly_folga_targets(df, df_ref=df_ref, pode_folgar_sabado=bool(colab_by_chapa[ch].get('Folga_Sab', False)), locked_status=locked)
+
+        # ✅ garante 5 dias depois do weekly (porque weekly pode remover folga)
+        enforce_max_5_consecutive_work(
+            df, ent, bool(colab_by_chapa[ch].get('Folga_Sab', False)),
+            initial_consec=(0 if _past else int((estado_prev.get(ch, {}) or {}).get('consec_trab_final', 0))),
+            locked_status=locked
+        )
+        enforce_no_consecutive_folga(df, locked_status=locked)
+
+        enforce_global_rest_keep_targets(df, ent, locked_status=locked, ultima_saida_prev=ultima_saida_prev)
+
+        if respeitar_ajustes:
+            _apply_overrides_to_df_inplace(df, setor, ch, ovmap)
+
+        hist_all[ch] = df
+
+    # Estado do mês
+    estado_out = {}
+    for ch, df in hist_all.items():
+        consec = 0
+        for i in range(len(df) - 1, -1, -1):
+            if df.loc[i, "Status"] in WORK_STATUSES:
+                consec += 1
+            else:
+                break
+
+        ultima_saida = ""
+        for i in range(len(df) - 1, -1, -1):
+            if df.loc[i, "Status"] in WORK_STATUSES and (df.loc[i, "H_Saida"] or ""):
+                ultima_saida = df.loc[i, "H_Saida"]
+                break
+
+        ultimo_dom = None
+        for i in range(len(df) - 1, -1, -1):
+            if df.loc[i, "Dia"] == "dom":
+                if df.loc[i, "Status"] == "Folga":
+                    ultimo_dom = "Folga"
+                    break
                 if df.loc[i, "Status"] in WORK_STATUSES:
-                    consec += 1
-                else:
+                    ultimo_dom = "Trabalho"
                     break
 
-            ultima_saida = ""
-            for i in range(len(df) - 1, -1, -1):
-                if df.loc[i, "Status"] in WORK_STATUSES and (df.loc[i, "H_Saida"] or ""):
-                    ultima_saida = df.loc[i, "H_Saida"]
-                    break
+        estado_out[ch] = {"consec_trab_final": consec, "ultima_saida": ultima_saida, "ultimo_domingo_status": ultimo_dom}
 
-            ultimo_dom = None
-            for i in range(len(df) - 1, -1, -1):
-                if df.loc[i, "Dia"] == "dom":
-                    if df.loc[i, "Status"] == "Folga":
-                        ultimo_dom = "Folga"
-                        break
-                    if df.loc[i, "Status"] in WORK_STATUSES:
-                        ultimo_dom = "Trabalho"
-                        break
+    return hist_all, estado_out
 
-            estado_out[ch] = {"consec_trab_final": consec, "ultima_saida": ultima_saida, "ultimo_domingo_status": ultimo_dom}
-
-    # =========================================================
-    # DASHBOARD / CALENDÁRIO / BANCO DE HORAS
-    # (resto do arquivo igual ao seu original — UI completa)
-    # =========================================================
+# =========================================================
+# DASHBOARD / CALENDÁRIO / BANCO DE HORAS
+# (resto do arquivo igual ao seu original — UI completa)
+# =========================================================
 
 def banco_horas_df(hist_db: dict[str, pd.DataFrame], colab_by: dict, base_min: int):
     rows = []
@@ -2827,7 +2773,6 @@ if "last_seed" not in st.session_state:
 
 
 db_init()
-auto_daily_backup()
 
 def page_login():
     st.title("🔐 Login por Setor (Usuário / Líder / Admin)")
@@ -3033,14 +2978,10 @@ def page_app():
 
     abas = st.tabs(tabs)
 
-    # Mapeia as abas por nome (evita índice errado quando ADMIN não existe)
-    tab_colab, tab_gerar, tab_ajustes, tab_ferias, tab_excel = abas[:5]
-    tab_admin = abas[5] if is_admin_area else None
-
     # ------------------------------------------------------
     # ABA 1: Colaboradores
     # ------------------------------------------------------
-    with tab_colab:
+    with abas[0]:
         st.subheader("👥 Colaboradores (SEM senha)")
         colaboradores = load_colaboradores_setor(setor)
 
@@ -3124,7 +3065,7 @@ def page_app():
     # ------------------------------------------------------
     # ABA 2: Gerar Escala
     # ------------------------------------------------------
-    with tab_gerar:
+    with abas[1]:
         st.subheader("🚀 Gerar escala")
         st.caption(f"Competência ativa: **{int(st.session_state['cfg_mes']):02d}/{int(st.session_state['cfg_ano'])}**")
 
@@ -3177,7 +3118,7 @@ def page_app():
     # ------------------------------------------------------
     # ABA 3: Ajustes
     # ------------------------------------------------------
-    with tab_ajustes:
+    with abas[2]:
         st.subheader("⚙️ Ajustes (travas) — sempre entram na geração")
 
         with st.container(border=True):
@@ -3370,7 +3311,7 @@ def page_app():
     # ------------------------------------------------------
     # ABA 4: Férias
     # ------------------------------------------------------
-    with tab_ferias:
+    with abas[3]:
         st.subheader("🏖️ Controle de Férias")
 
         st.markdown("---")
@@ -3454,7 +3395,7 @@ def page_app():
     # ------------------------------------------------------
     # ABA 5: Excel
     # ------------------------------------------------------
-    with tab_excel:
+    with abas[4]:
         st.subheader("📥 Excel modelo RH (separado por subgrupo)")
         ano = int(st.session_state["cfg_ano"])
         mes = int(st.session_state["cfg_mes"])
@@ -3557,7 +3498,7 @@ def page_app():
                                 if status == "Férias":
                                     v1, v2 = "FÉRIAS", ""
                                 elif status == "Folga":
-                                    v1, v2 = ("FF" if dia_sem == "dom" else "F"), ""
+                                    v1, v2 = "F", ""
                                 else:
                                     v1, v2 = row["H_Entrada"], row["H_Saida"]
 
@@ -3720,7 +3661,7 @@ def page_app():
     # ABA 6: Admin (somente ADMIN)
     # ------------------------------------------------------
     if is_admin_area:
-        with tab_admin:
+        with abas[5]:
             st.subheader("🔒 Admin do Sistema (somente ADMIN)")
             dfu = admin_list_users()
             st.dataframe(dfu, use_container_width=True, height=420)
@@ -3737,187 +3678,95 @@ def page_app():
                         st.success("Senha resetada!" if ok else "Falha.")
                         st.rerun()
 
+            st.markdown("---")
+            st.subheader("🗄️ Backup / Restauração (escala.db)")
 
-st.markdown("---")
-st.markdown("## 🗄️ Backup / Restauração (escala.db)")
-
-colb1, colb2 = st.columns([1, 1])
-with colb1:
-    if st.button("📦 Criar backup agora", key="adm_backup_now"):
-        p = make_backup_now(tag="manual")
-        st.success(f"Backup criado: {p}")
-
-# listar e baixar backups
-bks = list_backups()
-if bks:
-    bk_sel = st.selectbox("Backups disponíveis", bks, key="adm_bk_sel")
-    try:
-        data = open(bk_sel, "rb").read()
-        st.download_button("⬇️ Baixar backup selecionado", data=data, file_name=os.path.basename(bk_sel), mime="application/octet-stream", key="adm_bk_dl")
-    except Exception as e:
-        st.error(f"Não consegui ler o backup: {e}")
-else:
-    st.info("Nenhum backup encontrado ainda. Crie um primeiro backup.")
-
-st.markdown("### Restaurar um backup")
-up = st.file_uploader("Envie um arquivo .db (backup do escala.db)", type=["db"], key="adm_restore_up")
-if up is not None:
-    if st.button("♻️ Restaurar este backup", key="adm_restore_btn"):
-        ok = restore_db_from_bytes(up.getvalue())
-        if ok:
-            st.success("Backup restaurado! Recarregando o app…")
-            st.rerun()
-        else:
-            st.error("Arquivo inválido (não parece ser um escala.db compatível).")
-
-lastp = meta_get("last_auto_backup_path", "")
-lastd = meta_get("last_auto_backup_date", "")
-if lastd:
-    st.caption(f"Backup automático (1x/dia após 03:00): último em **{lastd}**. Arquivo: {lastp}")
-
-st.markdown("---")
-st.markdown("## 🏷️ Setores (criar / listar)")
-
-try:
-    dfset = pd.DataFrame(listar_setores(), columns=["setor"])
-except Exception:
-    dfset = pd.DataFrame(columns=["setor"])
-if not dfset.empty:
-    st.dataframe(dfset, use_container_width=True, height=200)
-else:
-    st.info("Nenhum setor cadastrado (além de ADMIN/GERAL).")
-
-csa, csb = st.columns([1, 1])
-with csa:
-    novo = st.text_input("Novo setor (ex: FLV)", key="adm_new_setor")
-    if st.button("➕ Criar setor", key="adm_add_setor"):
-        if not novo.strip():
-            st.error("Digite o nome do setor.")
-        else:
-            add_setor(novo.strip())
-            st.success("Setor criado/atualizado!")
-            st.rerun()
-
-with csb:
-    st.caption("Dica: setor é sempre normalizado (sem espaços extras / maiúsculo).")
-
-st.markdown("---")
-st.markdown("## 👥 Importar colaboradores (CSV / Excel)")
-
-st.caption("Formato esperado: nome, chapa, subgrupo, entrada (HH:MM), pode_folgar_sabado (0/1 ou true/false).")
-setor_imp = st.selectbox("Setor destino", listar_setores(), key="adm_imp_setor")
-arq = st.file_uploader("Enviar CSV/XLSX", type=["csv", "xlsx"], key="adm_imp_file")
-if arq is not None:
-    try:
-        import pandas as _pd
-        if arq.name.lower().endswith(".csv"):
-            dfimp = _pd.read_csv(arq)
-        else:
-            dfimp = _pd.read_excel(arq)
-
-        dfimp.columns = [str(c).strip().lower() for c in dfimp.columns]
-        need_cols = {"nome", "chapa"}
-        if not need_cols.issubset(set(dfimp.columns)):
-            st.error("O arquivo precisa ter pelo menos as colunas: nome, chapa.")
-        else:
-            st.dataframe(dfimp.head(30), use_container_width=True, height=240)
-            if st.button("✅ Importar colaboradores", key="adm_imp_go"):
-                n_ok = 0
-                n_fail = 0
-                for _, r in dfimp.iterrows():
-                    nome = str(r.get("nome","")).strip()
-                    chapa = str(r.get("chapa","")).strip()
-                    if not nome or not chapa:
-                        n_fail += 1
-                        continue
-                    subg = str(r.get("subgrupo","SEM SUBGRUPO")).strip() or "SEM SUBGRUPO"
-                    ent = str(r.get("entrada","12:40")).strip() or "12:40"
-                    sab = r.get("pode_folgar_sabado", False)
-                    # normaliza bool
-                    sab_bool = False
-                    if isinstance(sab, (int, float)):
-                        sab_bool = bool(int(sab))
-                    elif isinstance(sab, str):
-                        sab_bool = sab.strip().lower() in ("1","true","sim","s","yes","y")
-                    else:
-                        sab_bool = bool(sab)
-
+            c1, c2 = st.columns([1, 2])
+            with c1:
+                if st.button("Criar backup agora", key="adm_backup_now"):
                     try:
-                        add_colaborador(setor_imp, nome, chapa, subg, ent, sab_bool)
-                        n_ok += 1
-                    except Exception:
-                        n_fail += 1
-                st.success(f"Importação concluída. OK: {n_ok} | Falhas: {n_fail}")
-                st.rerun()
-    except Exception as e:
-        st.error(f"Falha ao ler arquivo: {e}")
+                        p = create_backup_now(prefix="manual")
+                        st.success(f"Backup criado: {os.path.basename(p)}")
+                    except Exception as e:
+                        st.error(f"Falha ao criar backup: {e}")
 
-st.markdown("---")
-st.markdown("## 📄 Importar escala a partir de PDF (assistido)")
+            bks = list_backups()
+            bk_sel = st.selectbox("Backups disponíveis", bks, key="adm_bk_sel") if bks else None
+            if bk_sel:
+                bk_path = os.path.join(BACKUP_DIR, bk_sel)
+                with open(bk_path, "rb") as f:
+                    st.download_button("⬇️ Baixar backup selecionado", data=f, file_name=bk_sel, mime="application/octet-stream", key="adm_bk_dl")
 
-st.caption("Importar PDF 100% automático é difícil (PDF pode vir como imagem). Aqui a importação é *assistida*: extraímos texto e você revisa/ajusta antes de importar.")
-pdf = st.file_uploader("Enviar PDF da escala", type=["pdf"], key="adm_pdf_up")
-if pdf is not None:
-    try:
-        import pdfplumber
-        import pandas as _pd
-        with pdfplumber.open(pdf) as _p:
-            txt = []
-            for pg in _p.pages:
-                t = pg.extract_text() or ""
-                if t:
-                    txt.append(t)
-        full = "\n".join(txt).strip()
-        st.text_area("Texto extraído (para conferência)", value=full[:20000], height=260)
+            st.markdown("### Restaurar um backup")
+            up = st.file_uploader("Envie um arquivo .db (backup do escala.db)", type=["db"], key="adm_bk_up")
+            if up is not None:
+                if st.button("Restaurar este backup", key="adm_bk_restore"):
+                    try:
+                        restore_backup_from_bytes(up.getvalue())
+                        st.success("Backup restaurado! Recarregando...")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Falha ao restaurar: {e}")
 
-        st.info("Se o PDF vier como imagem e não tiver texto, o campo acima pode vir vazio. Nesse caso, o caminho mais seguro é você converter o PDF para Excel/CSV e importar no bloco de cima.")
-    except Exception as e:
-        st.error(f"Não consegui ler o PDF: {e}")
+            st.caption(f"Backup automático (1x/dia) após {AUTO_BACKUP_HOUR:02d}:00. Pasta: {BACKUP_DIR}/")
+
+            st.markdown("---")
+            st.subheader("🏷️ Setores (criar / listar)")
+            setores = listar_setores_db()
+            st.info("Setores cadastrados: " + ", ".join(setores))
+
+            novo_setor = st.text_input("Novo setor (ex: FLV)", key="adm_new_setor")
+            if st.button("➕ Criar setor", key="adm_create_setor"):
+                try:
+                    criar_setor_db(novo_setor)
+                    st.success("Setor criado/garantido.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(str(e))
+
+            st.markdown("---")
+            st.subheader("👥 Importar colaboradores (CSV / Excel)")
+            st.write("Colunas aceitas: **nome, chapa, subgrupo, entrada, folga_sabado** (folga_sabado opcional).")
+            setor_imp = st.selectbox("Setor destino", setores, key="adm_imp_setor")
+            imp = st.file_uploader("Enviar CSV/XLSX", type=["csv", "xlsx"], key="adm_imp_file")
+            if imp is not None:
+                try:
+                    if imp.name.lower().endswith(".csv"):
+                        df_imp = pd.read_csv(imp)
+                    else:
+                        df_imp = pd.read_excel(imp)
+                    st.dataframe(df_imp.head(50), use_container_width=True, height=260)
+                    if st.button("Importar agora", key="adm_imp_run"):
+                        ins, upd = importar_colaboradores_df(setor_imp, df_imp)
+                        st.success(f"Importação concluída. Inseridos: {ins} | Atualizados: {upd}")
+                except Exception as e:
+                    st.error(f"Erro ao ler/importar: {e}")
+
+            st.markdown("---")
+            st.subheader("📄 Importar escala a partir de PDF (assistido)")
+            st.caption("Importação 100% automática de PDF pode falhar (muitos PDFs são imagem). Aqui é assistido: você envia o PDF, o sistema tenta extrair texto e você confere antes de usar.")
+            pdf = st.file_uploader("Enviar PDF da escala", type=["pdf"], key="adm_pdf")
+            if pdf is not None:
+                try:
+                    import PyPDF2
+                    reader = PyPDF2.PdfReader(pdf)
+                    txt = []
+                    for page in reader.pages[:10]:
+                        t = page.extract_text() or ""
+                        txt.append(t)
+                    extracted = "\n\n".join(txt).strip()
+                    if not extracted:
+                        st.warning("Não consegui extrair texto (provável PDF imagem). Você pode converter para PDF pesquisável ou mandar uma versão em Excel/CSV.")
+                    else:
+                        st.text_area("Texto extraído (revise)", extracted, height=250, key="adm_pdf_text")
+                        st.info("Próximo passo: me mande o PDF/Excel de um mês 'bom' e eu encaixo um parser específico do seu modelo de impressão para criar folgas/horários automaticamente.")
+                except Exception as e:
+                    st.error(f"Falha ao ler PDF: {e}")
+
 
 
 
 # =========================================================
-
-
-def listar_setores():
-    con = db_conn()
-    cur = con.cursor()
-    cur.execute("SELECT nome FROM setores ORDER BY nome")
-    rows = [r[0] for r in cur.fetchall()]
-    con.close()
-    return rows
-
-
-
-def add_setor(nome: str):
-    nome = (nome or "").strip().upper()
-    if not nome:
-        return
-    con = db_conn()
-    cur = con.cursor()
-    cur.execute("INSERT OR IGNORE INTO setores(nome) VALUES(?)", (nome,))
-    con.commit()
-    con.close()
-
-
-
-def add_colaborador(setor: str, nome: str, chapa: str, subgrupo: str, entrada: str, pode_folgar_sabado: bool):
-    setor = (setor or "").strip().upper()
-    add_setor(setor)
-    add_setor(setor)
-    nome = (nome or "").strip()
-    chapa = (chapa or "").strip()
-    subgrupo = (subgrupo or "SEM SUBGRUPO").strip().upper()
-    entrada = (entrada or "12:40").strip()
-    con = db_conn()
-    cur = con.cursor()
-    cur.execute("""
-        INSERT OR REPLACE INTO colaboradores(setor, chapa, nome, subgrupo, entrada, pode_folgar_sabado)
-        VALUES(?,?,?,?,?,?)
-    """, (setor, chapa, nome, subgrupo, entrada, 1 if pode_folgar_sabado else 0))
-    con.commit()
-    con.close()
-
 # MAIN
 # =========================================================
 db_init()
