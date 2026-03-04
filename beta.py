@@ -487,7 +487,14 @@ def aplicar_edicoes_e_exclusoes_glicemia(df_editado: pd.DataFrame):
     df_editado["Dose"] = df_editado.get("Dose", "").astype(str).str.strip()
     df_editado["Valor"] = pd.to_numeric(df_editado["Valor"], errors="coerce").fillna(0).astype(int)
 
-    ids_user = set(base.loc[base["Usuario"] == st.session_state.user_email, "ID"].astype(str).tolist())
+    user_email = str(st.session_state.get("user_email", "") or "").strip()
+    # Permitir edição em modo single-user/legado: se "Usuario" estiver vazio (ou user_email não definido),
+    # considera registros sem usuário como pertencentes ao usuário atual.
+    if user_email:
+        base_own = base[base["Usuario"].astype(str).str.strip().isin([user_email, ""])].copy()
+    else:
+        base_own = base.copy()
+    ids_user = set(base_own["ID"].astype(str).tolist())
     ids_excluir = set(df_editado.loc[df_editado["Excluir"] == True, "ID"].tolist()).intersection(ids_user)
 
     # atualiza
@@ -496,7 +503,10 @@ def aplicar_edicoes_e_exclusoes_glicemia(df_editado: pd.DataFrame):
         rid = str(r["ID"])
         if rid not in ids_user:
             continue
-        mask = (base["Usuario"] == st.session_state.user_email) & (base["ID"].astype(str) == rid)
+        if user_email:
+            mask = (base["Usuario"].astype(str).str.strip().isin([user_email, ""])) & (base["ID"].astype(str) == rid)
+        else:
+            mask = (base["ID"].astype(str) == rid)
         if mask.any():
             base.loc[mask, "Data"] = r["Data"]
             base.loc[mask, "Hora"] = r["Hora"]
@@ -506,7 +516,10 @@ def aplicar_edicoes_e_exclusoes_glicemia(df_editado: pd.DataFrame):
 
     # exclui
     if ids_excluir:
-        base = base[~((base["Usuario"] == st.session_state.user_email) & (base["ID"].astype(str).isin(ids_excluir)))].copy()
+        if user_email:
+            base = base[~(base["Usuario"].astype(str).str.strip().isin([user_email, ""]) & (base["ID"].astype(str).isin(ids_excluir)))].copy()
+        else:
+            base = base[~(base["ID"].astype(str).isin(ids_excluir))].copy()
 
     base.to_csv(ARQ_G, index=False)
 
