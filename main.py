@@ -3744,25 +3744,240 @@ def page_app():
                     st.error(f"Erro ao ler/importar: {e}")
 
             st.markdown("---")
-            st.subheader("📄 Importar escala a partir de PDF (assistido)")
-            st.caption("Importação 100% automática de PDF pode falhar (muitos PDFs são imagem). Aqui é assistido: você envia o PDF, o sistema tenta extrair texto e você confere antes de usar.")
+            st.subheader("📄 Importar escala a partir de PDF (assistido) — v3.0")
+            st.caption("Aqui o sistema tenta ler o PDF (texto). Se for PDF-imagem, ele não vai conseguir sem OCR. "
+                       "Quando conseguir ler, ele tenta reconhecer o modelo de impressão (linhas: 'Data / Dia' + 'Entrada') "
+                       "e monta uma prévia por colaborador/dia. Você confere e aplica como ajustes (overrides).")
+
+            # --- helpers locais (mantém simples e evita dependências obrigatórias)
+            import re as _re
+            from io import BytesIO as _BytesIO
+
+            def _extract_pdf_text_bytes(pdf_bytes: bytes, max_pages: int = 20) -> str:
+                # 1) tenta pdfplumber (melhor para layout)
+                try:
+                    import pdfplumber  # type: ignore
+                    out = []
+                    with pdfplumber.open(_BytesIO(pdf_bytes)) as p:
+                        for i, page in enumerate(p.pages[:max_pages]):
+                            t = page.extract_text() or ""
+                            if t.strip():
+                                out.append(t)
+                    txt = "\n\n".join(out).strip()
+                    if txt:
+                        return txt
+                except Exception:
+                    pass
+
+                # 2) fallback: PyPDF2
+                try:
+                    import PyPDF2  # type: ignore
+                    reader = PyPDF2.PdfReader(_BytesIO(pdf_bytes))
+                    out = []
+                    for page in reader.pages[:max_pages]:
+                        t = page.extract_text() or ""
+                        if t.strip():
+                            out.append(t)
+                    return "\n\n".join(out).strip()
+                except Exception:
+                    return ""
+
+            def _norm_hhmm(s: str) -> str:
+                s = (s or "").strip().replace(".", ":")
+                if _re.fullmatch(r"\d{1,2}:\d{2}", s):
+                    hh, mm = s.split(":")
+                    return f"{int(hh):02d}:{int(mm):02d}"
+                if _re.fullmatch(r"\d{3,4}", s):
+                    s = s.zfill(4)
+                    return f"{s[:2]}:{s[2:]}"
+                return s
+
+            def _parse_pdf_modelo_oficial(extracted: str, ano: int, mes: int) -> pd.DataFrame:
+                """
+                Parser heurístico do modelo oficial (o mesmo estilo do PDF do RH e do gerador do app):
+                - Procura blocos por colaborador usando '(CHAPA)' no cabeçalho: 'NOME (020.1234)'.
+                - Dentro do bloco, procura 'Data / Dia' para capturar os dias do mês.
+                - Depois captura a PRIMEIRA linha 'Entrada' e lê os valores dia-a-dia:
+                    'FOLG' => Folga
+                    'FER'  => Férias
+                    'HH:MM' => Trabalho (entrada)
+                Retorna DF longo: Chapa, Nome, Dia, Status, H_Entrada
+                """
+                if not extracted:
+                    return pd.DataFrame(columns=["Chapa","Nome","Dia","Status","H_Entrada"])
+
+                qtd = calendar.monthrange(int(ano), int(mes))[1]
+                # Normaliza espaços
+                txt = _re.sub(r"[\t\r]+", " ", extracted)
+                txt = _re.sub(r" +", " ", txt)
+
+                # Split por ocorrências "NOME (020.1234)"
+                # Captura tudo antes do (chapa) como nome (pode ter acento)
+                pat = _re.compile(r"([A-ZÀ-Ü0-9 .,'-]{3,}?)\s*\((\d{3}\.\d{4})\)")
+                hits = list(pat.finditer(extracted))
+                if not hits:
+                    # fallback: só chapas
+                    pat2 = _re.compile(r"(\d{3}\.\d{4})")
+                    hits2 = list(pat2.finditer(extracted))
+                    if not hits2:
+                        return pd.DataFrame(columns=["Chapa","Nome","Dia","Status","H_Entrada"])
+                    # cria blocos artificiais
+                    hits = []
+                    for h in hits2:
+                        class _H:  # shim simples
+                            def __init__(self, m): self._m=m
+                            def start(self): return self._m.start()
+                            def group(self, i): return "" if i==1 else self._m.group(1)
+                        hits.append(_H(h))
+
+                rows = []
+                for idx, h in enumerate(hits):
+                    start = h.start()
+                    end = hits[idx+1].start() if idx+1 < len(hits) else len(extracted)
+                    block = extracted[start:end]
+
+                    nome = (h.group(1) or "").strip(" -") if hasattr(h, "group") else ""
+                    chapa = (h.group(2) if hasattr(h, "group") else h.group(1)) or ""
+                    chapa = str(chapa).strip()
+
+                    # procura a linha Data / Dia
+                    mdd = _re.search(r"Data\s*/\s*Dia\s+(.+?)\s+Dia\s*/\s*Semana", block, flags=_re.S|_re.I)
+                    if not mdd:
+                        # fallback: tenta pegar todos os números 1..qtd em sequência
+                        nums = [int(x) for x in _re.findall(r"\b\d{1,2}\b", block)]
+                        # mantém apenas 1..qtd e pega a primeira sequência crescente
+                        nums = [n for n in nums if 1 <= n <= qtd]
+                        seq = []
+                        for n in nums:
+                            if not seq or n == seq[-1] + 1:
+                                seq.append(n)
+                                if len(seq) >= 10:  # já suficiente para confiar que é a linha de dias
+                                    break
+                        dias = list(range(1, qtd+1))
+                    else:
+                        # tokens da primeira linha
+                        tokens = _re.findall(r"\b\d{1,2}\b", mdd.group(1))
+                        dias = []
+                        for t in tokens:
+                            n = int(t)
+                            if 1 <= n <= qtd:
+                                dias.append(n)
+                        # se vier incompleto, completa
+                        if len(dias) != qtd:
+                            dias = list(range(1, qtd+1))
+
+                    # captura a primeira linha "Entrada"
+                    ment = _re.search(r"\bEntrada\b\s+(.+?)\s+(Sa[ií]da\s+Refei[cç][aã]o|Saida\s+Refeicao)", block, flags=_re.S|_re.I)
+                    if not ment:
+                        # fallback: procura 'Entrada' e pega o trecho até 'Saída' ou até 2000 chars
+                        ment2 = _re.search(r"\bEntrada\b\s+(.{1,2000})", block, flags=_re.S|_re.I)
+                        ent_blob = ment2.group(1) if ment2 else ""
+                    else:
+                        ent_blob = ment.group(1)
+
+                    # tokens candidatos (FOLG/FER/HH:MM)
+                    ent_tokens = _re.findall(r"(FOLG|FER|\d{1,2}:\d{2}|\d{3,4})", ent_blob.upper())
+                    ent_tokens = [_norm_hhmm(t) for t in ent_tokens]
+
+                    # garante qtd tokens (se vier a menos, preenche vazio)
+                    if len(ent_tokens) < qtd:
+                        ent_tokens = (ent_tokens + [""]*qtd)[:qtd]
+                    else:
+                        ent_tokens = ent_tokens[:qtd]
+
+                    for d in range(1, qtd+1):
+                        tok = (ent_tokens[d-1] or "").strip().upper()
+                        if tok == "FOLG":
+                            rows.append([chapa, nome, d, "Folga", ""])
+                        elif tok in ("FER", "FÉR"):
+                            rows.append([chapa, nome, d, "Férias", ""])
+                        elif _re.fullmatch(r"\d{2}:\d{2}", tok):
+                            rows.append([chapa, nome, d, "Trabalho", tok])
+                        else:
+                            # se vazio, não força nada (deixa o motor gerar depois)
+                            continue
+
+                df_out = pd.DataFrame(rows, columns=["Chapa","Nome","Dia","Status","H_Entrada"])
+                # limpa duplicatas (às vezes o PDF repete cabeçalho)
+                if not df_out.empty:
+                    df_out = df_out.drop_duplicates(subset=["Chapa","Dia"], keep="first")
+                return df_out
+
+            setores = listar_setores_db()
+            setor_pdf = st.selectbox("Setor (para aplicar/importar)", setores, key="adm_pdf_setor")
+            col1, col2 = st.columns(2)
+            with col1:
+                ano_pdf = st.number_input("Ano do PDF", min_value=2020, max_value=2100, value=date.today().year, step=1, key="adm_pdf_ano")
+            with col2:
+                mes_pdf = st.number_input("Mês do PDF", min_value=1, max_value=12, value=date.today().month, step=1, key="adm_pdf_mes")
+
             pdf = st.file_uploader("Enviar PDF da escala", type=["pdf"], key="adm_pdf")
             if pdf is not None:
                 try:
-                    import PyPDF2
-                    reader = PyPDF2.PdfReader(pdf)
-                    txt = []
-                    for page in reader.pages[:10]:
-                        t = page.extract_text() or ""
-                        txt.append(t)
-                    extracted = "\n\n".join(txt).strip()
+                    b = pdf.getvalue()
+                    extracted = _extract_pdf_text_bytes(b)
                     if not extracted:
-                        st.warning("Não consegui extrair texto (provável PDF imagem). Você pode converter para PDF pesquisável ou mandar uma versão em Excel/CSV.")
+                        st.warning("Não consegui extrair texto desse PDF. Normalmente isso acontece quando o PDF é uma imagem (escaneado). "
+                                   "Dica: exporte do sistema original como PDF 'pesquisável' (texto) ou envie CSV/Excel.")
                     else:
-                        st.text_area("Texto extraído (revise)", extracted, height=250, key="adm_pdf_text")
-                        st.info("Próximo passo: me mande o PDF/Excel de um mês 'bom' e eu encaixo um parser específico do seu modelo de impressão para criar folgas/horários automaticamente.")
+                        st.text_area("Texto extraído (para conferência)", extracted[:20000], height=220, key="adm_pdf_text_v3")
+
+                        df_parsed = _parse_pdf_modelo_oficial(extracted, int(ano_pdf), int(mes_pdf))
+                        if df_parsed.empty:
+                            st.warning("Extraí texto, mas não consegui reconhecer o modelo (Data/Dia + Entrada). "
+                                       "Se você me mandar 1 PDF 'bom' (o mesmo modelo sempre), eu ajusto o parser para ficar 100% automático.")
+                        else:
+                            st.success(f"Reconheci {df_parsed['Chapa'].nunique()} colaborador(es) e {len(df_parsed)} marcações (dias com Folga/Férias/Entrada).")
+
+                            # Prévia pivot (Nome/Chapa por dia)
+                            qtd = calendar.monthrange(int(ano_pdf), int(mes_pdf))[1]
+                            pv = df_parsed.copy()
+                            pv["Valor"] = pv.apply(lambda r: "F" if r["Status"]=="Folga" else ("FER" if r["Status"]=="Férias" else r["H_Entrada"]), axis=1)
+                            pv["Dia"] = pv["Dia"].astype(int)
+                            pv = pv.pivot_table(index=["Nome","Chapa"], columns="Dia", values="Valor", aggfunc="first")
+                            pv = pv.reindex(columns=list(range(1, qtd+1)))
+                            st.dataframe(pv.reset_index(), use_container_width=True, height=260)
+
+                            st.markdown("**Aplicar importação** (vira override — trava Status/H_Entrada nos dias reconhecidos).")
+                            aplicar_entradas = st.checkbox("Aplicar também horários de entrada (H_Entrada)", value=True, key="adm_pdf_apply_ent")
+                            aplicar_status = st.checkbox("Aplicar Status (Folga/Férias)", value=True, key="adm_pdf_apply_st")
+
+                            if st.button("✅ Aplicar no mês selecionado", key="adm_pdf_apply_btn"):
+                                # 1) garante colaboradores (nome/chapa) e perfil básico (entrada padrão)
+                                colabs = load_colaboradores_setor(setor_pdf)
+                                existe = {str(c["Chapa"]).strip(): c for c in colabs}
+                                for ch, nm in df_parsed[["Chapa","Nome"]].drop_duplicates().itertuples(index=False):
+                                    ch = str(ch).strip()
+                                    nm = str(nm).strip() or ch
+                                    if ch and ch not in existe:
+                                        create_colaborador(nm, setor_pdf, ch)
+
+                                # 2) aplica overrides
+                                applied = 0
+                                for _, r in df_parsed.iterrows():
+                                    ch = str(r["Chapa"]).strip()
+                                    d = int(r["Dia"])
+                                    stt = str(r["Status"]).strip()
+                                    ent = str(r["H_Entrada"] or "").strip()
+
+                                    if aplicar_status and stt in ("Folga","Férias","Trabalho"):
+                                        # Observação: Férias reais são controladas pela aba Férias.
+                                        # Se vier "Férias" do PDF, aplicamos como "Folga" para não quebrar a regra do app.
+                                        if stt == "Férias":
+                                            set_override(setor_pdf, int(ano_pdf), int(mes_pdf), ch, d, "status", "Folga")
+                                        else:
+                                            set_override(setor_pdf, int(ano_pdf), int(mes_pdf), ch, d, "status", stt)
+
+                                    if aplicar_entradas and ent and stt == "Trabalho":
+                                        set_override(setor_pdf, int(ano_pdf), int(mes_pdf), ch, d, "h_entrada", ent)
+
+                                    applied += 1
+
+                                st.success(f"Aplicado: {applied} override(s). Agora use 'Gerar agora (respeitando ajustes)' para completar o restante.")
+                                st.rerun()
+
                 except Exception as e:
-                    st.error(f"Falha ao ler PDF: {e}")
+                    st.error(f"Falha ao ler/importar PDF: {e}")
 
 
 
