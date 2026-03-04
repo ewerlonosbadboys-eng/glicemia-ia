@@ -43,6 +43,7 @@ import random
 import calendar
 import sqlite3
 import shutil
+import os
 import hashlib
 import secrets
 from openpyxl.styles import PatternFill, Alignment, Border, Side, Font
