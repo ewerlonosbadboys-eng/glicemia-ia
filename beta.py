@@ -1210,8 +1210,8 @@ else:
                 if st.button("✅ Salvar alterações do histórico", use_container_width=True):
                     aplicar_edicoes_e_exclusoes_glicemia(df_edit)
                     st.success("Histórico atualizado!")
-    # ✅ limpa o cache/estado do data_editor para recarregar do CSV
-    st.session_state.pop("glicemia_editor", None)
+                    # ✅ limpa o cache/estado do data_editor para recarregar do CSV
+                    st.session_state.pop("glicemia_editor", None)
 
                     st.rerun()
             with col_b:
