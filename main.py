@@ -2504,12 +2504,6 @@ except Exception:
 
         estado_out[ch] = {"consec_trab_final": consec, "ultima_saida": ultima_saida, "ultimo_domingo_status": ultimo_dom}
 
-def gerar_escala_setor_por_subgrupo(...):
-    ...
-    enforce_weekly_folga_targets(df, df_ref=df_ref, pode_folgar_sabado=pode_sab, locked_status=locked)
-
-    return hist_all, estado_out
-
 # =========================================================
 # DASHBOARD / CALENDÁRIO / BANCO DE HORAS
 # (resto do arquivo igual ao seu original — UI completa)
