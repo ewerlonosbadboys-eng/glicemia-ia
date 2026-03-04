@@ -38,7 +38,6 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta, date
-import datetime as dt
 import io
 import random
 import calendar
@@ -55,7 +54,6 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, 
 from reportlab.lib.pagesizes import landscape, A4
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib import colors
-import math
 st.set_page_config(page_title="Escala 5x2 Oficial", layout="wide")
 
 
@@ -1883,354 +1881,97 @@ def enforce_max_5_consecutive_work(df, ent_padrao, pode_folgar_sabado: bool, ini
             consec = 0
         i += 1
 
-def enforce_weekly_folga_targets(df, df_ref=None, pode_folgar_sabado=True, locked_status=None):
+def enforce_weekly_folga_targets(df, df_ref, pode_folgar_sabado, locked_status, ent_padrao, prev_status_by_date=None):
+    """Regra SUPREMA semanal (SEG->DOM): cada colaborador deve ter exatamente 2 folgas na semana.
+    Corrige também a semana de virada de mês usando o histórico do mês anterior (prev_status_by_date).
+    - Não altera dias travados (locked_status).
+    - Ajusta apenas dentro do mês atual (df), usando prev_status_by_date só para CONTAR.
     """
-    Regra semanal (SEMANA = segunda -> domingo), inclusive na virada do mês.
-    Objetivo: manter **2 folgas por semana** (modelo 5x2), mas com distribuição coerente:
-      - Se DOMINGO for FOLGA: a semana deve ter **apenas 1 folga adicional** (total 2).
-      - Se DOMINGO for TRABALHO: a semana deve ter **2 folgas** (total 2), ambas em dias úteis/sábado.
+    prev_status_by_date = prev_status_by_date or {}
 
-    Importante:
-    - Considera janela (df_ref) quando fornecida para enxergar a semana completa na virada do mês.
-    - Respeita "travados" (locked_status) quando informado.
-    - Evita criar folga no sábado se pode_folgar_sabado=False.
-    """
-    import datetime as dt
+    # Datas do mês atual (df_ref) e mapeamento Data->índice
+    datas = [pd.to_datetime(x).date() for x in df_ref["Data"].tolist()]
+    date_to_idx = {d: i for i, d in enumerate(datas)}
 
-    if locked_status is None:
-        locked_status = {}
+    # Agrupa por semana (âncora = segunda-feira)
+    weeks = {}
+    for d in datas:
+        monday = d - timedelta(days=d.weekday())  # seg=0 ... dom=6
+        weeks.setdefault(monday, []).append(d)
 
-    # Dataframe de referência para enxergar a semana completa (virada do mês)
-    ref = df_ref if df_ref is not None else df
-
-    if "Data" not in df.columns or "Status" not in df.columns:
-        return  # formato inesperado (segurança)
-
-    # Mapas data->index (permite operar mesmo se df e ref tiverem janelas diferentes)
-    date_to_idx_df = {d: i for i, d in enumerate(df["Data"].tolist())}
-    ref_dates = ref["Data"].tolist()
-    ref_status = ref["Status"].tolist() if "Status" in ref.columns else None
-
-    def _is_locked(date_obj):
-        # locked_status pode vir como {date: True/False} ou {date: {"locked":...}}
-        v = locked_status.get(date_obj)
-        if isinstance(v, dict):
-            return bool(v.get("locked"))
-        return bool(v)
+    # Helpers locais
+    def _get_status_for_date(d):
+        if d in date_to_idx:
+            return df.loc[date_to_idx[d], "Status"]
+        return prev_status_by_date.get(d, None)
 
     def _is_folga_status(s):
-        return s in ("F", "FF")
+        return (s == "Folga")
 
-    def _is_work_status(s):
-        # WORK_STATUSES já existe no app
-        return s in WORK_STATUSES
+    for monday in sorted(weeks.keys()):
+        week_dates = [monday + timedelta(days=i) for i in range(7)]
 
-    def _pick_work_template(ix_week):
-        # pega um "Status" de trabalho já existente na semana para copiar
-        for ix in ix_week:
-            if ix in df.index:
-                s = df.at[ix, "Status"]
-                if _is_work_status(s):
-                    return s
-        # fallback: primeiro horário conhecido
-        try:
-            return sorted(list(WORK_STATUSES))[0]
-        except Exception:
-            return None
+        # conta folgas na semana COMPLETA (incluindo dias do mês anterior se houver)
+        folga_count = 0
+        for wd in week_dates:
+            if _is_folga_status(_get_status_for_date(wd)):
+                folga_count += 1
 
-    # Itera sobre semanas pelo calendário (segunda -> domingo) usando ref_dates
-    seen_weeks = set()
-    for d in ref_dates:
-        if not isinstance(d, (dt.date, dt.datetime)):
-            continue
-        if isinstance(d, dt.datetime):
-            d = d.date()
-        monday = d - dt.timedelta(days=d.weekday())  # seg=0 ... dom=6
-        if monday in seen_weeks:
-            continue
-        seen_weeks.add(monday)
-        sunday = monday + dt.timedelta(days=6)
+        target = 2  # 5x2 = 2 folgas por semana (SEG->DOM)
 
-        # Índices (no ref) para os 7 dias
-        ref_idx_week = []
-        for k in range(7):
-            dk = monday + dt.timedelta(days=k)
-            # só inclui dias que existem no ref (janela pode começar no meio)
-            if dk in date_to_idx_df or (df_ref is not None and dk in {rd if isinstance(rd, dt.date) else rd.date() for rd in ref_dates}):
-                ref_idx_week.append(dk)
-
-        # Constrói lista de índices em df para esses dias (apenas os que existem em df)
-        idx_week = [date_to_idx_df[dk] for dk in ref_idx_week if dk in date_to_idx_df]
-
-        if not idx_week:
-            continue
-
-        # Status do domingo (preferir ref se existir; senão df)
-        dom_status = None
-        # tenta pegar do df primeiro
-        if sunday in date_to_idx_df:
-            dom_status = df.at[date_to_idx_df[sunday], "Status"]
-        # se não tem no df, tenta no ref (virada de mês)
-        if dom_status is None and df_ref is not None and "Status" in ref.columns:
-            # localizar sunday no ref por data
-            for i, rd in enumerate(ref_dates):
-                rdd = rd.date() if isinstance(rd, dt.datetime) else rd
-                if rdd == sunday:
-                    dom_status = ref.at[i, "Status"]
-                    break
-
-        dom_is_folga = _is_folga_status(dom_status)
-
-        # Target total semanal (5x2): sempre 2 folgas
-        TARGET_TOTAL = 2
-        # Se domingo for folga, precisa de 1 folga adicional; se domingo trabalhar, precisa de 2 folgas (todas fora do domingo)
-        TARGET_WEEKDAY_FOLGAS = 1 if dom_is_folga else 2
-
-        # Contagens atuais na SEMANA (no df)
-        folgas = [ix for ix in idx_week if _is_folga_status(df.at[ix, "Status"])]
-        total_folgas = len(folgas)
-
-        # --- 1) Reduz excesso de folgas (ex.: domingo + 2 dias = 3)
-        if total_folgas > TARGET_TOTAL:
-            # remove primeiro as folgas fora do domingo e fora de travas
-            # (mantém domingo se ele já é folga)
-            candidates = []
-            for ix in folgas:
-                day = df.at[ix, "Data"]
-                day = day.date() if isinstance(day, dt.datetime) else day
-                if dom_is_folga and day == sunday:
-                    continue
-                if _is_locked(day):
-                    continue
-                candidates.append(ix)
-
-            work_template = _pick_work_template(idx_week)
-            for ix in candidates:
-                if total_folgas <= TARGET_TOTAL:
-                    break
-                if work_template is None:
-                    break
-                _set_trabalho(df, ix, work_template, locked=False)
-                total_folgas -= 1
-
-        # Recalcula após possível redução
-        folgas = [ix for ix in idx_week if _is_folga_status(df.at[ix, "Status"])]
-        total_folgas = len(folgas)
-
-        # --- 2) Garante quantidade de folgas fora do domingo conforme regra
-        # Conta folgas fora do domingo (inclui sábado)
-        weekday_folgas = 0
-        for ix in folgas:
-            day = df.at[ix, "Data"]
-            day = day.date() if isinstance(day, dt.datetime) else day
-            if day == sunday:
-                continue
-            weekday_folgas += 1
-
-        # Se domingo é folga e já tem sábado folga, weekday_folgas pode ser 1 e está ok (domingo+sab = 2).
-        # Se domingo é folga e weekday_folgas > 1, já deveria ter sido reduzido acima.
-
-        # Adiciona folgas se estiver faltando (respeitando travas e sábado)
-        if weekday_folgas < TARGET_WEEKDAY_FOLGAS:
-            # candidatos: dias da semana (seg..sab) que são trabalho e não travados
-            days_order = sorted(idx_week, key=lambda ix: df.at[ix, "Data"])
+        # 1) Se tem folga demais (>2), transformar folga extra em trabalho (somente dentro do mês atual)
+        if folga_count > target:
+            # candidatos: folgas no mês atual não travadas
             cand = []
-            for ix in days_order:
-                day = df.at[ix, "Data"]
-                day = day.date() if isinstance(day, dt.datetime) else day
-                wd = day.weekday()
-                if wd == 6:  # domingo
+            for wd in week_dates:
+                if wd not in date_to_idx:
                     continue
-                if (wd == 5) and (not pode_folgar_sabado):
+                i = date_to_idx[wd]
+                if _locked(locked_status, i):
                     continue
-                if _is_locked(day):
+                if df.loc[i, "Status"] == "Folga":
+                    # preferência: tirar folga em dias úteis antes de mexer no domingo
+                    score = 0
+                    if wd.weekday() == 6:  # domingo
+                        score += 100
+                    if wd.weekday() == 5:  # sábado
+                        score += 10
+                    cand.append((score, i))
+            cand.sort()
+
+            need = folga_count - target
+            for _, i in cand:
+                if need <= 0:
+                    break
+                _set_trabalho(df, i, ent_padrao, locked=False, reason="weekly_fix_remove_extra_folga")
+                need -= 1
+
+        # 2) Se falta folga (<2), transformar trabalho em folga (somente dentro do mês atual)
+        elif folga_count < target:
+            need = target - folga_count
+            cand = []
+            for wd in week_dates:
+                if wd not in date_to_idx:
                     continue
-                if _is_work_status(df.at[ix, "Status"]):
-                    cand.append(ix)
-
-            # heurística: prioriza terça/quinta (mais "central") para evitar cair em dias ruins quando há preferência
-            def _prio(ix):
-                day = df.at[ix, "Data"]
-                day = day.date() if isinstance(day, dt.datetime) else day
-                # terça(1) e quinta(3) primeiro, depois quarta(2), depois segunda(0)/sexta(4), por fim sábado(5)
-                order = {1: 0, 3: 0, 2: 1, 0: 2, 4: 2, 5: 3}
-                return order.get(day.weekday(), 9)
-
-            cand.sort(key=_prio)
-
-            needed = TARGET_WEEKDAY_FOLGAS - weekday_folgas
-            for ix in cand[:max(0, needed)]:
-                _set_folga(df, ix, locked=False)
-
-        # --- 3) Se ainda passou do total (casos com travas), não quebra travas: deixa como está.
-        # (a preferência é nunca violar caixinhas/locks)
-
-
-def optimize_folgas_por_preferencia_e_espacamento(hist_by_chapa: dict, df_ref: pd.DataFrame, colab_by_chapa: dict, setor: str, locked_by_chapa: dict[str, set[int]] | None = None):
-    """
-    Pós-processamento leve:
-      - Para subgrupos com preferência "Evitar DIA", tenta realocar folgas (dentro da mesma semana SEG->DOM)
-        saindo de dias evitados para dias permitidos, sem quebrar:
-          * sábado permitido
-          * não criar folga consecutiva (exceto travados)
-      - Também tenta "espalhar" as 2 folgas na semana (ex.: TER/QUI em vez de QUA/SEX) quando possível.
-    """
-    locked_by_chapa = locked_by_chapa or {}
-
-    # agrupa chapas por subgrupo
-    grupos: dict[str, list[str]] = {}
-    for ch, info in colab_by_chapa.items():
-        sg = (info.get("Subgrupo") or "SEM SUBGRUPO").strip()
-        grupos.setdefault(sg, []).append(ch)
-
-    datas = pd.to_datetime(df_ref["Data"])
-    weeks = _all_weeks_seg_dom(pd.DatetimeIndex(datas))
-
-    def _is_avoided(dia: str, evitar: set[str]) -> bool:
-        return dia in evitar
-
-    for sg, chapas in grupos.items():
-        regras = get_subgrupo_regras(setor, sg) or {}
-        evitar = set((regras.get("evitar") or []))
-        if not evitar:
-            continue
-
-        for week in weeks:
-            week = list(week)
-            # SEG-SÁB (DOM não entra no alvo aqui)
-            idxs = [i for i in week if df_ref.loc[i, "Dia"] != "dom"]
-
-            # contagem de folgas no subgrupo por dia (para não concentrar demais)
-            folga_count = {i: 0 for i in idxs}
-            for ch in chapas:
-                df = hist_by_chapa.get(ch)
-                if df is None: 
+                i = date_to_idx[wd]
+                if _locked(locked_status, i):
                     continue
-                for i in idxs:
-                    if df.loc[i, "Status"] == "Folga":
-                        folga_count[i] += 1
-            max_f = max(folga_count.values()) if folga_count else 0
+                st = df.loc[i, "Status"]
+                if st == "Trabalho":
+                    # preferência: sábado (se puder) e dias longe do domingo para evitar encostar com folga de domingo
+                    score = 0
+                    if wd.weekday() == 5 and pode_folgar_sabado:
+                        score -= 5
+                    if wd.weekday() == 6:  # evitar criar folga no domingo (a menos que precise)
+                        score += 50
+                    cand.append((score, i))
+            cand.sort()
 
-            for ch in chapas:
-                df = hist_by_chapa.get(ch)
-                if df is None:
-                    continue
-                locked = locked_by_chapa.get(ch, set())
-
-                pode_sab = bool(colab_by_chapa.get(ch, {}).get("PodeFolgarSabado", False))
-
-                def can_set_folga(i: int) -> bool:
-                    if i in locked: return False
-                    if df_ref.loc[i, "Dia"] == "dom": return False
-                    if df.loc[i, "Status"] != "Trabalho": return False
-                    if df_ref.loc[i, "Dia"] == "sáb" and not pode_sab: return False
-                    if not _nao_consecutiva_folga(df, i): return False
-                    return True
-
-                def can_set_trabalho(i: int) -> bool:
-                    if i in locked: return False
-                    if df_ref.loc[i, "Dia"] == "dom": return False
-                    return df.loc[i, "Status"] == "Folga"
-
-                def week_folgas() -> list[int]:
-                    return [i for i in idxs if df.loc[i, "Status"] == "Folga"]
-
-                def spacing_score(folgas: list[int]) -> int:
-                    # maior é melhor: distância mínima entre folgas na semana
-                    if len(folgas) < 2:
-                        return 999
-                    folgas = sorted(folgas)
-                    dmin = min((folgas[i+1]-folgas[i]) for i in range(len(folgas)-1))
-                    return dmin
-
-                # 1) tirar folga de dia evitado (se houver) => mover para um dia permitido
-                folgas = [i for i in week_folgas() if can_set_trabalho(i)]
-                for i in folgas:
-                    dia_i = df_ref.loc[i, "Dia"]
-                    if not _is_avoided(dia_i, evitar):
-                        continue
-
-                    best = None
-                    cur_folgas = week_folgas()
-                    cur_space = spacing_score(cur_folgas)
-
-                    for j in idxs:
-                        if not can_set_folga(j):
-                            continue
-                        dia_j = df_ref.loc[j, "Dia"]
-                        if _is_avoided(dia_j, evitar):
-                            continue
-                        # não concentrar muito: deixa no máximo (max_f + 1)
-                        if folga_count.get(j, 0) + 1 > (max_f + 1):
-                            continue
-
-                        # simula swap i(F)->T e j(T)->F
-                        df.loc[i, "Status"], df.loc[j, "Status"] = "Trabalho", "Folga"
-                        ok = _nao_consecutiva_folga(df, j)
-                        new_folgas = week_folgas()
-                        new_space = spacing_score(new_folgas)
-                        # reverte
-                        df.loc[i, "Status"], df.loc[j, "Status"] = "Folga", "Trabalho"
-
-                        if not ok:
-                            continue
-
-                        # objetivo: remover evitado + melhorar/maint spacing
-                        score = (0, -new_space, abs(j - i))
-                        if best is None or score < best[0]:
-                            best = (score, j, new_space)
-
-                    if best is not None:
-                        j = best[1]
-                        # aplica de fato
-                        df.loc[i, "Status"] = "Trabalho"
-                        df.loc[j, "Status"] = "Folga"
-                        # atualiza contagem
-                        folga_count[i] = max(0, folga_count.get(i, 0) - 1)
-                        folga_count[j] = folga_count.get(j, 0) + 1
-                        max_f = max(folga_count.values()) if folga_count else 0
-
-                # 2) espalhar folgas (se 2 folgas muito próximas) respeitando preferências
-                folgas2 = week_folgas()
-                if len(folgas2) >= 2 and spacing_score(folgas2) <= 1:
-                    # tenta mover uma das folgas para aumentar distância
-                    folgas2 = sorted([i for i in folgas2 if can_set_trabalho(i)])
-                    for i in folgas2:
-                        dia_i = df_ref.loc[i, "Dia"]
-                        # se já está em dia não-evitado, preferimos mover outra, mas tenta assim mesmo
-                        best = None
-                        cur_space = spacing_score(week_folgas())
-
-                        for j in idxs:
-                            if not can_set_folga(j):
-                                continue
-                            dia_j = df_ref.loc[j, "Dia"]
-                            if _is_avoided(dia_j, evitar):
-                                continue
-                            if folga_count.get(j, 0) + 1 > (max_f + 1):
-                                continue
-
-                            # simula
-                            df.loc[i, "Status"], df.loc[j, "Status"] = "Trabalho", "Folga"
-                            ok = _nao_consecutiva_folga(df, j)
-                            new_space = spacing_score(week_folgas())
-                            df.loc[i, "Status"], df.loc[j, "Status"] = "Folga", "Trabalho"
-                            if not ok:
-                                continue
-                            if new_space <= cur_space:
-                                continue
-                            score = (-new_space, abs(j - i))
-                            if best is None or score < best[0]:
-                                best = (score, j, new_space)
-
-                        if best is not None:
-                            j = best[1]
-                            df.loc[i, "Status"] = "Trabalho"
-                            df.loc[j, "Status"] = "Folga"
-                            folga_count[i] = max(0, folga_count.get(i, 0) - 1)
-                            folga_count[j] = folga_count.get(j, 0) + 1
-                            max_f = max(folga_count.values()) if folga_count else 0
-                            break
+            for _, i in cand:
+                if need <= 0:
+                    break
+                _set_folga(df, i, locked=False, reason="weekly_fix_add_missing_folga")
+                need -= 1
 
 def _counts_folgas_day_and_hour(hist_by_chapa: dict, colab_by_chapa: dict, chapas_grupo: list, idxs_semana: list, df_ref):
     counts_day = {i: 0 for i in idxs_semana}
@@ -2337,24 +2078,26 @@ def rebalance_folgas_dia(
 # GERAR ESCALA — POR SUBGRUPO
 # =========================================================
 def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: int, mes: int, respeitar_ajustes: bool = True):
-    # --- Datas base do mês (competência)
-    datas_mes = _dias_mes(ano, mes)
-
-    # --- Janela semanal (SEG->DOM) para aplicar regras por semana mesmo cruzando mês
-    _first = pd.to_datetime(datas_mes[0])
-    _last  = pd.to_datetime(datas_mes[-1])
-    _start = _first - pd.Timedelta(days=int(_first.weekday()))              # segunda-feira
-    _end   = _last  + pd.Timedelta(days=int(6 - _last.weekday()))           # domingo
-    datas  = pd.date_range(_start, _end, freq="D")
-
+    datas = _dias_mes(ano, mes)
     weeks = _all_weeks_seg_dom(datas)
+    df_ref = pd.DataFrame({"Data": datas, "Dia": [D_PT[d.day_name()] for d in datas]})
 
-    df_ref = pd.DataFrame({
-        "Data": datas,
-        "Dia": [d.day for d in datas],
-        "DiaSem": [D_PT.get(pd.to_datetime(d).day_name(), pd.to_datetime(d).day_name()) for d in datas],
-    })
-# Meses passados: não aplicar continuidade/travamentos do mês anterior.
+# --- Semana SEG->DOM atravessa virada de mês:
+# Para NÃO gerar 3 folgas na semana da virada, carregamos o mês anterior (se existir)
+prev_status_by_chapa = {}
+try:
+    first_day = date(int(ano), int(mes), 1)
+    prev_day = first_day - timedelta(days=1)
+    _hist_prev = load_escala_mes_db(setor, int(prev_day.year), int(prev_day.month))
+    for _ch, _dfp in (_hist_prev or {}).items():
+        if _dfp is None or len(_dfp) == 0 or "Data" not in _dfp.columns:
+            continue
+        _tmp = _dfp.copy()
+        _tmp["Data"] = pd.to_datetime(_tmp["Data"])
+        prev_status_by_chapa[_ch] = {d.date(): s for d, s in zip(_tmp["Data"], _tmp.get("Status", []))}
+except Exception:
+    prev_status_by_chapa = {}
+    # Meses passados: não aplicar continuidade/travamentos do mês anterior.
     _past = is_past_competencia(ano, mes)
     estado_prev = {} if _past else load_estado_prev(setor, ano, mes)
 
@@ -2532,7 +2275,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
         enforce_no_consecutive_folga(df, locked_status=locked)
 
         # 2) Metas semanais podem REMOVER folga => pode criar >5 de novo
-        enforce_weekly_folga_targets(df, df_ref=df_ref, pode_folgar_sabado=pode_sab, locked_status=locked)
+        enforce_weekly_folga_targets(df, df_ref=df_ref, pode_folgar_sabado=pode_sab, locked_status=locked, ent_padrao=ent, prev_status_by_date=prev_status_by_chapa.get(ch, {}))
 
         # 3) Reforça novamente o limite de 5 depois das metas semanais
         enforce_max_5_consecutive_work(
@@ -2565,27 +2308,6 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
                 past_flag=_past,
                 max_iters=2200
             )
-
-    # ✅ Oportunidade de melhoria: após o balanceamento global, ajustar folgas dentro da semana
-    # para respeitar melhor a preferência "Evitar DIA" por subgrupo e espalhar as 2 folgas (quando possível).
-    optimize_folgas_por_preferencia_e_espacamento(hist_all, df_ref, colab_by_chapa, setor, locked_by_chapa=locked_idx)
-
-
-    # 🔒 Garantia: após otimização de preferências, re-aplicar a regra semanal de folgas
-    # (semana = SEG→DOM; se folga no DOM, deve haver +1 folga; se trabalha no DOM, deve haver 2 folgas na semana).
-    for ch, df in hist_all.items():
-        locked = locked_idx.get(ch, set())
-        pode_sab = bool(colab_by_chapa.get(ch, {}).get('Folga_Sab', False))
-        enforce_weekly_folga_targets(df, df_ref, pode_sab, locked)
-        hist_all[ch] = df
-
-    # Re-enforça as regras críticas após otimizações locais (sem refazer o balanceamento semanal)
-    for ch, df in hist_all.items():
-        ent = colab_by_chapa[ch].get("Entrada", "06:00")
-        locked = locked_idx.get(ch, set())
-        pode_sab = bool(colab_by_chapa[ch].get("Folga_Sab", False))
-        enforce_max_5_consecutive_work(df, ent, pode_sab, initial_consec=0)
-        enforce_no_consecutive_folga(df, locked)
 
     # ✅ Pós-rebalance: re-garante regra dos 5 dias por colaborador
     for ch, df in hist_all.items():
@@ -2664,17 +2386,8 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
 
         estado_out[ch] = {"consec_trab_final": consec, "ultima_saida": ultima_saida, "ultimo_domingo_status": ultimo_dom}
 
-    
-    # --- Saída: salvar/mostrar apenas a competência (mês/ano), mas regras foram aplicadas na janela SEG->DOM
-    for _ch in list(hist_all.keys()):
-        _dfch = hist_all[_ch]
-        try:
-            _mask = (pd.to_datetime(_dfch["Data"]).dt.year == ano) & (pd.to_datetime(_dfch["Data"]).dt.month == mes)
-            hist_all[_ch] = _dfch.loc[_mask].reset_index(drop=True).copy()
-        except Exception:
-            # se por algum motivo não tiver coluna Data, mantém como está
-            pass
     return hist_all, estado_out
+
 # =========================================================
 # DASHBOARD / CALENDÁRIO / BANCO DE HORAS
 # (resto do arquivo igual ao seu original — UI completa)
@@ -3165,24 +2878,9 @@ def page_app():
 
         st.markdown("---")
         with st.form("form_add_colaborador", clear_on_submit=True):
-            c1, c2, c3, c4 = st.columns(4)
+            c1, c2 = st.columns(2)
             nome_n = c1.text_input("Nome:", key="col_nome")
             chapa_n = c2.text_input("Chapa:", key="col_chapa")
-
-            sub_opts = ["SEM SUBGRUPO"] + list_subgrupos(setor)
-            subgrupo_n = c3.selectbox("Subgrupo:", sub_opts, index=0, key="col_subgrupo")
-
-            ent_opts = HORARIOS_ENTRADA_PRESET
-            ent_default = "12:40" if "12:40" in ent_opts else (ent_opts[0] if ent_opts else "")
-            entrada_n = c4.selectbox(
-                "Entrada:",
-                options=ent_opts,
-                index=ent_opts.index(ent_default) if ent_default in ent_opts else 0,
-                key="col_entrada",
-            )
-
-            folga_sab_n = st.checkbox("Permitir folga sábado", value=False, key="col_folga_sab")
-
             submitted = st.form_submit_button("Cadastrar colaborador", use_container_width=True)
             if submitted:
                 if not nome_n or not chapa_n:
@@ -3190,15 +2888,7 @@ def page_app():
                 elif colaborador_exists(setor, chapa_n.strip()):
                     st.error("Já existe essa chapa.")
                 else:
-                    sg = None if subgrupo_n == "SEM SUBGRUPO" else subgrupo_n
-                    create_colaborador(
-                        nome_n.strip(),
-                        setor,
-                        chapa_n.strip(),
-                        subgrupo=sg,
-                        entrada=entrada_n,
-                        folga_sab=bool(folga_sab_n),
-                    )
+                    create_colaborador(nome_n.strip(), setor, chapa_n.strip())
                     st.success("Cadastrado!")
                     st.rerun()
 
@@ -3229,56 +2919,28 @@ def page_app():
             )
             csel = next(x for x in colaboradores if x["Chapa"] == ch_sel)
 
-            # 🔁 Sempre que trocar o colaborador selecionado, puxar os valores atuais do banco
-            # e atualizar os campos "Entrada", "Subgrupo" e "Folga sábado" automaticamente.
-            ent_atual = (csel.get("Entrada") or BALANCO_DIA_ENTRADA).strip()
-            sg_atual = (csel.get("Subgrupo") or "").strip()
-            sab_atual = bool(int(csel.get("Folga_Sab", 0) or 0))
-            if st.session_state.get("_pf_loaded_chapa") != ch_sel:
-                st.session_state["pf_ent_sel"] = ent_atual
-                st.session_state["pf_sg"] = sg_atual
-                st.session_state["pf_sab"] = sab_atual
-                st.session_state["_pf_loaded_chapa"] = ch_sel
-
             colp1, colp2, colp3 = st.columns(3)
-
             # Entrada: usar presets (inclui 06:50 e 12:40) para facilitar
+            ent_atual = (csel.get("Entrada") or BALANCO_DIA_ENTRADA).strip()
             if ent_atual not in HORARIOS_ENTRADA_PRESET:
                 opcoes_ent = HORARIOS_ENTRADA_PRESET + [ent_atual]
             else:
                 opcoes_ent = HORARIOS_ENTRADA_PRESET
-
-            # índice baseado no valor atual em session_state (para atualizar ao trocar colaborador)
-            _ent_val = st.session_state.get("pf_ent_sel", ent_atual)
-            if _ent_val not in opcoes_ent:
-                opcoes_ent = opcoes_ent + [_ent_val]
             ent_sel = colp1.selectbox(
                 "Entrada:",
                 options=opcoes_ent,
-                index=opcoes_ent.index(_ent_val),
+                index=opcoes_ent.index(ent_atual),
                 key="pf_ent_sel",
             )
-
             sg_opts = [""] + list_subgrupos(setor)
-            _sg_val = st.session_state.get("pf_sg", sg_atual)
-            if _sg_val and _sg_val not in sg_opts:
-                sg_opts = sg_opts + [_sg_val]
-            sg_sel = colp2.selectbox(
-                "Subgrupo:",
-                options=sg_opts,
-                index=sg_opts.index(_sg_val) if _sg_val in sg_opts else 0,
-                key="pf_sg",
-            )
+            idx_default = sg_opts.index(csel["Subgrupo"]) if csel["Subgrupo"] in sg_opts else 0
+            sg = colp2.selectbox("Subgrupo:", sg_opts, index=idx_default, key="pf_sg")
+            sab = colp3.checkbox("Permitir folga sábado", value=bool(csel["Folga_Sab"]), key="pf_sab")
 
-            pode_sab = colp3.checkbox(
-                "Permitir folga sábado",
-                value=bool(st.session_state.get("pf_sab", sab_atual)),
-                key="pf_sab",
-            )
-        if st.button("Salvar perfil", key="pf_save"):
-            update_colaborador_perfil(setor, ch_sel, sg_sel, ent_sel, pode_sab)
-            st.success("Salvo!")
-            st.rerun()
+            if st.button("Salvar perfil", key="pf_save"):
+                update_colaborador_perfil(setor, ch_sel, sg, ent_sel, sab)
+                st.success("Salvo!")
+                st.rerun()
 
     # ------------------------------------------------------
     # ABA 2: Gerar Escala
@@ -3288,12 +2950,14 @@ def page_app():
         st.caption(f"Competência ativa: **{int(st.session_state['cfg_mes']):02d}/{int(st.session_state['cfg_ano'])}**")
 
         with st.container(border=True):
-            c1, c2 = st.columns([2, 1])
-            # Competência é a "data mãe" (vem da sidebar). Aqui só exibimos e usamos; não mostramos inputs separados.
-            mes = int(st.session_state.get("cfg_mes", datetime.now().month))
-            ano = int(st.session_state.get("cfg_ano", datetime.now().year))
-            c1.markdown(f"**Competência:** {mes:02d}/{ano}")
-            seed = c2.number_input("Semente", min_value=0, max_value=999999, value=int(st.session_state.get("last_seed", 0)), key="gen_seed")
+            c1, c2, c3 = st.columns([1, 1, 2])
+            mes = c1.selectbox("Mês:", list(range(1, 13)), index=int(st.session_state["cfg_mes"]) - 1, key="gen_mes")
+            ano = c2.number_input("Ano:", value=int(st.session_state["cfg_ano"]), step=1, key="gen_ano")
+            seed = c3.number_input("Semente", min_value=0, max_value=999999, value=int(st.session_state.get("last_seed", 0)), key="gen_seed")
+
+        st.session_state["cfg_mes"] = int(mes)
+        st.session_state["cfg_ano"] = int(ano)
+
         colaboradores = load_colaboradores_setor(setor)
         if not colaboradores:
             st.warning("Cadastre colaboradores.")
@@ -3338,10 +3002,14 @@ def page_app():
         st.subheader("⚙️ Ajustes (travas) — sempre entram na geração")
 
         with st.container(border=True):
-            # Competência é a "data mãe" (vem da sidebar). Aqui só exibimos e usamos; não mostramos inputs separados.
-            mes = int(st.session_state.get("cfg_mes", datetime.now().month))
-            ano = int(st.session_state.get("cfg_ano", datetime.now().year))
-            st.markdown(f"**Competência (ajustes):** {mes:02d}/{ano}")
+            c1, c2, c3 = st.columns([1, 1, 2])
+            mes = c1.selectbox("Mês (ajustes)", list(range(1, 13)), index=int(st.session_state["cfg_mes"]) - 1, key="adj_mes")
+            ano = c2.number_input("Ano (ajustes)", value=int(st.session_state["cfg_ano"]), step=1, key="adj_ano")
+            c3.caption("Dica: deixe o mês/ano aqui igual ao mês/ano da aba 🚀 Gerar Escala.")
+
+        st.session_state["cfg_mes"] = int(mes)
+        st.session_state["cfg_ano"] = int(ano)
+
         hist_db = load_escala_mes_db(setor, ano, mes)
         colaboradores = load_colaboradores_setor(setor)
         colab_by = {c["Chapa"]: c for c in colaboradores}
@@ -3657,15 +3325,16 @@ def page_app():
                         cA = ws.cell(1, i + 2, dia_num)
                         cB = ws.cell(2, i + 2, dia_sem)
 
-                        # Cabeçalho: mantém padrão (o vermelho será aplicado apenas no domingo quando Status=Folga)
-                        if dia_sem == 'dom':
+                        if dia_sem == "dom":
                             cA.fill = fill_dom
                             cB.fill = fill_dom
+                            cA.font = font_dom
+                            cB.font = font_dom
                         else:
                             cA.fill = fill_header
                             cB.fill = fill_header
-                        cA.font = font_header
-                        cB.font = font_header
+                            cA.font = font_header
+                            cB.font = font_header
 
                         cA.alignment = center
                         cB.alignment = center
@@ -3709,11 +3378,7 @@ def page_app():
                                 if status == "Férias":
                                     v1, v2 = "FÉRIAS", ""
                                 elif status == "Folga":
-                                    # Domingo de folga: marcar como FF (vermelho). Outros dias: F.
-                                    if dia_sem == "dom":
-                                        v1, v2 = "FF", ""
-                                    else:
-                                        v1, v2 = "F", ""
+                                    v1, v2 = ("FF" if dia_sem == "dom" else "F"), ""
                                 else:
                                     v1, v2 = row["H_Entrada"], row["H_Saida"]
 
