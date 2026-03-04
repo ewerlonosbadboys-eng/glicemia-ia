@@ -873,6 +873,25 @@ def db_init():
     _safe_exec(cur, "INSERT OR IGNORE INTO setores(nome) VALUES (?)", ("ADMIN",))
     con.commit()
 
+    # --- SINCRONIZAR SETORES (evita sumir FLV/DEPÓSITO etc no login)
+    # Se houver colaboradores/usuários em setores não cadastrados na tabela 'setores',
+    # o selectbox do login não mostra. Aqui a gente puxa automaticamente.
+    try:
+        # setores vindos de colaboradores
+        cur.execute("SELECT DISTINCT setor FROM colaboradores")
+        for (s,) in cur.fetchall():
+            if s and str(s).strip():
+                _safe_exec(cur, "INSERT OR IGNORE INTO setores(nome) VALUES (?)", (str(s).strip(),))
+        # setores vindos de usuários
+        cur.execute("SELECT DISTINCT setor FROM usuarios_sistema")
+        for (s,) in cur.fetchall():
+            if s and str(s).strip():
+                _safe_exec(cur, "INSERT OR IGNORE INTO setores(nome) VALUES (?)", (str(s).strip(),))
+        con.commit()
+    except Exception:
+        pass
+
+
     cur.execute("SELECT 1 FROM usuarios_sistema WHERE setor=? AND chapa=? LIMIT 1", ("ADMIN", "admin"))
     if cur.fetchone() is None:
         salt = secrets.token_hex(16)
