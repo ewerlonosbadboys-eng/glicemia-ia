@@ -42,6 +42,7 @@ import io
 import random
 import calendar
 import sqlite3
+import os
 import shutil
 from pathlib import Path
 
