@@ -915,6 +915,8 @@ def is_past_competencia(ano: int, mes: int) -> bool:
 # AUTH
 # =========================================================
 def system_user_exists(setor: str, chapa: str) -> bool:
+    setor = (setor or '').strip().upper()
+    chapa = (chapa or '').strip()
     con = db_conn()
     cur = con.cursor()
     cur.execute("SELECT 1 FROM usuarios_sistema WHERE setor=? AND chapa=? LIMIT 1", (setor, chapa))
@@ -923,6 +925,10 @@ def system_user_exists(setor: str, chapa: str) -> bool:
     return ok
 
 def create_system_user(nome: str, setor: str, chapa: str, senha: str, is_lider: int = 0, is_admin: int = 0):
+    nome = (nome or '').strip()
+    setor = (setor or '').strip().upper()
+    chapa = (chapa or '').strip()
+    senha = (senha or '').strip()
     salt = secrets.token_hex(16)
     senha_hash = hash_password(senha, salt)
     con = db_conn()
@@ -936,6 +942,9 @@ def create_system_user(nome: str, setor: str, chapa: str, senha: str, is_lider: 
     con.close()
 
 def verify_login(setor: str, chapa: str, senha: str):
+    setor = (setor or '').strip().upper()
+    chapa = (chapa or '').strip()
+    senha = (senha or '').strip()
     con = db_conn()
     cur = con.cursor()
     cur.execute("""
@@ -954,6 +963,8 @@ def verify_login(setor: str, chapa: str, senha: str):
     return None
 
 def is_lider_chapa(setor: str, chapa_lider: str) -> bool:
+    setor = (setor or '').strip().upper()
+    chapa_lider = (chapa_lider or '').strip()
     con = db_conn()
     cur = con.cursor()
     cur.execute("SELECT is_lider FROM usuarios_sistema WHERE setor=? AND chapa=? LIMIT 1", (setor, chapa_lider))
@@ -2646,6 +2657,11 @@ def page_login():
     with tab_login:
         con = db_conn()
         setores = pd.read_sql_query("SELECT nome FROM setores ORDER BY nome ASC", con)["nome"].tolist()
+        # garante setores básicos no dropdown mesmo em DB novo
+        for _s in ['FLV']:
+            if _s not in setores:
+                setores.append(_s)
+        setores = sorted(set([str(s).strip().upper() for s in setores if str(s).strip()]))
         con.close()
 
         setor = st.selectbox("Setor:", setores, key="lg_setor")
@@ -2690,6 +2706,11 @@ def page_login():
         st.subheader("Redefinir senha (com chapa do líder do setor)")
         con = db_conn()
         setores = pd.read_sql_query("SELECT nome FROM setores ORDER BY nome ASC", con)["nome"].tolist()
+        # garante setores básicos no dropdown mesmo em DB novo
+        for _s in ['FLV']:
+            if _s not in setores:
+                setores.append(_s)
+        setores = sorted(set([str(s).strip().upper() for s in setores if str(s).strip()]))
         con.close()
 
         setor = st.selectbox("Setor:", setores, key="fp_setor")
