@@ -114,6 +114,63 @@ DB_PATH = "escala.db"
 BACKUP_DIR = "backups"
 AUTO_BACKUP_HOUR = 3  # 03:00 (horário local do app)
 
+
+def normalize_setor(s: str) -> str:
+    """Normaliza o nome do setor para comparação/armazenamento (ignora maiúsc/minúsc e espaços)."""
+    if s is None:
+        return ""
+    return str(s).strip().upper()
+
+def listar_setores(include_defaults: bool = True):
+    """Lista setores existentes (tabela setores + setores presentes em usuários/colaboradores)."""
+    setores = []
+    try:
+        con = sqlite3.connect(DB_PATH)
+        cur = con.cursor()
+        # tabela setores (preferencial)
+        try:
+            cur.execute("SELECT nome FROM setores")
+            setores += [r[0] for r in cur.fetchall() if r and r[0] is not None]
+        except Exception:
+            pass
+        # setores que aparecem em usuários (fallback / legado)
+        try:
+            cur.execute("SELECT DISTINCT setor FROM usuarios")
+            setores += [r[0] for r in cur.fetchall() if r and r[0] is not None]
+        except Exception:
+            pass
+        # setores que aparecem em colaboradores (se existir)
+        try:
+            cur.execute("SELECT DISTINCT setor FROM colaboradores")
+            setores += [r[0] for r in cur.fetchall() if r and r[0] is not None]
+        except Exception:
+            pass
+    finally:
+        try:
+            con.close()
+        except Exception:
+            pass
+
+    norm = []
+    for s in setores:
+        ns = normalize_setor(s)
+        if ns:
+            norm.append(ns)
+
+    # defaults sempre disponíveis
+    if include_defaults:
+        norm += ["ADMIN", "GERAL"]
+
+    # unique mantendo ordem
+    out = []
+    seen = set()
+    for s in norm:
+        if s not in seen:
+            out.append(s)
+            seen.add(s)
+    return sorted(out)
+
+
 def _ensure_backup_dir():
     os.makedirs(BACKUP_DIR, exist_ok=True)
 
