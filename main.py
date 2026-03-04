@@ -941,6 +941,14 @@ def create_system_user(nome: str, setor: str, chapa: str, senha: str, is_lider: 
     con.commit()
     con.close()
 
+
+def _norm_setor(s: str) -> str:
+    return str(s or "").strip().upper()
+
+def _norm_chapa(s: str) -> str:
+    return str(s or "").strip()
+
+
 def verify_login(setor: str, chapa: str, senha: str):
     setor = (setor or '').strip().upper()
     chapa = (chapa or '').strip()
@@ -2664,7 +2672,8 @@ def page_login():
         setores = sorted(set([str(s).strip().upper() for s in setores if str(s).strip()]))
         con.close()
 
-        setor = st.selectbox("Setor:", setores, key="lg_setor")
+        setor_sug = st.selectbox("Setores cadastrados (opcional):", [""] + setores, key="lg_setor_sug")
+        setor = st.text_input("Setor (digite):", value=(setor_sug or st.session_state.get("lg_setor_txt","")), key="lg_setor_txt")
         chapa = st.text_input("Chapa:", key="lg_chapa")
         senha = st.text_input("Senha:", type="password", key="lg_senha")
 
@@ -2713,7 +2722,8 @@ def page_login():
         setores = sorted(set([str(s).strip().upper() for s in setores if str(s).strip()]))
         con.close()
 
-        setor = st.selectbox("Setor:", setores, key="fp_setor")
+        setor_sug = st.selectbox("Setores cadastrados (opcional):", [""] + setores, key="fp_setor_sug")
+        setor = st.text_input("Setor (digite):", value=(setor_sug or st.session_state.get("fp_setor_txt","")), key="fp_setor_txt")
         chapa = st.text_input("Sua chapa (usuário do sistema):", key="fp_chapa")
         chapa_lider = st.text_input("Chapa do líder:", key="fp_lider")
         nova = st.text_input("Nova senha:", type="password", key="fp_nova")
