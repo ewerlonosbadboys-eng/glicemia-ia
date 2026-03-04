@@ -3033,10 +3033,14 @@ def page_app():
 
     abas = st.tabs(tabs)
 
+    # Mapeia as abas por nome (evita índice errado quando ADMIN não existe)
+    tab_colab, tab_gerar, tab_ajustes, tab_ferias, tab_excel = abas[:5]
+    tab_admin = abas[5] if is_admin_area else None
+
     # ------------------------------------------------------
     # ABA 1: Colaboradores
     # ------------------------------------------------------
-    with abas[0]:
+    with tab_colab:
         st.subheader("👥 Colaboradores (SEM senha)")
         colaboradores = load_colaboradores_setor(setor)
 
@@ -3120,7 +3124,7 @@ def page_app():
     # ------------------------------------------------------
     # ABA 2: Gerar Escala
     # ------------------------------------------------------
-    with abas[1]:
+    with tab_gerar:
         st.subheader("🚀 Gerar escala")
         st.caption(f"Competência ativa: **{int(st.session_state['cfg_mes']):02d}/{int(st.session_state['cfg_ano'])}**")
 
@@ -3173,7 +3177,7 @@ def page_app():
     # ------------------------------------------------------
     # ABA 3: Ajustes
     # ------------------------------------------------------
-    with abas[2]:
+    with tab_ajustes:
         st.subheader("⚙️ Ajustes (travas) — sempre entram na geração")
 
         with st.container(border=True):
@@ -3366,7 +3370,7 @@ def page_app():
     # ------------------------------------------------------
     # ABA 4: Férias
     # ------------------------------------------------------
-    with abas[3]:
+    with tab_ferias:
         st.subheader("🏖️ Controle de Férias")
 
         st.markdown("---")
@@ -3450,7 +3454,7 @@ def page_app():
     # ------------------------------------------------------
     # ABA 5: Excel
     # ------------------------------------------------------
-    with abas[4]:
+    with tab_excel:
         st.subheader("📥 Excel modelo RH (separado por subgrupo)")
         ano = int(st.session_state["cfg_ano"])
         mes = int(st.session_state["cfg_mes"])
@@ -3716,7 +3720,7 @@ def page_app():
     # ABA 6: Admin (somente ADMIN)
     # ------------------------------------------------------
     if is_admin_area:
-        with abas[5]:
+        with tab_admin:
             st.subheader("🔒 Admin do Sistema (somente ADMIN)")
             dfu = admin_list_users()
             st.dataframe(dfu, use_container_width=True, height=420)
