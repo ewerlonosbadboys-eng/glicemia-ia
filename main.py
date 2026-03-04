@@ -873,6 +873,25 @@ def db_init():
     _safe_exec(cur, "INSERT OR IGNORE INTO setores(nome) VALUES (?)", ("ADMIN",))
     con.commit()
 
+    # --- SINCRONIZAR SETORES (evita sumir FLV/DEPÓSITO etc no login)
+    # Se houver colaboradores/usuários em setores não cadastrados na tabela 'setores',
+    # o selectbox do login não mostra. Aqui a gente puxa automaticamente.
+    try:
+        # setores vindos de colaboradores
+        cur.execute("SELECT DISTINCT setor FROM colaboradores")
+        for (s,) in cur.fetchall():
+            if s and str(s).strip():
+                _safe_exec(cur, "INSERT OR IGNORE INTO setores(nome) VALUES (?)", (str(s).strip(),))
+        # setores vindos de usuários
+        cur.execute("SELECT DISTINCT setor FROM usuarios_sistema")
+        for (s,) in cur.fetchall():
+            if s and str(s).strip():
+                _safe_exec(cur, "INSERT OR IGNORE INTO setores(nome) VALUES (?)", (str(s).strip(),))
+        con.commit()
+    except Exception:
+        pass
+
+
     cur.execute("SELECT 1 FROM usuarios_sistema WHERE setor=? AND chapa=? LIMIT 1", ("ADMIN", "admin"))
     if cur.fetchone() is None:
         salt = secrets.token_hex(16)
@@ -896,6 +915,8 @@ def is_past_competencia(ano: int, mes: int) -> bool:
 # AUTH
 # =========================================================
 def system_user_exists(setor: str, chapa: str) -> bool:
+    setor = (setor or '').strip().upper()
+    chapa = (chapa or '').strip()
     con = db_conn()
     cur = con.cursor()
     cur.execute("SELECT 1 FROM usuarios_sistema WHERE setor=? AND chapa=? LIMIT 1", (setor, chapa))
@@ -904,6 +925,10 @@ def system_user_exists(setor: str, chapa: str) -> bool:
     return ok
 
 def create_system_user(nome: str, setor: str, chapa: str, senha: str, is_lider: int = 0, is_admin: int = 0):
+    nome = (nome or '').strip()
+    setor = (setor or '').strip().upper()
+    chapa = (chapa or '').strip()
+    senha = (senha or '').strip()
     salt = secrets.token_hex(16)
     senha_hash = hash_password(senha, salt)
     con = db_conn()
@@ -916,7 +941,18 @@ def create_system_user(nome: str, setor: str, chapa: str, senha: str, is_lider: 
     con.commit()
     con.close()
 
+
+def _norm_setor(s: str) -> str:
+    return str(s or "").strip().upper()
+
+def _norm_chapa(s: str) -> str:
+    return str(s or "").strip()
+
+
 def verify_login(setor: str, chapa: str, senha: str):
+    setor = (setor or '').strip().upper()
+    chapa = (chapa or '').strip()
+    senha = (senha or '').strip()
     con = db_conn()
     cur = con.cursor()
     cur.execute("""
@@ -935,6 +971,8 @@ def verify_login(setor: str, chapa: str, senha: str):
     return None
 
 def is_lider_chapa(setor: str, chapa_lider: str) -> bool:
+    setor = (setor or '').strip().upper()
+    chapa_lider = (chapa_lider or '').strip()
     con = db_conn()
     cur = con.cursor()
     cur.execute("SELECT is_lider FROM usuarios_sistema WHERE setor=? AND chapa=? LIMIT 1", (setor, chapa_lider))
@@ -2094,6 +2132,9 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
 
         if respeitar_ajustes:
             _apply_overrides_to_df_inplace(df, setor, ch, ovmap)
+            # ✅ REGRA SUPREMA (após ajustes): garante limite semanal SEG->DOM
+            enforce_weekly_folga_targets(df, df_ref=df_ref, pode_folgar_sabado=bool(colab_by_chapa[ch].get('Folga_Sab', False)), locked_status=locked)
+            enforce_no_consecutive_folga(df, locked_status=locked)
 
         locked = set()
         if respeitar_ajustes:
@@ -2251,6 +2292,9 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
 
         if respeitar_ajustes:
             _apply_overrides_to_df_inplace(df, setor, ch, ovmap)
+            # ✅ REGRA SUPREMA (após ajustes): garante limite semanal SEG->DOM
+            enforce_weekly_folga_targets(df, df_ref=df_ref, pode_folgar_sabado=bool(colab_by_chapa[ch].get('Folga_Sab', False)), locked_status=locked)
+            enforce_no_consecutive_folga(df, locked_status=locked)
 
         hist_all[ch] = df
 
@@ -2312,6 +2356,9 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
 
         if respeitar_ajustes:
             _apply_overrides_to_df_inplace(df, setor, ch, ovmap)
+            # ✅ REGRA SUPREMA (após ajustes): garante limite semanal SEG->DOM
+            enforce_weekly_folga_targets(df, df_ref=df_ref, pode_folgar_sabado=bool(colab_by_chapa[ch].get('Folga_Sab', False)), locked_status=locked)
+            enforce_no_consecutive_folga(df, locked_status=locked)
 
         hist_all[ch] = df
 
@@ -2618,9 +2665,15 @@ def page_login():
     with tab_login:
         con = db_conn()
         setores = pd.read_sql_query("SELECT nome FROM setores ORDER BY nome ASC", con)["nome"].tolist()
+        # garante setores básicos no dropdown mesmo em DB novo
+        for _s in ['FLV']:
+            if _s not in setores:
+                setores.append(_s)
+        setores = sorted(set([str(s).strip().upper() for s in setores if str(s).strip()]))
         con.close()
 
-        setor = st.selectbox("Setor:", setores, key="lg_setor")
+        setor_sug = st.selectbox("Setores cadastrados (opcional):", [""] + setores, key="lg_setor_sug")
+        setor = st.text_input("Setor (digite):", value=(setor_sug or st.session_state.get("lg_setor_txt","")), key="lg_setor_txt")
         chapa = st.text_input("Chapa:", key="lg_chapa")
         senha = st.text_input("Senha:", type="password", key="lg_senha")
 
@@ -2662,9 +2715,15 @@ def page_login():
         st.subheader("Redefinir senha (com chapa do líder do setor)")
         con = db_conn()
         setores = pd.read_sql_query("SELECT nome FROM setores ORDER BY nome ASC", con)["nome"].tolist()
+        # garante setores básicos no dropdown mesmo em DB novo
+        for _s in ['FLV']:
+            if _s not in setores:
+                setores.append(_s)
+        setores = sorted(set([str(s).strip().upper() for s in setores if str(s).strip()]))
         con.close()
 
-        setor = st.selectbox("Setor:", setores, key="fp_setor")
+        setor_sug = st.selectbox("Setores cadastrados (opcional):", [""] + setores, key="fp_setor_sug")
+        setor = st.text_input("Setor (digite):", value=(setor_sug or st.session_state.get("fp_setor_txt","")), key="fp_setor_txt")
         chapa = st.text_input("Sua chapa (usuário do sistema):", key="fp_chapa")
         chapa_lider = st.text_input("Chapa do líder:", key="fp_lider")
         nova = st.text_input("Nova senha:", type="password", key="fp_nova")
@@ -2907,12 +2966,14 @@ def page_app():
         st.caption(f"Competência ativa: **{int(st.session_state['cfg_mes']):02d}/{int(st.session_state['cfg_ano'])}**")
 
         with st.container(border=True):
-            c1, c2 = st.columns([2, 1])
-            # Competência é a "data mãe" (vem da sidebar). Aqui só exibimos e usamos; não mostramos inputs separados.
-            mes = int(st.session_state.get("cfg_mes", datetime.now().month))
-            ano = int(st.session_state.get("cfg_ano", datetime.now().year))
-            c1.markdown(f"**Competência:** {mes:02d}/{ano}")
-            seed = c2.number_input("Semente", min_value=0, max_value=999999, value=int(st.session_state.get("last_seed", 0)), key="gen_seed")
+            c1, c2, c3 = st.columns([1, 1, 2])
+            mes = c1.selectbox("Mês:", list(range(1, 13)), index=int(st.session_state["cfg_mes"]) - 1, key="gen_mes")
+            ano = c2.number_input("Ano:", value=int(st.session_state["cfg_ano"]), step=1, key="gen_ano")
+            seed = c3.number_input("Semente", min_value=0, max_value=999999, value=int(st.session_state.get("last_seed", 0)), key="gen_seed")
+
+        st.session_state["cfg_mes"] = int(mes)
+        st.session_state["cfg_ano"] = int(ano)
+
         colaboradores = load_colaboradores_setor(setor)
         if not colaboradores:
             st.warning("Cadastre colaboradores.")
@@ -2957,10 +3018,14 @@ def page_app():
         st.subheader("⚙️ Ajustes (travas) — sempre entram na geração")
 
         with st.container(border=True):
-            # Competência é a "data mãe" (vem da sidebar). Aqui só exibimos e usamos; não mostramos inputs separados.
-            mes = int(st.session_state.get("cfg_mes", datetime.now().month))
-            ano = int(st.session_state.get("cfg_ano", datetime.now().year))
-            st.markdown(f"**Competência (ajustes):** {mes:02d}/{ano}")
+            c1, c2, c3 = st.columns([1, 1, 2])
+            mes = c1.selectbox("Mês (ajustes)", list(range(1, 13)), index=int(st.session_state["cfg_mes"]) - 1, key="adj_mes")
+            ano = c2.number_input("Ano (ajustes)", value=int(st.session_state["cfg_ano"]), step=1, key="adj_ano")
+            c3.caption("Dica: deixe o mês/ano aqui igual ao mês/ano da aba 🚀 Gerar Escala.")
+
+        st.session_state["cfg_mes"] = int(mes)
+        st.session_state["cfg_ano"] = int(ano)
+
         hist_db = load_escala_mes_db(setor, ano, mes)
         colaboradores = load_colaboradores_setor(setor)
         colab_by = {c["Chapa"]: c for c in colaboradores}
@@ -3329,12 +3394,15 @@ def page_app():
                                 if status == "Férias":
                                     v1, v2 = "FÉRIAS", ""
                                 elif status == "Folga":
-                                    v1, v2 = "F", ""
+                                    v1, v2 = ("FF" if dia_sem == "dom" else "F"), ""
                                 else:
                                     v1, v2 = row["H_Entrada"], row["H_Saida"]
 
                                 cell1 = ws.cell(row_idx, i + 2, v1)
                                 cell2 = ws.cell(row_idx + 1, i + 2, v2)
+                                if dia_sem == "dom":
+                                    cell1.fill = fill_dom
+                                    cell2.fill = fill_dom
 
                                 cell1.alignment = center
                                 cell2.alignment = center
