@@ -2386,7 +2386,7 @@ except Exception:
 
         estado_out[ch] = {"consec_trab_final": consec, "ultima_saida": ultima_saida, "ultimo_domingo_status": ultimo_dom}
 
-        return hist_all, estado_out
+         return hist_all, estado_out)
 
 # =========================================================
 # DASHBOARD / CALENDÁRIO / BANCO DE HORAS
