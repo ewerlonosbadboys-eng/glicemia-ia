@@ -4418,6 +4418,47 @@ def page_app():
                             row_idx += 2
                         row_idx += 1
 
+                    # -----------------------------
+                    # Aba extra: Relatório de Férias do mês (quem está de férias no mês selecionado)
+                    # -----------------------------
+                    try:
+                        rows_f = list_ferias(setor) or []
+                        if rows_f:
+                            df_f = pd.DataFrame(rows_f, columns=["Chapa", "Início", "Fim"]).copy()
+                            df_f["Início"] = pd.to_datetime(df_f["Início"], errors="coerce").dt.date
+                            df_f["Fim"] = pd.to_datetime(df_f["Fim"], errors="coerce").dt.date
+                            df_f = df_f.dropna(subset=["Início", "Fim"])
+
+                            # Mês/ano atuais
+                            ini_mes = pd.Timestamp(year=int(ano), month=int(mes), day=1).date()
+                            fim_mes = (pd.Timestamp(year=int(ano), month=int(mes), day=1) + pd.offsets.MonthEnd(0)).date()
+
+                            # Overlap com o mês
+                            df_f = df_f[(df_f["Fim"] >= ini_mes) & (df_f["Início"] <= fim_mes)].copy()
+
+                            if not df_f.empty:
+                                # Nome ao lado
+                                nome_by = {str(c.get("Chapa","")): str(c.get("Nome","") or "") for c in (colaboradores or [])}
+                                df_f["Nome"] = df_f["Chapa"].astype(str).map(nome_by).fillna("")
+                                # Dias de férias dentro do mês
+                                def _dias_no_mes(r):
+                                    s = max(r["Início"], ini_mes)
+                                    e = min(r["Fim"], fim_mes)
+                                    return max(0, int((e - s).days + 1))
+                                df_f["Dias no mês"] = df_f.apply(_dias_no_mes, axis=1)
+                                df_f = df_f[["Chapa", "Nome", "Início", "Fim", "Dias no mês"]].sort_values(["Nome","Chapa"])
+
+                                df_f.to_excel(writer, sheet_name="Férias do mês", index=False)
+
+                                # estilo simples no header
+                                ws_f = wb["Férias do mês"]
+                                for cell in ws_f[1]:
+                                    cell.fill = fill_header
+                                    cell.font = cell.font.copy(color="FFFFFF", bold=True)
+                                ws_f.freeze_panes = "A2"
+                    except Exception:
+                        pass
+
                     if "Sheet" in wb.sheetnames and len(wb.sheetnames) > 1:
                         wb.remove(wb["Sheet"])
 
@@ -4506,6 +4547,23 @@ def page_app():
             cols_dates[2].caption("Obs.: o PDF segue o modelo oficial do mês. Aqui o filtro é para escolher colaboradores/Seções como no sistema.")
 
             colabs_filtrados = _filtrar_colaboradores(colaboradores, secoes_sel, busca_txt)
+
+            # Filtro extra: somente quem está de férias no mês
+            only_ferias = st.checkbox("🟨 Mostrar somente colaboradores em férias no mês selecionado", value=False, key="pdf_only_ferias")
+            if only_ferias:
+                try:
+                    ini_mes = pd.Timestamp(year=int(ano), month=int(mes), day=1).date()
+                    fim_mes = (pd.Timestamp(year=int(ano), month=int(mes), day=1) + pd.offsets.MonthEnd(0)).date()
+                    fer_rows = list_ferias(setor) or []
+                    fer_df = pd.DataFrame(fer_rows, columns=["Chapa","Início","Fim"])
+                    fer_df["Início"] = pd.to_datetime(fer_df["Início"], errors="coerce").dt.date
+                    fer_df["Fim"] = pd.to_datetime(fer_df["Fim"], errors="coerce").dt.date
+                    fer_df = fer_df.dropna(subset=["Início","Fim"])
+                    fer_df = fer_df[(fer_df["Fim"] >= ini_mes) & (fer_df["Início"] <= fim_mes)]
+                    chapas_fer = set(fer_df["Chapa"].astype(str).tolist())
+                    colabs_filtrados = [c for c in colabs_filtrados if str(c.get("Chapa","")) in chapas_fer]
+                except Exception:
+                    pass
 
             opcoes = [
                 f"{(c.get('Nome') or '').strip()} — Chapa: {str(c.get('Chapa') or '').strip()} — {((c.get('Subgrupo') or '').strip() or 'SEM SUBGRUPO')}"
