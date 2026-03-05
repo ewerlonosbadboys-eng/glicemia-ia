@@ -3584,139 +3584,146 @@ def page_app():
     # ABA 1: Colaboradores
     # ------------------------------------------------------
     with abas[0]:
-        st.subheader("👥 Colaboradores (SEM senha)")
-        colaboradores = load_colaboradores_setor(setor)
+        tabs_col = st.tabs(["👥 Colaboradores", "➕ Cadastrar colaborador", "🗑️ Excluir colaborador", "✏️ Editar perfil"])
+        with tabs_col[0]:
+            st.markdown("### 👥 Colaboradores")
+            colaboradores = load_colaboradores_setor(setor)
 
-        if colaboradores:
-            st.dataframe(pd.DataFrame([{
-                "Nome": c["Nome"],
-                "Chapa": c["Chapa"],
-                "Subgrupo": c["Subgrupo"] or "SEM SUBGRUPO",
-                "Entrada": c["Entrada"],
-                "Folga Sábado": "Sim" if c["Folga_Sab"] else "Não",
-            } for c in colaboradores]), use_container_width=True, height=420)
-        else:
-            st.info("Sem colaboradores.")
-
-        st.markdown("---")
-        st.markdown("## ➕ Cadastrar colaborador (perfil completo + folgas do mês)")
-
-        # competência usada para salvar folgas já no cadastro
-        ano_cfg = int(st.session_state.get("cfg_ano", datetime.now().year))
-        mes_cfg = int(st.session_state.get("cfg_mes", datetime.now().month))
-        ndias_cfg = calendar.monthrange(ano_cfg, mes_cfg)[1]
-
-        with st.form("form_add_colaborador", clear_on_submit=True):
-            c1, c2 = st.columns(2)
-            nome_n = c1.text_input("Nome:", key="col_nome")
-            chapa_n = c2.text_input("Chapa:", key="col_chapa")
-
-            c3, c4, c5 = st.columns([1.2, 1.2, 1])
-            sg_opts_new = [""] + list_subgrupos(setor)
-            subgrupo_n = c3.selectbox("Subgrupo:", sg_opts_new, index=0, key="col_subgrupo")
-            entrada_n = c4.selectbox("Entrada:", HORARIOS_ENTRADA_PRESET, index=HORARIOS_ENTRADA_PRESET.index("06:00") if "06:00" in HORARIOS_ENTRADA_PRESET else 0, key="col_entrada")
-            folga_sab_n = c5.checkbox("Permitir folga sábado", value=False, key="col_folga_sab")
-
-            st.caption(f"Folgas do mês para já salvar como **Folga** (competência ativa: {mes_cfg:02d}/{ano_cfg}).")
-            dias_folga = st.multiselect(
-                "Selecione os dias de folga (1..31):",
-                options=list(range(1, ndias_cfg + 1)),
-                default=[],
-                key="col_dias_folga",
-            )
-
-            submitted = st.form_submit_button("Cadastrar colaborador", use_container_width=True)
-
-            if submitted:
-                if not nome_n or not chapa_n:
-                    st.error("Preencha nome e chapa.")
-                elif colaborador_exists(setor, chapa_n.strip()):
-                    st.error("Já existe essa chapa.")
-                else:
-                    ch_new = chapa_n.strip()
-                    create_colaborador(nome_n.strip(), setor, ch_new, subgrupo=subgrupo_n, entrada=entrada_n, folga_sab=folga_sab_n)
-
-                    # salva folgas como overrides do mês/ano ativos
-                    for d in dias_folga:
-                        set_override(setor, ano_cfg, mes_cfg, ch_new, int(d), "status", "Folga")
-
-                    st.success("Cadastrado! (perfil + folgas do mês salvos)")
-                    st.rerun()
-
-
-        st.markdown("---")
-        st.markdown("## 🗑️ Excluir colaborador")
-        if colaboradores:
-            opts = []
-            for c in colaboradores:
-                ch = str(c.get("Chapa","")).strip()
-                nm = str(c.get("Nome","") or "").strip()
-                label = f"{ch} — {nm}" if nm else ch
-                opts.append((label, ch))
-            pick = st.selectbox("Escolha a chapa para excluir:", [o[0] for o in opts], key="del_chapa_label")
-            ch_del = next((o[1] for o in opts if o[0] == pick), pick.split("—")[0].strip())
-            st.warning("⚠️ Excluir remove também férias, ajustes, escala e estado desse colaborador no setor.")
-            confirm = st.checkbox("Confirmo que quero excluir definitivamente", key="del_confirm")
-            if st.button("Excluir colaborador", key="del_btn"):
-                if not confirm:
-                    st.error("Marque a confirmação para excluir.")
-                else:
-                    delete_colaborador_total(setor, ch_del)
-                    st.success("Colaborador excluído!")
-                    st.rerun()
-
-        st.markdown("---")
-        st.markdown("## ✏️ Editar perfil do colaborador")
-        if colaboradores:
-            chapas = [c["Chapa"] for c in colaboradores]
-            nome_by_chapa = {c["Chapa"]: c.get("Nome", "") for c in colaboradores}
-            ch_sel = st.selectbox(
-                "Colaborador (Nome — Chapa):",
-                chapas,
-                key="pf_chapa",
-                format_func=lambda ch: f"{(nome_by_chapa.get(ch, ch) or ch)} — {ch}",
-            )
-            csel = next(x for x in colaboradores if x["Chapa"] == ch_sel)
-
-            # --- FIX v8.1: ao trocar de colaborador, atualizar widgets (entrada/subgrupo/sábado)
-            last = st.session_state.get("pf_last_chapa")
-            if last != ch_sel:
-                _ent_atual = (csel.get("Entrada") or BALANCO_DIA_ENTRADA).strip()
-                st.session_state["pf_ent_sel"] = _ent_atual
-
-                _sg = (csel.get("Subgrupo") or "").strip()
-                _sg_opts = [""] + list_subgrupos(setor)
-                st.session_state["pf_sg"] = _sg if _sg in _sg_opts else ""
-
-                st.session_state["pf_sab"] = bool(csel.get("Folga_Sab"))
-                st.session_state["pf_last_chapa"] = ch_sel
-
-            colp1, colp2, colp3 = st.columns(3)
-            # Entrada: usar presets (inclui 06:50 e 12:40) para facilitar
-            ent_atual = (csel.get("Entrada") or BALANCO_DIA_ENTRADA).strip()
-            if ent_atual not in HORARIOS_ENTRADA_PRESET:
-                opcoes_ent = HORARIOS_ENTRADA_PRESET + [ent_atual]
+            if colaboradores:
+                st.dataframe(pd.DataFrame([{
+                    "Nome": c["Nome"],
+                    "Chapa": c["Chapa"],
+                    "Subgrupo": c["Subgrupo"] or "SEM SUBGRUPO",
+                    "Entrada": c["Entrada"],
+                    "Folga Sábado": "Sim" if c["Folga_Sab"] else "Não",
+                } for c in colaboradores]), use_container_width=True, height=420)
             else:
-                opcoes_ent = HORARIOS_ENTRADA_PRESET
-            ent_sel = colp1.selectbox(
-                "Entrada:",
-                options=opcoes_ent,
-                index=opcoes_ent.index(ent_atual),
-                key="pf_ent_sel",
-            )
-            sg_opts = [""] + list_subgrupos(setor)
-            idx_default = sg_opts.index(csel["Subgrupo"]) if csel["Subgrupo"] in sg_opts else 0
-            sg = colp2.selectbox("Subgrupo:", sg_opts, index=idx_default, key="pf_sg")
-            sab = colp3.checkbox("Permitir folga sábado", value=bool(csel["Folga_Sab"]), key="pf_sab")
+                st.info("Sem colaboradores.")
 
-            if st.button("Salvar perfil", key="pf_save"):
-                update_colaborador_perfil(setor, ch_sel, sg, ent_sel, sab)
-                st.success("Salvo!")
-                st.rerun()
+            st.markdown("---")
+        with tabs_col[1]:
+            st.markdown("## ➕ Cadastrar colaborador (perfil completo + folgas do mês)")
 
-    # ------------------------------------------------------
-    # ABA 2: Gerar Escala
-    # ------------------------------------------------------
+            # competência usada para salvar folgas já no cadastro
+            ano_cfg = int(st.session_state.get("cfg_ano", datetime.now().year))
+            mes_cfg = int(st.session_state.get("cfg_mes", datetime.now().month))
+            ndias_cfg = calendar.monthrange(ano_cfg, mes_cfg)[1]
+
+            with st.form("form_add_colaborador", clear_on_submit=True):
+                c1, c2 = st.columns(2)
+                nome_n = c1.text_input("Nome:", key="col_nome")
+                chapa_n = c2.text_input("Chapa:", key="col_chapa")
+
+                c3, c4, c5 = st.columns([1.2, 1.2, 1])
+                sg_opts_new = [""] + list_subgrupos(setor)
+                subgrupo_n = c3.selectbox("Subgrupo:", sg_opts_new, index=0, key="col_subgrupo")
+                entrada_n = c4.selectbox("Entrada:", HORARIOS_ENTRADA_PRESET, index=HORARIOS_ENTRADA_PRESET.index("06:00") if "06:00" in HORARIOS_ENTRADA_PRESET else 0, key="col_entrada")
+                folga_sab_n = c5.checkbox("Permitir folga sábado", value=False, key="col_folga_sab")
+
+                st.caption(f"Folgas do mês para já salvar como **Folga** (competência ativa: {mes_cfg:02d}/{ano_cfg}).")
+                dias_folga = st.multiselect(
+                    "Selecione os dias de folga (1..31):",
+                    options=list(range(1, ndias_cfg + 1)),
+                    default=[],
+                    key="col_dias_folga",
+                )
+
+                submitted = st.form_submit_button("Cadastrar colaborador", use_container_width=True)
+
+                if submitted:
+                    if not nome_n or not chapa_n:
+                        st.error("Preencha nome e chapa.")
+                    elif colaborador_exists(setor, chapa_n.strip()):
+                        st.error("Já existe essa chapa.")
+                    else:
+                        ch_new = chapa_n.strip()
+                        create_colaborador(nome_n.strip(), setor, ch_new, subgrupo=subgrupo_n, entrada=entrada_n, folga_sab=folga_sab_n)
+
+                        # salva folgas como overrides do mês/ano ativos
+                        for d in dias_folga:
+                            set_override(setor, ano_cfg, mes_cfg, ch_new, int(d), "status", "Folga")
+
+                        st.success("Cadastrado! (perfil + folgas do mês salvos)")
+                        st.rerun()
+
+
+            st.markdown("---")
+        with tabs_col[2]:
+            st.markdown("## 🗑️ Excluir colaborador")
+            if colaboradores:
+                opts = []
+                for c in colaboradores:
+                    ch = str(c.get("Chapa","")).strip()
+                    nm = str(c.get("Nome","") or "").strip()
+                    label = f"{ch} — {nm}" if nm else ch
+                    opts.append((label, ch))
+                pick = st.selectbox("Escolha a chapa para excluir:", [o[0] for o in opts], key="del_chapa_label")
+                ch_del = next((o[1] for o in opts if o[0] == pick), pick.split("—")[0].strip())
+                st.warning("⚠️ Excluir remove também férias, ajustes, escala e estado desse colaborador no setor.")
+                confirm = st.checkbox("Confirmo que quero excluir definitivamente", key="del_confirm")
+                if st.button("Excluir colaborador", key="del_btn"):
+                    if not confirm:
+                        st.error("Marque a confirmação para excluir.")
+                    else:
+                        delete_colaborador_total(setor, ch_del)
+                        st.success("Colaborador excluído!")
+                        st.rerun()
+
+            st.markdown("---")
+        with tabs_col[3]:
+            st.markdown("## ✏️ Editar perfil do colaborador")
+            if colaboradores:
+                chapas = [c["Chapa"] for c in colaboradores]
+                nome_by_chapa = {c["Chapa"]: c.get("Nome", "") for c in colaboradores}
+                ch_sel = st.selectbox(
+                    "Colaborador (Nome — Chapa):",
+                    chapas,
+                    key="pf_chapa",
+                    format_func=lambda ch: f"{(nome_by_chapa.get(ch, ch) or ch)} — {ch}",
+                )
+                csel = next(x for x in colaboradores if x["Chapa"] == ch_sel)
+
+                # --- FIX v8.1: ao trocar de colaborador, atualizar widgets (entrada/subgrupo/sábado)
+                last = st.session_state.get("pf_last_chapa")
+                if last != ch_sel:
+                    _ent_atual = (csel.get("Entrada") or BALANCO_DIA_ENTRADA).strip()
+                    st.session_state["pf_ent_sel"] = _ent_atual
+
+                    _sg = (csel.get("Subgrupo") or "").strip()
+                    _sg_opts = [""] + list_subgrupos(setor)
+                    st.session_state["pf_sg"] = _sg if _sg in _sg_opts else ""
+
+                    st.session_state["pf_sab"] = bool(csel.get("Folga_Sab"))
+                    st.session_state["pf_last_chapa"] = ch_sel
+
+                colp1, colp2, colp3 = st.columns(3)
+                # Entrada: usar presets (inclui 06:50 e 12:40) para facilitar
+                ent_atual = (csel.get("Entrada") or BALANCO_DIA_ENTRADA).strip()
+                if ent_atual not in HORARIOS_ENTRADA_PRESET:
+                    opcoes_ent = HORARIOS_ENTRADA_PRESET + [ent_atual]
+                else:
+                    opcoes_ent = HORARIOS_ENTRADA_PRESET
+                ent_sel = colp1.selectbox(
+                    "Entrada:",
+                    options=opcoes_ent,
+                    index=opcoes_ent.index(ent_atual),
+                    key="pf_ent_sel",
+                )
+                sg_opts = [""] + list_subgrupos(setor)
+                idx_default = sg_opts.index(csel["Subgrupo"]) if csel["Subgrupo"] in sg_opts else 0
+                sg = colp2.selectbox("Subgrupo:", sg_opts, index=idx_default, key="pf_sg")
+                sab = colp3.checkbox("Permitir folga sábado", value=bool(csel["Folga_Sab"]), key="pf_sab")
+
+                if st.button("Salvar perfil", key="pf_save"):
+                    update_colaborador_perfil(setor, ch_sel, sg, ent_sel, sab)
+                    st.success("Salvo!")
+                    st.rerun()
+
+                # ------------------------------------------------------
+                # ABA 2: Gerar Escala
+                # ------------------------------------------------------
+    
+
     with abas[1]:
         st.subheader("🚀 Gerar escala")
         st.caption(f"Competência ativa: **{int(st.session_state['cfg_mes']):02d}/{int(st.session_state['cfg_ano'])}**")
