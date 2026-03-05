@@ -4670,28 +4670,6 @@ def page_app():
 
 
 
-                st.markdown("---")
-                st.markdown("## 🖨️ Imprimir escala parede")
-
-                all_subgrupos = sorted({((c.get("Subgrupo") or "").strip() or "SEM SUBGRUPO") for c in colaboradores})
-                cfx1, cfx2, cfx3 = st.columns([1.2, 1.2, 1.6])
-                loja_txt = cfx1.text_input("Loja:", value=str(setor), key="pdf_loja_txt")
-                secoes_sel = cfx2.multiselect("Seções (Subgrupo):", options=all_subgrupos, default=[], key="pdf_secoes_sel")
-                busca_txt = cfx3.text_input("Filtro (nome/chapa/subgrupo):", value="", key="pdf_busca")
-
-                cols_dates = st.columns([1,1,2])
-                data_ini = cols_dates[0].date_input("Dia inicial:", value=date(int(ano), int(mes), 1), key="pdf_dt_ini")
-                data_fim = cols_dates[1].date_input("Dia final:", value=date(int(ano), int(mes), calendar.monthrange(int(ano), int(mes))[1]), key="pdf_dt_fim")
-                cols_dates[2].caption("Obs.: o PDF segue o modelo oficial do mês. Aqui o filtro é para escolher colaboradores/Seções como no sistema.")
-
-                st.markdown("### 👥 Colaboradores")
-                colabs_filtrados = _filtrar_colaboradores(colaboradores, secoes_sel, busca_txt)
-
-                opcoes = [
-                    f"{(c.get('Nome') or '').strip()} — Chapa: {str(c.get('Chapa') or '').strip()} — {((c.get('Subgrupo') or '').strip() or 'SEM SUBGRUPO')}"
-                    for c in colabs_filtrados
-                ]
-                mapa_idx = {opcoes[i]: colabs_filtrados[i] for i in range(len(opcoes))}
         with sub_imp3:
             st.subheader("📅 Escala")
             st.markdown("---")
@@ -4717,6 +4695,26 @@ def page_app():
                 )
         with sub_imp4:
             st.subheader("🖨️ Imprimir escala parede")
+
+            all_subgrupos = sorted({((c.get("Subgrupo") or "").strip() or "SEM SUBGRUPO") for c in colaboradores})
+            cfx1, cfx2, cfx3 = st.columns([1.2, 1.2, 1.6])
+            loja_txt = cfx1.text_input("Loja:", value=str(setor), key="pdf_loja_txt")
+            secoes_sel = cfx2.multiselect("Seções (Subgrupo):", options=all_subgrupos, default=[], key="pdf_secoes_sel")
+            busca_txt = cfx3.text_input("Filtro (nome/chapa/subgrupo):", value="", key="pdf_busca")
+
+            cols_dates = st.columns([1, 1, 2])
+            data_ini = cols_dates[0].date_input("Dia inicial:", value=date(int(ano), int(mes), 1), key="pdf_dt_ini")
+            data_fim = cols_dates[1].date_input("Dia final:", value=date(int(ano), int(mes), calendar.monthrange(int(ano), int(mes))[1]), key="pdf_dt_fim")
+            cols_dates[2].caption("Obs.: o PDF segue o modelo oficial do mês. Aqui o filtro é para escolher colaboradores/Seções como no sistema.")
+
+            colabs_filtrados = _filtrar_colaboradores(colaboradores, secoes_sel, busca_txt)
+
+            opcoes = [
+                f"{(c.get('Nome') or '').strip()} — Chapa: {str(c.get('Chapa') or '').strip()} — {((c.get('Subgrupo') or '').strip() or 'SEM SUBGRUPO')}"
+                for c in colabs_filtrados
+            ]
+            mapa_idx = {opcoes[i]: colabs_filtrados[i] for i in range(len(opcoes))}
+
             st.markdown("### 👥 Colaboradores")
             sel = st.multiselect(
                 "Selecione (se vazio, imprime TODOS do filtro):",
