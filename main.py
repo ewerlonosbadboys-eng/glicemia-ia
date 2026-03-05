@@ -1655,22 +1655,74 @@ def save_estado_mes(setor: str, ano: int, mes: int, estado: dict):
         pass
 
 def load_estado_prev(setor: str, ano: int, mes: int):
+    """
+    Carrega estado do mês anterior (consecutivos, última saída e status do último domingo)
+    para manter continuidade entre competências.
+
+    ✅ Robustez extra:
+    - Se a tabela estado_mes_anterior não tiver o domingo (None) ou não tiver registro do colaborador,
+      tenta inferir o "ultimo_domingo_status" a partir da escala do mês anterior salva em escala_mes.
+    """
     prev_ano, prev_mes = ano, mes - 1
     if prev_mes == 0:
         prev_mes = 12
         prev_ano -= 1
+
+    def _infer_ultimo_domingo_status_from_escala(chapa: str) -> str | None:
+        try:
+            con2 = db_conn()
+            dfp = pd.read_sql_query(
+                """
+                SELECT dia, status
+                FROM escala_mes
+                WHERE setor=? AND ano=? AND mes=? AND chapa=?
+                ORDER BY dia ASC
+                """,
+                con2,
+                params=(setor, int(prev_ano), int(prev_mes), str(chapa)),
+            )
+            con2.close()
+            if dfp is None or dfp.empty:
+                return None
+            # pega último domingo (dia == 'dom') do mês anterior
+            for i in range(len(dfp) - 1, -1, -1):
+                if str(dfp.loc[i, "dia"]).strip().lower() in ("dom", "domingo"):
+                    stt = str(dfp.loc[i, "status"] or "").strip()
+                    if stt == "Folga":
+                        return "Folga"
+                    if stt in WORK_STATUSES:
+                        return "Trabalho"
+                    # se for férias/blank, continua procurando domingo anterior
+            return None
+        except Exception:
+            return None
+
     con = db_conn()
     cur = con.cursor()
-    cur.execute("""
+    cur.execute(
+        """
         SELECT chapa, consec_trab_final, ultima_saida, ultimo_domingo_status
         FROM estado_mes_anterior
         WHERE setor=? AND ano=? AND mes=?
-    """, (setor, prev_ano, prev_mes))
+        """,
+        (setor, int(prev_ano), int(prev_mes)),
+    )
     rows = cur.fetchall()
     con.close()
-    estado = {}
+
+    estado: dict[str, dict] = {}
     for chapa, consec, ultima_saida, ultimo_dom in rows:
-        estado[chapa] = {"consec_trab_final": int(consec), "ultima_saida": ultima_saida or "", "ultimo_domingo_status": ultimo_dom}
+        estado[str(chapa)] = {
+            "consec_trab_final": int(consec),
+            "ultima_saida": ultima_saida or "",
+            "ultimo_domingo_status": ultimo_dom,
+        }
+
+    # fallback do domingo quando estiver ausente
+    for chapa in list(estado.keys()):
+        if not (estado[chapa].get("ultimo_domingo_status") in ("Trabalho", "Folga")):
+            estado[chapa]["ultimo_domingo_status"] = _infer_ultimo_domingo_status_from_escala(chapa)
+
     return estado
 
 # =========================================================
