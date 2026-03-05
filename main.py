@@ -3792,7 +3792,14 @@ def page_app():
                         # pré-processamento simples (melhora muito em PDF fraco)
                         g = ImageOps.grayscale(img)
                         g = ImageOps.autocontrast(g)
-                        txt_ = pytesseract.image_to_string(g, lang="por")
+                        # tenta português; se o servidor não tiver por.traineddata, cai para inglês
+                        try:
+                            txt_ = pytesseract.image_to_string(g, lang="por")
+                        except Exception as _e_lang:
+                            if "por.traineddata" in str(_e_lang) or "Failed loading language 'por'" in str(_e_lang):
+                                txt_ = pytesseract.image_to_string(g, lang="eng")
+                            else:
+                                raise
                         if txt_:
                             ocr_parts.append(txt_.strip())
                     return "\n\n".join(ocr_parts).strip(), "ocr"
