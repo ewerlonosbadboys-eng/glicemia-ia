@@ -896,6 +896,86 @@ def gerar_pdf_modelo_oficial(setor: str, ano: int, mes: int, hist_db: dict, cola
     doc.build(story, onFirstPage=_draw_header, onLaterPages=_draw_header, canvasmaker=_NumberedCanvas)
     return buffer.getvalue()
 
+def gerar_pdf_ferias_mes(setor: str, ano: int, mes: int, colaboradores: list[dict]) -> bytes:
+    """
+    PDF A4 (retrato) - Relatório "Férias do mês"
+    Colunas: Nome, Chapa, Início, Fim, Dias (total do período) e Dias no mês (interseção).
+    """
+    from io import BytesIO
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib import colors
+    from reportlab.lib.units import mm
+    import pandas as pd
+    from datetime import date
+
+    rows_f = list_ferias(setor) or []
+    df = pd.DataFrame(rows_f, columns=["Chapa", "Início", "Fim"]).copy() if rows_f else pd.DataFrame(columns=["Chapa","Início","Fim"])
+    if not df.empty:
+        df["Início"] = pd.to_datetime(df["Início"], errors="coerce").dt.date
+        df["Fim"] = pd.to_datetime(df["Fim"], errors="coerce").dt.date
+        df = df.dropna(subset=["Início", "Fim"])
+
+        ini_mes = pd.Timestamp(year=int(ano), month=int(mes), day=1).date()
+        fim_mes = (pd.Timestamp(year=int(ano), month=int(mes), day=1) + pd.offsets.MonthEnd(0)).date()
+
+        # Overlap com o mês
+        df = df[(df["Fim"] >= ini_mes) & (df["Início"] <= fim_mes)].copy()
+
+        nome_by = {str(c.get("Chapa","")): str(c.get("Nome","") or "") for c in (colaboradores or [])}
+        df["Nome"] = df["Chapa"].astype(str).map(nome_by).fillna("")
+
+        # Dias do período total
+        df["Dias (total)"] = df.apply(lambda r: int((r["Fim"] - r["Início"]).days + 1), axis=1)
+
+        # Dias dentro do mês (interseção)
+        def _dias_mes(r):
+            s = max(r["Início"], ini_mes)
+            e = min(r["Fim"], fim_mes)
+            return max(0, int((e - s).days + 1))
+        df["Dias (no mês)"] = df.apply(_dias_mes, axis=1)
+
+        df = df[["Nome","Chapa","Início","Fim","Dias (total)","Dias (no mês)"]].sort_values(["Nome","Chapa"])
+    else:
+        df = pd.DataFrame(columns=["Nome","Chapa","Início","Fim","Dias (total)","Dias (no mês)"])
+
+    buf = BytesIO()
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=A4,
+        leftMargin=12*mm, rightMargin=12*mm, topMargin=12*mm, bottomMargin=12*mm
+    )
+    styles = getSampleStyleSheet()
+
+    title = Paragraph(f"<b>Férias do mês</b> — Setor: {setor} — {mes:02d}/{ano}", styles["Title"])
+    elements = [title, Spacer(1, 8)]
+
+    if df.empty:
+        elements.append(Paragraph("Nenhum colaborador em férias neste mês.", styles["Normal"]))
+        doc.build(elements)
+        return buf.getvalue()
+
+    data = [list(df.columns)] + df.astype(str).values.tolist()
+    tbl = Table(data, repeatRows=1, colWidths=[65*mm, 22*mm, 25*mm, 25*mm, 20*mm, 20*mm])
+    tbl.setStyle(TableStyle([
+        ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#1F4E79")),
+        ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+        ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
+        ("FONTSIZE", (0,0), (-1,0), 10),
+        ("ALIGN", (1,1), (-1,-1), "CENTER"),
+        ("ALIGN", (0,0), (0,-1), "LEFT"),
+        ("GRID", (0,0), (-1,-1), 0.25, colors.grey),
+        ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.whitesmoke, colors.lightgrey]),
+        ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+        ("BOTTOMPADDING", (0,0), (-1,0), 6),
+        ("TOPPADDING", (0,0), (-1,0), 6),
+    ]))
+    elements.append(tbl)
+    doc.build(elements)
+    return buf.getvalue()
+
+
 def _is_fixed_day(status: str) -> bool:
     # FIXO: balanço
     return str(status) == BALANCO_STATUS
@@ -4556,29 +4636,34 @@ def page_app():
 
             colabs_filtrados = _filtrar_colaboradores(colaboradores, secoes_sel, busca_txt)
 
-            # Filtro extra: somente quem está de férias no mês
-            only_ferias = st.checkbox("🟨 Mostrar somente colaboradores em férias no mês selecionado", value=False, key="pdf_only_ferias")
-            if only_ferias:
-                try:
-                    ini_mes = pd.Timestamp(year=int(ano), month=int(mes), day=1).date()
-                    fim_mes = (pd.Timestamp(year=int(ano), month=int(mes), day=1) + pd.offsets.MonthEnd(0)).date()
-                    fer_rows = list_ferias(setor) or []
-                    fer_df = pd.DataFrame(fer_rows, columns=["Chapa","Início","Fim"])
-                    fer_df["Início"] = pd.to_datetime(fer_df["Início"], errors="coerce").dt.date
-                    fer_df["Fim"] = pd.to_datetime(fer_df["Fim"], errors="coerce").dt.date
-                    fer_df = fer_df.dropna(subset=["Início","Fim"])
-                    fer_df = fer_df[(fer_df["Fim"] >= ini_mes) & (fer_df["Início"] <= fim_mes)]
-                    chapas_fer = set(fer_df["Chapa"].astype(str).tolist())
-                    colabs_filtrados = [c for c in colabs_filtrados if str(c.get("Chapa","")) in chapas_fer]
-                except Exception:
-                    pass
-
             opcoes = [
                 f"{(c.get('Nome') or '').strip()} — Chapa: {str(c.get('Chapa') or '').strip()} — {((c.get('Subgrupo') or '').strip() or 'SEM SUBGRUPO')}"
                 for c in colabs_filtrados
             ]
             mapa_idx = {opcoes[i]: colabs_filtrados[i] for i in range(len(opcoes))}
 
+
+            st.markdown("---")
+            st.markdown("### 🏖️ Férias do mês (PDF)")
+            cfx1, cfx2 = st.columns([1, 2])
+            pdf_fer_busca = cfx2.text_input("Filtro (nome ou chapa) — opcional:", value="", key="pdf_fer_busca")
+            btn_fer_pdf = cfx1.button("📄 Gerar PDF — Férias do mês", use_container_width=True, key="pdf_fer_btn")
+            cfx2.caption("Gera um relatório A4 com Nome, Chapa, Início, Fim e Dias. Considera quem tem férias que encostam no mês selecionado.")
+            if btn_fer_pdf:
+                colabs_all = load_colaboradores_setor(setor) or []
+                # aplica filtro simples
+                if pdf_fer_busca.strip():
+                    kw = pdf_fer_busca.strip().lower()
+                    colabs_all = [c for c in colabs_all if kw in str(c.get("Nome","")).lower() or kw in str(c.get("Chapa","")).lower()]
+                pdf_bytes = gerar_pdf_ferias_mes(setor, int(ano), int(mes), colabs_all)
+                st.download_button(
+                    "⬇️ Baixar PDF (Férias do mês)",
+                    data=pdf_bytes,
+                    file_name=f"ferias_{setor}_{int(mes):02d}_{int(ano)}.pdf",
+                    mime="application/pdf",
+                    use_container_width=True,
+                    key="pdf_fer_dl"
+                )
             st.markdown("### 👥 Colaboradores")
             sel = st.multiselect(
                 "Selecione (se vazio, imprime TODOS do filtro):",
