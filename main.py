@@ -3499,142 +3499,112 @@ def page_app():
                     st.rerun()
 
             with t2:
-                st.markdown("### 🔁 Troca de horários (por dias)")
-                st.caption("Mesmo formato da grade de folgas: selecione colaboradores (ou marque para aplicar em todos) e marque os dias (quadradinhos) para aplicar um horário específico. Por padrão, aplica só em dias de trabalho.")
+                            st.markdown("### 🔁 Troca de horários em grade (por colaborador)")
+                            st.caption("Escolha o horário e marque (quadradinhos) os dias em que ele deve valer. **Folga/Férias sempre prevalecem**: se o dia estiver como Folga/Férias/AFA, o sistema NÃO aplica horário nesse dia.")
 
-                qtd2 = calendar.monthrange(int(ano), int(mes))[1]
-                dias2 = list(range(1, qtd2 + 1))
+                            qtd2 = calendar.monthrange(int(ano), int(mes))[1]
+                            dias2 = list(range(1, qtd2 + 1))
 
-                # --- seleção de colaboradores (mesmo layout da grade de folgas)
-                chapas_opts = list(hist_db.keys())
+                            # --- filtro/seleção de colaboradores (mesmo layout da grade de folgas)
+                            show_all_th = st.checkbox("👥 Mostrar todos os colaboradores", value=True, key="th_show_all")
 
-                show_all_th = st.checkbox("👥 Aplicar para TODOS os colaboradores do setor", value=False, key="th_show_all")
+                            labels_opts_th = [f'{c["Nome"]} ({c["Chapa"]})' for c in colaboradores]
+                            inv_label_th = {f'{c["Nome"]} ({c["Chapa"]})': str(c["Chapa"]) for c in colaboradores}
 
-                labels_opts = []
-                inv_label = {}
-                for ch in chapas_opts:
-                    nm = (colab_by.get(ch, {}) or {}).get("Nome", "")
-                    lab = f"{nm} ({ch})" if nm else str(ch)
-                    labels_opts.append(lab)
-                    inv_label[lab] = ch
+                            sel_labels_th = st.multiselect(
+                                "Selecionar colaboradores para editar (se selecionar, a grade mostra somente eles):",
+                                options=labels_opts_th,
+                                default=st.session_state.get("th_sel_labels", []),
+                                key="th_sel_labels"
+                            )
+                            sel_chapas_th = [inv_label_th[l] for l in sel_labels_th if l in inv_label_th]
 
-                sel_labels = st.multiselect(
-                    "Selecionar colaboradores (se selecionar, aplica somente nesses):",
-                    options=labels_opts,
-                    default=[],
-                    key="th_sel_labels"
-                )
-                target_chapas = [inv_label[x] for x in sel_labels if x in inv_label]
+                            if sel_chapas_th:
+                                colaboradores_view = [c for c in colaboradores if str(c["Chapa"]) in set(sel_chapas_th)]
+                                st.caption(f"Mostrando {len(colaboradores_view)} colaborador(es) selecionado(s).")
+                            else:
+                                colaboradores_view = colaboradores if show_all_th else []
+                                if not colaboradores_view:
+                                    st.info("Selecione colaboradores acima ou marque 'Mostrar todos'.")
+                                    # evita montar grade vazia que confunde
+                                    st.stop()
 
-                # Regra:
-                # - Se selecionou alguém => aplica só nos selecionados
-                # - Se não selecionou ninguém e marcou 'TODOS' => aplica em todos
-                # - Se não selecionou ninguém e NÃO marcou 'TODOS' => não aplica (mostra aviso)
-                if target_chapas:
-                    target_chapas = target_chapas
-                    st.caption(f"Mostrando/aplicando para {len(target_chapas)} colaborador(es) selecionado(s).")
-                elif show_all_th:
-                    target_chapas = chapas_opts
-                    st.caption(f"Mostrando/aplicando para TODOS ({len(target_chapas)}) colaboradores do setor.")
-                else:
-                    target_chapas = []
-                    st.caption("Selecione pelo menos 1 colaborador OU marque 'Aplicar para TODOS'.")
-
-                c1, c2, c3, c4 = st.columns([1.2, 1.2, 1.2, 2.4])
-                with c1:
-                    nova_ent = st.time_input("Entrada para aplicar:", value=datetime.strptime("06:00", "%H:%M").time(), key="th_ent")
-                with c2:
-                    so_trabalho = st.checkbox("Só dias de trabalho", value=True, key="th_so_trab")
-                with c3:
-                    readequar = st.checkbox("Readequar escala após aplicar", value=True, key="th_readeq")
-                with c4:
-                    upd_perfil = st.checkbox("Atualizar 'Entrada' do perfil (padrão)", value=False, key="th_updperfil")
-
-                # --- grade de dias (quadradinhos)
-                st.markdown("**Dias selecionados:**")
-                a, b, _ = st.columns([1, 1, 6])
-                with a:
-                    if st.button("Marcar todos", key="th_all"):
-                        for d in dias2:
-                            st.session_state[f"th_d_{d}"] = True
-                with b:
-                    if st.button("Limpar", key="th_none"):
-                        for d in dias2:
-                            st.session_state[f"th_d_{d}"] = False
-
-                # renderiza em 7 colunas
-                cols = st.columns(7)
-                for idx, d in enumerate(dias2):
-                    col = cols[idx % 7]
-                    with col:
-                        st.checkbox(f"{d:02d}", key=f"th_d_{d}")
-
-                dias_marcados = [d for d in dias2 if st.session_state.get(f"th_d_{d}", False)]
-
-                if st.button("✅ Aplicar horário nos dias marcados", key="th_apply"):
-                    if not target_chapas:
-                        st.error("Selecione pelo menos 1 colaborador.")
-                    elif not dias_marcados:
-                        st.error("Marque pelo menos 1 dia.")
-                    else:
-                        e = nova_ent.strftime("%H:%M")
-                        s = _saida_from_entrada(e)
-
-                        aplicados = 0
-                        pulados = 0
-
-                        for ch2 in target_chapas:
-                            dfm = hist_db[ch2].copy()
-
-                            # pega perfil atual
-                            subgrupo2 = (colab_by.get(ch2, {}).get("Subgrupo", "") or "").strip()
-                            pode_sab2 = bool(colab_by.get(ch2, {}).get("Folga_Sab", False))
-
-                            for i in range(len(dfm)):
-                                dia_num = int(pd.to_datetime(dfm.loc[i, "Data"]).day)
-                                if dia_num not in dias_marcados:
-                                    continue
-
-                                stt = dfm.loc[i, "Status"]
-
-                                # por padrão, só aplica em dias de trabalho
-                                if so_trabalho and (stt not in WORK_STATUSES):
-                                    pulados += 1
-                                    continue
-
-                                # força como trabalho com o horário escolhido
-                                dfm.loc[i, "Status"] = "Trabalho"
-                                dfm.loc[i, "H_Entrada"] = e
-                                dfm.loc[i, "H_Saida"] = s
-
-                                set_override(setor, ano, mes, ch2, dia_num, "status", "Trabalho")
-                                set_override(setor, ano, mes, ch2, dia_num, "h_entrada", e)
-                                set_override(setor, ano, mes, ch2, dia_num, "h_saida", s)
-
-                                aplicados += 1
-
-                            # salva df do colaborador
-                            save_escala_mes_db(setor, ano, mes, {ch2: dfm})
-
-                            # opcional: atualizar entrada padrão do perfil
-                            if upd_perfil:
-                                update_colaborador_perfil(setor, ch2, subgrupo2, e, bool(pode_sab2))
-
-                        if readequar:
-                            _regenerar_mes_inteiro(
-                                setor, ano, mes,
-                                seed=int(st.session_state.get("last_seed", 0)),
-                                respeitar_ajustes=True
+                            # horário a aplicar
+                            horario_sel = st.selectbox(
+                                "Horário (Entrada) para aplicar nos dias marcados:",
+                                options=HORARIOS_ENTRADA_PRESET,
+                                index=HORARIOS_ENTRADA_PRESET.index(BALANCO_DIA_ENTRADA) if BALANCO_DIA_ENTRADA in HORARIOS_ENTRADA_PRESET else 0,
+                                key="th_horario_sel"
                             )
 
-                        st.success(f"Aplicado em {aplicados} célula(s). Pulado(s): {pulados}.")
-                        st.rerun()
+                            # overrides do mês (para respeitar folgas/férias)
+                            ovmap = _ov_map(setor, ano, mes)
 
-                # preview rápido (1 colaborador)
-                if target_chapas:
-                    st.markdown("### Prévia (primeiro colaborador selecionado)")
-                    st.dataframe(hist_db[target_chapas[0]], use_container_width=True, height=420)
+                            # monta grade: SOMENTE Nome, Chapa e dias (checkbox)
+                            rows = []
+                            for c in colaboradores_view:
+                                ch = str(c["Chapa"])
+                                nm = c.get("Nome","")
+                                row = {"Nome": nm, "Chapa": ch}
+                                # pré-preenche: marca como True apenas se já existir override h_entrada == horario_sel
+                                for d in dias2:
+                                    cur = (ovmap.get(ch, {}).get(d, {}) or {})
+                                    row[str(d)] = (cur.get("h_entrada") == horario_sel)
+                                rows.append(row)
 
+                            df_th = pd.DataFrame(rows)
+
+                            edited_th = st.data_editor(
+                                df_th,
+                                use_container_width=True,
+                                hide_index=True,
+                                num_rows="fixed",
+                                column_config={str(d): st.column_config.CheckboxColumn(str(d), width="small") for d in dias2},
+                                key="th_grid_editor"
+                            )
+
+                            auto_readequar_th = st.checkbox("🔄 Readequar escala ao salvar", value=True, key="th_auto_regen")
+
+                            if st.button("💾 Salvar troca de horários (aplicar nos dias marcados)", key="th_save"):
+                                applied = 0
+                                skipped = 0
+                                for _, r in edited_th.iterrows():
+                                    ch = str(r["Chapa"])
+                                    dfh = hist_db.get(ch)
+                                    # horário padrão para fallback
+                                    ent_pad = (colab_by.get(ch, {}) or {}).get("Entrada", BALANCO_DIA_ENTRADA)
+
+                                    for d in dias2:
+                                        want = bool(r[str(d)])
+
+                                        # status do dia (já com overrides)
+                                        status_dia = None
+                                        if dfh is not None and len(dfh) >= d:
+                                            status_dia = str(dfh.loc[d - 1, "Status"])
+                                        st_ov = (ovmap.get(ch, {}).get(d, {}) or {}).get("status")
+                                        if st_ov:
+                                            status_dia = str(st_ov)
+
+                                        # ✅ regra pedida: Folga/Férias/AFA sempre prevalecem (não aplicar horário)
+                                        if status_dia in ("Folga", "Férias", "AFA"):
+                                            if want:
+                                                skipped += 1
+                                            # opcional: remove override de horário se existir, para não "sujar" o banco
+                                            # del_override(setor, ano, mes, ch, d, "h_entrada")
+                                            continue
+
+                                        if want:
+                                            set_override(setor, ano, mes, ch, d, "h_entrada", horario_sel)
+                                            applied += 1
+                                        else:
+                                            # desmarcado: remove override daquele horário (limpa h_entrada do dia)
+                                            del_override(setor, ano, mes, ch, d, "h_entrada")
+
+                                if auto_readequar_th:
+                                    _regenerar_mes_inteiro(setor, ano, mes, seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
+
+                                st.success(f"Salvo! Horários aplicados: {applied}. Ignorados por Folga/Férias/AFA: {skipped}.")
+                                st.rerun()
 
             with t3:
                 st.markdown("### ✅ Preferência por subgrupo (Evitar folga se possível)")
