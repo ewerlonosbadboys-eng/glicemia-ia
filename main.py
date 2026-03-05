@@ -4186,6 +4186,91 @@ def page_app():
                     st.rerun()
 
             st.markdown("---")
+
+            st.markdown("---")
+            st.markdown("### 📊 Controle de Férias (histórico por mês)")
+
+            # Ano de referência para o histórico
+            ano_ref = st.number_input(
+                "Ano para análise:",
+                min_value=2000, max_value=2100,
+                value=int(st.session_state.get("cfg_ano", datetime.now().year)),
+                step=1,
+                key="fer_hist_ano"
+            )
+
+            rows_all = list_ferias(setor)
+            if not rows_all:
+                st.info("Nenhuma férias cadastrada para este setor.")
+            else:
+                df_all = pd.DataFrame(rows_all, columns=["Chapa", "Início", "Fim"]).copy()
+
+                def _to_date(x):
+                    try:
+                        return pd.to_datetime(x).date()
+                    except Exception:
+                        return None
+
+                df_all["Início"] = df_all["Início"].apply(_to_date)
+                df_all["Fim"] = df_all["Fim"].apply(_to_date)
+                df_all = df_all.dropna(subset=["Início", "Fim"])
+
+                # Mapa chapa->nome
+                colabs_hist = load_colaboradores_setor(setor)
+                nome_by_hist = {str(c.get("Chapa","")): str(c.get("Nome","") or "") for c in (colabs_hist or [])}
+                df_all["Nome"] = df_all["Chapa"].astype(str).map(nome_by_hist).fillna("")
+
+                # Resumo por mês (do ano_ref)
+                resumo = []
+                for mes_i in range(1, 13):
+                    ini_mes = pd.Timestamp(year=int(ano_ref), month=int(mes_i), day=1).date()
+                    fim_mes = (pd.Timestamp(year=int(ano_ref), month=int(mes_i), day=1) + pd.offsets.MonthEnd(0)).date()
+
+                    inter = df_all[(df_all["Fim"] >= ini_mes) & (df_all["Início"] <= fim_mes)].copy()
+                    if inter.empty:
+                        resumo.append({
+                            "Mês": mes_i,
+                            "Colaboradores em férias": 0,
+                            "Dias de férias (soma)": 0,
+                            "Períodos iniciados no mês": 0,
+                        })
+                        continue
+
+                    dias_soma = 0
+                    for _, r in inter.iterrows():
+                        s = max(r["Início"], ini_mes)
+                        e = min(r["Fim"], fim_mes)
+                        dias = (e - s).days + 1
+                        dias_soma += max(0, int(dias))
+
+                    iniciados = df_all[(df_all["Início"] >= ini_mes) & (df_all["Início"] <= fim_mes)]
+                    resumo.append({
+                        "Mês": mes_i,
+                        "Colaboradores em férias": int(inter["Chapa"].nunique()),
+                        "Dias de férias (soma)": int(dias_soma),
+                        "Períodos iniciados no mês": int(iniciados.shape[0]),
+                    })
+
+                df_res = pd.DataFrame(resumo)
+                try:
+                    df_res["Mês (nome)"] = df_res["Mês"].apply(lambda m: pd.Timestamp(year=2000, month=int(m), day=1).strftime("%b").upper())
+                    df_res = df_res[["Mês", "Mês (nome)", "Colaboradores em férias", "Dias de férias (soma)", "Períodos iniciados no mês"]]
+                except Exception:
+                    pass
+
+                st.dataframe(df_res, use_container_width=True, height=360)
+
+                with st.expander("🔎 Ver detalhes de um mês"):
+                    mes_det = st.selectbox("Mês:", list(range(1, 13)), index=0, key="fer_hist_mes_det")
+                    ini_mes = pd.Timestamp(year=int(ano_ref), month=int(mes_det), day=1).date()
+                    fim_mes = (pd.Timestamp(year=int(ano_ref), month=int(mes_det), day=1) + pd.offsets.MonthEnd(0)).date()
+                    det = df_all[(df_all["Fim"] >= ini_mes) & (df_all["Início"] <= fim_mes)].copy()
+                    if det.empty:
+                        st.info("Nenhuma férias nesse mês.")
+                    else:
+                        det = det[["Chapa", "Nome", "Início", "Fim"]].sort_values(["Nome","Chapa"])
+                        st.dataframe(det, use_container_width=True, height=360)
+
             st.markdown("### 📋 Férias cadastradas")
 
             rows = list_ferias(setor)
