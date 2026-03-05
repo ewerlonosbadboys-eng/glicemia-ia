@@ -913,7 +913,7 @@ def gerar_pdf_trabalhando_no_dia(setor: str, ano: int, mes: int, dia: int, hist_
 
     # Mapa rápido chapa->(nome, subgrupo)
     meta = {}
-    for c in colaboradores_view:
+    for c in colaboradores:
         meta[str(c.get("Chapa", "")).strip()] = (str(c.get("Nome", "")).strip(), str(c.get("Subgrupo", "")).strip())
 
     rows = [["Chapa", "Nome", "Subgrupo", "Entrada", "Saída"]]
@@ -2435,7 +2435,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
     ovmap = _ov_map(setor, int(ano), int(mes)) if respeitar_ajustes else {}
 
     grupos = {}
-    for c in colaboradores_view:
+    for c in colaboradores:
         sg = (c.get("Subgrupo") or "").strip() or "SEM SUBGRUPO"
         grupos.setdefault(sg, []).append(c)
 
@@ -3515,10 +3515,10 @@ def page_app():
                 sel_chapas = [inv_label[l] for l in sel_labels if l in inv_label]
 
                 if sel_chapas:
-                    colaboradores_view = [c for c in colaboradores if str(c["Chapa"]) in set(sel_chapas)]
-                    st.caption(f"Mostrando {len(colaboradores_view)} colaborador(es) selecionado(s).")
+                    colaboradores = [c for c in colaboradores if str(c["Chapa"]) in set(sel_chapas)]
+                    st.caption(f"Mostrando {len(colaboradores)} colaborador(es) selecionado(s).")
                 else:
-                    colaboradores_view = colaboradores if show_all else []
+                    colaboradores = colaboradores if show_all else []
                     if not show_all:
                         st.info("Marque 'Mostrar todos' ou selecione 1+ colaboradores acima.")
 
@@ -3537,7 +3537,7 @@ def page_app():
 
                 # monta grade
                 rows = []
-                for c in colaboradores_view:
+                for c in colaboradores:
                     chg = str(c["Chapa"])
                     row = {"Nome": c["Nome"], "Chapa": chg}
                     dfh = hist_db.get(chg)
@@ -3616,11 +3616,11 @@ def page_app():
                             sel_chapas_th = [inv_label_th[l] for l in sel_labels_th if l in inv_label_th]
 
                             if sel_chapas_th:
-                                colaboradores_view = [c for c in colaboradores if str(c["Chapa"]) in set(sel_chapas_th)]
-                                st.caption(f"Mostrando {len(colaboradores_view)} colaborador(es) selecionado(s).")
+                                colaboradores = [c for c in colaboradores if str(c["Chapa"]) in set(sel_chapas_th)]
+                                st.caption(f"Mostrando {len(colaboradores)} colaborador(es) selecionado(s).")
                             else:
-                                colaboradores_view = colaboradores if show_all_th else []
-                                if not colaboradores_view:
+                                colaboradores = colaboradores if show_all_th else []
+                                if not colaboradores:
                                     st.info("Selecione colaboradores acima ou marque 'Mostrar todos'.")
                                     # evita montar grade vazia que confunde
                                     st.stop()
@@ -3650,7 +3650,7 @@ def page_app():
 
                             # monta grade: SOMENTE Nome, Chapa e dias (checkbox)
                             rows = []
-                            for c in colaboradores_view:
+                            for c in colaboradores:
                                 ch = str(c["Chapa"])
                                 nm = c.get("Nome","")
                                 row = {"Nome": nm, "Chapa": ch}
