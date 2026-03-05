@@ -3402,24 +3402,29 @@ def page_app():
                 st.markdown("### 🧩 Folgas manuais em grade (por colaborador)")
                 st.caption("Marque/desmarque as folgas do mês. Isso cria/remove travas (overrides) de Status=Folga. Domingo é editável aqui (manual é soberano).")
                 # --- filtro de colaboradores (para facilitar)
+                # Regra v8.4:
+                # - Se você selecionar 1+ colaboradores, a grade mostra SOMENTE os selecionados (mesmo se "Mostrar todos" estiver marcado).
+                # - Se não selecionar ninguém, a grade respeita o checkbox (todos ou nenhum).
                 show_all = st.checkbox("👥 Mostrar todos os colaboradores", value=True, key="grid_show_all")
-                chapas_opts = [str(c["Chapa"]) for c in colaboradores]
+
                 labels_opts = [f'{c["Nome"]} ({c["Chapa"]})' for c in colaboradores]
                 inv_label = {f'{c["Nome"]} ({c["Chapa"]})': str(c["Chapa"]) for c in colaboradores}
 
-                sel_chapas = []
-                if not show_all:
-                    sel_labels = st.multiselect(
-                        "Selecionar colaboradores para editar (somente os selecionados serão alterados):",
-                        options=labels_opts,
-                        default=st.session_state.get("grid_sel_labels", []),
-                        key="grid_sel_labels"
-                    )
-                    sel_chapas = [inv_label[l] for l in sel_labels if l in inv_label]
-                    if not sel_chapas:
-                        st.info("Selecione pelo menos 1 colaborador ou marque 'Mostrar todos'.")
-                # lista usada para montar a grade
-                colaboradores_view = colaboradores if show_all else [c for c in colaboradores if str(c["Chapa"]) in set(sel_chapas)]
+                sel_labels = st.multiselect(
+                    "Selecionar colaboradores para editar (se selecionar, a grade mostra somente eles):",
+                    options=labels_opts,
+                    default=st.session_state.get("grid_sel_labels", []),
+                    key="grid_sel_labels"
+                )
+                sel_chapas = [inv_label[l] for l in sel_labels if l in inv_label]
+
+                if sel_chapas:
+                    colaboradores_view = [c for c in colaboradores if str(c["Chapa"]) in set(sel_chapas)]
+                    st.caption(f"Mostrando {len(colaboradores_view)} colaborador(es) selecionado(s).")
+                else:
+                    colaboradores_view = colaboradores if show_all else []
+                    if not show_all:
+                        st.info("Marque 'Mostrar todos' ou selecione 1+ colaboradores acima.")
 
 
                 qtd = calendar.monthrange(int(ano), int(mes))[1]
