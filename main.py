@@ -3596,11 +3596,25 @@ def page_app():
                 colab_by = {c["Chapa"]: c for c in colaboradores}
                 st.markdown("### 📅 Calendário RH (visual por colaborador)")
                 cal = calendario_rh_df(hist_db, colab_by)
+
+                # Filtro por colaborador (para não ficar gigante)
+                opts = [("Todos", None)]
+                for _, r in cal[["Chapa","Nome"]].drop_duplicates().sort_values(["Nome","Chapa"]).iterrows():
+                    ch = str(r["Chapa"]).strip()
+                    nm = str(r["Nome"]).strip()
+                    label = f"{ch} — {nm}" if nm else ch
+                    opts.append((label, ch))
+
+                pick = st.selectbox("Filtrar colaborador:", [o[0] for o in opts], index=0, key="cal_filter_pick")
+                ch_pick = next((o[1] for o in opts if o[0] == pick), None)
+
+                cal_show = cal if not ch_pick else cal[cal["Chapa"] == ch_pick].reset_index(drop=True)
+
                 show_color = st.checkbox("🎨 Mostrar cores no calendário (pode deixar lento)", value=False, key="cal_color")
                 if show_color:
-                    st.dataframe(style_calendario(cal, int(mes), int(ano)), use_container_width=True)
+                    st.dataframe(style_calendario(cal_show, int(mes), int(ano)), use_container_width=True)
                 else:
-                    st.dataframe(cal, use_container_width=True)
+                    st.dataframe(cal_show, use_container_width=True)
 
                 st.markdown("---")
                 st.markdown("### 👤 Visualizar colaborador (detalhado)")
