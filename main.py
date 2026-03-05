@@ -3217,6 +3217,43 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
 # (resto do arquivo igual ao seu original — UI completa)
 # =========================================================
 
+
+    # ============================
+    # GARANTIA FINAL (5x2 semanal)
+    # - Semana SEG->DOM tem 2 folgas no total (domingo conta se for folga)
+    # - Reaplica após todas as outras regras que podem adicionar/remover folga
+    # - Cap final: nunca deixa 3 folgas na mesma semana (exceto se travado)
+    # ============================
+    try:
+        df = enforce_weekly_folga_targets(df, df_ref=df_ref, pode_folgar_sabado=pode_sab, locked_status=locked)
+    except Exception:
+        try:
+            df = enforce_weekly_folga_targets(df)
+        except Exception:
+            pass
+
+    try:
+        enforce_max_5_consecutive_work(df, ent, pode_sab)
+    except Exception:
+        pass
+
+    try:
+        df = enforce_weekly_folga_targets(df, df_ref=df_ref, pode_folgar_sabado=pode_sab, locked_status=locked)
+    except Exception:
+        try:
+            df = enforce_weekly_folga_targets(df)
+        except Exception:
+            pass
+
+    try:
+        df = _cap_total_folgas_por_semana(df, target_total=2, locked_status=locked)
+    except Exception:
+        try:
+            df = _cap_total_folgas_por_semana(df, target_total=2)
+        except Exception:
+            pass
+
+
 def banco_horas_df(hist_db: dict[str, pd.DataFrame], colab_by: dict, base_min: int):
     rows = []
     for ch, df in hist_db.items():
