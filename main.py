@@ -86,12 +86,17 @@ def _detect_mes_ano_from_text(s: str):
     return ano, mes
 
 def _split_employee_blocks_ponto_new(s: str):
-    pat = re.compile(r"\n\s*([A-ZÁÉÍÓÚÃÕÇ ]{8,}?)(?:\s*\(([^\)]+)\))?\s*\n\s*M[eê]s\s*:", flags=re.IGNORECASE)
+    # Aceita cabeçalho do funcionário com ou sem quebra de linha antes de "Mês:"
+    # Ex.: "NOME (020.1906) Mês: 03/2026" ou "NOME\nMês: 03/2026"
+    pat = re.compile(
+        r"(?:^|\n)\s*([A-ZÁÉÍÓÚÃÕÇ ]{8,}?)(?:\s*\(([^\)]+)\))?\s*(?:\n\s*)?M[eê]s\s*:",
+        flags=re.IGNORECASE,
+    )
     matches = list(pat.finditer(s))
     out = []
     for i, m in enumerate(matches):
         start = m.start()
-        end = matches[i+1].start() if i+1 < len(matches) else len(s)
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(s)
         nome = (m.group(1) or "").strip()
         chapa_raw = (m.group(2) or "").strip()
         chapa = chapa_raw
@@ -131,6 +136,42 @@ def _group_consecutive_days(days: list[int]) -> list[tuple[int,int]]:
     ranges.append((start, prev))
     return ranges
 
+
+def _norm_nome_key(nome: str) -> str:
+    nome = (nome or "").strip().upper()
+    # remove espaços duplicados
+    nome = re.sub(r"\s{2,}", " ", nome)
+    return nome
+
+def _find_chapa_by_nome_db(setor: str, nome: str):
+    """Tenta encontrar chapa no banco pelo nome (case-insensitive). Retorna (chapa, ambig)."""
+    nome_key = _norm_nome_key(nome)
+    if not nome_key:
+        return None, False
+    con = db_conn()
+    cur = con.cursor()
+    try:
+        cur.execute(
+            "SELECT chapa, nome FROM colaboradores WHERE setor=?",
+            ((setor or '').strip().upper(),),
+        )
+        rows = cur.fetchall()
+    except Exception:
+        con.close()
+        return None, False
+    con.close()
+    hits = []
+    for ch, nm in rows:
+        if _norm_nome_key(nm) == nome_key:
+            hits.append(ch)
+    hits = [h for h in hits if h]
+    if len(hits) == 1:
+        return hits[0], False
+    if len(hits) > 1:
+        return hits[0], True
+    return None, False
+
+
 def _apply_pdf_import_to_db(
     setor_destino: str,
     ano: int,
@@ -161,8 +202,21 @@ def _apply_pdf_import_to_db(
         nome = (it.get("nome") or "").strip()
         chapa = (it.get("chapa") or "").strip()
         tokens = it.get("tokens") or []
+        
+        # Se a chapa não veio no PDF (alguns funcionários aparecem sem (CHAPA)),
+        # tenta mapear pelo nome no banco do setor destino.
         if not chapa:
-            continue
+            chapa_db, ambig = _find_chapa_by_nome_db(setor_destino, nome)
+            if chapa_db:
+                chapa = chapa_db
+            else:
+                # Se ainda não achou chapa, cria uma chapa sintética (para não perder ninguém do PDF)
+                if criar_colabs and nome:
+                    # 6 dígitos estável por setor+nome
+                    sig = abs(hash((setor_destino, nome))) % 1000000
+                    chapa = f"PDF_{sig:06d}"
+                else:
+                    continue
 
         if criar_colabs:
             upsert_colaborador_nome(setor_destino, chapa, nome)
