@@ -4618,7 +4618,7 @@ def page_app():
                         mes_cfg = int(st.session_state.get("cfg_mes", datetime.now().month))
                         ndias_cfg = calendar.monthrange(ano_cfg, mes_cfg)[1]
 
-                        with st.form("form_add_colaborador", clear_on_submit=True):
+                        with st.form("form_add_colaborador_imp", clear_on_submit=True):
                             c1, c2 = st.columns(2)
                             nome_n = c1.text_input("Nome:", key="col_nome")
                             chapa_n = c2.text_input("Chapa:", key="col_chapa")
@@ -5099,7 +5099,7 @@ def page_app():
                         mes_cfg = int(st.session_state.get("cfg_mes", datetime.now().month))
                         ndias_cfg = calendar.monthrange(ano_cfg, mes_cfg)[1]
 
-                        with st.form("form_add_colaborador", clear_on_submit=True):
+                        with st.form("form_add_colaborador_imp", clear_on_submit=True):
                             c1, c2 = st.columns(2)
                             nome_n = c1.text_input("Nome:", key="col_nome")
                             chapa_n = c2.text_input("Chapa:", key="col_chapa")
