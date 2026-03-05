@@ -3441,7 +3441,7 @@ def page_app():
 
                 # monta grade
                 rows = []
-                for c in colaboradores:
+                for c in colaboradores_view:
                     chg = str(c["Chapa"])
                     row = {"Nome": c["Nome"], "Chapa": chg}
                     dfh = hist_db.get(chg)
