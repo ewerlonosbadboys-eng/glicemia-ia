@@ -510,6 +510,52 @@ def aplicar_edicoes_e_exclusoes_glicemia(df_editado: pd.DataFrame):
 
     base.to_csv(ARQ_G, index=False)
 
+
+# ================= IDs + CRUD NUTRIÇÃO =================
+def carregar_nutricao_com_id() -> pd.DataFrame:
+    """Carrega nutrição do usuário garantindo coluna ID (migra CSV antigo)."""
+    df_all = pd.read_csv(ARQ_N) if os.path.exists(ARQ_N) else pd.DataFrame()
+    if df_all.empty:
+        return pd.DataFrame(columns=["ID", "Usuario", "Data", "Momento", "Info", "C", "P", "G"])
+
+    if "Usuario" not in df_all.columns:
+        df_all["Usuario"] = ""
+
+    df_all = _ensure_id_column(df_all, "ID", "NU")
+    # tenta persistir IDs (migração tranquila)
+    try:
+        df_all.to_csv(ARQ_N, index=False)
+    except Exception:
+        pass
+
+    return df_all[df_all["Usuario"] == st.session_state.user_email].copy()
+
+
+def aplicar_exclusoes_nutricao(df_editado: pd.DataFrame):
+    """Remove linhas marcadas como Excluir = True, usando a coluna ID."""
+    if df_editado is None or df_editado.empty:
+        return
+    if "Excluir" not in df_editado.columns or "ID" not in df_editado.columns:
+        return
+
+    ids_del = df_editado.loc[df_editado["Excluir"] == True, "ID"].astype(str).tolist()  # noqa: E712
+    if not ids_del:
+        return
+
+    df_all = pd.read_csv(ARQ_N) if os.path.exists(ARQ_N) else pd.DataFrame()
+    if df_all.empty:
+        return
+    if "Usuario" not in df_all.columns:
+        df_all["Usuario"] = ""
+    df_all = _ensure_id_column(df_all, "ID", "NU")
+
+    # remove apenas as linhas do usuário atual com IDs marcados
+    mask_user = df_all["Usuario"] == st.session_state.user_email
+    mask_del = df_all["ID"].astype(str).isin(ids_del)
+    df_all2 = df_all.loc[~(mask_user & mask_del)].copy()
+
+    df_all2.to_csv(ARQ_N, index=False)
+
 # ================= RECEITA (RÁPIDA/LONGA) =================
 def _schema_receita_nova(rec: pd.Series, periodo: str) -> bool:
     need = [
@@ -1399,7 +1445,7 @@ else:
     # ====== NUTRIÇÃO ======
     with tab2:
         st.markdown('<div class="card">', unsafe_allow_html=True)
-        dfn = carregar_dados_seguro(ARQ_N)
+        dfn = carregar_nutricao_com_id()
 
         # ---------- util: normalização (sem acento) ----------
         import unicodedata
@@ -1501,12 +1547,22 @@ else:
             if st.button("💾 Salvar Refeição", use_container_width=True, disabled=not bool(sel)):
                 dt = agora_br()
                 novo_n = pd.DataFrame(
-                    [[st.session_state.user_email, dt.strftime("%d/%m/%Y"), m_nutri, ", ".join(sel), c_tot, p_tot, g_tot]],
-                    columns=["Usuario", "Data", "Momento", "Info", "C", "P", "G"]
+                    [[
+                        f"NU-{uuid.uuid4().hex[:12]}",
+                        st.session_state.user_email,
+                        dt.strftime("%d/%m/%Y"),
+                        m_nutri,
+                        ", ".join(sel),
+                        c_tot,
+                        p_tot,
+                        g_tot,
+                    ]],
+                    columns=["ID", "Usuario", "Data", "Momento", "Info", "C", "P", "G"],
                 )
                 base = pd.read_csv(ARQ_N) if os.path.exists(ARQ_N) else pd.DataFrame(columns=novo_n.columns)
                 if "Usuario" not in base.columns:
                     base["Usuario"] = ""
+                base = _ensure_id_column(base, "ID", "NU")
                 pd.concat([base, novo_n], ignore_index=True).to_csv(ARQ_N, index=False)
 
                 # limpa seleção após salvar
@@ -1522,7 +1578,31 @@ else:
         if dfn is None or dfn.empty:
             st.info("Sem refeições registradas ainda.")
         else:
-            st.dataframe(dfn.tail(12), use_container_width=True)
+            df_hist_n = dfn.tail(12).copy()
+            df_hist_n = _ensure_id_column(df_hist_n, "ID", "NU")
+            if "Excluir" not in df_hist_n.columns:
+                df_hist_n.insert(0, "Excluir", False)
+
+            df_edit_n = st.data_editor(
+                df_hist_n,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Excluir": st.column_config.CheckboxColumn("Excluir"),
+                    "ID": st.column_config.TextColumn("ID", disabled=True),
+                },
+                key="nutri_editor",
+            )
+
+            col_n1, col_n2 = st.columns([2, 1])
+            with col_n1:
+                if st.button("🗑️ Excluir selecionadas", use_container_width=True):
+                    aplicar_exclusoes_nutricao(df_edit_n)
+                    st.success("Refeições removidas!")
+                    st.session_state.pop("nutri_editor", None)
+                    st.rerun()
+            with col_n2:
+                st.caption("Marque 'Excluir' e clique para remover.")
         st.markdown("</div>", unsafe_allow_html=True)
 
     # ====== RECEITA ======
