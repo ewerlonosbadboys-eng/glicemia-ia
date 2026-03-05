@@ -1415,9 +1415,10 @@ else:
         st.subheader("🍽️ Nutrição")
         m_nutri = st.selectbox("Refeição", MOMENTOS_ORDEM, key="n_m")
 
-        # estado persistente da seleção (resolve “só 1 alimento” e facilita ir adicionando)
-        if "nutri_sel" not in st.session_state:
-            st.session_state.nutri_sel = []
+        # estado persistente da seleção (mantém vários itens sem “sumir”)
+        # Fonte da verdade: widget multiselect (nutri_sel_mult)
+        if "nutri_sel_mult" not in st.session_state:
+            st.session_state.nutri_sel_mult = []
 
         busca_alim = st.text_input(
             "🔎 Buscar alimento",
@@ -1434,7 +1435,7 @@ else:
             opts = [o for o in opts_all if qn in _norm_txt(o)]
             # 2) fallback por similaridade (quando a pessoa digita “quase certo”)
             if len(opts) < 20:
-                mapping = { _norm_txt(o): o for o in opts_all }
+                mapping = {_norm_txt(o): o for o in opts_all}
                 close = difflib.get_close_matches(qn, list(mapping.keys()), n=25, cutoff=0.55)
                 for k in close:
                     o = mapping.get(k)
@@ -1464,20 +1465,20 @@ else:
             pick = st.selectbox("Escolher alimento para adicionar", options=opts, key="nutri_pick")
         with colB:
             if st.button("➕ Adicionar", use_container_width=True):
-                if pick and pick not in st.session_state.nutri_sel:
-                    st.session_state.nutri_sel.append(pick)
+                cur = list(st.session_state.get("nutri_sel_mult", []) or [])
+                if pick and pick not in cur:
+                    cur.append(pick)
+                    st.session_state["nutri_sel_mult"] = cur  # força UI manter + adicionar
 
         # lista atual (permite remover)
         st.multiselect(
             "Alimentos selecionados (pode remover clicando no X)",
             options=opts_all,
-            default=st.session_state.nutri_sel,
             key="nutri_sel_mult",
         )
-        # sincroniza (caso usuário remova)
-        st.session_state.nutri_sel = list(st.session_state.get("nutri_sel_mult", []))
 
-        sel = st.session_state.nutri_sel
+        sel = list(st.session_state.get("nutri_sel_mult", []) or [])
+
 
         c_tot = sum(ALIMENTOS[x][0] for x in sel) if sel else 0
         p_tot = sum(ALIMENTOS[x][1] for x in sel) if sel else 0
