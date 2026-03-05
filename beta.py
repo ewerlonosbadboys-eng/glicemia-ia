@@ -1623,10 +1623,54 @@ else:
                 st.session_state["_nutri_clear_pending"] = True
                 st.rerun()
         st.markdown("### Últimas refeições")
+
+        # Mostra e permite excluir linhas do usuário logado
         if dfn is None or dfn.empty:
             st.info("Sem refeições registradas ainda.")
         else:
-            st.dataframe(dfn.tail(12), use_container_width=True)
+            dfn_all = dfn.copy()
+            if "Usuario" in dfn_all.columns:
+                dfn_user = dfn_all[dfn_all["Usuario"] == st.session_state.user_email].copy()
+            else:
+                dfn_user = dfn_all.copy()
+
+            if dfn_user.empty:
+                st.info("Sem refeições registradas ainda.")
+            else:
+                # Mantém referência ao índice original para exclusão segura
+                dfn_user["_row_id"] = dfn_user.index.astype(int)
+                view = dfn_user[["Data", "Momento", "Info", "C", "P", "G", "_row_id"]].tail(12).copy()
+                view.insert(0, "Excluir", False)
+
+                edited = st.data_editor(
+                    view,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Excluir": st.column_config.CheckboxColumn("Excluir"),
+                        "_row_id": st.column_config.NumberColumn("_row_id", disabled=True),
+                    },
+                    disabled=["Data", "Momento", "Info", "C", "P", "G", "_row_id"],
+                    key="nutri_last_editor",
+                )
+
+                cdel1, cdel2 = st.columns([1, 2])
+                with cdel1:
+                    if st.button("🗑️ Excluir selecionadas", use_container_width=True):
+                        to_del = edited[edited["Excluir"] == True]["_row_id"].tolist()
+                        if not to_del:
+                            st.warning("Marque pelo menos 1 linha em 'Excluir'.")
+                        else:
+                            # Remove do arquivo completo (todas as pessoas), baseado no índice original
+                            base = pd.read_csv(ARQ_N) if os.path.exists(ARQ_N) else pd.DataFrame(columns=dfn_all.columns)
+                            # Garante que o base tenha o mesmo índice do arquivo (0..n-1)
+                            base = base.reset_index(drop=True)
+                            base = base.drop(index=[int(i) for i in to_del if int(i) in base.index])
+                            base.to_csv(ARQ_N, index=False)
+                            st.success(f"Removido: {len(to_del)} registro(s).")
+                            st.rerun()
+                with cdel2:
+                    st.caption("Dica: marque 'Excluir' e clique em **Excluir selecionadas** para remover do histórico de Nutrição.")
 
         st.markdown("</div>", unsafe_allow_html=True)
 
