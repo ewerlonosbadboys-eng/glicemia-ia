@@ -1936,6 +1936,28 @@ def infer_ultimo_domingo_status_from_escala(setor: str, ano: int, mes: int, chap
         return None
 
 
+
+def set_override(setor: str, ano: int, mes: int, chapa: str, dia: int, campo: str, valor: str):
+    """
+    Cria/atualiza um override (UPSERT) na tabela overrides.
+    - campo e valor são strings (ex.: "Status" -> "Folga", "H_Entrada" -> "06:00")
+    """
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute("""
+        INSERT INTO overrides(setor, ano, mes, chapa, dia, campo, valor)
+        VALUES(?,?,?,?,?,?,?)
+        ON CONFLICT(setor, ano, mes, chapa, dia, campo)
+        DO UPDATE SET valor=excluded.valor
+    """, (str(setor).strip().upper(), int(ano), int(mes), str(chapa).strip(), int(dia), str(campo).strip(), str(valor).strip()))
+    con.commit()
+    con.close()
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+
+
 def delete_override(setor: str, ano: int, mes: int, chapa: str, dia: int, campo: str | None = None):
     con = db_conn()
     cur = con.cursor()
