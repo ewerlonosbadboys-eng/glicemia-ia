@@ -2592,7 +2592,7 @@ def _week_start_monday(d: pd.Timestamp) -> pd.Timestamp:
     d = pd.to_datetime(d)
     return (d - pd.to_timedelta(int(d.weekday()), unit="D")).normalize()
 
-def enforce_weekly_folga_targets(df: pd.DataFrame) -> pd.DataFrame:
+def enforce_weekly_folga_targets(df: pd.DataFrame, df_ref=None, pode_folgar_sabado=None, locked_status=None, **kwargs) -> pd.DataFrame:
     """
     REGRA SEMANAL (SEG->DOM) ATUALIZADA:
       - Semana sempre tem 2 folgas no total (5x2).
@@ -2621,7 +2621,24 @@ def enforce_weekly_folga_targets(df: pd.DataFrame) -> pd.DataFrame:
             sab_col = c
             break
 
+
+    # compat: se o chamador já passou pode_folgar_sabado (bool), respeita
+    # - se for bool: aplica globalmente
+    # - se for dict/Series/DataFrame: tentamos ler por chapa (se possível)
+    _pode_sab_param = pode_folgar_sabado
     def _allow_sab(idx_row) -> bool:
+        # se parâmetro foi passado, ele manda
+        if _pode_sab_param is not None:
+            try:
+                # bool global
+                if isinstance(_pode_sab_param, bool):
+                    return _pode_sab_param
+                # dict por chapa
+                chv = str(df.at[idx_row, 'Chapa'])
+                if isinstance(_pode_sab_param, dict) and chv in _pode_sab_param:
+                    return bool(_pode_sab_param[chv])
+            except Exception:
+                pass
         if sab_col is None:
             return True
         try:
@@ -2641,6 +2658,17 @@ def enforce_weekly_folga_targets(df: pd.DataFrame) -> pd.DataFrame:
             break
 
     def _is_locked(idx_row) -> bool:
+        # compat: se chamador passou locked_status, respeita
+        if locked_status is not None:
+            try:
+                # pode ser set/list de índices
+                if isinstance(locked_status, (set, list, tuple)) and idx_row in locked_status:
+                    return True
+                # pode ser DataFrame/Series booleana alinhada por índice
+                if hasattr(locked_status, 'get') and locked_status.get(idx_row, False):
+                    return True
+            except Exception:
+                pass
         if lock_col is None:
             return False
         try:
