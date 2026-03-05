@@ -3902,17 +3902,31 @@ def page_app():
                 st.rerun()
 
             # 🧹 Gerar do zero: ignora travas/ajustes (recalcula o mês totalmente)
+            # -> pede confirmação antes de apagar os overrides do mês.
             if b3.button("🧹 Gerar do zero (ignorar ajustes)", use_container_width=True, key="gen_zero_btn"):
-                # Importante: se existirem overrides antigos no mês, eles podem "forçar" Folga/Trabalho e aparentar que o motor não funcionou.
-                # Ao gerar do zero, limpamos overrides do mês selecionado (não mexe em meses anteriores, como Março).
-                delete_overrides_mes(setor, int(ano), int(mes))
-                st.session_state["last_seed"] = int(seed)
-                ok = _regenerar_mes_inteiro(setor, int(ano), int(mes), seed=int(seed), respeitar_ajustes=False)
-                if ok:
-                    st.success("Escala gerada do zero (ajustes ignorados)!")
-                else:
-                    st.warning("Sem colaboradores.")
-                st.rerun()
+                st.session_state["confirm_gen_zero"] = True
+
+            if st.session_state.get("confirm_gen_zero", False):
+                st.warning(f"Tem certeza que deseja **zerar a escala {mes:02d}/{ano}**? Isso apaga ajustes/travas (overrides) desse mês.", icon="⚠️")
+                cy, cn, _sp = st.columns([1, 1, 5])
+                if cy.button("✅ Sim", use_container_width=True, key="gen_zero_yes"):
+                    st.session_state["confirm_gen_zero"] = False
+                    # Importante: se existirem overrides antigos no mês, eles podem "forçar" Folga/Trabalho e aparentar que o motor não funcionou.
+                    # Ao gerar do zero, limpamos overrides do mês selecionado (não mexe em meses anteriores).
+                    delete_overrides_mes(setor, int(ano), int(mes))
+                    st.session_state["last_seed"] = int(seed)
+                    ok = _regenerar_mes_inteiro(setor, int(ano), int(mes), seed=int(seed), respeitar_ajustes=False)
+                    if ok:
+                        st.success("Escala gerada do zero (ajustes ignorados)!")
+                    else:
+                        st.warning("Sem colaboradores.")
+                    st.rerun()
+
+                if cn.button("❌ Não", use_container_width=True, key="gen_zero_no"):
+                    st.session_state["confirm_gen_zero"] = False
+                    st.info("Ação cancelada.")
+                    st.rerun()
+
 
             hist_db = load_escala_mes_db(setor, int(ano), int(mes))
             hist_db = apply_overrides_to_hist(setor, int(ano), int(mes), hist_db)
