@@ -3529,15 +3529,27 @@ def page_app():
                                     # evita montar grade vazia que confunde
                                     st.stop()
 
-                            # horário a aplicar
-                            horario_sel = st.selectbox(
-                                "Horário (Entrada) para aplicar nos dias marcados:",
-                                options=HORARIOS_ENTRADA_PRESET,
-                                index=HORARIOS_ENTRADA_PRESET.index(BALANCO_DIA_ENTRADA) if BALANCO_DIA_ENTRADA in HORARIOS_ENTRADA_PRESET else 0,
-                                key="th_horario_sel"
+                            # ação a aplicar (horário/folga/afastamento)
+                            acao_th = st.selectbox(
+                                "Ação para aplicar nos dias marcados:",
+                                options=["Horário", "Folga", "Afastamento"],
+                                index=0,
+                                key="th_acao_sel"
                             )
 
-                            # overrides do mês (para respeitar folgas/férias)
+                            horario_sel = None
+                            if acao_th == "Horário":
+                                horario_sel = st.selectbox(
+                                    "Horário (Entrada) para aplicar nos dias marcados:",
+                                    options=HORARIOS_ENTRADA_PRESET,
+                                    index=HORARIOS_ENTRADA_PRESET.index(BALANCO_DIA_ENTRADA) if BALANCO_DIA_ENTRADA in HORARIOS_ENTRADA_PRESET else 0,
+                                    key="th_horario_sel"
+                                )
+                            elif acao_th == "Folga":
+                                st.info("Dias marcados serão salvos como **Folga**. (Folga sempre prevalece sobre horário.)")
+                            else:
+                                st.info("Dias marcados serão salvos como **Afastamento (AFA)**. Após acabar, a escala volta a seguir as regras normalmente.")
+# overrides do mês (para respeitar folgas/férias)
                             ovmap = _ov_map(setor, ano, mes)
 
                             # monta grade: SOMENTE Nome, Chapa e dias (checkbox)
@@ -3546,10 +3558,15 @@ def page_app():
                                 ch = str(c["Chapa"])
                                 nm = c.get("Nome","")
                                 row = {"Nome": nm, "Chapa": ch}
-                                # pré-preenche: marca como True apenas se já existir override h_entrada == horario_sel
+                                # pré-preenche conforme a ação selecionada
                                 for d in dias2:
                                     cur = (ovmap.get(ch, {}).get(d, {}) or {})
-                                    row[str(d)] = (cur.get("h_entrada") == horario_sel)
+                                    if acao_th == "Horário":
+                                        row[str(d)] = (cur.get("h_entrada") == horario_sel)
+                                    elif acao_th == "Folga":
+                                        row[str(d)] = str(cur.get("status") or "").strip().upper() in ("FOLGA","FOLG")
+                                    else:
+                                        row[str(d)] = str(cur.get("status") or "").strip().upper() in ("AFASTAMENTO","AFA")
                                 rows.append(row)
 
                             df_th = pd.DataFrame(rows)
@@ -3585,25 +3602,51 @@ def page_app():
                                         if st_ov:
                                             status_dia = str(st_ov)
 
-                                        # ✅ regra pedida: Folga/Férias/AFA sempre prevalecem (não aplicar horário)
-                                        if status_dia in ("Folga", "Férias", "AFA"):
-                                            if want:
-                                                skipped += 1
-                                            # opcional: remove override de horário se existir, para não "sujar" o banco
-                                            # del_override(setor, ano, mes, ch, d, "h_entrada")
-                                            continue
+                                        st_norm = str(status_dia or "").strip().upper()
 
-                                        if want:
-                                            set_override(setor, ano, mes, ch, d, "h_entrada", horario_sel)
-                                            applied += 1
-                                        else:
-                                            # desmarcado: remove override daquele horário (limpa h_entrada do dia)
-                                            del_override(setor, ano, mes, ch, d, "h_entrada")
+                                        if acao_th == "Horário":
+                                            # ✅ regra: Folga/Férias/Afastamento sempre prevalecem (não aplicar horário)
+                                            if st_norm in ("FOLGA","FOLG","FÉRIAS","FERIAS","FER","AFA","AFASTAMENTO"):
+                                                if want:
+                                                    skipped += 1
+                                                continue
+
+                                            if want:
+                                                set_override(setor, ano, mes, ch, d, "h_entrada", horario_sel)
+                                                applied += 1
+                                            else:
+                                                # desmarcado: remove override de horário (limpa h_entrada do dia)
+                                                del_override(setor, ano, mes, ch, d, "h_entrada")
+
+                                        elif acao_th == "Folga":
+                                            # Folga sobrepõe qualquer horário: salva status e remove h_entrada
+                                            if st_norm in ("FER","FÉRIAS","FERIAS"):
+                                                if want:
+                                                    skipped += 1
+                                                continue
+                                            if want:
+                                                set_override(setor, ano, mes, ch, d, "status", "Folga")
+                                                del_override(setor, ano, mes, ch, d, "h_entrada")
+                                                applied += 1
+                                            else:
+                                                del_override(setor, ano, mes, ch, d, "status")
+
+                                        else:  # Afastamento
+                                            if st_norm in ("FER","FÉRIAS","FERIAS"):
+                                                if want:
+                                                    skipped += 1
+                                                continue
+                                            if want:
+                                                set_override(setor, ano, mes, ch, d, "status", "AFA")
+                                                del_override(setor, ano, mes, ch, d, "h_entrada")
+                                                applied += 1
+                                            else:
+                                                del_override(setor, ano, mes, ch, d, "status")
 
                                 if auto_readequar_th:
                                     _regenerar_mes_inteiro(setor, ano, mes, seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
 
-                                st.success(f"Salvo! Horários aplicados: {applied}. Ignorados por Folga/Férias/AFA: {skipped}.")
+                                st.success(f"Salvo! Ação: {acao_th}. Aplicados: {applied}. Ignorados (por conflito com Folga/Férias): {skipped}.")
                                 st.rerun()
 
             with t3:
