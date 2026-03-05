@@ -4192,6 +4192,10 @@ def page_app():
 
             if rows:
                 df_f = pd.DataFrame(rows, columns=["Chapa", "Início", "Fim"])
+                # adiciona Nome ao lado da chapa
+                colabs = load_colaboradores_setor(setor)
+                nome_by = {str(c.get("Chapa","")): str(c.get("Nome","") or "") for c in (colabs or [])}
+                df_f.insert(1, "Nome", df_f["Chapa"].astype(str).map(nome_by).fillna(""))
                 st.dataframe(df_f, use_container_width=True, height=420)
 
                 st.markdown("### ❌ Remover férias")
