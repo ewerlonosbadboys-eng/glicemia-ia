@@ -1728,56 +1728,79 @@ def load_estado_prev(setor: str, ano: int, mes: int):
 
 def infer_ultimo_domingo_status_from_escala(setor: str, ano: int, mes: int, chapa: str) -> str | None:
     """
-    Inferir o status do ÚLTIMO domingo do mês anterior diretamente da escala_mes.
-    Retorna "Folga" ou "Trabalho" (ou None se não achar).
+    Inferir o status do ÚLTIMO domingo do mês anterior para manter continuidade DOM 1x1.
+
+    Fonte de verdade:
+      1) escala_mes (mês anterior) + overrides do mês anterior (se houver)
+      2) retorna "Folga" ou "Trabalho" (ou None se não achar)
+
+    Observação importante:
+    - No banco, 'dia' é o dia do mês (inteiro). O dia da semana está em 'dia_sem'.
     """
-    prev_ano, prev_mes = ano, mes - 1
+    prev_ano, prev_mes = int(ano), int(mes) - 1
     if prev_mes == 0:
         prev_mes = 12
         prev_ano -= 1
+
     try:
         con = db_conn()
+
+        # Escala do mês anterior (por dia)
         dfp = pd.read_sql_query(
             """
-            SELECT dia, status
+            SELECT dia, dia_sem, status
             FROM escala_mes
             WHERE setor=? AND ano=? AND mes=? AND chapa=?
             ORDER BY dia ASC
             """,
             con,
-            params=(setor, int(prev_ano), int(prev_mes), str(chapa)),
+            params=(str(setor), int(prev_ano), int(prev_mes), str(chapa)),
         )
+
+        # Overrides do mês anterior (se existirem)
+        ov = pd.read_sql_query(
+            """
+            SELECT dia, campo, valor
+            FROM overrides
+            WHERE setor=? AND ano=? AND mes=? AND chapa=?
+            """,
+            con,
+            params=(str(setor), int(prev_ano), int(prev_mes), str(chapa)),
+        )
+
         con.close()
+
         if dfp is None or dfp.empty:
             return None
+
+        # aplica override de status (somente campo=status)
+        if ov is not None and not ov.empty:
+            try:
+                ov_s = ov[ov["campo"] == "status"][["dia", "valor"]].copy()
+                if not ov_s.empty:
+                    ov_map = {int(r["dia"]): str(r["valor"]) for _, r in ov_s.iterrows()}
+                    for i in range(len(dfp)):
+                        d_int = int(dfp.loc[i, "dia"])
+                        if d_int in ov_map:
+                            dfp.loc[i, "status"] = ov_map[d_int]
+            except Exception:
+                pass
+
+        # último domingo do mês anterior (de trás pra frente)
         for i in range(len(dfp) - 1, -1, -1):
-            d = str(dfp.loc[i, "dia"]).strip().lower()
-            if d in ("dom", "domingo"):
+            dia_sem = str(dfp.loc[i, "dia_sem"] or "").strip().lower()
+            if dia_sem in ("dom", "domingo"):
                 stt = str(dfp.loc[i, "status"] or "").strip()
                 if stt == "Folga":
                     return "Folga"
                 if stt in WORK_STATUSES:
                     return "Trabalho"
+                # se cair em férias/blank, continua procurando domingo anterior
+
         return None
     except Exception:
         return None
 
-# =========================================================
-# OVERRIDES
-# =========================================================
-def set_override(setor: str, ano: int, mes: int, chapa: str, dia: int, campo: str, valor: str):
-    con = db_conn()
-    cur = con.cursor()
-    cur.execute("""
-        INSERT OR REPLACE INTO overrides(setor, ano, mes, chapa, dia, campo, valor)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (setor, int(ano), int(mes), chapa, int(dia), campo, str(valor)))
-    con.commit()
-    con.close()
-    try:
-        st.cache_data.clear()
-    except Exception:
-        pass
 
 def delete_override(setor: str, ano: int, mes: int, chapa: str, dia: int, campo: str | None = None):
     con = db_conn()
