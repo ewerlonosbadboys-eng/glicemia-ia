@@ -3782,6 +3782,90 @@ def page_app():
                 except Exception:
                     return ""
 
+
+
+
+            def _ocr_pdf_text_bytes(pdf_bytes: bytes, max_pages: int = 10, dpi: int = 220) -> str:
+
+
+                """OCR para PDF imagem/escaneado.
+
+
+                Requer (ambiente): tesseract + poppler
+
+
+                Requer (python): pytesseract + pdf2image
+
+
+                """
+
+
+                try:
+
+
+                    from pdf2image import convert_from_bytes  # type: ignore
+
+
+                    import pytesseract  # type: ignore
+
+
+                except Exception:
+
+
+                    return ""
+
+
+
+                try:
+
+
+                    # converte páginas em imagens
+
+
+                    images = convert_from_bytes(pdf_bytes, dpi=dpi, first_page=1, last_page=max_pages)
+
+
+                except Exception:
+
+
+                    return ""
+
+
+
+                out = []
+
+
+                for img in images[:max_pages]:
+
+
+                    try:
+
+
+                        t = pytesseract.image_to_string(img, lang="por")
+
+
+                    except Exception:
+
+
+                        try:
+
+
+                            t = pytesseract.image_to_string(img, lang="eng")
+
+
+                        except Exception:
+
+
+                            t = ""
+
+
+                    if t and t.strip():
+
+
+                        out.append(t)
+
+
+                return "\n\n".join(out).strip()
             def _norm_hhmm(s: str) -> str:
                 s = (s or "").strip().replace(".", ":")
                 if _re.fullmatch(r"\d{1,2}:\d{2}", s):
@@ -3911,13 +3995,21 @@ def page_app():
             with col2:
                 mes_pdf = st.number_input("Mês do PDF", min_value=1, max_value=12, value=date.today().month, step=1, key="adm_pdf_mes")
 
+            use_ocr = st.checkbox("Usar OCR se o PDF for imagem (escaneado)", value=False, key="adm_pdf_use_ocr")
+
+
+
             pdf = st.file_uploader("Enviar PDF da escala", type=["pdf"], key="adm_pdf")
             if pdf is not None:
                 try:
                     b = pdf.getvalue()
                     extracted = _extract_pdf_text_bytes(b)
+                    if (not extracted) and bool(use_ocr):
+                        extracted = _ocr_pdf_text_bytes(b)
+                    
                     if not extracted:
-                        st.warning("Não consegui extrair texto desse PDF. Normalmente isso acontece quando o PDF é uma imagem (escaneado). "
+                        st.warning("Não consegui extrair texto desse PDF. Isso geralmente acontece quando o PDF é uma imagem (escaneado). "
+                                   "Se você marcou OCR e mesmo assim não funcionou, provavelmente faltam dependências no servidor (tesseract/poppler) ou o PDF está com qualidade baixa. "
                                    "Dica: exporte do sistema original como PDF 'pesquisável' (texto) ou envie CSV/Excel.")
                     else:
                         st.text_area("Texto extraído (para conferência)", extracted[:20000], height=220, key="adm_pdf_text_v3")
