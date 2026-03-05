@@ -1420,6 +1420,13 @@ else:
         if "nutri_sel_mult" not in st.session_state:
             st.session_state.nutri_sel_mult = []
 
+        # ✅ Evita erro do Streamlit: limpar multiselect só ANTES de criar o widget
+        if st.session_state.get("_nutri_clear_pending", False):
+            st.session_state["nutri_sel"] = []
+            st.session_state["nutri_sel_mult"] = []
+            st.session_state["nutri_add_sel"] = None
+            st.session_state["_nutri_clear_pending"] = False
+
         busca_alim = st.text_input(
             "🔎 Buscar alimento",
             value="",
@@ -1503,17 +1510,14 @@ else:
                 pd.concat([base, novo_n], ignore_index=True).to_csv(ARQ_N, index=False)
 
                 # limpa seleção após salvar
-                st.session_state.nutri_sel = []
-                st.session_state.nutri_sel_mult = []
                 st.success("Refeição salva!")
+                st.session_state["_nutri_clear_pending"] = True
                 st.rerun()
-        with cbtn2:
+with cbtn2:
             if st.button("🧹 Limpar seleção", use_container_width=True):
-                st.session_state.nutri_sel = []
-                st.session_state.nutri_sel_mult = []
+                st.session_state["_nutri_clear_pending"] = True
                 st.rerun()
-
-        st.markdown("### Últimas refeições")
+st.markdown("### Últimas refeições")
         if dfn is None or dfn.empty:
             st.info("Sem refeições registradas ainda.")
         else:
