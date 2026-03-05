@@ -1725,6 +1725,43 @@ def load_estado_prev(setor: str, ano: int, mes: int):
 
     return estado
 
+
+def infer_ultimo_domingo_status_from_escala(setor: str, ano: int, mes: int, chapa: str) -> str | None:
+    """
+    Inferir o status do ÚLTIMO domingo do mês anterior diretamente da escala_mes.
+    Retorna "Folga" ou "Trabalho" (ou None se não achar).
+    """
+    prev_ano, prev_mes = ano, mes - 1
+    if prev_mes == 0:
+        prev_mes = 12
+        prev_ano -= 1
+    try:
+        con = db_conn()
+        dfp = pd.read_sql_query(
+            """
+            SELECT dia, status
+            FROM escala_mes
+            WHERE setor=? AND ano=? AND mes=? AND chapa=?
+            ORDER BY dia ASC
+            """,
+            con,
+            params=(setor, int(prev_ano), int(prev_mes), str(chapa)),
+        )
+        con.close()
+        if dfp is None or dfp.empty:
+            return None
+        for i in range(len(dfp) - 1, -1, -1):
+            d = str(dfp.loc[i, "dia"]).strip().lower()
+            if d in ("dom", "domingo"):
+                stt = str(dfp.loc[i, "status"] or "").strip()
+                if stt == "Folga":
+                    return "Folga"
+                if stt in WORK_STATUSES:
+                    return "Trabalho"
+        return None
+    except Exception:
+        return None
+
 # =========================================================
 # OVERRIDES
 # =========================================================
@@ -2556,6 +2593,8 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
             base_first = None
         else:
             prev_dom = (estado_prev.get(ch, {}) or {}).get("ultimo_domingo_status", None)
+            if prev_dom not in ("Folga","Trabalho"):
+                prev_dom = infer_ultimo_domingo_status_from_escala(setor, int(ano), int(mes), ch)
             if prev_dom == "Folga":
                 base_first = "Trabalho"
             elif prev_dom == "Trabalho":
@@ -2659,6 +2698,8 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
             base_first = None
         else:
             prev_dom = (estado_prev.get(ch, {}) or {}).get("ultimo_domingo_status", None)
+            if prev_dom not in ("Folga","Trabalho"):
+                prev_dom = infer_ultimo_domingo_status_from_escala(setor, int(ano), int(mes), ch)
             if prev_dom == "Folga":
                 base_first = "Trabalho"
             elif prev_dom == "Trabalho":
@@ -2734,6 +2775,8 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
             base_first = None
         else:
             prev_dom = (estado_prev.get(ch, {}) or {}).get("ultimo_domingo_status", None)
+            if prev_dom not in ("Folga","Trabalho"):
+                prev_dom = infer_ultimo_domingo_status_from_escala(setor, int(ano), int(mes), ch)
             if prev_dom == "Folga":
                 base_first = "Trabalho"
             elif prev_dom == "Trabalho":
