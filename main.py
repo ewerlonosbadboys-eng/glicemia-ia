@@ -1314,18 +1314,45 @@ def colaborador_exists(setor: str, chapa: str) -> bool:
     con.close()
     return ok
 
-def create_colaborador(nome: str, setor: str, chapa: str, subgrupo: str = "", entrada: str = "06:00", folga_sabado: bool = False):
-    """Cria colaborador já com perfil completo (subgrupo/entrada/folga_sabado)."""
+def create_colaborador(nome: str, setor: str, chapa: str, subgrupo: str = "", entrada: str = "06:00", folga_sab: bool = False):
+    """
+    Cria colaborador (se não existir) já com perfil completo.
+    Mantém compatibilidade: parâmetros adicionais são opcionais.
+    """
+    nome = (nome or "").strip()
+    setor = (setor or "").strip()
+    chapa = (chapa or "").strip()
+    subgrupo = (subgrupo or "").strip()
+    entrada = (entrada or "06:00").strip()
+
     con = db_conn()
     cur = con.cursor()
+    # cria (ou ignora) com os campos completos
     cur.execute(
-        """INSERT OR IGNORE INTO colaboradores(nome, setor, chapa, subgrupo, entrada, folga_sabado, criado_em)
-             VALUES (?, ?, ?, ?, ?, ?, ?)""",
-        (nome, setor, chapa, (subgrupo or "").strip(), (entrada or "06:00").strip(), 1 if bool(folga_sabado) else 0, datetime.now().isoformat()),
+        """
+        INSERT OR IGNORE INTO colaboradores(nome, setor, chapa, subgrupo, entrada, folga_sab, criado_em)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (nome, setor, chapa, subgrupo, entrada, 1 if folga_sab else 0, datetime.now().isoformat()),
+    )
+    # se já existia, não força overwrite de tudo; mas se os campos estão vazios, completa
+    cur.execute(
+        """
+        UPDATE colaboradores
+        SET nome = COALESCE(NULLIF(nome,''), ?),
+            subgrupo = CASE WHEN (subgrupo IS NULL OR TRIM(subgrupo)='') THEN ? ELSE subgrupo END,
+            entrada = CASE WHEN (entrada IS NULL OR TRIM(entrada)='') THEN ? ELSE entrada END,
+            folga_sab = CASE WHEN folga_sab IS NULL THEN ? ELSE folga_sab END
+        WHERE setor=? AND chapa=?
+        """,
+        (nome, subgrupo, entrada, 1 if folga_sab else 0, setor, chapa),
     )
     con.commit()
     con.close()
-
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
 
 
 def upsert_colaborador_nome(setor: str, chapa: str, nome: str):
@@ -1401,32 +1428,30 @@ def delete_colaborador_total(setor: str, chapa: str):
         pass
 
 def update_colaborador_perfil(setor: str, chapa: str, subgrupo: str, entrada: str, folga_sab: bool):
-    """Atualiza perfil do colaborador."""
     con = db_conn()
     cur = con.cursor()
-    cur.execute(
-        """UPDATE colaboradores
-           SET subgrupo=?, entrada=?, folga_sabado=?
-           WHERE setor=? AND chapa=?""",
-        ((subgrupo or "").strip(), (entrada or "06:00").strip(), 1 if bool(folga_sab) else 0, setor, chapa),
-    )
+    cur.execute("""
+        UPDATE colaboradores
+        SET subgrupo=?, entrada=?, folga_sab=?
+        WHERE setor=? AND chapa=?
+    """, (subgrupo or "", entrada, 1 if folga_sab else 0, setor, chapa))
     con.commit()
     con.close()
-
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
 
 @st.cache_data(show_spinner=False)
 def load_colaboradores_setor(setor: str):
     con = db_conn()
     cur = con.cursor()
-    cur.execute(
-        """
-        SELECT nome, chapa, subgrupo, entrada, folga_sabado
+    cur.execute("""
+        SELECT nome, chapa, subgrupo, entrada, folga_sab
         FROM colaboradores
         WHERE setor=?
         ORDER BY nome ASC
-        """,
-        (setor,),
-    )
+    """, (setor,))
     rows = cur.fetchall()
     con.close()
     return [{
@@ -1434,9 +1459,9 @@ def load_colaboradores_setor(setor: str):
         "Chapa": r[1],
         "Subgrupo": (r[2] or "").strip(),
         "Entrada": (r[3] or "06:00").strip(),
-        "Folga_Sab": bool(int(r[4] or 0)),
+        "Folga_Sab": bool(r[4]),
+        "Setor": setor,
     } for r in rows]
-
 
 # =========================================================
 # SUBGRUPOS + REGRAS
@@ -3182,51 +3207,48 @@ def page_app():
             st.info("Sem colaboradores.")
 
         st.markdown("---")
-        
-with st.form("form_add_colaborador", clear_on_submit=True):
-            # Competência atual (para já cadastrar folgas do mês)
-            ano_cfg = int(st.session_state.get("cfg_ano", datetime.now().year))
-            mes_cfg = int(st.session_state.get("cfg_mes", datetime.now().month))
-            ndias = calendar.monthrange(ano_cfg, mes_cfg)[1]
+        st.markdown("## ➕ Cadastrar colaborador (perfil completo + folgas do mês)")
 
+        # competência usada para salvar folgas já no cadastro
+        ano_cfg = int(st.session_state.get("cfg_ano", datetime.now().year))
+        mes_cfg = int(st.session_state.get("cfg_mes", datetime.now().month))
+        ndias_cfg = calendar.monthrange(ano_cfg, mes_cfg)[1]
+
+        with st.form("form_add_colaborador", clear_on_submit=True):
             c1, c2 = st.columns(2)
             nome_n = c1.text_input("Nome:", key="col_nome")
             chapa_n = c2.text_input("Chapa:", key="col_chapa")
 
-            c3, c4, c5 = st.columns(3)
-            sg_opts = [""] + list_subgrupos(setor)
-            subgrupo_n = c3.selectbox("Subgrupo:", sg_opts, index=0, key="col_sg")
-            entrada_n = c4.selectbox("Entrada:", HORARIOS_ENTRADA_PRESET, index=0, key="col_ent")
-            sab_n = c5.checkbox("Permitir folga sábado", value=False, key="col_sab")
+            c3, c4, c5 = st.columns([1.2, 1.2, 1])
+            sg_opts_new = [""] + list_subgrupos(setor)
+            subgrupo_n = c3.selectbox("Subgrupo:", sg_opts_new, index=0, key="col_subgrupo")
+            entrada_n = c4.selectbox("Entrada:", HORARIOS_ENTRADA_PRESET, index=HORARIOS_ENTRADA_PRESET.index("06:00") if "06:00" in HORARIOS_ENTRADA_PRESET else 0, key="col_entrada")
+            folga_sab_n = c5.checkbox("Permitir folga sábado", value=False, key="col_folga_sab")
 
-            folgas_sel = st.multiselect(
-                f"Folgas do mês {mes_cfg:02d}/{ano_cfg} (marque os dias):",
-                options=list(range(1, ndias + 1)),
+            st.caption(f"Folgas do mês para já salvar como **Folga** (competência ativa: {mes_cfg:02d}/{ano_cfg}).")
+            dias_folga = st.multiselect(
+                "Selecione os dias de folga (1..31):",
+                options=list(range(1, ndias_cfg + 1)),
                 default=[],
-                key="col_folgas_mes",
-                help="Essas folgas serão aplicadas como AJUSTE MANUAL (override) no mês selecionado.",
+                key="col_dias_folga",
             )
 
             submitted = st.form_submit_button("Cadastrar colaborador", use_container_width=True)
+
             if submitted:
                 if not nome_n or not chapa_n:
                     st.error("Preencha nome e chapa.")
                 elif colaborador_exists(setor, chapa_n.strip()):
                     st.error("Já existe essa chapa.")
                 else:
-                    create_colaborador(
-                        nome_n.strip(),
-                        setor,
-                        chapa_n.strip(),
-                        subgrupo=subgrupo_n.strip(),
-                        entrada=entrada_n.strip(),
-                        folga_sabado=bool(sab_n),
-                    )
-                    # Aplicar folgas do mês já no cadastro (override)
-                    for d in folgas_sel:
-                        set_override(setor, ano_cfg, mes_cfg, chapa_n.strip(), int(d), "status", "Folga")
+                    ch_new = chapa_n.strip()
+                    create_colaborador(nome_n.strip(), setor, ch_new, subgrupo=subgrupo_n, entrada=entrada_n, folga_sab=folga_sab_n)
 
-                    st.success(f"Cadastrado! Folgas aplicadas no mês: {len(folgas_sel)}")
+                    # salva folgas como overrides do mês/ano ativos
+                    for d in dias_folga:
+                        set_override(setor, ano_cfg, mes_cfg, ch_new, int(d), "status", "Folga")
+
+                    st.success("Cadastrado! (perfil + folgas do mês salvos)")
                     st.rerun()
 
         st.markdown("---")
