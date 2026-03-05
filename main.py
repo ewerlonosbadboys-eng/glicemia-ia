@@ -2225,6 +2225,9 @@ def enforce_max_5_consecutive_work(df, ent_padrao, pode_folgar_sabado: bool, ini
     df.reset_index(drop=True, inplace=True)
 
     def can_make_folga(i):
+        # Segurança (evita iloc out-of-bounds)
+        if i is None or i < 0 or i >= len(df):
+            return False
         # Só converte TRABALHO normal em folga (não mexe em Balanço)
         if _locked(locked_status, i):
             return False
@@ -2246,6 +2249,9 @@ def enforce_max_5_consecutive_work(df, ent_padrao, pode_folgar_sabado: bool, ini
             if consec > 5:
                 block_start = i - (consec - 1)
                 block_end = i
+                # Evita range negativo quando initial_consec vem do mês anterior
+                block_start = max(0, int(block_start))
+                block_end = min(len(df) - 1, int(block_end))
                 candidatos = []
                 for j in range(block_start, block_end + 1):
                     if can_make_folga(j):
@@ -3596,25 +3602,11 @@ def page_app():
                 colab_by = {c["Chapa"]: c for c in colaboradores}
                 st.markdown("### 📅 Calendário RH (visual por colaborador)")
                 cal = calendario_rh_df(hist_db, colab_by)
-
-                # Filtro por colaborador (para não ficar gigante)
-                opts = [("Todos", None)]
-                for _, r in cal[["Chapa","Nome"]].drop_duplicates().sort_values(["Nome","Chapa"]).iterrows():
-                    ch = str(r["Chapa"]).strip()
-                    nm = str(r["Nome"]).strip()
-                    label = f"{ch} — {nm}" if nm else ch
-                    opts.append((label, ch))
-
-                pick = st.selectbox("Filtrar colaborador:", [o[0] for o in opts], index=0, key="cal_filter_pick")
-                ch_pick = next((o[1] for o in opts if o[0] == pick), None)
-
-                cal_show = cal if not ch_pick else cal[cal["Chapa"] == ch_pick].reset_index(drop=True)
-
                 show_color = st.checkbox("🎨 Mostrar cores no calendário (pode deixar lento)", value=False, key="cal_color")
                 if show_color:
-                    st.dataframe(style_calendario(cal_show, int(mes), int(ano)), use_container_width=True)
+                    st.dataframe(style_calendario(cal, int(mes), int(ano)), use_container_width=True)
                 else:
-                    st.dataframe(cal_show, use_container_width=True)
+                    st.dataframe(cal, use_container_width=True)
 
                 st.markdown("---")
                 st.markdown("### 👤 Visualizar colaborador (detalhado)")
@@ -3980,14 +3972,7 @@ def page_app():
         else:
             chapas = [c["Chapa"] for c in colaboradores]
             st.markdown("### ➕ Lançar Férias")
-            opts = []
-            for c in colaboradores:
-                chp = str(c.get("Chapa","")).strip()
-                nm = str(c.get("Nome","") or "").strip()
-                label = f"{chp} — {nm}" if nm else chp
-                opts.append((label, chp))
-            pick = st.selectbox("Colaborador (chapa — nome):", [o[0] for o in opts], key="fer_pick")
-            ch = next((o[1] for o in opts if o[0] == pick), pick.split("—")[0].strip())
+            ch = st.selectbox("Chapa:", chapas, key="fer_ch")
 
             nome_sel = next((x.get("Nome","") for x in colaboradores if str(x.get("Chapa","")) == str(ch)), "")
             st.write(f"**Colaborador:** {nome_sel}  \n**Chapa:** {ch}")
