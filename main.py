@@ -86,17 +86,12 @@ def _detect_mes_ano_from_text(s: str):
     return ano, mes
 
 def _split_employee_blocks_ponto_new(s: str):
-    # Aceita cabeçalho do funcionário com ou sem quebra de linha antes de "Mês:"
-    # Ex.: "NOME (020.1906) Mês: 03/2026" ou "NOME\nMês: 03/2026"
-    pat = re.compile(
-        r"(?:^|\n)\s*([A-ZÁÉÍÓÚÃÕÇ ]{8,}?)(?:\s*\(([^\)]+)\))?\s*(?:\n\s*)?M[eê]s\s*:",
-        flags=re.IGNORECASE,
-    )
+    pat = re.compile(r"\n\s*([A-ZÁÉÍÓÚÃÕÇ ]{8,}?)(?:\s*\(([^\)]+)\))?\s*\n\s*M[eê]s\s*:", flags=re.IGNORECASE)
     matches = list(pat.finditer(s))
     out = []
     for i, m in enumerate(matches):
         start = m.start()
-        end = matches[i + 1].start() if i + 1 < len(matches) else len(s)
+        end = matches[i+1].start() if i+1 < len(matches) else len(s)
         nome = (m.group(1) or "").strip()
         chapa_raw = (m.group(2) or "").strip()
         chapa = chapa_raw
@@ -136,42 +131,6 @@ def _group_consecutive_days(days: list[int]) -> list[tuple[int,int]]:
     ranges.append((start, prev))
     return ranges
 
-
-def _norm_nome_key(nome: str) -> str:
-    nome = (nome or "").strip().upper()
-    # remove espaços duplicados
-    nome = re.sub(r"\s{2,}", " ", nome)
-    return nome
-
-def _find_chapa_by_nome_db(setor: str, nome: str):
-    """Tenta encontrar chapa no banco pelo nome (case-insensitive). Retorna (chapa, ambig)."""
-    nome_key = _norm_nome_key(nome)
-    if not nome_key:
-        return None, False
-    con = db_conn()
-    cur = con.cursor()
-    try:
-        cur.execute(
-            "SELECT chapa, nome FROM colaboradores WHERE setor=?",
-            ((setor or '').strip().upper(),),
-        )
-        rows = cur.fetchall()
-    except Exception:
-        con.close()
-        return None, False
-    con.close()
-    hits = []
-    for ch, nm in rows:
-        if _norm_nome_key(nm) == nome_key:
-            hits.append(ch)
-    hits = [h for h in hits if h]
-    if len(hits) == 1:
-        return hits[0], False
-    if len(hits) > 1:
-        return hits[0], True
-    return None, False
-
-
 def _apply_pdf_import_to_db(
     setor_destino: str,
     ano: int,
@@ -202,21 +161,8 @@ def _apply_pdf_import_to_db(
         nome = (it.get("nome") or "").strip()
         chapa = (it.get("chapa") or "").strip()
         tokens = it.get("tokens") or []
-        
-        # Se a chapa não veio no PDF (alguns funcionários aparecem sem (CHAPA)),
-        # tenta mapear pelo nome no banco do setor destino.
         if not chapa:
-            chapa_db, ambig = _find_chapa_by_nome_db(setor_destino, nome)
-            if chapa_db:
-                chapa = chapa_db
-            else:
-                # Se ainda não achou chapa, cria uma chapa sintética (para não perder ninguém do PDF)
-                if criar_colabs and nome:
-                    # 6 dígitos estável por setor+nome
-                    sig = abs(hash((setor_destino, nome))) % 1000000
-                    chapa = f"PDF_{sig:06d}"
-                else:
-                    continue
+            continue
 
         if criar_colabs:
             upsert_colaborador_nome(setor_destino, chapa, nome)
@@ -1369,25 +1315,17 @@ def colaborador_exists(setor: str, chapa: str) -> bool:
     return ok
 
 def create_colaborador(nome: str, setor: str, chapa: str, subgrupo: str = "", entrada: str = "06:00", folga_sabado: bool = False):
-    """
-    Cadastra colaborador com perfil completo (subgrupo, entrada padrão, permitir folga sábado).
-    Mantém compatibilidade com o restante do sistema.
-    """
+    """Cria colaborador já com perfil completo (subgrupo/entrada/folga_sabado)."""
     con = db_conn()
     cur = con.cursor()
     cur.execute(
-        """
-        INSERT OR IGNORE INTO colaboradores(nome, setor, chapa, subgrupo, entrada, folga_sabado, criado_em)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-        (nome, setor, chapa, subgrupo or "", (entrada or "06:00"), 1 if folga_sabado else 0, datetime.now().isoformat()),
+        """INSERT OR IGNORE INTO colaboradores(nome, setor, chapa, subgrupo, entrada, folga_sabado, criado_em)
+             VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (nome, setor, chapa, (subgrupo or "").strip(), (entrada or "06:00").strip(), 1 if bool(folga_sabado) else 0, datetime.now().isoformat()),
     )
     con.commit()
     con.close()
-    try:
-        st.cache_data.clear()
-    except Exception:
-        pass
+
 
 
 def upsert_colaborador_nome(setor: str, chapa: str, nome: str):
@@ -1463,30 +1401,32 @@ def delete_colaborador_total(setor: str, chapa: str):
         pass
 
 def update_colaborador_perfil(setor: str, chapa: str, subgrupo: str, entrada: str, folga_sab: bool):
+    """Atualiza perfil do colaborador."""
     con = db_conn()
     cur = con.cursor()
-    cur.execute("""
-        UPDATE colaboradores
-        SET subgrupo=?, entrada=?, folga_sab=?
-        WHERE setor=? AND chapa=?
-    """, (subgrupo or "", entrada, 1 if folga_sab else 0, setor, chapa))
+    cur.execute(
+        """UPDATE colaboradores
+           SET subgrupo=?, entrada=?, folga_sabado=?
+           WHERE setor=? AND chapa=?""",
+        ((subgrupo or "").strip(), (entrada or "06:00").strip(), 1 if bool(folga_sab) else 0, setor, chapa),
+    )
     con.commit()
     con.close()
-    try:
-        st.cache_data.clear()
-    except Exception:
-        pass
+
 
 @st.cache_data(show_spinner=False)
 def load_colaboradores_setor(setor: str):
     con = db_conn()
     cur = con.cursor()
-    cur.execute("""
-        SELECT nome, chapa, subgrupo, entrada, folga_sab
+    cur.execute(
+        """
+        SELECT nome, chapa, subgrupo, entrada, folga_sabado
         FROM colaboradores
         WHERE setor=?
         ORDER BY nome ASC
-    """, (setor,))
+        """,
+        (setor,),
+    )
     rows = cur.fetchall()
     con.close()
     return [{
@@ -1494,9 +1434,9 @@ def load_colaboradores_setor(setor: str):
         "Chapa": r[1],
         "Subgrupo": (r[2] or "").strip(),
         "Entrada": (r[3] or "06:00").strip(),
-        "Folga_Sab": bool(r[4]),
-        "Setor": setor,
+        "Folga_Sab": bool(int(r[4] or 0)),
     } for r in rows]
+
 
 # =========================================================
 # SUBGRUPOS + REGRAS
@@ -3242,22 +3182,30 @@ def page_app():
             st.info("Sem colaboradores.")
 
         st.markdown("---")
-        with st.form("form_add_colaborador", clear_on_submit=True):
+        
+with st.form("form_add_colaborador", clear_on_submit=True):
+            # Competência atual (para já cadastrar folgas do mês)
+            ano_cfg = int(st.session_state.get("cfg_ano", datetime.now().year))
+            mes_cfg = int(st.session_state.get("cfg_mes", datetime.now().month))
+            ndias = calendar.monthrange(ano_cfg, mes_cfg)[1]
+
             c1, c2 = st.columns(2)
             nome_n = c1.text_input("Nome:", key="col_nome")
             chapa_n = c2.text_input("Chapa:", key="col_chapa")
 
-            c3, c4, c5 = st.columns([1.2, 1.0, 1.0])
-            sg_opts_new = [""] + list_subgrupos(setor)
-            subgrupo_n = c3.selectbox("Subgrupo:", sg_opts_new, index=0, key="col_subgrupo")
+            c3, c4, c5 = st.columns(3)
+            sg_opts = [""] + list_subgrupos(setor)
+            subgrupo_n = c3.selectbox("Subgrupo:", sg_opts, index=0, key="col_sg")
+            entrada_n = c4.selectbox("Entrada:", HORARIOS_ENTRADA_PRESET, index=0, key="col_ent")
+            sab_n = c5.checkbox("Permitir folga sábado", value=False, key="col_sab")
 
-            # Entrada: usar presets + permitir digitar um valor novo
-            ent_default = "06:00"
-            ent_opts = list(HORARIOS_ENTRADA_PRESET) if "HORARIOS_ENTRADA_PRESET" in globals() else ["06:00", "07:00", "09:00", "10:00", "12:40", "00:10"]
-            if ent_default not in ent_opts:
-                ent_opts = [ent_default] + ent_opts
-            entrada_n = c4.selectbox("Entrada:", ent_opts, index=ent_opts.index(ent_default), key="col_entrada")
-            folga_sab_n = c5.checkbox("Permitir folga sábado", value=False, key="col_folga_sab")
+            folgas_sel = st.multiselect(
+                f"Folgas do mês {mes_cfg:02d}/{ano_cfg} (marque os dias):",
+                options=list(range(1, ndias + 1)),
+                default=[],
+                key="col_folgas_mes",
+                help="Essas folgas serão aplicadas como AJUSTE MANUAL (override) no mês selecionado.",
+            )
 
             submitted = st.form_submit_button("Cadastrar colaborador", use_container_width=True)
             if submitted:
@@ -3272,9 +3220,13 @@ def page_app():
                         chapa_n.strip(),
                         subgrupo=subgrupo_n.strip(),
                         entrada=entrada_n.strip(),
-                        folga_sabado=bool(folga_sab_n),
+                        folga_sabado=bool(sab_n),
                     )
-                    st.success("Cadastrado!")
+                    # Aplicar folgas do mês já no cadastro (override)
+                    for d in folgas_sel:
+                        set_override(setor, ano_cfg, mes_cfg, chapa_n.strip(), int(d), "status", "Folga")
+
+                    st.success(f"Cadastrado! Folgas aplicadas no mês: {len(folgas_sel)}")
                     st.rerun()
 
         st.markdown("---")
