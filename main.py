@@ -85,32 +85,12 @@ def _detect_mes_ano_from_text(s: str):
     return ano, mes
 
 def _split_employee_blocks_ponto_new(s: str):
-    """
-    Divide o texto do PDF em blocos por funcionário para o modelo ESCALA_PONTO_NEW.
-    Robusto para variações onde o PDF extrai "NOME ... Mês: 03/2026" na MESMA linha
-    (sem quebra de linha antes de 'Mês:').
-    """
-    s = _norm_pdf_text(s)
-
-    # Padrão principal: "NOME (CHAPA) Mês: MM/AAAA" (na mesma linha ou após espaços)
-    pat = re.compile(
-        r"(?:\n|^)\s*([A-ZÁÉÍÓÚÃÕÇ ]{8,}?)(?:\s*\(([0-9\.\-]+)\))?\s+M[eê]s\s*:\s*\d{2}/\d{4}",
-        flags=re.IGNORECASE
-    )
+    pat = re.compile(r"(?:^|\n)\s*([A-ZÁÉÍÓÚÃÕÇ][A-ZÁÉÍÓÚÃÕÇ ]{7,}?)(?:\s*\(([^\)]+)\))?\s+M[eê]s\s*:\s*\d{2}/\d{4}", flags=re.IGNORECASE | re.MULTILINE)
     matches = list(pat.finditer(s))
-
-    # Fallback: algumas extrações removem o \n; procura o marcador "Mês:" e captura o nome antes dele
-    if not matches:
-        pat2 = re.compile(
-            r"([A-ZÁÉÍÓÚÃÕÇ ]{8,}?)(?:\s*\(([0-9\.\-]+)\))?\s+M[eê]s\s*:\s*\d{2}/\d{4}",
-            flags=re.IGNORECASE
-        )
-        matches = list(pat2.finditer(s))
-
     out = []
     for i, m in enumerate(matches):
         start = m.start()
-        end = matches[i + 1].start() if i + 1 < len(matches) else len(s)
+        end = matches[i+1].start() if i+1 < len(matches) else len(s)
         nome = (m.group(1) or "").strip()
         chapa_raw = (m.group(2) or "").strip()
         chapa = chapa_raw
@@ -118,14 +98,16 @@ def _split_employee_blocks_ponto_new(s: str):
         out.append({"nome": nome, "chapa_raw": chapa_raw, "chapa": chapa, "texto": block})
     return out
 
-
 def _extract_entrada_tokens(block_text: str, ndays: int):
     t = _norm_pdf_text(block_text)
     m = re.search(r"\bEntrada\b\s+(.*?)\s+\bSa[ií]da\s+Refei[cç][aã]o\b", t, flags=re.IGNORECASE | re.DOTALL)
     if not m:
-        m2 = re.search(r"\bEntrada\b\s+(.*?)(?:\n\s*Entrada\b|\n\s*Sa[ií]da\b)", t, flags=re.IGNORECASE | re.DOTALL)
-        if not m2:
-            return []
+        # fallback: sem acentos (alguns extratores removem)
+        m = re.search(r"\bEntrada\b\s+(.*?)\s+\bSaida\s+Refeicao\b", t, flags=re.IGNORECASE | re.DOTALL)
+    if not m:
+        return []
+    # fallback_saidasem_acento
+
         region = m2.group(1)
     else:
         region = m.group(1)
@@ -357,15 +339,7 @@ def auto_backup_if_due():
 
 
 def restore_backup_from_bytes(data: bytes) -> None:
-   
-
-def list_setores() -> list:
-    """Alias compatível para UI antiga."""
-    try:
-        return listar_setores_db()
-    except Exception:
-        return ["ADMIN"]
- _ensure_backup_dir()
+    _ensure_backup_dir()
     # safety backup
     try:
         create_backup_now(prefix="pre_restore")
@@ -386,6 +360,14 @@ def listar_setores_db() -> list:
     conn.close()
     base_set = {"ADMIN", "GERAL"}
     return sorted(list(base_set.union({(x or "").strip().upper() for x in rows if x})))
+
+
+def list_setores() -> list:
+    """Alias de compatibilidade para UI/versões antigas."""
+    try:
+        return listar_setores_db()
+    except Exception:
+        return ["ADMIN", "GERAL"]
 
 
 def criar_setor_db(nome: str) -> None:
