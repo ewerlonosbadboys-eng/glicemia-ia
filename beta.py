@@ -1180,7 +1180,7 @@ else:
 
         c1, c2 = st.columns([1, 2])
         with c1:
-        v_gl = st.number_input("Valor Glicemia", 0, 600, 100, step=1, key="g_valor_glicemia")
+            v_gl = st.number_input("Valor Glicemia", 0, 600, 100, step=1, key="g_valor_glicemia")
 
             # ✅ Momentos extras (personalizado)
             MOMENTOS_BASE = MOMENTOS_ORDEM + ["Outro (personalizado)"]
