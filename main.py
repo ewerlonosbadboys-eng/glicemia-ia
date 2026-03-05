@@ -2848,6 +2848,53 @@ def _cap_total_folgas_por_semana(df: pd.DataFrame, target_total: int = 2, locked
 
     return df
 
+
+
+def enforce_no_consecutive_folgas(df: pd.DataFrame, locked_status=None) -> pd.DataFrame:
+    """
+    Impede folgas consecutivas (ex.: DOM+SEG) criadas automaticamente.
+    Respeita travas (locked_status ou coluna de travado no DF).
+    """
+    if df is None or df.empty:
+        return df
+    if "Data" not in df.columns or "Chapa" not in df.columns or "Status" not in df.columns:
+        return df
+
+    df = df.copy()
+    df["Data_dt"] = pd.to_datetime(df["Data"])
+    df.sort_values(["Chapa", "Data_dt"], inplace=True)
+
+    lock_col = None
+    for c in ("Travado_Status", "travado_status", "Lock_Status", "lock_status", "Status_Travado", "status_travado"):
+        if c in df.columns:
+            lock_col = c
+            break
+
+    def _is_locked(i):
+        if locked_status is not None:
+            try:
+                if isinstance(locked_status, (set, list, tuple)) and i in locked_status:
+                    return True
+                if hasattr(locked_status, "get") and locked_status.get(i, False):
+                    return True
+            except Exception:
+                pass
+        if lock_col is None:
+            return False
+        try:
+            return bool(df.at[i, lock_col])
+        except Exception:
+            return False
+
+    for ch in df["Chapa"].astype(str).unique():
+        sub = df[df["Chapa"].astype(str) == str(ch)].sort_values("Data_dt")
+        idxs = sub.index.tolist()
+        for a, b in zip(idxs, idxs[1:]):
+            if _is_folga_status(df.at[a, "Status"]) and _is_folga_status(df.at[b, "Status"]):
+                if not _is_locked(b):
+                    df.at[b, "Status"] = "Trabalho"
+    return df
+
 def _counts_folgas_day_and_hour(hist_by_chapa: dict, colab_by_chapa: dict, chapas_grupo: list, idxs_semana: list, df_ref):
     counts_day = {i: 0 for i in idxs_semana}
     counts_day_hour = {}
@@ -3267,6 +3314,41 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
                     break
 
         estado_out[ch] = {"consec_trab_final": consec, "ultima_saida": ultima_saida, "ultimo_domingo_status": ultimo_dom}
+    # ============================
+    # GARANTIA FINAL (motor profissional)
+    # - semana contínua SEG->DOM (considera df_ref para virada de mês)
+    # - rebalance e max5 não podem quebrar a regra semanal
+    # ============================
+    try:
+        enforce_max_5_consecutive_work(df, ent, pode_sab)
+    except Exception:
+        pass
+
+    try:
+        df = enforce_weekly_folga_targets(df, df_ref=df_ref, pode_folgar_sabado=pode_sab, locked_status=locked)
+    except Exception:
+        pass
+
+    try:
+        df = enforce_no_consecutive_folgas(df, locked_status=locked)
+    except Exception:
+        pass
+
+    try:
+        df = enforce_weekly_folga_targets(df, df_ref=df_ref, pode_folgar_sabado=pode_sab, locked_status=locked)
+    except Exception:
+        pass
+
+    try:
+        df = _cap_total_folgas_por_semana(df, target_total=2, locked_status=locked, df_ref=df_ref)
+    except Exception:
+        pass
+
+    try:
+        df = enforce_weekly_folga_targets(df, df_ref=df_ref, pode_folgar_sabado=pode_sab, locked_status=locked)
+    except Exception:
+        pass
+
 
     return hist_all, estado_out
 
@@ -3741,8 +3823,39 @@ def _regenerar_mes_inteiro(setor: str, ano: int, mes: int, seed: int = 0, respei
         return False
 
     random.seed(int(seed))
+    # ===== CONTEXTO SEMANA CONTÍNUA (mês anterior) =====
+    df_ref = None
+    try:
+        ano_prev = int(ano)
+        mes_prev = int(mes) - 1
+        if mes_prev <= 0:
+            mes_prev = 12
+            ano_prev -= 1
+
+        prev_df = load_escala_mes_db(setor, ano_prev, mes_prev) if "load_escala_mes_db" in globals() else None
+        if prev_df is not None and hasattr(prev_df, "empty") and (not prev_df.empty):
+            prev = prev_df.copy()
+            if "Data" not in prev.columns:
+                for c in ("data", "dia", "DataDia"):
+                    if c in prev.columns:
+                        prev["Data"] = prev[c]
+                        break
+            if "Chapa" not in prev.columns:
+                for c in ("chapa", "CHAPA"):
+                    if c in prev.columns:
+                        prev["Chapa"] = prev[c]
+                        break
+            if "Status" not in prev.columns:
+                for c in ("status", "STATUS"):
+                    if c in prev.columns:
+                        prev["Status"] = prev[c]
+                        break
+            df_ref = prev[["Data", "Chapa", "Status"]].copy()
+    except Exception:
+        df_ref = None
+
     hist, estado_out = gerar_escala_setor_por_subgrupo(
-        setor, colaboradores, int(ano), int(mes),
+        setor, colaboradores, int(ano, df_ref=df_ref), int(mes),
         respeitar_ajustes=bool(respeitar_ajustes)
     )
 
