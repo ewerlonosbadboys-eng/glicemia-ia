@@ -43,6 +43,7 @@ import random
 import calendar
 import sqlite3
 import os
+import re
 import shutil
 from pathlib import Path
 
@@ -59,6 +60,177 @@ from reportlab.lib.pagesizes import landscape, A4
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib import colors
 st.set_page_config(page_title="Escala 5x2 Oficial", layout="wide")
+
+# =========================================================
+# PDF IMPORT (AUTOMÁTICO) — modelo ESCALA_PONTO_NEW (Savegnago)
+# Extrai: Nome, Chapa, Entrada (primeira linha), FOLG/FER/AFA
+# Aplica no sistema via overrides + (opcional) cadastro de férias
+# =========================================================
+
+_PDF_TOKEN_RE = re.compile(r"\b(\d{2}:\d{2}|FOLG|FER|AFA)\b", flags=re.IGNORECASE)
+
+def _norm_pdf_text(s: str) -> str:
+    s = (s or "")
+    s = s.replace("\r", "\n")
+    s = re.sub(r"[\t\f\v]+", " ", s)
+    s = re.sub(r"[ ]{2,}", " ", s)
+    return s
+
+def _detect_mes_ano_from_text(s: str):
+    m = re.search(r"M[eê]s\s*:\s*(\d{2})/(\d{4})", s, flags=re.IGNORECASE)
+    if not m:
+        return None, None
+    mes = int(m.group(1))
+    ano = int(m.group(2))
+    return ano, mes
+
+def _split_employee_blocks_ponto_new(s: str):
+    pat = re.compile(r"\n\s*([A-ZÁÉÍÓÚÃÕÇ ]{8,}?)(?:\s*\(([^\)]+)\))?\s*\n\s*M[eê]s\s*:", flags=re.IGNORECASE)
+    matches = list(pat.finditer(s))
+    out = []
+    for i, m in enumerate(matches):
+        start = m.start()
+        end = matches[i+1].start() if i+1 < len(matches) else len(s)
+        nome = (m.group(1) or "").strip()
+        chapa_raw = (m.group(2) or "").strip()
+        chapa = chapa_raw
+        block = s[start:end]
+        out.append({"nome": nome, "chapa_raw": chapa_raw, "chapa": chapa, "texto": block})
+    return out
+
+def _extract_entrada_tokens(block_text: str, ndays: int):
+    t = _norm_pdf_text(block_text)
+    m = re.search(r"\bEntrada\b\s+(.*?)\s+\bSa[ií]da\s+Refei[cç][aã]o\b", t, flags=re.IGNORECASE | re.DOTALL)
+    if not m:
+        m2 = re.search(r"\bEntrada\b\s+(.*?)(?:\n\s*Entrada\b|\n\s*Sa[ií]da\b)", t, flags=re.IGNORECASE | re.DOTALL)
+        if not m2:
+            return []
+        region = m2.group(1)
+    else:
+        region = m.group(1)
+
+    tokens = _PDF_TOKEN_RE.findall(region)
+    tokens = [x.upper() for x in tokens]
+    if len(tokens) > ndays:
+        tokens = tokens[:ndays]
+    return tokens
+
+def _group_consecutive_days(days: list[int]) -> list[tuple[int,int]]:
+    if not days:
+        return []
+    days = sorted(set(int(d) for d in days))
+    ranges = []
+    start = prev = days[0]
+    for d in days[1:]:
+        if d == prev + 1:
+            prev = d
+        else:
+            ranges.append((start, prev))
+            start = prev = d
+    ranges.append((start, prev))
+    return ranges
+
+def _apply_pdf_import_to_db(
+    setor_destino: str,
+    ano: int,
+    mes: int,
+    items: list[dict],
+    criar_colabs: bool = True,
+    limpar_mes_antes: bool = False,
+    map_afa_para_folga: bool = True,
+    cadastrar_ferias: bool = True,
+):
+    """
+    items: lista com {nome, chapa, tokens:[...]}
+    Aplica overrides:
+      - campo=Status -> Folga/Trabalho
+      - campo=H_Entrada -> HH:MM (quando Trabalho)
+    Férias:
+      - se cadastrar_ferias=True: insere intervalos na tabela ferias (add_ferias)
+      - e também marca override Status=Folga nesses dias
+    """
+    if limpar_mes_antes:
+        con = db_conn()
+        cur = con.cursor()
+        cur.execute("DELETE FROM overrides WHERE setor=? AND ano=? AND mes=?", (setor_destino, int(ano), int(mes)))
+        con.commit()
+        con.close()
+
+    for it in items:
+        nome = (it.get("nome") or "").strip()
+        chapa = (it.get("chapa") or "").strip()
+        tokens = it.get("tokens") or []
+        if not chapa:
+            continue
+
+        if criar_colabs:
+            upsert_colaborador_nome(setor_destino, chapa, nome)
+
+        ferias_days = []
+        for dia, tok in enumerate(tokens, start=1):
+            tok = (tok or "").upper()
+            if tok == "FOLG":
+                set_override(setor_destino, ano, mes, chapa, dia, "Status", "Folga")
+                delete_override(setor_destino, ano, mes, chapa, dia, "H_Entrada")
+                delete_override(setor_destino, ano, mes, chapa, dia, "H_Saida")
+            elif tok == "FER":
+                ferias_days.append(dia)
+                set_override(setor_destino, ano, mes, chapa, dia, "Status", "Folga")
+                delete_override(setor_destino, ano, mes, chapa, dia, "H_Entrada")
+                delete_override(setor_destino, ano, mes, chapa, dia, "H_Saida")
+            elif tok == "AFA":
+                if map_afa_para_folga:
+                    set_override(setor_destino, ano, mes, chapa, dia, "Status", "Folga")
+                    delete_override(setor_destino, ano, mes, chapa, dia, "H_Entrada")
+                    delete_override(setor_destino, ano, mes, chapa, dia, "H_Saida")
+                else:
+                    set_override(setor_destino, ano, mes, chapa, dia, "Status", "Folga")
+                    delete_override(setor_destino, ano, mes, chapa, dia, "H_Entrada")
+                    delete_override(setor_destino, ano, mes, chapa, dia, "H_Saida")
+            else:
+                if re.match(r"^\d{2}:\d{2}$", tok):
+                    set_override(setor_destino, ano, mes, chapa, dia, "Status", "Trabalho")
+                    set_override(setor_destino, ano, mes, chapa, dia, "H_Entrada", tok)
+
+        if cadastrar_ferias and ferias_days:
+            ranges = _group_consecutive_days(ferias_days)
+            for a, b in ranges:
+                inicio = date(int(ano), int(mes), int(a))
+                fim = date(int(ano), int(mes), int(b))
+                add_ferias(setor_destino, chapa, inicio, fim)
+
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+
+def _parse_escala_ponto_new_pdf_text(extracted_text: str):
+    """
+    Retorna: (ano, mes, parsed_items, erros)
+    parsed_items: lista de dicts {nome, chapa, tokens}
+    """
+    t = _norm_pdf_text(extracted_text)
+    ano, mes = _detect_mes_ano_from_text(t)
+    if not ano or not mes:
+        return None, None, [], ["Não consegui detectar 'Mês: MM/AAAA' no texto extraído."]
+    ndays = calendar.monthrange(int(ano), int(mes))[1]
+
+    blocks = _split_employee_blocks_ponto_new(t)
+    if not blocks:
+        return int(ano), int(mes), [], ["Não consegui identificar blocos de funcionário (Nome + Mês:)."]
+
+    items = []
+    erros = []
+    for b in blocks:
+        nome = b["nome"]
+        chapa = b["chapa"]
+        tokens = _extract_entrada_tokens(b["texto"], ndays)
+        if len(tokens) != ndays:
+            erros.append(f"Funcionário {nome}: esperado {ndays} valores de Entrada, li {len(tokens)}.")
+        items.append({"nome": nome, "chapa": chapa, "tokens": tokens})
+
+    return int(ano), int(mes), items, erros
+
 
 
 
@@ -1253,130 +1425,6 @@ def load_colaboradores_setor(setor: str):
         "Folga_Sab": bool(r[4]),
         "Setor": setor,
     } for r in rows]
-
-
-# =========================================================
-# PDF IMPORT — MODELO ESCALA_PONTO_NEW (Savegnago)
-# =========================================================
-def _pdf_savegnago_detect_mes_ano(extracted_text: str):
-    # aceita 'Mês : 03/2026' ou 'Mês: 03/2026'
-    m = re.search(r"M[eê]s\s*:?\s*(\d{2})/(\d{4})", extracted_text, flags=re.IGNORECASE)
-    if not m:
-        return None, None
-    mes = int(m.group(1))
-    ano = int(m.group(2))
-    return ano, mes
-
-def _pdf_savegnago_split_funcionarios(extracted_text: str):
-    """
-    Divide o texto em blocos por funcionário.
-    Padrão observado no PDF: 'NOME (020.1906) Mês: 03/2026' OU 'NOME Mês: 03/2026'
-    """
-    # normaliza quebras
-    t = extracted_text.replace("\r", "\n")
-    # captura início de cada funcionário
-    pat = re.compile(r"\n([A-ZÁÉÍÓÚÃÕÇ ]{8,})(?:\s*\(([^\)]+)\))?\s+M[eê]s\s*:?\s*\d{2}/\d{4}\b")
-    matches = list(pat.finditer(t))
-    blocks = []
-    for i, m in enumerate(matches):
-        start = m.start()
-        end = matches[i+1].start() if i+1 < len(matches) else len(t)
-        nome = (m.group(1) or "").strip()
-        chapa = (m.group(2) or "").strip()
-        bloco = t[start:end]
-        blocks.append({"nome_pdf": nome, "chapa_pdf": chapa, "bloco": bloco})
-    return blocks
-
-def _pdf_savegnago_extract_entrada_tokens(func_block: str, ndays: int):
-    """
-    Extrai os 'ndays' valores da PRIMEIRA seção 'Entrada' (início do turno),
-    lendo o conteúdo entre 'Entrada' e 'Saída Refeição' (com/sem acento).
-    Aceita HH:MM, FOLG, FER, AFA.
-    """
-    txtb = re.sub(r"[ \t]+", " ", func_block.replace("\r", "\n"))
-    # tenta com e sem acento
-    m = re.search(r"\bEntrada\b\s+(.*?)\s+\bSa[ií]da\s+Refei[cç][aã]o\b",
-                  txtb, flags=re.IGNORECASE | re.DOTALL)
-    if not m:
-        # fallback: algumas extrações quebram o 'Saída Refeição'
-        m = re.search(r"\bEntrada\b\s+(.*?)(?:\n|\s+)\bSa[ií]da\b",
-                      txtb, flags=re.IGNORECASE | re.DOTALL)
-    if not m:
-        return []
-    region = m.group(1)
-
-    tokens = re.findall(r"\b(\d{2}:\d{2}|FOLG|FER|AFA)\b", region, flags=re.IGNORECASE)
-    tokens = [t.upper() for t in tokens]
-
-    # garante tamanho
-    if len(tokens) >= ndays:
-        return tokens[:ndays]
-
-    # fallback: às vezes há 'Entrada' duplicada; tenta pegar a primeira ocorrência e seguir tokens até bater ndays
-    # (pegando tokens do bloco inteiro, mas interrompendo antes da segunda 'Entrada' se existir)
-    if len(tokens) < ndays:
-        # pega tudo depois da primeira 'Entrada'
-        m2 = re.search(r"\bEntrada\b\s+(.*)", txtb, flags=re.IGNORECASE | re.DOTALL)
-        if m2:
-            after = m2.group(1)
-            # corta se achar a segunda 'Entrada' depois da 'Saída Refeição' (proteção)
-            after = re.split(r"\n\s*Entrada\b", after, maxsplit=1)[0]
-            tokens2 = re.findall(r"\b(\d{2}:\d{2}|FOLG|FER|AFA)\b", after, flags=re.IGNORECASE)
-            tokens2 = [t.upper() for t in tokens2]
-            if len(tokens2) >= ndays:
-                return tokens2[:ndays]
-    return tokens
-
-def _pdf_savegnago_map_to_colaboradores(setor: str, nome_pdf: str, chapa_pdf: str, colaboradores: list[dict]):
-    """
-    Tenta mapear PDF -> colaborador do setor.
-    Prioridade: chapa exata; depois nome normalizado.
-    Retorna (chapa, nome) ou (None, None).
-    """
-    def norm(s: str):
-        s = (s or "").upper()
-        s = re.sub(r"[^A-Z0-9]+", "", s)
-        return s
-
-    # 1) chapa exata
-    if chapa_pdf:
-        chp = chapa_pdf.strip()
-        for c in colaboradores:
-            if str(c.get("Chapa","")).strip() == chp:
-                return str(c.get("Chapa","")).strip(), str(c.get("Nome","")).strip()
-
-    # 2) nome normalizado
-    np = norm(nome_pdf)
-    if np:
-        for c in colaboradores:
-            if norm(c.get("Nome","")) == np:
-                return str(c.get("Chapa","")).strip(), str(c.get("Nome","")).strip()
-
-    return None, None
-
-def _pdf_savegnago_parse_escala(extracted_text: str):
-    """
-    Retorna dict com:
-    - ano, mes
-    - funcionarios: lista de {nome_pdf, chapa_pdf, tokens_entrada}
-    """
-    ano, mes = _pdf_savegnago_detect_mes_ano(extracted_text)
-    if not ano or not mes:
-        raise ValueError("Não consegui identificar o Mês/Ano no PDF (ex.: 'Mês : 03/2026').")
-    ndays = calendar.monthrange(int(ano), int(mes))[1]
-
-    funcionarios = []
-    blocks = _pdf_savegnago_split_funcionarios(extracted_text)
-    if not blocks:
-        raise ValueError("Não consegui separar os funcionários no PDF. Verifique se é o modelo ESCALA_PONTO_NEW.")
-    for b in blocks:
-        tokens = _pdf_savegnago_extract_entrada_tokens(b["bloco"], ndays)
-        funcionarios.append({
-            "nome_pdf": b["nome_pdf"],
-            "chapa_pdf": b["chapa_pdf"],
-            "tokens_entrada": tokens,
-        })
-    return {"ano": int(ano), "mes": int(mes), "ndays": int(ndays), "funcionarios": funcionarios}
 
 # =========================================================
 # SUBGRUPOS + REGRAS
@@ -3868,130 +3916,124 @@ def page_app():
                     st.error(f"Erro ao ler/importar: {e}")
 
             st.markdown("---")
-            
-st.markdown("---")
-st.subheader("📄 Importar escala a partir de PDF (automático - ESCALA_PONTO_NEW)")
-st.caption("Modelo reconhecido: relatório 'ESCALA_PONTO_NEW Escala de DSR e Horário de Trabalho'. O sistema extrai a PRIMEIRA linha 'Entrada' (início do turno) e interpreta: HH:MM, FOLG, FER, AFA.")
 
-pdf = st.file_uploader("Enviar PDF da escala (ESCALA_PONTO_NEW)", type=["pdf"], key="adm_pdf")
-if pdf is not None:
-    try:
-        import PyPDF2
-        reader = PyPDF2.PdfReader(pdf)
-        parts = []
-        # lê todas as páginas (até 30 para proteger)
-        max_pages = min(len(reader.pages), 30)
-        for i in range(max_pages):
-            t = reader.pages[i].extract_text() or ""
-            parts.append(t)
-        extracted = "\n\n".join(parts).strip()
+            st.markdown("---")
 
-        if not extracted:
-            st.warning("Não consegui extrair texto (provável PDF imagem). Se quiser OCR, use PDF pesquisável ou exporte CSV/Excel.")
-        else:
-            # parse do modelo Savegnago
-            parsed = _pdf_savegnago_parse_escala(extracted)
-            ano_pdf, mes_pdf, ndays = parsed["ano"], parsed["mes"], parsed["ndays"]
-            st.success(f"Modelo reconhecido ✅  Mês: {mes_pdf:02d}/{ano_pdf}  |  Dias: {ndays}")
+            st.subheader("📄 Importar escala a partir de PDF (automático — ESCALA_PONTO_NEW)")
 
-            # setor destino
-            setor_dest = st.selectbox("Setor destino para aplicar overrides:", SETORES, index=0, key="adm_pdf_setor_dest")
+            st.caption("Importa 100% automático: Nome + Chapa + Entrada (1ª linha) + FOLG/FER/AFA. Aplica no mês detectado do PDF como overrides (e pode cadastrar férias).")
 
-            colabs = load_colaboradores_setor(setor_dest) if setor_dest else []
-            st.caption(f"Colaboradores cadastrados no setor {setor_dest}: {len(colabs)}")
 
-            criar_se_nao_existir = st.checkbox("Criar colaborador automaticamente se não existir no setor (usa nome/chapa do PDF)", value=False, key="adm_pdf_criar")
-            aplicar_fer_afa_como = st.selectbox("Quando vier 'FER' ou 'AFA' no PDF, salvar como:", ["Folga", "FER", "AFA"], index=0, key="adm_pdf_fer_map")
-            limpar_overrides_mes = st.checkbox("Limpar overrides do mês antes de aplicar (cuidado)", value=False, key="adm_pdf_limpar")
+            colA, colB, colC, colD = st.columns([1.3, 1, 1, 1])
 
-            # monta prévia
-            prev_rows = []
-            nao_mapeados = 0
-            for f in parsed["funcionarios"]:
-                chapa_map, nome_map = _pdf_savegnago_map_to_colaboradores(setor_dest, f["nome_pdf"], f["chapa_pdf"], colabs)
-                tokens = f["tokens_entrada"] or []
-                prev_rows.append({
-                    "Nome_PDF": f["nome_pdf"],
-                    "Chapa_PDF": f["chapa_pdf"] or "",
-                    "Chapa_Map": chapa_map or "",
-                    "Nome_Map": nome_map or "",
-                    "Dias_lidos": len(tokens),
-                    "OK_31": "✅" if len(tokens) == ndays else "❌",
-                })
-                if not chapa_map:
-                    nao_mapeados += 1
+            with colA:
 
-            df_prev = pd.DataFrame(prev_rows)
-            st.dataframe(df_prev, use_container_width=True, height=280)
+                setor_dest = st.selectbox("Setor destino:", list_setores(), key="pdf_setor_dest")
 
-            if nao_mapeados:
-                st.warning(f"{nao_mapeados} funcionário(s) do PDF não foram mapeados para o setor '{setor_dest}'. Se marcar 'Criar colaborador automaticamente', eles serão cadastrados no setor e a importação aplica normalmente.")
+            with colB:
 
-            # aplicar
-            if st.button("✅ Aplicar escala do PDF como overrides (status + h_entrada)", key="adm_pdf_apply"):
-                # limpa overrides do mês, se solicitado
-                if limpar_overrides_mes:
-                    con = db_conn()
-                    cur = con.cursor()
-                    cur.execute("DELETE FROM overrides WHERE setor=? AND ano=? AND mes=?", (setor_dest, int(ano_pdf), int(mes_pdf)))
-                    con.commit()
-                    con.close()
+                criar_colabs = st.checkbox("Criar/atualizar colaboradores", value=True, key="pdf_criar_colabs")
 
-                applied = 0
-                skipped = 0
-                created = 0
+            with colC:
 
-                # recarrega colabs (caso crie)
-                colabs = load_colaboradores_setor(setor_dest) if setor_dest else []
+                limpar_mes = st.checkbox("Limpar overrides do mês antes", value=False, key="pdf_limpar_mes")
 
-                for f in parsed["funcionarios"]:
-                    nome_pdf = f["nome_pdf"]
-                    chapa_pdf = (f["chapa_pdf"] or "").strip()
-                    tokens = f["tokens_entrada"] or []
-                    if len(tokens) != ndays:
-                        skipped += 1
-                        continue
+            with colD:
 
-                    chapa_map, nome_map = _pdf_savegnago_map_to_colaboradores(setor_dest, nome_pdf, chapa_pdf, colabs)
+                cadastrar_ferias = st.checkbox("Cadastrar férias (FER)", value=True, key="pdf_cad_ferias")
 
-                    if not chapa_map and criar_se_nao_existir:
-                        # se não tem chapa no PDF, cria uma chapa sintética estável
-                        ch_new = chapa_pdf if chapa_pdf else ("PDF_" + re.sub(r"[^A-Z0-9]+", "", (nome_pdf or "").upper())[:18])
-                        upsert_colaborador_nome(setor_dest, ch_new, nome_pdf)
-                        created += 1
-                        # atualiza cache/colabs
-                        try:
-                            st.cache_data.clear()
-                        except Exception:
-                            pass
-                        colabs = load_colaboradores_setor(setor_dest)
-                        chapa_map, nome_map = _pdf_savegnago_map_to_colaboradores(setor_dest, nome_pdf, ch_new, colabs)
 
-                    if not chapa_map:
-                        skipped += 1
-                        continue
+            map_afa = st.checkbox("Tratar AFA como Folga", value=True, key="pdf_map_afa")
 
-                    for dia in range(1, ndays + 1):
-                        tok = tokens[dia - 1]
-                        if tok == "FOLG":
-                            set_override(setor_dest, ano_pdf, mes_pdf, chapa_map, dia, "status", "Folga")
-                            applied += 1
-                        elif tok in ("FER", "AFA"):
-                            if aplicar_fer_afa_como == "Folga":
-                                set_override(setor_dest, ano_pdf, mes_pdf, chapa_map, dia, "status", "Folga")
-                            else:
-                                set_override(setor_dest, ano_pdf, mes_pdf, chapa_map, dia, "status", aplicar_fer_afa_como)
-                            applied += 1
+
+            pdf = st.file_uploader("Enviar PDF da escala (ESCALA_PONTO_NEW)", type=["pdf"], key="adm_pdf_auto")
+
+            if pdf is not None:
+
+                try:
+
+                    import PyPDF2
+
+                    reader = PyPDF2.PdfReader(pdf)
+
+                    parts = []
+
+                    for page in reader.pages:
+
+                        parts.append(page.extract_text() or "")
+
+                    extracted = "\n".join(parts).strip()
+
+
+                    if not extracted:
+
+                        st.warning("Não consegui extrair texto desse PDF (provável PDF imagem). Converta para PDF pesquisável ou envie CSV/Excel. OCR exige tesseract+poppler no servidor.")
+
+                    else:
+
+                        ano, mes, items, erros = _parse_escala_ponto_new_pdf_text(extracted)
+
+
+                        if erros:
+
+                            st.warning("Encontrei divergências na leitura (ainda dá para aplicar, mas recomendo revisar):")
+
+                            st.write(erros[:20])
+
+                            if len(erros) > 20:
+
+                                st.caption(f"... +{len(erros)-20} avisos")
+
+
+                        if not items:
+
+                            st.error("Não consegui identificar funcionários/entradas nesse PDF.")
+
                         else:
-                            # horário HH:MM -> h_entrada + status Trabalho
-                            set_override(setor_dest, ano_pdf, mes_pdf, chapa_map, dia, "h_entrada", tok)
-                            set_override(setor_dest, ano_pdf, mes_pdf, chapa_map, dia, "status", "Trabalho")
-                            applied += 1
 
-                st.success(f"Aplicado: {applied} overrides | Criados: {created} colaboradores | Ignorados: {skipped} blocos (dias não bateram ou não mapeou).")
+                            st.success(f"Modelo reconhecido ✅  Mês detectado: {mes:02d}/{ano} | Funcionários no PDF: {len(items)}")
 
-    except Exception as e:
-        st.error(f"Falha ao ler/importar PDF: {e}")
+
+                            with st.expander("Prévia (primeiros 3 funcionários)"):
+
+                                for it in items[:3]:
+
+                                    st.markdown(f"**{it.get('nome','')}**  — Chapa: `{it.get('chapa','')}`")
+
+                                    st.write(it.get("tokens", [])[:10], " ...")
+
+
+                            if st.button("✅ Aplicar escala do PDF no sistema (1 clique)", key="btn_apply_pdf"):
+
+                                _apply_pdf_import_to_db(
+
+                                    setor_destino=setor_dest,
+
+                                    ano=int(ano),
+
+                                    mes=int(mes),
+
+                                    items=items,
+
+                                    criar_colabs=bool(criar_colabs),
+
+                                    limpar_mes_antes=bool(limpar_mes),
+
+                                    map_afa_para_folga=bool(map_afa),
+
+                                    cadastrar_ferias=bool(cadastrar_ferias),
+
+                                )
+
+                                st.success("Importação aplicada com sucesso! Vá em Gerar Escala e marque 'Respeitar ajustes' para ver refletido.")
+
+                except Exception as e:
+
+                    st.error(f"Falha ao ler/importar PDF: {e}")
+
+
+
+
 # =========================================================
 # MAIN
 # =========================================================
