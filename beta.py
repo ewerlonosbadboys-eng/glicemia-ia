@@ -435,12 +435,52 @@ def _ensure_id_column(df: pd.DataFrame, col_name="ID", prefix="GL") -> pd.DataFr
 def carregar_glicemia_com_id() -> pd.DataFrame:
     df_all = pd.read_csv(ARQ_G) if os.path.exists(ARQ_G) else pd.DataFrame()
     if df_all.empty:
-        return pd.DataFrame(columns=["ID", "Usuario", "Data", "Hora", "Valor", "Momento", "Dose"])
+        return pd.DataFrame(columns=["ID", "Usuario", "Data", "Hora", "Valor", "Momento", "Dose", "Dose_Rapida", "Dose_Longa"])
+
     if "Usuario" not in df_all.columns:
         df_all["Usuario"] = ""
+
+    # garante ID
     df_all = _ensure_id_column(df_all, "ID", "GL")
 
-    # tenta persistir IDs (migração tranquila)
+    # garante coluna Dose (legado)
+    if "Dose" not in df_all.columns:
+        df_all["Dose"] = ""
+
+    # migração: separa Dose_Rapida / Dose_Longa a partir do texto legado "Dose"
+    if "Dose_Rapida" not in df_all.columns:
+        def _parse_r(x: str) -> str:
+            s = str(x or "")
+            m = re.search(r"(?:Rápida|Rapida)\s*:?\s*([^|]+)", s, flags=re.IGNORECASE)
+            if m:
+                return str(m.group(1)).strip()
+            # se não tiver tag, mas tiver algo tipo "2 UI"
+            if s.strip() and ("longa" not in s.lower()):
+                return s.strip()
+            return ""
+        df_all["Dose_Rapida"] = df_all["Dose"].apply(_parse_r)
+
+    if "Dose_Longa" not in df_all.columns:
+        def _parse_l(x: str) -> str:
+            s = str(x or "")
+            m = re.search(r"Longa\s*:?\s*([^|]+)", s, flags=re.IGNORECASE)
+            return str(m.group(1)).strip() if m else ""
+        df_all["Dose_Longa"] = df_all["Dose"].apply(_parse_l)
+
+    # recomputa a coluna Dose (para exibição legada) a partir das colunas separadas
+    def _mk_dose_display(r) -> str:
+        dr = str(r.get("Dose_Rapida", "") or "").strip()
+        dl = str(r.get("Dose_Longa", "") or "").strip()
+        out = ""
+        if dr:
+            out = dr
+        if dl:
+            out = (out + " | " if out else "") + f"Longa: {dl}"
+        return out
+
+    df_all["Dose"] = df_all.apply(_mk_dose_display, axis=1)
+
+    # tenta persistir migração
     try:
         df_all.to_csv(ARQ_G, index=False)
     except Exception:
@@ -448,7 +488,30 @@ def carregar_glicemia_com_id() -> pd.DataFrame:
 
     return df_all[df_all["Usuario"] == st.session_state.user_email].copy()
 
-def salvar_registro_glicemia(valor: int, momento: str, dose: str, dt: datetime):
+def salvar_registro_glicemia(valor: int, momento: str, dose: str, dt: datetime, dose_rapida: str = "", dose_longa: str = ""):
+    # Mantém compatibilidade com versões antigas (coluna Dose texto),
+    # mas salva também em colunas separadas Dose_Rapida / Dose_Longa.
+    dr = (dose_rapida or "").strip()
+    dl = (dose_longa or "").strip()
+
+    # se vierem vazias, tenta extrair do texto legado "dose"
+    if not dr and dose:
+        m = re.search(r"(?:Rápida|Rapida)\s*:?\s*([^|]+)", str(dose), flags=re.IGNORECASE)
+        if m:
+            dr = str(m.group(1)).strip()
+        elif str(dose).strip() and ("longa" not in str(dose).lower()):
+            dr = str(dose).strip()
+    if not dl and dose:
+        m = re.search(r"Longa\s*:?\s*([^|]+)", str(dose), flags=re.IGNORECASE)
+        if m:
+            dl = str(m.group(1)).strip()
+
+    dose_display = ""
+    if dr:
+        dose_display = dr
+    if dl:
+        dose_display = (dose_display + " | " if dose_display else "") + f"Longa: {dl}"
+
     novo = pd.DataFrame([{
         "ID": f"GL-{uuid.uuid4().hex[:12]}",
         "Usuario": st.session_state.user_email,
@@ -456,12 +519,21 @@ def salvar_registro_glicemia(valor: int, momento: str, dose: str, dt: datetime):
         "Hora": dt.strftime("%H:%M"),
         "Valor": int(valor),
         "Momento": (momento or "").strip(),
-        "Dose": (dose or "").strip(),
+        "Dose": dose_display,
+        "Dose_Rapida": dr,
+        "Dose_Longa": dl,
     }])
+
     base = pd.read_csv(ARQ_G) if os.path.exists(ARQ_G) else pd.DataFrame(columns=novo.columns)
     if "Usuario" not in base.columns:
         base["Usuario"] = ""
     base = _ensure_id_column(base, "ID", "GL")
+
+    # garante colunas novas no base
+    for col in ["Dose", "Dose_Rapida", "Dose_Longa"]:
+        if col not in base.columns:
+            base[col] = ""
+
     pd.concat([base, novo], ignore_index=True).to_csv(ARQ_G, index=False)
 
 def aplicar_edicoes_e_exclusoes_glicemia(df_editado: pd.DataFrame):
@@ -475,6 +547,12 @@ def aplicar_edicoes_e_exclusoes_glicemia(df_editado: pd.DataFrame):
         base["Usuario"] = ""
     base = _ensure_id_column(base, "ID", "GL")
 
+    # garante colunas novas
+    for col in ["Dose", "Dose_Rapida", "Dose_Longa"]:
+        if col not in base.columns:
+            base[col] = ""
+
+
     df_editado = df_editado.copy()
     if "Excluir" not in df_editado.columns:
         df_editado["Excluir"] = False
@@ -484,7 +562,21 @@ def aplicar_edicoes_e_exclusoes_glicemia(df_editado: pd.DataFrame):
     df_editado["Data"] = df_editado["Data"].astype(str).str.strip()
     df_editado["Hora"] = df_editado["Hora"].astype(str).str.strip()
     df_editado["Momento"] = df_editado["Momento"].astype(str).str.strip()
-    df_editado["Dose"] = df_editado.get("Dose", "").astype(str).str.strip()
+    df_editado["Dose_Rapida"] = df_editado.get("Dose_Rapida", "").astype(str).str.strip()
+    df_editado["Dose_Longa"] = df_editado.get("Dose_Longa", "").astype(str).str.strip()
+
+    # reconstrói "Dose" (legado) a partir das colunas separadas
+    def _mk_dose_display(r) -> str:
+        dr = str(r.get("Dose_Rapida", "") or "").strip()
+        dl = str(r.get("Dose_Longa", "") or "").strip()
+        out = ""
+        if dr:
+            out = dr
+        if dl:
+            out = (out + " | " if out else "") + f"Longa: {dl}"
+        return out
+
+    df_editado["Dose"] = df_editado.apply(_mk_dose_display, axis=1)
     df_editado["Valor"] = pd.to_numeric(df_editado["Valor"], errors="coerce").fillna(0).astype(int)
 
     ids_user = set(base.loc[base["Usuario"] == st.session_state.user_email, "ID"].astype(str).tolist())
@@ -502,7 +594,9 @@ def aplicar_edicoes_e_exclusoes_glicemia(df_editado: pd.DataFrame):
             base.loc[mask, "Hora"] = r["Hora"]
             base.loc[mask, "Valor"] = int(r["Valor"])
             base.loc[mask, "Momento"] = r["Momento"]
-            base.loc[mask, "Dose"] = r["Dose"]
+            base.loc[mask, "Dose_Rapida"] = r.get("Dose_Rapida", "")
+            base.loc[mask, "Dose_Longa"] = r.get("Dose_Longa", "")
+            base.loc[mask, "Dose"] = r.get("Dose", "")
 
     # exclui
     if ids_excluir:
@@ -1292,16 +1386,24 @@ else:
             st.link_button("📲 Abrir WhatsApp com mensagem pronta", link_wpp, use_container_width=True)
 
             if st.button("💾 Salvar Glicemia", use_container_width=True):
-                # salva o que você ajustou (se aplicável)
-                dose_para_salvar = ""
+                # salva doses separadas (Rápida / Longa) para o histórico e para o PDF
+                dose_r_save = ""
+                dose_l_save = ""
 
                 if m_gl in MOMENTOS_RAPIDA and "dose_r_final" in locals() and dose_r_final:
-                    dose_para_salvar = dose_r_final
+                    dose_r_save = str(dose_r_final).strip()
 
                 if m_gl in MOMENTOS_LONGA and "dose_l_final" in locals() and dose_l_final:
-                    dose_para_salvar = (dose_para_salvar + " | " if dose_para_salvar else "") + f"Longa: {dose_l_final}"
+                    dose_l_save = str(dose_l_final).strip()
 
-                salvar_registro_glicemia(int(v_gl), m_gl, dose_para_salvar, agora_br())
+                # mantém a coluna "Dose" (texto) para compatibilidade, mas salva também em colunas separadas
+                dose_texto = ""
+                if dose_r_save:
+                    dose_texto = dose_r_save
+                if dose_l_save:
+                    dose_texto = (dose_texto + " | " if dose_texto else "") + f"Longa: {dose_l_save}"
+
+                salvar_registro_glicemia(int(v_gl), m_gl, dose_texto, agora_br(), dose_rapida=dose_r_save, dose_longa=dose_l_save)
                 st.rerun()
                 st.rerun()
 
@@ -1361,7 +1463,7 @@ else:
             if "Excluir" not in df_hist.columns:
                 df_hist["Excluir"] = False
 
-            cols_order = ["Excluir", "ID", "Data", "Hora", "Valor", "Momento", "Dose"]
+            cols_order = ["Excluir", "ID", "Data", "Hora", "Valor", "Momento", "Dose_Rapida", "Dose_Longa"]
             for c in cols_order:
                 if c not in df_hist.columns:
                     df_hist[c] = ""
@@ -1376,6 +1478,8 @@ else:
                     "Excluir": st.column_config.CheckboxColumn("Excluir"),
                     "ID": st.column_config.TextColumn("ID", disabled=True),
                     "Valor": st.column_config.NumberColumn("Valor", min_value=0, max_value=600, step=1),
+                    "Dose_Rapida": st.column_config.TextColumn("Dose Rápida"),
+                    "Dose_Longa": st.column_config.TextColumn("Dose Longa"),
                 },
                 key="glicemia_editor",
             )
@@ -1867,8 +1971,16 @@ def gerar_pdf_bytes(df_g: pd.DataFrame, df_n: pd.DataFrame) -> bytes:
                 df_dose = df_dose.dropna(subset=["DT"]).sort_values("DT")
 
                 # Extrai valores do texto salvo: "Rápida: X UI | Longa: Y UI"
-                df_dose["R"] = df_dose["Dose"].apply(lambda s: _extrair("Rápida", s) or _extrair("Rapida", s))
-                df_dose["L"] = df_dose["Dose"].apply(lambda s: _extrair("Longa", s))
+                # usa colunas separadas se existirem; senão, faz fallback para o texto legado "Dose"
+                if "Dose_Rapida" in df_dose.columns:
+                    df_dose["R"] = df_dose["Dose_Rapida"].astype(str)
+                else:
+                    df_dose["R"] = df_dose["Dose"].apply(lambda s: _extrair("Rápida", s) or _extrair("Rapida", s))
+
+                if "Dose_Longa" in df_dose.columns:
+                    df_dose["L"] = df_dose["Dose_Longa"].astype(str)
+                else:
+                    df_dose["L"] = df_dose["Dose"].apply(lambda s: _extrair("Longa", s))
 
                 # Mantém só linhas com algo
                 df_dose = df_dose[(df_dose["R"].astype(str).str.strip().ne("")) | (df_dose["L"].astype(str).str.strip().ne(""))].copy()
