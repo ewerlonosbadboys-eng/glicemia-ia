@@ -85,77 +85,20 @@ def _detect_mes_ano_from_text(s: str):
     ano = int(m.group(2))
     return ano, mes
 
-def _normalize_chapa(chapa_raw: str | None) -> str | None:
-    if not chapa_raw:
-        return None
-    s = str(chapa_raw).strip()
-    # já no formato 00.00000
-    m = re.search(r"\b(\d{2}\.\d{5})\b", s)
-    if m:
-        return m.group(1)
-    # aceita 3.4 / 3.5 / 2.4 etc (ex.: 020.1906)
-    m = re.search(r"\b(\d{2,3})\.(\d{4,5})\b", s)
-    if m:
-        left = m.group(1)
-        right = m.group(2)
-        digits = re.sub(r"\D", "", left + right)
-    else:
-        digits = re.sub(r"\D", "", s)
-
-    if not digits:
-        return None
-
-    # tenta normalizar para 7 dígitos: 2 + 5
-    if len(digits) >= 7:
-        digits = digits[:7]
-        return f"{digits[:2]}.{digits[2:7]}"
-    if len(digits) == 6:
-        # 2 + 4 => pad na esquerda do bloco direito
-        return f"{digits[:2]}.0{digits[2:6]}"
-    if len(digits) == 5:
-        return f"{digits[:2]}.00{digits[2:5]}"
-    return None
-
-
 def _split_employee_blocks_ponto_new(s: str):
-    """
-    Parser robusto para o relatório ESCALA_PONTO_NEW:
-    - Aceita 'NOME ... Mês:' na MESMA linha
-    - Aceita 'NOME (CHAPA) Mês:' e também chapa em outras partes do bloco
-    """
-    # garante que 'Mês:' comece um marcador claro
-    # (alguns extratores removem quebras)
-    t = s
-
-    # 1) localizar cabeçalhos de funcionário
-    # captura nome em caixa alta e opcional '(...)' antes de 'Mês:'
-    pat = re.compile(
-        r"(?i)(?m)(^|\n)\s*([A-ZÁÉÍÓÚÃÕÇ ]{8,}?)(?:\s*\(([^\)]+)\))?\s+M[eê]s\s*:",
-    )
-    matches = list(pat.finditer(t))
+    pat = re.compile(r"\n\s*([A-ZÁÉÍÓÚÃÕÇ ]{8,}?)(?:\s*\(([^\)]+)\))?\s*\n\s*M[eê]s\s*:", flags=re.IGNORECASE)
+    matches = list(pat.finditer(s))
     out = []
     for i, m in enumerate(matches):
         start = m.start()
-        end = matches[i+1].start() if i+1 < len(matches) else len(t)
-        nome = (m.group(2) or "").strip()
-        chapa_raw = (m.group(3) or "").strip()
-        block = t[start:end]
-
-        # 2) tenta extrair chapa de QUALQUER lugar do bloco
-        chapa = _normalize_chapa(chapa_raw)
-        if not chapa:
-            # procurar qualquer id tipo 02.01447 no bloco
-            mm = re.search(r"\b\d{2}\.\d{5}\b", block)
-            if mm:
-                chapa = mm.group(0)
-            else:
-                # procurar formato alternativo e normalizar
-                mm = re.search(r"\b\d{2,3}\.\d{4,5}\b", block)
-                if mm:
-                    chapa = _normalize_chapa(mm.group(0))
-
+        end = matches[i+1].start() if i+1 < len(matches) else len(s)
+        nome = (m.group(1) or "").strip()
+        chapa_raw = (m.group(2) or "").strip()
+        chapa = chapa_raw
+        block = s[start:end]
         out.append({"nome": nome, "chapa_raw": chapa_raw, "chapa": chapa, "texto": block})
     return out
+
 def _extract_entrada_tokens(block_text: str, ndays: int):
     t = _norm_pdf_text(block_text)
     m = re.search(r"\bEntrada\b\s+(.*?)\s+\bSa[ií]da\s+Refei[cç][aã]o\b", t, flags=re.IGNORECASE | re.DOTALL)
@@ -187,57 +130,6 @@ def _group_consecutive_days(days: list[int]) -> list[tuple[int,int]]:
             start = prev = d
     ranges.append((start, prev))
     return ranges
-
-def _merge_placeholder_chapa_if_any(setor: str, nome: str, chapa_real: str, ano: int, mes: int) -> None:
-    """
-    Se existir um colaborador no banco com o MESMO nome e chapa "PDF-xxxxxx" (placeholder),
-    migra overrides/ferias para a chapa real e remove o placeholder.
-    Isso corrige casos em que uma importação anterior criou chapas falsas.
-    """
-    try:
-        con = db_conn()
-        cur = con.cursor()
-        nome_norm = (nome or "").strip().upper()
-
-        cur.execute(
-            "SELECT chapa, subgrupo, entrada, folga_sabado FROM colaboradores "
-            "WHERE setor=? AND UPPER(nome)=? AND (chapa LIKE 'PDF-%' OR chapa LIKE 'PDF_%')",
-            (setor, nome_norm),
-        )
-        rows = cur.fetchall() or []
-        if not rows:
-            con.close()
-            return
-
-        for chapa_fake, subg, ent, fs in rows:
-            if not chapa_fake or str(chapa_fake).strip() == chapa_real:
-                continue
-
-            # Migra overrides do mês (se existirem) para chapa_real
-            cur.execute(
-                "UPDATE OR IGNORE overrides SET chapa=? "
-                "WHERE setor=? AND ano=? AND mes=? AND chapa=?",
-                (chapa_real, setor, int(ano), int(mes), chapa_fake),
-            )
-
-            # Migra férias
-            cur.execute(
-                "UPDATE ferias SET chapa=? WHERE setor=? AND chapa=?",
-                (chapa_real, setor, chapa_fake),
-            )
-
-            # Remove colaborador placeholder (mantendo os dados no novo, via upsert depois)
-            cur.execute("DELETE FROM colaboradores WHERE setor=? AND chapa=?", (setor, chapa_fake))
-
-        con.commit()
-        con.close()
-    except Exception:
-        try:
-            con.close()
-        except Exception:
-            pass
-        return
-
 
 def _apply_pdf_import_to_db(
     setor_destino: str,
@@ -273,7 +165,6 @@ def _apply_pdf_import_to_db(
             continue
 
         if criar_colabs:
-            _merge_placeholder_chapa_if_any(setor_destino, nome, chapa, ano, mes)
             upsert_colaborador_nome(setor_destino, chapa, nome)
 
         ferias_days = []
@@ -334,9 +225,6 @@ def _parse_escala_ponto_new_pdf_text(extracted_text: str):
     for b in blocks:
         nome = b["nome"]
         chapa = b["chapa"]
-
-        if not chapa:
-            erros.append(f"Funcionário {nome}: não consegui identificar a CHAPA no PDF (não vou inventar).")
         tokens = _extract_entrada_tokens(b["texto"], ndays)
         if len(tokens) != ndays:
             erros.append(f"Funcionário {nome}: esperado {ndays} valores de Entrada, li {len(tokens)}.")
@@ -3586,39 +3474,127 @@ def page_app():
                     st.rerun()
 
             with t2:
-                ch2 = st.selectbox("Chapa:", list(hist_db.keys()), key="adjm_ch")
-                dfm = hist_db[ch2].copy()
-                ent_pad2 = colab_by.get(ch2, {}).get("Entrada", "06:00")
-                pode_sab2 = bool(colab_by.get(ch2, {}).get("Folga_Sab", False))
-                subgrupo2 = (colab_by.get(ch2, {}).get("Subgrupo", "") or "").strip()
+                st.markdown("### 📅 Trocar horário por dias (formato grade)")
+                st.caption("Selecione 1 ou mais colaboradores e marque os dias (quadradinhos) para aplicar um horário específico. Por padrão, aplica só em dias de trabalho.")
 
-                nova_ent_mes = st.time_input("Nova entrada:", value=datetime.strptime(ent_pad2, "%H:%M").time(), key="adjm_ent")
+                qtd2 = calendar.monthrange(int(ano), int(mes))[1]
+                dias2 = list(range(1, qtd2 + 1))
 
-                if st.button("Aplicar mês inteiro (e readequar)", key="adjm_apply"):
-                    e = nova_ent_mes.strftime("%H:%M")
-                    s = _saida_from_entrada(e)
+                # --- seleção de colaboradores
+                chapas_opts = list(hist_db.keys())
+                # mostra chapa + nome (se existir)
+                def _label_ch(ch):
+                    nm = (colab_by.get(ch, {}) or {}).get("Nome", "")
+                    return f"{ch} — {nm}" if nm else ch
 
-                    for i in range(len(dfm)):
-                        stt = dfm.loc[i, "Status"]
-                        dia_num = int(pd.to_datetime(dfm.loc[i, "Data"]).day)
-                        if stt in WORK_STATUSES:
-                            dfm.loc[i, "Status"] = "Trabalho"
-                            dfm.loc[i, "H_Entrada"] = e
-                            dfm.loc[i, "H_Saida"] = s
-                            set_override(setor, ano, mes, ch2, dia_num, "status", "Trabalho")
-                            set_override(setor, ano, mes, ch2, dia_num, "h_entrada", e)
-                            set_override(setor, ano, mes, ch2, dia_num, "h_saida", s)
-                        else:
-                            dfm.loc[i, "H_Entrada"] = ""
-                            dfm.loc[i, "H_Saida"] = ""
+                sel_labels = st.multiselect(
+                    "Colaboradores (pode marcar vários):",
+                    options=[_label_ch(ch) for ch in chapas_opts],
+                    default=[],
+                    key="th_sel_labels"
+                )
+                sel_chapas = []
+                inv_map = {_label_ch(ch): ch for ch in chapas_opts}
+                for lb in sel_labels:
+                    ch = inv_map.get(lb)
+                    if ch:
+                        sel_chapas.append(ch)
 
-                    update_colaborador_perfil(setor, ch2, subgrupo2, e, bool(pode_sab2))
-                    save_escala_mes_db(setor, ano, mes, {ch2: dfm})
-                    _regenerar_mes_inteiro(setor, ano, mes, seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
-                    st.success("Horário do mês inteiro FORÇADO e escala readequada.")
-                    st.rerun()
+                c1, c2, c3, c4 = st.columns([1.2, 1.2, 1.2, 2.4])
+                with c1:
+                    nova_ent = st.time_input("Entrada para aplicar:", value=datetime.strptime("06:00", "%H:%M").time(), key="th_ent")
+                with c2:
+                    so_trabalho = st.checkbox("Só dias de trabalho", value=True, key="th_so_trab")
+                with c3:
+                    readequar = st.checkbox("Readequar escala após aplicar", value=True, key="th_readeq")
+                with c4:
+                    upd_perfil = st.checkbox("Atualizar 'Entrada' do perfil (padrão)", value=False, key="th_updperfil")
 
-                st.dataframe(dfm, use_container_width=True, height=420)
+                # --- grade de dias (quadradinhos)
+                st.markdown("**Dias selecionados:**")
+                a, b, _ = st.columns([1, 1, 6])
+                with a:
+                    if st.button("Marcar todos", key="th_all"):
+                        for d in dias2:
+                            st.session_state[f"th_d_{d}"] = True
+                with b:
+                    if st.button("Limpar", key="th_none"):
+                        for d in dias2:
+                            st.session_state[f"th_d_{d}"] = False
+
+                # renderiza em 7 colunas
+                cols = st.columns(7)
+                for idx, d in enumerate(dias2):
+                    col = cols[idx % 7]
+                    with col:
+                        st.checkbox(f"{d:02d}", key=f"th_d_{d}")
+
+                dias_marcados = [d for d in dias2 if st.session_state.get(f"th_d_{d}", False)]
+
+                if st.button("✅ Aplicar horário nos dias marcados", key="th_apply"):
+                    if not sel_chapas:
+                        st.error("Selecione pelo menos 1 colaborador.")
+                    elif not dias_marcados:
+                        st.error("Marque pelo menos 1 dia.")
+                    else:
+                        e = nova_ent.strftime("%H:%M")
+                        s = _saida_from_entrada(e)
+
+                        aplicados = 0
+                        pulados = 0
+
+                        for ch2 in sel_chapas:
+                            dfm = hist_db[ch2].copy()
+
+                            # pega perfil atual
+                            subgrupo2 = (colab_by.get(ch2, {}).get("Subgrupo", "") or "").strip()
+                            pode_sab2 = bool(colab_by.get(ch2, {}).get("Folga_Sab", False))
+
+                            for i in range(len(dfm)):
+                                dia_num = int(pd.to_datetime(dfm.loc[i, "Data"]).day)
+                                if dia_num not in dias_marcados:
+                                    continue
+
+                                stt = dfm.loc[i, "Status"]
+
+                                # por padrão, só aplica em dias de trabalho
+                                if so_trabalho and (stt not in WORK_STATUSES):
+                                    pulados += 1
+                                    continue
+
+                                # força como trabalho com o horário escolhido
+                                dfm.loc[i, "Status"] = "Trabalho"
+                                dfm.loc[i, "H_Entrada"] = e
+                                dfm.loc[i, "H_Saida"] = s
+
+                                set_override(setor, ano, mes, ch2, dia_num, "status", "Trabalho")
+                                set_override(setor, ano, mes, ch2, dia_num, "h_entrada", e)
+                                set_override(setor, ano, mes, ch2, dia_num, "h_saida", s)
+
+                                aplicados += 1
+
+                            # salva df do colaborador
+                            save_escala_mes_db(setor, ano, mes, {ch2: dfm})
+
+                            # opcional: atualizar entrada padrão do perfil
+                            if upd_perfil:
+                                update_colaborador_perfil(setor, ch2, subgrupo2, e, bool(pode_sab2))
+
+                        if readequar:
+                            _regenerar_mes_inteiro(
+                                setor, ano, mes,
+                                seed=int(st.session_state.get("last_seed", 0)),
+                                respeitar_ajustes=True
+                            )
+
+                        st.success(f"Aplicado em {aplicados} célula(s). Pulado(s): {pulados}.")
+                        st.rerun()
+
+                # preview rápido (1 colaborador)
+                if sel_chapas:
+                    st.markdown("### Prévia (primeiro colaborador selecionado)")
+                    st.dataframe(hist_db[sel_chapas[0]], use_container_width=True, height=420)
+
 
             with t3:
                 st.markdown("### ✅ Preferência por subgrupo (Evitar folga se possível)")
