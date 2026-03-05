@@ -10,4 +10,7 @@ pytz
 plotly
 extra-streamlit-components==0.1.60
 reportlab
+pytesseract
+pdf2image
+Pillow
 
