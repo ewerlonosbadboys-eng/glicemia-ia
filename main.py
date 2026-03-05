@@ -2578,11 +2578,9 @@ def _is_folga_status(stt: str) -> bool:
     return s in ("folga", "f", "folg")
 
 def _is_work_status(stt: str) -> bool:
-    # Trabalho + WORK_STATUSES contam como trabalho para sequência
     s = str(stt or "").strip().lower()
     if s in ("trabalho", "t", "work"):
         return True
-    # WORK_STATUSES é um set global no app
     try:
         return str(stt) in WORK_STATUSES
     except Exception:
@@ -2594,49 +2592,52 @@ def _week_start_monday(d: pd.Timestamp) -> pd.Timestamp:
 
 def enforce_weekly_folga_targets(df: pd.DataFrame, df_ref=None, pode_folgar_sabado=None, locked_status=None, **kwargs) -> pd.DataFrame:
     """
-    REGRA SEMANAL (SEG->DOM) ATUALIZADA:
+    REGRA SEMANAL (SEG->DOM) — SEMANA CONTÍNUA (corrige virada de mês):
       - Semana sempre tem 2 folgas no total (5x2).
       - Domingo conta como folga quando é Folga.
-      - Se domingo = Folga => precisa 1 folga em SEG-SÁB.
-      - Se domingo = Trabalho => precisa 2 folgas em SEG-SÁB.
-    Observações:
-      - Não mexe no domingo diretamente (1x1 é tratado em outra regra).
-      - Ajusta apenas SEG-SÁB, convertendo 'Trabalho' <-> 'Folga'.
+      - Se domingo = Folga => precisa completar para 2 no total (então SEG-SÁB tende a 1, mas pode variar na virada).
+      - Se domingo = Trabalho => precisa completar para 2 no total (SEG-SÁB tende a 2).
+    Importante (virada de mês):
+      - Se a semana começou no mês anterior, usamos df_ref (se fornecido) para contar as folgas já existentes
+        nos dias anteriores (SEG..dia anterior ao 1º do mês).
+      - Ajustamos APENAS os dias do mês atual (não mexe no mês anterior).
     """
     if df is None or df.empty:
         return df
-
-    df = df.copy()
     if "Data" not in df.columns or "Chapa" not in df.columns or "Status" not in df.columns:
         return df
 
+    df = df.copy()
     df["Data_dt"] = pd.to_datetime(df["Data"])
     df["week_start"] = df["Data_dt"].apply(_week_start_monday)
+    df.sort_values(["Chapa", "Data_dt"], inplace=True)
 
-    # flag opcional: permitir folga sábado por colaborador
-    # (se existir uma coluna com esse significado)
+    # Data mínima do mês corrente dentro do df (para saber onde começa o "mês atual")
+    min_cur = df["Data_dt"].min().normalize()
+
+    # df_ref (se vier) deve conter pelo menos Data, Chapa, Status
+    ref_ok = isinstance(df_ref, pd.DataFrame) and {"Data", "Chapa", "Status"}.issubset(set(df_ref.columns))
+    if ref_ok:
+        ref = df_ref.copy()
+        ref["Data_dt"] = pd.to_datetime(ref["Data"])
+    else:
+        ref = None
+
+    # Permissão de sábado: pode ser bool global ou dict por chapa; ou coluna do df
     sab_col = None
     for c in ("Pode_Folgar_Sabado", "pode_folgar_sabado", "folga_sabado", "Folga_Sabado", "pode_sabado"):
         if c in df.columns:
             sab_col = c
             break
 
-
-    # compat: se o chamador já passou pode_folgar_sabado (bool), respeita
-    # - se for bool: aplica globalmente
-    # - se for dict/Series/DataFrame: tentamos ler por chapa (se possível)
-    _pode_sab_param = pode_folgar_sabado
     def _allow_sab(idx_row) -> bool:
-        # se parâmetro foi passado, ele manda
-        if _pode_sab_param is not None:
+        if pode_folgar_sabado is not None:
             try:
-                # bool global
-                if isinstance(_pode_sab_param, bool):
-                    return _pode_sab_param
-                # dict por chapa
-                chv = str(df.at[idx_row, 'Chapa'])
-                if isinstance(_pode_sab_param, dict) and chv in _pode_sab_param:
-                    return bool(_pode_sab_param[chv])
+                if isinstance(pode_folgar_sabado, bool):
+                    return pode_folgar_sabado
+                chv = str(df.at[idx_row, "Chapa"])
+                if isinstance(pode_folgar_sabado, dict) and chv in pode_folgar_sabado:
+                    return bool(pode_folgar_sabado[chv])
             except Exception:
                 pass
         if sab_col is None:
@@ -2650,7 +2651,7 @@ def enforce_weekly_folga_targets(df: pd.DataFrame, df_ref=None, pode_folgar_saba
             except Exception:
                 return True
 
-    # Se houver coluna de "travado" / override travado, evitamos mexer onde estiver travado.
+    # Lock (travado): pode vir como set/list de índices, Series/DataFrame booleana, ou coluna no df
     lock_col = None
     for c in ("Travado_Status", "travado_status", "Lock_Status", "lock_status", "Status_Travado", "status_travado"):
         if c in df.columns:
@@ -2658,87 +2659,111 @@ def enforce_weekly_folga_targets(df: pd.DataFrame, df_ref=None, pode_folgar_saba
             break
 
     def _is_locked(idx_row) -> bool:
-        # compat: se chamador passou locked_status, respeita
         if locked_status is not None:
             try:
-                # pode ser set/list de índices
                 if isinstance(locked_status, (set, list, tuple)) and idx_row in locked_status:
                     return True
-                # pode ser DataFrame/Series booleana alinhada por índice
-                if hasattr(locked_status, 'get') and locked_status.get(idx_row, False):
+                if hasattr(locked_status, "get") and locked_status.get(idx_row, False):
                     return True
             except Exception:
                 pass
         if lock_col is None:
             return False
         try:
-            v = df.at[idx_row, lock_col]
-            return bool(v)
+            return bool(df.at[idx_row, lock_col])
         except Exception:
             return False
 
-    df.sort_values(["Chapa", "Data_dt"], inplace=True)
+    # Helper: status combinado (df tem prioridade, senão df_ref)
+    def _status_comb(chapa: str, day: pd.Timestamp) -> str:
+        day_d = day.normalize()
+        # procura no df (mês atual)
+        rows = df[(df["Chapa"].astype(str) == str(chapa)) & (df["Data_dt"].dt.normalize() == day_d)]
+        if not rows.empty:
+            return rows.iloc[0]["Status"]
+        # procura no df_ref (mês anterior / contexto), se existir
+        if ref is not None:
+            r2 = ref[(ref["Chapa"].astype(str) == str(chapa)) & (ref["Data_dt"].dt.normalize() == day_d)]
+            if not r2.empty:
+                return r2.iloc[0]["Status"]
+        return ""
 
+    # Para cada colaborador, para cada semana que intersecta o mês atual:
     for ch in df["Chapa"].astype(str).unique():
         sub = df[df["Chapa"].astype(str) == str(ch)]
         for ws in sub["week_start"].unique():
-            wk_mask = (df["Chapa"].astype(str) == str(ch)) & (df["week_start"] == ws)
+            ws = pd.to_datetime(ws).normalize()
+            we = ws + pd.Timedelta(days=6)
+
+            # domingo da semana
+            sunday = we
+            dom_status = _status_comb(ch, sunday)
+            dom_folga = 1 if _is_folga_status(dom_status) else 0
+
+            # Conta folgas SEG-SÁB na parte "antes do mês" (se semana começou antes de min_cur)
+            folgas_prev_seg_sab = 0
+            if ws < min_cur:
+                for d in range(0, 6):  # SEG..SÁB
+                    day = ws + pd.Timedelta(days=d)
+                    if day < min_cur:
+                        if _is_folga_status(_status_comb(ch, day)):
+                            folgas_prev_seg_sab += 1
+
+            # Target de folgas total = 2
+            # Folgas que precisam existir em SEG-SÁB no mês atual para fechar 2:
+            needed_seg_sab_total = max(0, int(TARGET_FOLGAS_POR_SEMANA) - dom_folga)
+            needed_seg_sab_current = max(0, needed_seg_sab_total - folgas_prev_seg_sab)
+
+            # Linhas do df no intervalo SEG-SÁB desta semana (somente mês atual)
+            wk_mask = (df["Chapa"].astype(str) == str(ch)) & (df["Data_dt"] >= ws) & (df["Data_dt"] <= we)
             wk = df[wk_mask].copy()
-            if wk.empty:
-                continue
-
-            # domingo dessa semana
-            sunday = pd.to_datetime(ws) + pd.Timedelta(days=6)
-            dom_rows = wk[wk["Data_dt"].dt.date == sunday.date()]
-            dom_folga = 0
-            if len(dom_rows) >= 1:
-                # se houver mais de uma linha (não deveria), considera folga se qualquer uma for folga
-                dom_folga = 1 if any(dom_rows["Status"].apply(_is_folga_status).tolist()) else 0
-
-            needed_seg_sab = max(0, int(TARGET_FOLGAS_POR_SEMANA) - int(dom_folga))  # 1 ou 2
-
-            # SEG(0) .. SÁB(5)
             seg_sab = wk[wk["Data_dt"].dt.weekday <= 5].copy()
+
             if seg_sab.empty:
                 continue
 
-            # conta folgas seg-sab
+            seg_sab = seg_sab[seg_sab["Data_dt"] >= min_cur]  # só ajusta no mês atual
+            if seg_sab.empty:
+                continue
+
             seg_sab_folgas = seg_sab["Status"].apply(_is_folga_status)
-            folgas_seg_sab = int(seg_sab_folgas.sum())
+            folgas_seg_sab_current = int(seg_sab_folgas.sum())
 
             # candidatos (respeita lock e sábado permitido)
-            cand_folga = [i for i in seg_sab[seg_sab_folgas].index.tolist() if (not _is_locked(i)) and (_allow_sab(i) or df.at[i, "Data_dt"].weekday() != 5)]
-            cand_trab  = [i for i in seg_sab[~seg_sab_folgas].index.tolist() if (not _is_locked(i)) and (_allow_sab(i) or df.at[i, "Data_dt"].weekday() != 5)]
+            cand_folga = [i for i in seg_sab[seg_sab_folgas].index.tolist()
+                          if (not _is_locked(i)) and (_allow_sab(i) or df.at[i, "Data_dt"].weekday() != 5)]
+            cand_trab = [i for i in seg_sab[~seg_sab_folgas].index.tolist()
+                         if (not _is_locked(i)) and (_allow_sab(i) or df.at[i, "Data_dt"].weekday() != 5)]
 
-            # excesso: transforma Folga -> Trabalho (preferir extremos para evitar folga consecutiva no miolo)
-            if folgas_seg_sab > needed_seg_sab:
-                excesso = folgas_seg_sab - needed_seg_sab
-                # ordena por proximidade do fim da semana primeiro (heurística simples)
-                cand_folga_sorted = sorted(cand_folga, key=lambda i: df.at[i, "Data_dt"], reverse=True)
-                for i in cand_folga_sorted[:excesso]:
+            # Se excesso no mês atual (considerando o que já veio do mês anterior), remove
+            if folgas_seg_sab_current > needed_seg_sab_current:
+                excesso = folgas_seg_sab_current - needed_seg_sab_current
+                # remove do fim da semana primeiro
+                cand_sorted = sorted(cand_folga, key=lambda i: df.at[i, "Data_dt"], reverse=True)
+                for i in cand_sorted[:excesso]:
                     df.at[i, "Status"] = "Trabalho"
 
-            # falta: transforma Trabalho -> Folga (preferir meio da semana para quebrar sequência)
-            elif folgas_seg_sab < needed_seg_sab:
-                falta = needed_seg_sab - folgas_seg_sab
+            # Se falta no mês atual, adiciona folga
+            elif folgas_seg_sab_current < needed_seg_sab_current:
+                falta = needed_seg_sab_current - folgas_seg_sab_current
+
                 # heurística: preferir quarta/quinta, depois terça/sexta, depois segunda/sábado
                 def _prio(i):
                     wd = int(df.at[i, "Data_dt"].weekday())
                     return {2:0, 3:0, 1:1, 4:1, 0:2, 5:3}.get(wd, 9)
-                cand_trab_sorted = sorted(cand_trab, key=_prio)
-                for i in cand_trab_sorted[:falta]:
+
+                cand_sorted = sorted(cand_trab, key=_prio)
+                for i in cand_sorted[:falta]:
                     df.at[i, "Status"] = "Folga"
 
-    # limpa colunas auxiliares se existirem
-    # (mantemos se o app já usa essas colunas em outros pontos)
     return df
 
-
-
-def _cap_total_folgas_por_semana(df: pd.DataFrame, target_total: int = 2) -> pd.DataFrame:
+def _cap_total_folgas_por_semana(df: pd.DataFrame, target_total: int = 2, locked_status=None, df_ref=None) -> pd.DataFrame:
     """
-    Segurança extra: garante que cada semana (SEG->DOM) tenha no máximo `target_total` folgas no total.
-    Se houver excesso, converte folgas SEG-SÁB (não travadas) para Trabalho.
+    Segurança extra (SEMANA CONTÍNUA): garante que cada semana (SEG->DOM) tenha no máximo `target_total` folgas.
+    - Considera folgas que já existam no mês anterior via df_ref (se fornecido).
+    - Remove excesso APENAS no mês atual (df), preferindo SEG-SÁB e respeitando lock/travado.
+    - NÃO mexe em 'Férias' (elas não contam como Folga no seu modelo se quiser tratar diferente; aqui só olha Status=Folga/F).
     """
     if df is None or df.empty:
         return df
@@ -2748,6 +2773,16 @@ def _cap_total_folgas_por_semana(df: pd.DataFrame, target_total: int = 2) -> pd.
     df = df.copy()
     df["Data_dt"] = pd.to_datetime(df["Data"])
     df["week_start"] = df["Data_dt"].apply(_week_start_monday)
+    df.sort_values(["Chapa", "Data_dt"], inplace=True)
+
+    min_cur = df["Data_dt"].min().normalize()
+
+    ref_ok = isinstance(df_ref, pd.DataFrame) and {"Data", "Chapa", "Status"}.issubset(set(df_ref.columns))
+    if ref_ok:
+        ref = df_ref.copy()
+        ref["Data_dt"] = pd.to_datetime(ref["Data"])
+    else:
+        ref = None
 
     lock_col = None
     for c in ("Travado_Status", "travado_status", "Lock_Status", "lock_status", "Status_Travado", "status_travado"):
@@ -2756,6 +2791,14 @@ def _cap_total_folgas_por_semana(df: pd.DataFrame, target_total: int = 2) -> pd.
             break
 
     def _is_locked(i):
+        if locked_status is not None:
+            try:
+                if isinstance(locked_status, (set, list, tuple)) and i in locked_status:
+                    return True
+                if hasattr(locked_status, "get") and locked_status.get(i, False):
+                    return True
+            except Exception:
+                pass
         if lock_col is None:
             return False
         try:
@@ -2763,32 +2806,47 @@ def _cap_total_folgas_por_semana(df: pd.DataFrame, target_total: int = 2) -> pd.
         except Exception:
             return False
 
-    df.sort_values(["Chapa", "Data_dt"], inplace=True)
+    def _status_comb(chapa: str, day: pd.Timestamp) -> str:
+        day_d = pd.to_datetime(day).normalize()
+        rows = df[(df["Chapa"].astype(str) == str(chapa)) & (df["Data_dt"].dt.normalize() == day_d)]
+        if not rows.empty:
+            return rows.iloc[0]["Status"]
+        if ref is not None:
+            r2 = ref[(ref["Chapa"].astype(str) == str(chapa)) & (ref["Data_dt"].dt.normalize() == day_d)]
+            if not r2.empty:
+                return r2.iloc[0]["Status"]
+        return ""
 
     for ch in df["Chapa"].astype(str).unique():
         sub = df[df["Chapa"].astype(str) == str(ch)]
         for ws in sub["week_start"].unique():
-            wk_mask = (df["Chapa"].astype(str) == str(ch)) & (df["week_start"] == ws)
+            ws = pd.to_datetime(ws).normalize()
+            we = ws + pd.Timedelta(days=6)
+
+            # conta folgas total na semana (combinado)
+            folgas_total = 0
+            for d in range(0, 7):
+                day = ws + pd.Timedelta(days=d)
+                if _is_folga_status(_status_comb(ch, day)):
+                    folgas_total += 1
+
+            if folgas_total <= target_total:
+                continue
+
+            excesso = folgas_total - target_total
+
+            # remove somente no mês atual: candidatos SEG-SÁB (dias >= min_cur)
+            wk_mask = (df["Chapa"].astype(str) == str(ch)) & (df["Data_dt"] >= ws) & (df["Data_dt"] <= we)
             wk = df[wk_mask].copy()
-            if wk.empty:
-                continue
+            seg_sab = wk[(wk["Data_dt"].dt.weekday <= 5) & (wk["Data_dt"] >= min_cur)]
+            cand = [i for i in seg_sab[seg_sab["Status"].apply(_is_folga_status)].index.tolist() if not _is_locked(i)]
 
-            folgas_all = wk[wk["Status"].apply(_is_folga_status)]
-            if len(folgas_all) <= target_total:
-                continue
-
-            excesso = len(folgas_all) - target_total
-
-            # preferimos remover excesso de SEG-SÁB; nunca mexer no DOM aqui
-            seg_sab_folgas = folgas_all[folgas_all["Data_dt"].dt.weekday <= 5]
-            cand = [i for i in seg_sab_folgas.index.tolist() if not _is_locked(i)]
-            # se ainda faltar candidato, usa qualquer folga não travada exceto domingo
+            # remove do fim primeiro
             cand_sorted = sorted(cand, key=lambda i: df.at[i, "Data_dt"], reverse=True)
             for i in cand_sorted[:excesso]:
                 df.at[i, "Status"] = "Trabalho"
 
     return df
-
 
 def _counts_folgas_day_and_hour(hist_by_chapa: dict, colab_by_chapa: dict, chapas_grupo: list, idxs_semana: list, df_ref):
     counts_day = {i: 0 for i in idxs_semana}
@@ -3246,7 +3304,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
             pass
 
     try:
-        df = _cap_total_folgas_por_semana(df, target_total=2, locked_status=locked)
+        df = _cap_total_folgas_por_semana(df, target_total=2, locked_status=locked, df_ref=df_ref)
     except Exception:
         try:
             df = _cap_total_folgas_por_semana(df, target_total=2)
