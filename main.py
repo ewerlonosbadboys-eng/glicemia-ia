@@ -359,6 +359,11 @@ def listar_setores_db() -> list:
     return sorted(list(base_set.union({(x or "").strip().upper() for x in rows if x})))
 
 
+def list_setores():
+    """Compat: alguns trechos do app usam list_setores()."""
+    return listar_setores_db()
+
+
 def criar_setor_db(nome: str) -> None:
     nome = (nome or "").strip().upper()
     if not nome:
