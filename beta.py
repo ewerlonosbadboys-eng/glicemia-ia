@@ -1401,36 +1401,123 @@ else:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         dfn = carregar_dados_seguro(ARQ_N)
 
-        m_nutri = st.selectbox("Refeição", MOMENTOS_ORDEM, key="n_m")
-        busca_alim = st.text_input("🔎 Buscar alimento", value="", placeholder="Digite para filtrar (ex: banana, frango, iogurte)")
-        opts = list(ALIMENTOS.keys())
-        if busca_alim.strip():
-            q = busca_alim.strip().lower()
-            opts = [o for o in opts if q in o.lower()]
-        if len(opts) > 200:
-            opts = opts[:200]
-        sel = st.multiselect("Alimentos", options=opts)
+        # ---------- util: normalização (sem acento) ----------
+        import unicodedata
+        import difflib
 
-        c_tot = sum(ALIMENTOS[x][0] for x in sel)
-        p_tot = sum(ALIMENTOS[x][1] for x in sel)
-        g_tot = sum(ALIMENTOS[x][2] for x in sel)
+        def _norm_txt(s: str) -> str:
+            s = (s or "").strip().lower()
+            s = unicodedata.normalize("NFD", s)
+            s = "".join(ch for ch in s if unicodedata.category(ch) != "Mn")
+            s = " ".join(s.split())
+            return s
+
+        st.subheader("🍽️ Nutrição")
+        m_nutri = st.selectbox("Refeição", MOMENTOS_ORDEM, key="n_m")
+
+        # estado persistente da seleção (resolve “só 1 alimento” e facilita ir adicionando)
+        if "nutri_sel" not in st.session_state:
+            st.session_state.nutri_sel = []
+
+        busca_alim = st.text_input(
+            "🔎 Buscar alimento",
+            value="",
+            placeholder="Digite para filtrar (ex: banana, frango, iogurte). Não precisa acento.",
+            key="nutri_busca",
+        )
+
+        opts_all = list(ALIMENTOS.keys())
+        qn = _norm_txt(busca_alim)
+
+        if qn:
+            # 1) contém (rápido)
+            opts = [o for o in opts_all if qn in _norm_txt(o)]
+            # 2) fallback por similaridade (quando a pessoa digita “quase certo”)
+            if len(opts) < 20:
+                mapping = { _norm_txt(o): o for o in opts_all }
+                close = difflib.get_close_matches(qn, list(mapping.keys()), n=25, cutoff=0.55)
+                for k in close:
+                    o = mapping.get(k)
+                    if o and o not in opts:
+                        opts.append(o)
+        else:
+            # sem busca: mostra os mais usados (se houver) + restante
+            try:
+                if not dfn.empty and "Info" in dfn.columns:
+                    usados = []
+                    for s in dfn["Info"].astype(str).tail(80).tolist():
+                        for part in [p.strip() for p in s.split(",") if p.strip()]:
+                            if part in ALIMENTOS and part not in usados:
+                                usados.append(part)
+                    opts = usados + [o for o in opts_all if o not in usados]
+                else:
+                    opts = opts_all
+            except Exception:
+                opts = opts_all
+
+        # limite para manter o app leve
+        if len(opts) > 250:
+            opts = opts[:250]
+
+        colA, colB = st.columns([3, 1])
+        with colA:
+            pick = st.selectbox("Escolher alimento para adicionar", options=opts, key="nutri_pick")
+        with colB:
+            if st.button("➕ Adicionar", use_container_width=True):
+                if pick and pick not in st.session_state.nutri_sel:
+                    st.session_state.nutri_sel.append(pick)
+
+        # lista atual (permite remover)
+        st.multiselect(
+            "Alimentos selecionados (pode remover clicando no X)",
+            options=opts_all,
+            default=st.session_state.nutri_sel,
+            key="nutri_sel_mult",
+        )
+        # sincroniza (caso usuário remova)
+        st.session_state.nutri_sel = list(st.session_state.get("nutri_sel_mult", []))
+
+        sel = st.session_state.nutri_sel
+
+        c_tot = sum(ALIMENTOS[x][0] for x in sel) if sel else 0
+        p_tot = sum(ALIMENTOS[x][1] for x in sel) if sel else 0
+        g_tot = sum(ALIMENTOS[x][2] for x in sel) if sel else 0
 
         col1, col2, col3 = st.columns(3)
         col1.metric("Carbos", f"{c_tot}g")
         col2.metric("Proteínas", f"{p_tot}g")
         col3.metric("Gorduras", f"{g_tot}g")
 
-        if st.button("💾 Salvar Refeição", use_container_width=True):
-            dt = agora_br()
-            novo_n = pd.DataFrame([[st.session_state.user_email, dt.strftime("%d/%m/%Y"), m_nutri, ", ".join(sel), c_tot, p_tot, g_tot]],
-                                 columns=["Usuario", "Data", "Momento", "Info", "C", "P", "G"])
-            base = pd.read_csv(ARQ_N) if os.path.exists(ARQ_N) else pd.DataFrame(columns=novo_n.columns)
-            if "Usuario" not in base.columns:
-                base["Usuario"] = ""
-            pd.concat([base, novo_n], ignore_index=True).to_csv(ARQ_N, index=False)
-            st.rerun()
+        cbtn1, cbtn2 = st.columns([2, 1])
+        with cbtn1:
+            if st.button("💾 Salvar Refeição", use_container_width=True, disabled=not bool(sel)):
+                dt = agora_br()
+                novo_n = pd.DataFrame(
+                    [[st.session_state.user_email, dt.strftime("%d/%m/%Y"), m_nutri, ", ".join(sel), c_tot, p_tot, g_tot]],
+                    columns=["Usuario", "Data", "Momento", "Info", "C", "P", "G"]
+                )
+                base = pd.read_csv(ARQ_N) if os.path.exists(ARQ_N) else pd.DataFrame(columns=novo_n.columns)
+                if "Usuario" not in base.columns:
+                    base["Usuario"] = ""
+                pd.concat([base, novo_n], ignore_index=True).to_csv(ARQ_N, index=False)
 
-        st.dataframe(dfn.tail(12), use_container_width=True)
+                # limpa seleção após salvar
+                st.session_state.nutri_sel = []
+                st.session_state.nutri_sel_mult = []
+                st.success("Refeição salva!")
+                st.rerun()
+        with cbtn2:
+            if st.button("🧹 Limpar seleção", use_container_width=True):
+                st.session_state.nutri_sel = []
+                st.session_state.nutri_sel_mult = []
+                st.rerun()
+
+        st.markdown("### Últimas refeições")
+        if dfn is None or dfn.empty:
+            st.info("Sem refeições registradas ainda.")
+        else:
+            st.dataframe(dfn.tail(12), use_container_width=True)
+
         st.markdown("</div>", unsafe_allow_html=True)
 
     # ====== RECEITA ======
