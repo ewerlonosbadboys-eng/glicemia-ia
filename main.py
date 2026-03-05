@@ -1822,6 +1822,40 @@ def delete_override(setor: str, ano: int, mes: int, chapa: str, dia: int, campo:
     except Exception:
         pass
 
+
+def delete_overrides_mes(setor: str, ano: int, mes: int, keep_campos: set[str] | None = None):
+    """
+    Remove overrides do mês inteiro (útil para "Gerar do zero").
+    Por padrão remove TUDO para o mês. Se keep_campos for informado,
+    preserva overrides cujo campo esteja em keep_campos.
+    """
+    con = db_conn()
+    cur = con.cursor()
+    if keep_campos and len(keep_campos) > 0:
+        # mantém alguns campos (ex.: se quiser preservar algo específico)
+        placeholders = ",".join(["?"] * len(keep_campos))
+        cur.execute(
+            f"""
+            DELETE FROM overrides
+            WHERE setor=? AND ano=? AND mes=? AND campo NOT IN ({placeholders})
+            """,
+            (setor, int(ano), int(mes), *list(keep_campos)),
+        )
+    else:
+        cur.execute(
+            """
+            DELETE FROM overrides
+            WHERE setor=? AND ano=? AND mes=?
+            """,
+            (setor, int(ano), int(mes)),
+        )
+    con.commit()
+    con.close()
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+
 @st.cache_data(show_spinner=False)
 def load_overrides(setor: str, ano: int, mes: int):
     con = db_conn()
@@ -3715,6 +3749,9 @@ def page_app():
 
             # 🧹 Gerar do zero: ignora travas/ajustes (recalcula o mês totalmente)
             if b3.button("🧹 Gerar do zero (ignorar ajustes)", use_container_width=True, key="gen_zero_btn"):
+                # Importante: se existirem overrides antigos no mês, eles podem "forçar" Folga/Trabalho e aparentar que o motor não funcionou.
+                # Ao gerar do zero, limpamos overrides do mês selecionado (não mexe em meses anteriores, como Março).
+                delete_overrides_mes(setor, int(ano), int(mes))
                 st.session_state["last_seed"] = int(seed)
                 ok = _regenerar_mes_inteiro(setor, int(ano), int(mes), seed=int(seed), respeitar_ajustes=False)
                 if ok:
