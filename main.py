@@ -3484,10 +3484,18 @@ def page_app():
                     st.success("Cadastrado! (perfil + folgas do mês salvos)")
                     st.rerun()
 
+
         st.markdown("---")
         st.markdown("## 🗑️ Excluir colaborador")
         if colaboradores:
-            ch_del = st.selectbox("Escolha a chapa para excluir:", [c["Chapa"] for c in colaboradores], key="del_chapa")
+            opts = []
+            for c in colaboradores:
+                ch = str(c.get("Chapa","")).strip()
+                nm = str(c.get("Nome","") or "").strip()
+                label = f"{ch} — {nm}" if nm else ch
+                opts.append((label, ch))
+            pick = st.selectbox("Escolha a chapa para excluir:", [o[0] for o in opts], key="del_chapa_label")
+            ch_del = next((o[1] for o in opts if o[0] == pick), pick.split("—")[0].strip())
             st.warning("⚠️ Excluir remove também férias, ajustes, escala e estado desse colaborador no setor.")
             confirm = st.checkbox("Confirmo que quero excluir definitivamente", key="del_confirm")
             if st.button("Excluir colaborador", key="del_btn"):
