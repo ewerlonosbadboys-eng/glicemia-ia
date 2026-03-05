@@ -3816,13 +3816,26 @@ def page_app():
                 mes_pdf = int(m.group(1))
                 ano_pdf = int(m.group(2))
 
-                # Pega lista de dias (Data / Dia 1..31)
-                md = re.search(r"Data\s*/\s*Dia\s+((?:\d{1,2}\s+){10,}\d{1,2})", extracted)
-                if not md:
-                    raise ValueError("Não achei a linha 'Data / Dia 1 2 3 ...'.")
+                # Pega lista de dias (Data / Dia 1..31) — robusto (quebras de linha / colunas)
+                # Alguns PDFs “quebram” a linha de dias; então:
+                # 1) tenta capturar o trecho entre 'Data / Dia' e 'Dia / Semana'
+                # 2) extrai números 1..31 desse trecho
+                # 3) se ainda falhar, usa o calendário do mês/ano do próprio PDF
+                dias = []
+                mdd = re.search(r"Data\s*/\s*Dia(.*?)(?:Dia\s*/\s*Semana|Entrada\b)", extracted, flags=re.DOTALL | re.IGNORECASE)
+                if mdd:
+                    trecho = mdd.group(1)
+                    dias_raw = [int(x) for x in re.findall(r"\b(\d{1,2})\b", trecho)]
+                    dias_filtrados = []
+                    seen = set()
+                    for d in dias_raw:
+                        if 1 <= d <= 31 and d not in seen:
+                            dias_filtrados.append(d); seen.add(d)
+                    dias = dias_filtrados
 
-                dias = [int(x) for x in re.findall(r"\b(\d{1,2})\b", md.group(1))]
-                dias = sorted(dict.fromkeys(dias))
+                if not dias:
+                    last_day = calendar.monthrange(ano_pdf, mes_pdf)[1]
+                    dias = list(range(1, last_day + 1))
 
                 # Localiza blocos por funcionário
                 patt = re.compile(r"\n([A-ZÁÉÍÓÚÃÕÇ ]{5,}?)(?:\s*\((\d{2,}\.\d{2,})\))?\s+M[eê]s\s*:\s*(\d{2})/(\d{4})", re.M)
