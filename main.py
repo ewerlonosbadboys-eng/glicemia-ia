@@ -5070,7 +5070,485 @@ def page_app():
                                         key="pdf_down"
                                     )
 
-    # ------------------------------------------------------
+    
+    with abas[3]:
+        sub_imp0, sub_imp1, sub_imp2, sub_imp3 = st.tabs(["👥 Colaboradores", "📊 Excel modelo", "🗓️ Quem trabalha no dia", "🖨️ Imprimir escala parede"])
+        with sub_imp0:
+                    tabs_col = st.tabs(["👥 Colaboradores", "➕ Cadastrar colaborador", "🗑️ Excluir colaborador", "✏️ Editar perfil"])
+                    with tabs_col[0]:
+                        st.markdown("### 👥 Colaboradores")
+                        colaboradores = load_colaboradores_setor(setor)
+
+                        if colaboradores:
+                            st.dataframe(pd.DataFrame([{
+                                "Nome": c["Nome"],
+                                "Chapa": c["Chapa"],
+                                "Subgrupo": c["Subgrupo"] or "SEM SUBGRUPO",
+                                "Entrada": c["Entrada"],
+                                "Folga Sábado": "Sim" if c["Folga_Sab"] else "Não",
+                            } for c in colaboradores]), use_container_width=True, height=420)
+                        else:
+                            st.info("Sem colaboradores.")
+
+                        st.markdown("---")
+                    with tabs_col[1]:
+                        st.markdown("## ➕ Cadastrar colaborador (perfil completo + folgas do mês)")
+
+                        # competência usada para salvar folgas já no cadastro
+                        ano_cfg = int(st.session_state.get("cfg_ano", datetime.now().year))
+                        mes_cfg = int(st.session_state.get("cfg_mes", datetime.now().month))
+                        ndias_cfg = calendar.monthrange(ano_cfg, mes_cfg)[1]
+
+                        with st.form("form_add_colaborador", clear_on_submit=True):
+                            c1, c2 = st.columns(2)
+                            nome_n = c1.text_input("Nome:", key="col_nome")
+                            chapa_n = c2.text_input("Chapa:", key="col_chapa")
+
+                            c3, c4, c5 = st.columns([1.2, 1.2, 1])
+                            sg_opts_new = [""] + list_subgrupos(setor)
+                            subgrupo_n = c3.selectbox("Subgrupo:", sg_opts_new, index=0, key="col_subgrupo")
+                            entrada_n = c4.selectbox("Entrada:", HORARIOS_ENTRADA_PRESET, index=HORARIOS_ENTRADA_PRESET.index("06:00") if "06:00" in HORARIOS_ENTRADA_PRESET else 0, key="col_entrada")
+                            folga_sab_n = c5.checkbox("Permitir folga sábado", value=False, key="col_folga_sab")
+
+                            st.caption(f"Folgas do mês para já salvar como **Folga** (competência ativa: {mes_cfg:02d}/{ano_cfg}).")
+                            dias_folga = st.multiselect(
+                                "Selecione os dias de folga (1..31):",
+                                options=list(range(1, ndias_cfg + 1)),
+                                default=[],
+                                key="col_dias_folga",
+                            )
+
+                            submitted = st.form_submit_button("Cadastrar colaborador", use_container_width=True)
+
+                            if submitted:
+                                if not nome_n or not chapa_n:
+                                    st.error("Preencha nome e chapa.")
+                                elif colaborador_exists(setor, chapa_n.strip()):
+                                    st.error("Já existe essa chapa.")
+                                else:
+                                    ch_new = chapa_n.strip()
+                                    create_colaborador(nome_n.strip(), setor, ch_new, subgrupo=subgrupo_n, entrada=entrada_n, folga_sab=folga_sab_n)
+
+                                    # salva folgas como overrides do mês/ano ativos
+                                    for d in dias_folga:
+                                        set_override(setor, ano_cfg, mes_cfg, ch_new, int(d), "status", "Folga")
+
+                                    st.success("Cadastrado! (perfil + folgas do mês salvos)")
+                                    st.rerun()
+
+
+                        st.markdown("---")
+                    with tabs_col[2]:
+                        st.markdown("## 🗑️ Excluir colaborador")
+                        if colaboradores:
+                            opts = []
+                            for c in colaboradores:
+                                ch = str(c.get("Chapa","")).strip()
+                                nm = str(c.get("Nome","") or "").strip()
+                                label = f"{ch} — {nm}" if nm else ch
+                                opts.append((label, ch))
+                            pick = st.selectbox("Escolha a chapa para excluir:", [o[0] for o in opts], key="del_chapa_label")
+                            ch_del = next((o[1] for o in opts if o[0] == pick), pick.split("—")[0].strip())
+                            st.warning("⚠️ Excluir remove também férias, ajustes, escala e estado desse colaborador no setor.")
+                            confirm = st.checkbox("Confirmo que quero excluir definitivamente", key="del_confirm")
+                            if st.button("Excluir colaborador", key="del_btn"):
+                                if not confirm:
+                                    st.error("Marque a confirmação para excluir.")
+                                else:
+                                    delete_colaborador_total(setor, ch_del)
+                                    st.success("Colaborador excluído!")
+                                    st.rerun()
+
+                        st.markdown("---")
+                    with tabs_col[3]:
+                        st.markdown("## ✏️ Editar perfil do colaborador")
+                        if colaboradores:
+                            chapas = [c["Chapa"] for c in colaboradores]
+                            nome_by_chapa = {c["Chapa"]: c.get("Nome", "") for c in colaboradores}
+                            ch_sel = st.selectbox(
+                                "Colaborador (Nome — Chapa):",
+                                chapas,
+                                key="pf_chapa",
+                                format_func=lambda ch: f"{(nome_by_chapa.get(ch, ch) or ch)} — {ch}",
+                            )
+                            csel = next(x for x in colaboradores if x["Chapa"] == ch_sel)
+
+                            # --- FIX v8.1: ao trocar de colaborador, atualizar widgets (entrada/subgrupo/sábado)
+                            last = st.session_state.get("pf_last_chapa")
+                            if last != ch_sel:
+                                _ent_atual = (csel.get("Entrada") or BALANCO_DIA_ENTRADA).strip()
+                                st.session_state["pf_ent_sel"] = _ent_atual
+
+                                _sg = (csel.get("Subgrupo") or "").strip()
+                                _sg_opts = [""] + list_subgrupos(setor)
+                                st.session_state["pf_sg"] = _sg if _sg in _sg_opts else ""
+
+                                st.session_state["pf_sab"] = bool(csel.get("Folga_Sab"))
+                                st.session_state["pf_last_chapa"] = ch_sel
+
+                            colp1, colp2, colp3 = st.columns(3)
+                            # Entrada: usar presets (inclui 06:50 e 12:40) para facilitar
+                            ent_atual = (csel.get("Entrada") or BALANCO_DIA_ENTRADA).strip()
+                            if ent_atual not in HORARIOS_ENTRADA_PRESET:
+                                opcoes_ent = HORARIOS_ENTRADA_PRESET + [ent_atual]
+                            else:
+                                opcoes_ent = HORARIOS_ENTRADA_PRESET
+                            ent_sel = colp1.selectbox(
+                                "Entrada:",
+                                options=opcoes_ent,
+                                index=opcoes_ent.index(ent_atual),
+                                key="pf_ent_sel",
+                            )
+                            sg_opts = [""] + list_subgrupos(setor)
+                            idx_default = sg_opts.index(csel["Subgrupo"]) if csel["Subgrupo"] in sg_opts else 0
+                            sg = colp2.selectbox("Subgrupo:", sg_opts, index=idx_default, key="pf_sg")
+                            sab = colp3.checkbox("Permitir folga sábado", value=bool(csel["Folga_Sab"]), key="pf_sab")
+
+                            if st.button("Salvar perfil", key="pf_save"):
+                                update_colaborador_perfil(setor, ch_sel, sg, ent_sel, sab)
+                                st.success("Salvo!")
+                                st.rerun()
+
+                            # ------------------------------------------------------
+                            # ABA 2: Gerar Escala
+                            # ------------------------------------------------------
+    
+
+    
+        with sub_imp1:
+                        st.subheader("📊 Excel modelo RH (separado por subgrupo)")
+                        ano = int(st.session_state["cfg_ano"])
+                        mes = int(st.session_state["cfg_mes"])
+                        hist_db = load_escala_mes_db(setor, ano, mes)
+                        colaboradores = load_colaboradores_setor(setor)
+                        colab_by = {c["Chapa"]: c for c in colaboradores}
+
+                        if not hist_db:
+                            st.info("Gere a escala.")
+                        else:
+                            hist_db = apply_overrides_to_hist(setor, ano, mes, hist_db)
+
+                            if st.button("📊 Gerar Excel", key="xls_btn"):
+                                output = io.BytesIO()
+                                with pd.ExcelWriter(output, engine="openpyxl") as writer:
+                                    wb = writer.book
+                                    ws = wb.create_sheet("Escala Mensal", index=0)
+
+                                    fill_header = PatternFill(start_color="1F4E78", end_color="1F4E78", patternType="solid")
+                                    fill_dom = PatternFill(start_color="C00000", end_color="C00000", patternType="solid")
+                                    fill_folga = PatternFill(start_color="FFF2CC", end_color="FFF2CC", patternType="solid")
+                                    fill_nome = PatternFill(start_color="D9E1F2", end_color="D9E1F2", patternType="solid")
+                                    fill_ferias = PatternFill(start_color="92D050", end_color="92D050", patternType="solid")
+                                    fill_group = PatternFill(start_color="BDD7EE", end_color="BDD7EE", patternType="solid")
+
+                                    font_header = Font(color="FFFFFF", bold=True)
+                                    font_dom = Font(color="FFFFFF", bold=True)
+
+                                    border = Border(left=Side(style="thin"), right=Side(style="thin"), top=Side(style="thin"), bottom=Side(style="thin"))
+                                    center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+                                    ch0 = list(hist_db.keys())[0]
+                                    df_ref_xls = hist_db[ch0]
+                                    total_dias = len(df_ref_xls)
+
+                                    ws.cell(1, 1, "COLABORADOR").fill = fill_header
+                                    ws.cell(1, 1).font = font_header
+                                    ws.cell(1, 1).alignment = center
+                                    ws.cell(1, 1).border = border
+                                    ws.cell(2, 1, "").fill = fill_header
+                                    ws.cell(2, 1).alignment = center
+                                    ws.cell(2, 1).border = border
+
+                                    for i in range(total_dias):
+                                        dia_num = df_ref_xls.iloc[i]["Data"].day
+                                        dia_sem = df_ref_xls.iloc[i]["Dia"]
+                                        cA = ws.cell(1, i + 2, dia_num)
+                                        cB = ws.cell(2, i + 2, dia_sem)
+
+                                        if dia_sem == "dom":
+                                            cA.fill = fill_dom
+                                            cB.fill = fill_dom
+                                            cA.font = font_dom
+                                            cB.font = font_dom
+                                        else:
+                                            cA.fill = fill_header
+                                            cB.fill = fill_header
+                                            cA.font = font_header
+                                            cB.font = font_header
+
+                                        cA.alignment = center
+                                        cB.alignment = center
+                                        cA.border = border
+                                        cB.border = border
+                                        ws.column_dimensions[get_column_letter(i + 2)].width = 7
+
+                                    ws.column_dimensions["A"].width = 36
+
+                                    subgrupo_map = {}
+                                    for chx in hist_db.keys():
+                                        sg = (colab_by.get(chx, {}).get("Subgrupo", "") or "").strip() or "SEM SUBGRUPO"
+                                        subgrupo_map.setdefault(sg, []).append(chx)
+
+                                    subgrupos_ordenados = sorted(subgrupo_map.keys())
+                                    row_idx = 3
+
+                                    for sg in subgrupos_ordenados:
+                                        ws.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx, end_column=total_dias + 1)
+                                        t = ws.cell(row_idx, 1, f"SUBGRUPO: {sg}")
+                                        t.fill = fill_group
+                                        t.font = Font(bold=True)
+                                        t.alignment = Alignment(horizontal="left", vertical="center")
+                                        t.border = border
+                                        row_idx += 1
+
+                                        chapas_sg = sorted(subgrupo_map[sg], key=lambda chx: colab_by.get(chx, {}).get("Nome", chx))
+                                        for chx in chapas_sg:
+                                            df_f = hist_db[chx]
+                                            nome = colab_by.get(chx, {}).get("Nome", chx)
+
+                                            c_nome = ws.cell(row_idx, 1, f"{nome}\nCHAPA: {chx}")
+                                            c_nome.fill = fill_nome
+                                            c_nome.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+                                            c_nome.border = border
+                                            ws.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx + 1, end_column=1)
+
+                                            for i, row in df_f.iterrows():
+                                                dia_sem = row["Dia"]
+                                                status = row["Status"]
+                                                if status == "Férias":
+                                                    v1, v2 = "FÉRIAS", ""
+                                                elif status == "Folga":
+                                                    v1, v2 = "F", ""
+                                                else:
+                                                    v1, v2 = row["H_Entrada"], row["H_Saida"]
+
+                                                cell1 = ws.cell(row_idx, i + 2, v1)
+                                                cell2 = ws.cell(row_idx + 1, i + 2, v2)
+
+                                                cell1.alignment = center
+                                                cell2.alignment = center
+                                                cell1.border = border
+                                                cell2.border = border
+
+                                                if status == "Férias":
+                                                    cell1.fill = fill_ferias
+                                                    cell2.fill = fill_ferias
+                                                elif status == "Folga":
+                                                    if dia_sem == "dom":
+                                                        cell1.fill = fill_dom
+                                                        cell2.fill = fill_dom
+                                                    else:
+                                                        cell1.fill = fill_folga
+                                                        cell2.fill = fill_folga
+
+                                            row_idx += 2
+                                        row_idx += 1
+
+                                    # -----------------------------
+                                    # Aba extra: Relatório de Férias do mês (quem está de férias no mês selecionado)
+                                    # -----------------------------
+                                    try:
+                                        rows_f = list_ferias(setor) or []
+                                        if rows_f:
+                                            df_f = pd.DataFrame(rows_f, columns=["Chapa", "Início", "Fim"]).copy()
+                                            df_f["Início"] = pd.to_datetime(df_f["Início"], errors="coerce").dt.date
+                                            df_f["Fim"] = pd.to_datetime(df_f["Fim"], errors="coerce").dt.date
+                                            df_f = df_f.dropna(subset=["Início", "Fim"])
+
+                                            # Mês/ano atuais
+                                            ini_mes = pd.Timestamp(year=int(ano), month=int(mes), day=1).date()
+                                            fim_mes = (pd.Timestamp(year=int(ano), month=int(mes), day=1) + pd.offsets.MonthEnd(0)).date()
+
+                                            # Overlap com o mês (se tocar o mês, entra no relatório)
+                                            df_f = df_f[(df_f["Fim"] >= ini_mes) & (df_f["Início"] <= fim_mes)].copy()
+
+                                            if not df_f.empty:
+                                                # Nome ao lado
+                                                nome_by = {str(c.get("Chapa","")): str(c.get("Nome","") or "") for c in (colaboradores or [])}
+                                                df_f["Nome"] = df_f["Chapa"].astype(str).map(nome_by).fillna("")
+
+                                                # Datas operacionais que você pediu:
+                                                # - "Sai de férias" = início
+                                                # - "Volta ao trabalho" = dia seguinte ao fim
+                                                df_f["Sai de férias"] = df_f["Início"]
+                                                df_f["Volta ao trabalho"] = df_f["Fim"].apply(lambda d: (pd.Timestamp(d) + pd.Timedelta(days=1)).date())
+
+                                                # Dias de férias dentro do mês (opcional, mas útil)
+                                                def _dias_no_mes(r):
+                                                    s = max(r["Início"], ini_mes)
+                                                    e = min(r["Fim"], fim_mes)
+                                                    return max(0, int((e - s).days + 1))
+                                                df_f["Dias de férias no mês"] = df_f.apply(_dias_no_mes, axis=1)
+
+                                                df_f = df_f[["Chapa", "Nome", "Sai de férias", "Volta ao trabalho", "Início", "Fim", "Dias de férias no mês"]].sort_values(["Nome","Chapa"])
+
+                                                df_f.to_excel(writer, sheet_name="Férias do mês", index=False)
+
+                                                # estilo simples no header
+                                                ws_f = wb["Férias do mês"]
+                                                for cell in ws_f[1]:
+                                                    cell.fill = fill_header
+                                                    cell.font = cell.font.copy(color="FFFFFF", bold=True)
+                                                ws_f.freeze_panes = "A2"
+                                    except Exception:
+                                        pass
+
+                                    if "Sheet" in wb.sheetnames and len(wb.sheetnames) > 1:
+                                        wb.remove(wb["Sheet"])
+
+                                st.download_button(
+                                    "📥 Baixar Excel",
+                                    data=output.getvalue(),
+                                    file_name=f"escala_{setor}_{mes:02d}_{ano}.xlsx",
+                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                    key="xls_down"
+                                )
+        
+        with sub_imp2:
+                        # --- Lista (e PDF) de quem TRABALHA no dia escolhido ---
+                        st.markdown("### 🗓️ Quem trabalha no dia (para impressão)")
+                        try:
+                            dias_mes = calendar.monthrange(int(ano), int(mes))[1]
+                        except Exception:
+                            dias_mes = 31
+                        dia_sel = st.number_input("Dia do mês", min_value=1, max_value=int(dias_mes), value=1, step=1)
+
+                        # Monta tabela para visualização
+                        linhas = []
+                        for _chapa, _df in (hist_db or {}).items():
+                            if _df is None or _df.empty:
+                                continue
+                            try:
+                                _linha = _df.loc[_df["Data"].dt.day == int(dia_sel)].head(1)
+                            except Exception:
+                                _linha = _df.loc[pd.to_datetime(_df["Data"], errors="coerce").dt.day == int(dia_sel)].head(1)
+                            if _linha.empty:
+                                continue
+                            _r = _linha.iloc[0].to_dict()
+                            _stt = str(_r.get("Status", "")).strip()
+                            if _stt not in WORK_STATUSES:
+                                continue
+                            _ent = str(_r.get("H_Entrada", "") or "").strip()
+                            _sai = str(_r.get("H_Saida", "") or "").strip()
+                            # metadados do colaborador
+                            _nome = ""
+                            _subg = ""
+                            for c in colaboradores:
+                                if str(c.get("Chapa", "")).strip() == str(_chapa).strip():
+                                    _nome = str(c.get("Nome", "")).strip()
+                                    _subg = str(c.get("Subgrupo", "")).strip()
+                                    break
+                            linhas.append({"Chapa": str(_chapa).strip(), "Nome": _nome, "Subgrupo": _subg, "Entrada": _ent, "Saída": _sai})
+
+                        df_dia = pd.DataFrame(linhas).sort_values(["Subgrupo", "Nome"]) if linhas else pd.DataFrame(columns=["Chapa","Nome","Subgrupo","Entrada","Saída"])
+                        st.dataframe(df_dia, use_container_width=True, hide_index=True)
+
+                        colp1, colp2 = st.columns([1, 2])
+                        with colp1:
+                            if st.button("📄 Gerar PDF (quem trabalha no dia)"):
+                                if df_dia.empty:
+                                    st.warning("Não há colaboradores trabalhando nesse dia (ou ainda não foi gerado para este mês).")
+                                else:
+                                    pdf_bytes_dia = gerar_pdf_trabalhando_no_dia(setor, int(ano), int(mes), int(dia_sel), hist_db, colaboradores)
+                                    st.session_state["pdf_dia_trabalho_bytes"] = pdf_bytes_dia
+                                    st.success("PDF pronto.")
+                        with colp2:
+                            if st.session_state.get("pdf_dia_trabalho_bytes"):
+                                st.download_button(
+                                    "⬇️ Baixar PDF (quem trabalha no dia)",
+                                    data=st.session_state["pdf_dia_trabalho_bytes"],
+                                    file_name=f"escala_trabalhando_dia_{int(dia_sel):02d}_{int(mes):02d}_{int(ano)}.pdf",
+                                    mime="application/pdf",
+                                )
+
+
+
+
+
+
+                            st.markdown("---")
+                            st.markdown("## 🖨️ Impressão de Escala (PDF)")
+
+                            all_subgrupos = sorted({((c.get("Subgrupo") or "").strip() or "SEM SUBGRUPO") for c in colaboradores})
+                            cfx1, cfx2, cfx3 = st.columns([1.2, 1.2, 1.6])
+                            loja_txt = cfx1.text_input("Loja:", value=str(setor), key="pdf_loja_txt")
+                            secoes_sel = cfx2.multiselect("Seções (Subgrupo):", options=all_subgrupos, default=[], key="pdf_secoes_sel")
+                            busca_txt = cfx3.text_input("Filtro (nome/chapa/subgrupo):", value="", key="pdf_busca")
+
+                            cols_dates = st.columns([1,1,2])
+                            data_ini = cols_dates[0].date_input("Dia inicial:", value=date(int(ano), int(mes), 1), key="pdf_dt_ini")
+                            data_fim = cols_dates[1].date_input("Dia final:", value=date(int(ano), int(mes), calendar.monthrange(int(ano), int(mes))[1]), key="pdf_dt_fim")
+                            cols_dates[2].caption("Obs.: o PDF segue o modelo oficial do mês. Aqui o filtro é para escolher colaboradores/Seções como no sistema.")
+
+                            colabs_filtrados = _filtrar_colaboradores(colaboradores, secoes_sel, busca_txt)
+
+                            opcoes = [
+                                f"{(c.get('Nome') or '').strip()} — Chapa: {str(c.get('Chapa') or '').strip()} — {((c.get('Subgrupo') or '').strip() or 'SEM SUBGRUPO')}"
+                                for c in colabs_filtrados
+                            ]
+                            mapa_idx = {opcoes[i]: colabs_filtrados[i] for i in range(len(opcoes))}
+        
+        with sub_imp3:
+                        st.markdown("---")
+                        st.markdown("### 🏖️ Férias do mês (PDF)")
+                        cfx1, cfx2 = st.columns([1, 2])
+                        pdf_fer_busca = cfx2.text_input("Filtro (nome ou chapa) — opcional:", value="", key="pdf_fer_busca")
+                        btn_fer_pdf = cfx1.button("📄 Gerar PDF — Férias do mês", use_container_width=True, key="pdf_fer_btn")
+                        cfx2.caption("Gera um relatório A4 com Nome, Chapa, Início, Fim e Dias. Considera quem tem férias que encostam no mês selecionado.")
+                        if btn_fer_pdf:
+                            colabs_all = load_colaboradores_setor(setor) or []
+                            # aplica filtro simples
+                            if pdf_fer_busca.strip():
+                                kw = pdf_fer_busca.strip().lower()
+                                colabs_all = [c for c in colabs_all if kw in str(c.get("Nome","")).lower() or kw in str(c.get("Chapa","")).lower()]
+                            pdf_bytes = gerar_pdf_ferias_mes(setor, int(ano), int(mes), load_colaboradores_setor(setor) or [], keyword=pdf_fer_busca)
+                            st.download_button(
+                                "⬇️ Baixar PDF (Férias do mês)",
+                                data=pdf_bytes,
+                                file_name=f"ferias_{setor}_{int(mes):02d}_{int(ano)}.pdf",
+                                mime="application/pdf",
+                                use_container_width=True,
+                                key="pdf_fer_dl"
+                            )
+                        st.markdown("### 👥 Colaboradores")
+                        sel = st.multiselect(
+                            "Selecione (se vazio, imprime TODOS do filtro):",
+                            options=opcoes,
+                            default=[],
+                            key="pdf_colabs_sel"
+                        )
+
+                        cbtn1, cbtn2 = st.columns([1, 3])
+                        gerar = cbtn1.button("🖨️ Imprimir (gerar PDF)", key="pdf_print_btn", use_container_width=True)
+                        cbtn2.caption("Dica: selecione uma seção, depois marque os colaboradores. Se não marcar nenhum, imprime todos os filtrados.")
+
+                        if gerar:
+                            hist_db_pdf = load_escala_mes_db(setor, ano, mes)
+                            if not hist_db_pdf:
+                                st.warning("Gere a escala antes na aba 🚀 Gerar Escala.")
+                            else:
+                                hist_db_pdf = apply_overrides_to_hist(setor, ano, mes, hist_db_pdf)
+
+                                if sel:
+                                    chapas_sel = [str(mapa_idx[x].get("Chapa")) for x in sel if x in mapa_idx]
+                                else:
+                                    chapas_sel = [str(c.get("Chapa")) for c in colabs_filtrados]
+
+                                hist_db_pdf = {ch: df for ch, df in hist_db_pdf.items() if ch in set(chapas_sel)}
+
+                                if not hist_db_pdf:
+                                    st.warning("Nenhum colaborador para imprimir com os filtros atuais.")
+                                else:
+                                    pdf_bytes = gerar_pdf_modelo_oficial(loja_txt.strip() or str(setor), ano, mes, hist_db_pdf, colaboradores)
+                                    st.download_button(
+                                        "⬇️ Baixar PDF",
+                                        data=pdf_bytes,
+                                        file_name=f"escala_{(loja_txt.strip() or str(setor))}_{mes:02d}_{ano}.pdf",
+                                        mime="application/pdf",
+                                        key="pdf_down"
+                                    )
+
+# ------------------------------------------------------
     # ABA Admin (somente ADMIN)
     # ------------------------------------------------------
     if is_admin_area:
