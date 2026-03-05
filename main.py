@@ -3278,6 +3278,19 @@ def page_app():
             )
             csel = next(x for x in colaboradores if x["Chapa"] == ch_sel)
 
+            # --- FIX v8.1: ao trocar de colaborador, atualizar widgets (entrada/subgrupo/sábado)
+            last = st.session_state.get("pf_last_chapa")
+            if last != ch_sel:
+                _ent_atual = (csel.get("Entrada") or BALANCO_DIA_ENTRADA).strip()
+                st.session_state["pf_ent_sel"] = _ent_atual
+
+                _sg = (csel.get("Subgrupo") or "").strip()
+                _sg_opts = [""] + list_subgrupos(setor)
+                st.session_state["pf_sg"] = _sg if _sg in _sg_opts else ""
+
+                st.session_state["pf_sab"] = bool(csel.get("Folga_Sab"))
+                st.session_state["pf_last_chapa"] = ch_sel
+
             colp1, colp2, colp3 = st.columns(3)
             # Entrada: usar presets (inclui 06:50 e 12:40) para facilitar
             ent_atual = (csel.get("Entrada") or BALANCO_DIA_ENTRADA).strip()
