@@ -4138,7 +4138,14 @@ def page_app():
         else:
             chapas = [c["Chapa"] for c in colaboradores]
             st.markdown("### ➕ Lançar Férias")
-            ch = st.selectbox("Chapa:", chapas, key="fer_ch")
+            opts = []
+            for c in colaboradores:
+                chp = str(c.get("Chapa","")).strip()
+                nm = str(c.get("Nome","") or "").strip()
+                label = f"{chp} — {nm}" if nm else chp
+                opts.append((label, chp))
+            pick = st.selectbox("Colaborador (chapa — nome):", [o[0] for o in opts], key="fer_pick")
+            ch = next((o[1] for o in opts if o[0] == pick), pick.split("—")[0].strip())
 
             nome_sel = next((x.get("Nome","") for x in colaboradores if str(x.get("Chapa","")) == str(ch)), "")
             st.write(f"**Colaborador:** {nome_sel}  \n**Chapa:** {ch}")
