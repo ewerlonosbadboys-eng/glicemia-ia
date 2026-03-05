@@ -936,28 +936,84 @@ def gerar_pdf_ferias_mes(setor: str, ano: int, mes: int, colaboradores: list[dic
             return max(0, int((e - s).days + 1))
         df["Dias (no mês)"] = df.apply(_dias_mes, axis=1)
 
-        df = df[["Nome","Chapa","Início","Fim","Dias (total)","Dias (no mês)"]].sort_values(["Nome","Chapa"])
+        df = df[["Nome","Chapa","Início","Fim","Dias (total)"]].sort_values(["Nome","Chapa"])
     else:
         df = pd.DataFrame(columns=["Nome","Chapa","Início","Fim","Dias (total)","Dias (no mês)"])
 
     buf = BytesIO()
     doc = SimpleDocTemplate(
         buf,
-        pagesize=A4,
+        pagesize=landscape(A4),
         leftMargin=12*mm, rightMargin=12*mm, topMargin=12*mm, bottomMargin=12*mm
     )
     styles = getSampleStyleSheet()
 
     title = Paragraph(f"<b>Férias do mês</b> — Setor: {setor} — {mes:02d}/{ano}", styles["Title"])
-    elements = [title, Spacer(1, 8)]
+
+    def _load_logo(candidates, w_mm=30, h_mm=14):
+        """Tenta carregar PNG/JPG/WEBP (converte WEBP para PNG em memória) e retorna um Flowable Image."""
+        from io import BytesIO
+        from reportlab.lib.units import mm
+        for p in candidates:
+            try:
+                if not p:
+                    continue
+                path = str(p)
+                if not pathlib.Path(path).exists():
+                    continue
+                im = PILImage.open(path)
+                im = im.convert("RGBA")
+                bio = BytesIO()
+                im.save(bio, format="PNG")
+                bio.seek(0)
+                ir = ImageReader(bio)
+                img = Image(ir, width=float(w_mm)*mm, height=float(h_mm)*mm)
+                return img
+            except Exception:
+                continue
+        return Spacer(1, 1)
+
+    logo_esq = _load_logo(
+        ["savegnago_logo.png","savegnago_logo.webp","savegnago-logo.webp","savegnago.png","savegnago.webp"],
+        w_mm=34, h_mm=16
+    )
+    logo_dir = _load_logo(
+        ["paulistao_logo.png","paulistao_logo.webp","paulistao-atacadista.webp","paulistao.png","paulistao.webp"],
+        w_mm=40, h_mm=16
+    )
+
+    header = Table([[logo_esq, title, logo_dir]], colWidths=[60, 420, 80])
+    header.setStyle(TableStyle([
+        ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+        ("ALIGN", (0,0), (0,0), "LEFT"),
+        ("ALIGN", (1,0), (1,0), "CENTER"),
+        ("ALIGN", (2,0), (2,0), "RIGHT"),
+        ("BOTTOMPADDING", (0,0), (-1,-1), 6),
+    ]))
+
+    elements = [header, Spacer(1, 10)]
 
     if df.empty:
         elements.append(Paragraph("Nenhum colaborador em férias neste mês.", styles["Normal"]))
-        doc.build(elements)
-        return buf.getvalue()
+        elements.append(Spacer(1, 22))
+
+    assin = Table(
+        [["______________________________", "______________________________"],
+         ["RH", "Gerência"]],
+        colWidths=[260, 260]
+    )
+    assin.setStyle(TableStyle([
+        ("ALIGN",(0,0),(-1,-1),"CENTER"),
+        ("VALIGN",(0,0),(-1,-1),"MIDDLE"),
+        ("TOPPADDING",(0,0),(-1,-1),6),
+    ]))
+    elements.append(assin)
+
+    doc.build(elements)
+    return buf.getvalue()
 
     data = [list(df.columns)] + df.astype(str).values.tolist()
-    tbl = Table(data, repeatRows=1, colWidths=[65*mm, 22*mm, 25*mm, 25*mm, 20*mm, 20*mm])
+    tbl = Table(data, repeatRows=1, colWidths=[80*mm, 30*mm, 30*mm, 30*mm, 25*mm])
     tbl.setStyle(TableStyle([
         ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#1F4E79")),
         ("TEXTCOLOR", (0,0), (-1,0), colors.white),
@@ -1025,7 +1081,7 @@ def gerar_pdf_trabalhando_no_dia(setor: str, ano: int, mes: int, dia: int, hist_
     buf = BytesIO()
     doc = SimpleDocTemplate(
         buf,
-        pagesize=A4,
+        pagesize=landscape(A4),
         leftMargin=1.2*cm,
         rightMargin=1.2*cm,
         topMargin=1.2*cm,
