@@ -3323,12 +3323,13 @@ def page_app():
 
         with st.container(border=True):
             c1, c2, c3 = st.columns([1, 1, 2])
-            mes = c1.selectbox("Mês:", list(range(1, 13)), index=int(st.session_state["cfg_mes"]) - 1, key="gen_mes")
-            ano = c2.number_input("Ano:", value=int(st.session_state["cfg_ano"]), step=1, key="gen_ano")
+            # v9.3 UI: mês/ano vêm somente da Competência (sidebar)
+            mes = int(st.session_state["cfg_mes"])
+            ano = int(st.session_state["cfg_ano"])
+            c1.markdown(f"**Mês/Ano:** {mes:02d}/{ano}")
+            c2.caption("Alterar em 🗓️ Competência (sidebar)")
             seed = c3.number_input("Semente", min_value=0, max_value=999999, value=int(st.session_state.get("last_seed", 0)), key="gen_seed")
 
-        st.session_state["cfg_mes"] = int(mes)
-        st.session_state["cfg_ano"] = int(ano)
 
         colaboradores = load_colaboradores_setor(setor)
         if not colaboradores:
@@ -3375,12 +3376,12 @@ def page_app():
 
         with st.container(border=True):
             c1, c2, c3 = st.columns([1, 1, 2])
-            mes = c1.selectbox("Mês (ajustes)", list(range(1, 13)), index=int(st.session_state["cfg_mes"]) - 1, key="adj_mes")
-            ano = c2.number_input("Ano (ajustes)", value=int(st.session_state["cfg_ano"]), step=1, key="adj_ano")
-            c3.caption("Dica: deixe o mês/ano aqui igual ao mês/ano da aba 🚀 Gerar Escala.")
-
-        st.session_state["cfg_mes"] = int(mes)
-        st.session_state["cfg_ano"] = int(ano)
+            # v9.3 UI: mês/ano vêm somente da Competência (sidebar)
+            mes = int(st.session_state["cfg_mes"])
+            ano = int(st.session_state["cfg_ano"])
+            c1.markdown(f"**Mês/Ano:** {mes:02d}/{ano}")
+            c2.caption("Alterar em 🗓️ Competência (sidebar)")
+            c3.caption("Ajustes aplicam na competência ativa.")
 
         hist_db = load_escala_mes_db(setor, ano, mes)
         colaboradores = load_colaboradores_setor(setor)
