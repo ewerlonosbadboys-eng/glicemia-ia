@@ -3124,6 +3124,18 @@ def page_gestao_dashboard(ano: int, mes: int):
 
     df = pd.read_sql_query(q, con, params=[ano, mes, *setores_sel])
 
+
+    # --- Nomes (merge opcional com tabela colaboradores)
+    try:
+        qn = "SELECT setor, chapa, nome FROM colaboradores WHERE setor IN ({})".format(",".join(["?"]*len(setores_sel)))
+        df_n = pd.read_sql_query(qn, con, params=[*setores_sel])
+        df_n["chapa"] = df_n["chapa"].astype(str).str.strip()
+        df["chapa"] = df["chapa"].astype(str).str.strip()
+        df = df.merge(df_n.drop_duplicates(subset=["setor","chapa"]), on=["setor","chapa"], how="left")
+    except Exception:
+        df["nome"] = ""
+
+
     # Normalização de status
     df["status_norm"] = df["status"].fillna("").astype(str).str.strip().str.upper()
     # categorias
@@ -3159,13 +3171,45 @@ def page_gestao_dashboard(ano: int, mes: int):
     df_det = df[df["setor"] == setor_det].copy()
 
     if modo.startswith("Por dia"):
-        by = df_det.groupby(["dia","cat"]).size().reset_index(name="qtd")
-        piv = by.pivot_table(index="dia", columns="cat", values="qtd", fill_value=0).reset_index()
-        for col in ["TRABALHO","FOLGA","FÉRIAS","AFASTAMENTO"]:
-            if col not in piv.columns:
-                piv[col] = 0
-        piv["TOTAL"] = piv[["TRABALHO","FOLGA","FÉRIAS","AFASTAMENTO"]].sum(axis=1)
-        st.dataframe(piv.sort_values("dia"), use_container_width=True, hide_index=True)
+        tabC, tabL = st.tabs(["📈 Contagem por dia", "👥 Listas do dia"])
+        with tabC:
+            by = df_det.groupby(["dia","cat"]).size().reset_index(name="qtd")
+            piv = by.pivot_table(index="dia", columns="cat", values="qtd", fill_value=0).reset_index()
+            for col in ["TRABALHO","FOLGA","FÉRIAS","AFASTAMENTO"]:
+                if col not in piv.columns:
+                    piv[col] = 0
+            piv["TOTAL"] = piv[["TRABALHO","FOLGA","FÉRIAS","AFASTAMENTO"]].sum(axis=1)
+
+            # Dia da semana (pt-br)
+            DPT = {0:"Seg",1:"Ter",2:"Qua",3:"Qui",4:"Sex",5:"Sáb",6:"Dom"}
+            piv["DIA_SEMANA"] = piv["dia"].apply(lambda d: DPT.get(dt.date(int(ano), int(mes), int(d)).weekday(), ""))
+            piv = piv[["dia","DIA_SEMANA","TRABALHO","FOLGA","FÉRIAS","AFASTAMENTO","TOTAL"]]
+
+            st.dataframe(piv.sort_values("dia"), use_container_width=True, hide_index=True)
+
+        with tabL:
+            last_day = calendar.monthrange(int(ano), int(mes))[1]
+            dia_sel = st.selectbox("Dia para detalhar", list(range(1, last_day+1)), index=0, key="gest_dia_sel")
+            dname = ["Segunda","Terça","Quarta","Quinta","Sexta","Sábado","Domingo"][dt.date(int(ano), int(mes), int(dia_sel)).weekday()]
+            st.caption(f"Detalhe do dia **{dia_sel:02d}/{int(mes):02d}/{int(ano)}** — {dname}")
+
+            df_day = df_det[df_det["dia"] == int(dia_sel)].copy()
+
+            def _show_cat(title, cat, icon):
+                sub = df_day[df_day["cat"] == cat].copy()
+                sub["nome"] = sub.get("nome", "").fillna("")
+                sub["status"] = sub.get("status", "").fillna("")
+                sub = sub[["nome","chapa","status"]].rename(columns={"nome":"Nome","chapa":"Chapa","status":"Status"})
+                st.markdown(f"#### {icon} {title} ({len(sub)})")
+                st.dataframe(sub.sort_values(["Nome","Chapa"]), use_container_width=True, hide_index=True, height=280)
+
+            cA, cB = st.columns(2)
+            with cA:
+                _show_cat("Trabalhando", "TRABALHO", "🟩")
+                _show_cat("Férias", "FÉRIAS", "🟦")
+            with cB:
+                _show_cat("Folga", "FOLGA", "🟨")
+                _show_cat("Afastamento", "AFASTAMENTO", "🟥")
     else:
         by = df_det.groupby(["chapa","cat"]).size().reset_index(name="qtd")
         piv = by.pivot_table(index="chapa", columns="cat", values="qtd", fill_value=0).reset_index()
