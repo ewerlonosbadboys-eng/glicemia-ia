@@ -1195,6 +1195,7 @@ def db_init():
     con.commit()
     _safe_exec(cur, "INSERT OR IGNORE INTO setores(nome) VALUES (?)", ("GERAL",))
     _safe_exec(cur, "INSERT OR IGNORE INTO setores(nome) VALUES (?)", ("ADMIN",))
+    _safe_exec(cur, "INSERT OR IGNORE INTO setores(nome) VALUES (?)", ("GESTAO",))
     con.commit()
 
     cur.execute("SELECT 1 FROM usuarios_sistema WHERE setor=? AND chapa=? LIMIT 1", ("ADMIN", "admin"))
@@ -3090,6 +3091,93 @@ def _regenerar_mes_inteiro(setor: str, ano: int, mes: int, seed: int = 0, respei
 
 
 
+
+def page_gestao_dashboard(ano: int, mes: int):
+    st.title("📊 Gestão — Visão Geral (todos os setores)")
+    st.caption("Indicadores de trabalho, folgas, férias e afastamentos. Use os filtros para cruzar setor e período.")
+
+    con = db_conn()
+    try:
+        setores_all = pd.read_sql_query("SELECT nome FROM setores ORDER BY nome ASC", con)["nome"].tolist()
+    except Exception:
+        setores_all = []
+    # remove setores técnicos
+    setores_all = [s for s in setores_all if s and s.upper() not in ("ADMIN",)]
+    if not setores_all:
+        setores_all = ["GERAL"]
+
+    c1, c2, c3 = st.columns([2,1,1])
+    setores_sel = c1.multiselect("Setores", setores_all, default=setores_all, key="gest_setores")
+    ano = int(c2.number_input("Ano", value=int(ano), step=1, key="gest_ano"))
+    mes = int(c3.selectbox("Mês", list(range(1,13)), index=int(mes)-1, key="gest_mes"))
+
+    if not setores_sel:
+        st.warning("Selecione ao menos 1 setor.")
+        return
+
+    # Base: escala_mes
+    q = """
+        SELECT setor, chapa, dia, status
+        FROM escala_mes
+        WHERE ano=? AND mes=? AND setor IN ({})
+    """.format(",".join(["?"]*len(setores_sel)))
+
+    df = pd.read_sql_query(q, con, params=[ano, mes, *setores_sel])
+
+    # Normalização de status
+    df["status_norm"] = df["status"].fillna("").astype(str).str.strip().str.upper()
+    # categorias
+    is_fer = df["status_norm"].str.contains("F[ÉE]RIAS", regex=True)
+    is_afa = df["status_norm"].isin(["AFA", "AFASTAMENTO"]) | df["status_norm"].str.contains("AFAST", regex=True)
+    is_folga = df["status_norm"].str.contains("FOLG", regex=True) | df["status_norm"].isin(["FOLGA"])
+    is_trab = ~(is_fer | is_afa | is_folga)
+
+    df["cat"] = "TRABALHO"
+    df.loc[is_folga, "cat"] = "FOLGA"
+    df.loc[is_fer, "cat"] = "FÉRIAS"
+    df.loc[is_afa, "cat"] = "AFASTAMENTO"
+
+    # Resumo por setor
+    pivot = (
+        df.pivot_table(index="setor", columns="cat", values="dia", aggfunc="count", fill_value=0)
+          .reset_index()
+    )
+    for col in ["TRABALHO","FOLGA","FÉRIAS","AFASTAMENTO"]:
+        if col not in pivot.columns:
+            pivot[col] = 0
+    pivot["TOTAL_REGISTROS"] = pivot[["TRABALHO","FOLGA","FÉRIAS","AFASTAMENTO"]].sum(axis=1)
+
+    st.subheader("Resumo por setor (mês)")
+    st.dataframe(pivot.sort_values("setor"), use_container_width=True, hide_index=True)
+
+    # Filtro detalhado
+    st.subheader("Detalhe")
+    sA, sB = st.columns([2,1])
+    setor_det = sA.selectbox("Setor (detalhe)", setores_sel, key="gest_setor_det")
+    modo = sB.selectbox("Visão", ["Por dia (contagem)", "Por colaborador (totais)"], key="gest_modo")
+
+    df_det = df[df["setor"] == setor_det].copy()
+
+    if modo.startswith("Por dia"):
+        by = df_det.groupby(["dia","cat"]).size().reset_index(name="qtd")
+        piv = by.pivot_table(index="dia", columns="cat", values="qtd", fill_value=0).reset_index()
+        for col in ["TRABALHO","FOLGA","FÉRIAS","AFASTAMENTO"]:
+            if col not in piv.columns:
+                piv[col] = 0
+        piv["TOTAL"] = piv[["TRABALHO","FOLGA","FÉRIAS","AFASTAMENTO"]].sum(axis=1)
+        st.dataframe(piv.sort_values("dia"), use_container_width=True, hide_index=True)
+    else:
+        by = df_det.groupby(["chapa","cat"]).size().reset_index(name="qtd")
+        piv = by.pivot_table(index="chapa", columns="cat", values="qtd", fill_value=0).reset_index()
+        for col in ["TRABALHO","FOLGA","FÉRIAS","AFASTAMENTO"]:
+            if col not in piv.columns:
+                piv[col] = 0
+        piv["TOTAL"] = piv[["TRABALHO","FOLGA","FÉRIAS","AFASTAMENTO"]].sum(axis=1)
+        st.dataframe(piv.sort_values("TOTAL", ascending=False), use_container_width=True, hide_index=True)
+
+    st.info("Dica: para o gerente, esta tela é a única exibida — as outras abas ficam ocultas para reduzir poluição visual.")
+
+
 def page_app():
     auth = st.session_state.get("auth") or {}
     setor = auth.get("setor", "GERAL")
@@ -3131,6 +3219,13 @@ def page_app():
         if st.button("🚪 Sair", use_container_width=True, key="logout_btn"):
             st.session_state["auth"] = None
             st.rerun()
+
+    # =========================
+    # PERFIL GESTÃO (GERENTE) — UI dedicada
+    # =========================
+    if str(setor).strip().upper() in ("GESTAO", "GERENCIA", "GERENTE"):
+        page_gestao_dashboard(int(st.session_state["cfg_ano"]), int(st.session_state["cfg_mes"]))
+        return
 
         
 
