@@ -2434,7 +2434,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
     ovmap = _ov_map(setor, int(ano), int(mes)) if respeitar_ajustes else {}
 
     grupos = {}
-    for c in colaboradores:
+    for c in colaboradores_view:
         sg = (c.get("Subgrupo") or "").strip() or "SEM SUBGRUPO"
         grupos.setdefault(sg, []).append(c)
 
