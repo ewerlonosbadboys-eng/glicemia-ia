@@ -1174,7 +1174,17 @@ def db_init():
                 cur.execute(f"ALTER TABLE escala_mes ADD COLUMN {c} INTEGER")
             else:
                 cur.execute(f"ALTER TABLE escala_mes ADD COLUMN {c} TEXT")
-        con.commit()
+        
+    _safe_exec(cur, """
+    CREATE TABLE IF NOT EXISTS login_recent (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        setor TEXT NOT NULL,
+        chapa TEXT NOT NULL,
+        ts TEXT NOT NULL
+    )
+    """)
+
+con.commit()
     except Exception:
         pass
 
@@ -2994,14 +3004,94 @@ def page_login():
         setores = pd.read_sql_query("SELECT nome FROM setores ORDER BY nome ASC", con)["nome"].tolist()
         con.close()
 
-        setor = st.selectbox("Setor:", setores, key="lg_setor")
-        chapa = st.text_input("Chapa:", key="lg_chapa")
+        # --- Login (melhorado): recentes + busca (case-insensitive) + salvar setor/chapa
+        con = db_conn()
+        # recentes (últimos 6)
+        rec = pd.read_sql_query(
+            "SELECT setor, chapa, ts FROM login_recent ORDER BY ts DESC LIMIT 6",
+            con
+        )
+        # junta com nome (se existir)
+        try:
+            rec2 = rec.merge(
+                pd.read_sql_query("SELECT setor, chapa, nome FROM usuarios_sistema", con),
+                on=["setor","chapa"],
+                how="left"
+            )
+        except Exception:
+            rec2 = rec.copy()
+            rec2["nome"] = ""
+        con.close()
+
+        st.caption("🔎 Você pode digitar em minúsculo (ex.: flv) — o sistema normaliza e encontra igual.")
+        kw = st.text_input("Buscar (setor / chapa / nome):", key="lg_kw").strip()
+
+        # opções recentes
+        recentes_opts = []
+        for _, r in rec2.iterrows():
+            s = str(r.get("setor","")).strip()
+            c = str(r.get("chapa","")).strip()
+            n = str(r.get("nome","") or "").strip()
+            label = f"{s} | {c}" + (f" — {n}" if n else "")
+            recentes_opts.append((label, s, c))
+
+        # filtro por keyword
+        if kw:
+            kwu = kw.strip().upper()
+            recentes_opts_f = [t for t in recentes_opts if kwu in t[0].upper()]
+            setores_f = [s for s in setores if kwu in s.upper()]
+        else:
+            recentes_opts_f = recentes_opts
+            setores_f = setores
+
+        colA, colB = st.columns([1.4, 1.0])
+        with colA:
+            if recentes_opts_f:
+                pick = st.selectbox(
+                    "Recentes (clique para preencher):",
+                    [t[0] for t in recentes_opts_f],
+                    index=0,
+                    key="lg_recent_pick"
+                )
+                chosen = next((t for t in recentes_opts_f if t[0] == pick), None)
+                if chosen:
+                    # pré-preenche setor/chapa
+                    st.session_state["lg_setor_txt"] = chosen[1]
+                    st.session_state["lg_chapa"] = chosen[2]
+
+        with colB:
+            lembrar = st.checkbox("✅ Salvar setor/chapa neste dispositivo", value=True, key="lg_remember")
+
+        setor_txt = st.text_input("Setor (digite ou selecione):", value=st.session_state.get("lg_setor_txt",""), key="lg_setor_txt")
+        # se usuário não digitou, oferece selectbox filtrado
+        if not setor_txt.strip():
+            setor_sel = st.selectbox("Setor (lista):", setores_f, key="lg_setor_sel")
+            setor_txt = setor_sel
+
+        # normaliza setor (case-insensitive)
+        setor_norm = setor_txt.strip().upper()
+
+        chapa = st.text_input("Chapa:", value=st.session_state.get("lg_chapa",""), key="lg_chapa")
         senha = st.text_input("Senha:", type="password", key="lg_senha")
 
         if st.button("Entrar", key="lg_btn"):
-            u = verify_login(setor, chapa, senha)
+            u = verify_login(setor_norm, chapa.strip(), senha)
             if u:
                 st.session_state["auth"] = u
+
+                # salva recente
+                if lembrar:
+                    try:
+                        con = db_conn()
+                        con.execute(
+                            "INSERT INTO login_recent(setor, chapa, ts) VALUES(?,?,?)",
+                            (setor_norm, chapa.strip(), dt.datetime.now().isoformat(timespec="seconds"))
+                        )
+                        con.commit()
+                        con.close()
+                    except Exception:
+                        pass
+
                 st.success("Login efetuado!")
                 st.rerun()
             else:
