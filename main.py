@@ -2938,18 +2938,35 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
                 max_iters=2200
             )
 
-    # ✅ Pós-rebalance: re-garante regra dos 5 dias por colaborador
+    # ✅ Pós-rebalance: revalida regras por colaborador (evita semana com 3 folgas)
     for ch, df in hist_all.items():
         ent = colab_by_chapa[ch].get("Entrada", "06:00")
         locked = locked_idx.get(ch, set())
         pode_sab = bool(colab_by_chapa[ch].get("Folga_Sab", False))
 
+        # 1) Limite 5 dias (pode ter sido quebrado pelo rebalance)
         enforce_max_5_consecutive_work(
             df, ent, pode_sab,
             initial_consec=(0 if _past else int((estado_prev.get(ch, {}) or {}).get('consec_trab_final', 0))),
             locked_status=locked
         )
+
+        # 2) Regra semanal SEG→DOM (remove excesso e completa falta)
+        enforce_weekly_folga_targets(df, df_ref=df_ref, pode_folgar_sabado=pode_sab, locked_status=locked)
+
+        # 3) Reforça 5 dias novamente (regra semanal pode remover folga e criar sequência >5)
+        enforce_max_5_consecutive_work(
+            df, ent, pode_sab,
+            initial_consec=(0 if _past else int((estado_prev.get(ch, {}) or {}).get('consec_trab_final', 0))),
+            locked_status=locked
+        )
+
+        # 4) Regra semanal novamente (se o max_5 criou folga extra, normaliza para alvo)
+        enforce_weekly_folga_targets(df, df_ref=df_ref, pode_folgar_sabado=pode_sab, locked_status=locked)
+
+        # 5) Proíbe folga consecutiva automática (DOM+SEG etc.)
         enforce_no_consecutive_folga(df, locked_status=locked)
+
         hist_all[ch] = df
 
     # Pós final (garantia)
