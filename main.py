@@ -4433,20 +4433,28 @@ def page_app():
                             ini_mes = pd.Timestamp(year=int(ano), month=int(mes), day=1).date()
                             fim_mes = (pd.Timestamp(year=int(ano), month=int(mes), day=1) + pd.offsets.MonthEnd(0)).date()
 
-                            # Overlap com o mês
+                            # Overlap com o mês (se tocar o mês, entra no relatório)
                             df_f = df_f[(df_f["Fim"] >= ini_mes) & (df_f["Início"] <= fim_mes)].copy()
 
                             if not df_f.empty:
                                 # Nome ao lado
                                 nome_by = {str(c.get("Chapa","")): str(c.get("Nome","") or "") for c in (colaboradores or [])}
                                 df_f["Nome"] = df_f["Chapa"].astype(str).map(nome_by).fillna("")
-                                # Dias de férias dentro do mês
+
+                                # Datas operacionais que você pediu:
+                                # - "Sai de férias" = início
+                                # - "Volta ao trabalho" = dia seguinte ao fim
+                                df_f["Sai de férias"] = df_f["Início"]
+                                df_f["Volta ao trabalho"] = df_f["Fim"].apply(lambda d: (pd.Timestamp(d) + pd.Timedelta(days=1)).date())
+
+                                # Dias de férias dentro do mês (opcional, mas útil)
                                 def _dias_no_mes(r):
                                     s = max(r["Início"], ini_mes)
                                     e = min(r["Fim"], fim_mes)
                                     return max(0, int((e - s).days + 1))
-                                df_f["Dias no mês"] = df_f.apply(_dias_no_mes, axis=1)
-                                df_f = df_f[["Chapa", "Nome", "Início", "Fim", "Dias no mês"]].sort_values(["Nome","Chapa"])
+                                df_f["Dias de férias no mês"] = df_f.apply(_dias_no_mes, axis=1)
+
+                                df_f = df_f[["Chapa", "Nome", "Sai de férias", "Volta ao trabalho", "Início", "Fim", "Dias de férias no mês"]].sort_values(["Nome","Chapa"])
 
                                 df_f.to_excel(writer, sheet_name="Férias do mês", index=False)
 
