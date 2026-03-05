@@ -943,7 +943,7 @@ def gerar_pdf_ferias_mes(setor: str, ano: int, mes: int, colaboradores: list[dic
 
         ini_mes = pd.Timestamp(year=int(ano), month=int(mes), day=1).date()
         fim_mes = (pd.Timestamp(year=int(ano), month=int(mes), day=1) + pd.offsets.MonthEnd(0)).date()
-        df = df[(df["Fim"] >= ini_mes) & (df["Início"] <= fim_mes)].copy()
+        df = df[(df["Início"] >= ini_mes) & (df["Início"] <= fim_mes)].copy()
 
         # Nome ao lado da chapa
         nome_by = {str(c.get("Chapa","")): str(c.get("Nome","") or "") for c in (colaboradores or [])}
