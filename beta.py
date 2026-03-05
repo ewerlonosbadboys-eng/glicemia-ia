@@ -1781,9 +1781,12 @@ def gerar_pdf_bytes(df_g: pd.DataFrame, df_n: pd.DataFrame) -> bytes:
                 ]))
                 story.append(tE)
 
-        # ===== Doses (Rápida/Longa) abaixo de Medidas extras =====
+
+        # ===== Doses (Rápida/Longa) no mesmo formato da Glicemia (Data x Momento) =====
         story.append(Spacer(1, 8))
-        story.append(Paragraph("Doses (Rápida / Longa)", styles["Heading3"]))
+        story.append(Paragraph("Doses de insulina - Tabela (Data x Momento)", styles["Heading3"]))
+        story.append(Paragraph("Legenda: R = Rápida, L = Longa", styles["Normal"]))
+        story.append(Spacer(1, 4))
 
         try:
             df_dose = df_g.copy()
@@ -1792,12 +1795,13 @@ def gerar_pdf_bytes(df_g: pd.DataFrame, df_n: pd.DataFrame) -> bytes:
 
             if df_dose.empty:
                 story.append(Paragraph("Sem doses registradas.", styles["Normal"]))
+                story.append(Spacer(1, 12))
             else:
                 df_dose["DT"] = pd.to_datetime(
                     df_dose["Data"].astype(str) + " " + df_dose["Hora"].astype(str),
                     dayfirst=True, errors="coerce"
                 )
-                df_dose = df_dose.dropna(subset=["DT"]).sort_values("DT").tail(40)
+                df_dose = df_dose.dropna(subset=["DT"]).sort_values("DT")
 
                 # Extrai valores do texto salvo: "Rápida: X UI | Longa: Y UI"
                 def _extrair(tag: str, s: str) -> str:
@@ -1808,24 +1812,71 @@ def gerar_pdf_bytes(df_g: pd.DataFrame, df_n: pd.DataFrame) -> bytes:
                     except Exception:
                         return ""
 
-                df_dose["Rápida"] = df_dose["Dose"].apply(lambda s: _extrair("Rápida", s) or _extrair("Rapida", s))
-                df_dose["Longa"] = df_dose["Dose"].apply(lambda s: _extrair("Longa", s))
+                df_dose["R"] = df_dose["Dose"].apply(lambda s: _extrair("Rápida", s) or _extrair("Rapida", s))
+                df_dose["L"] = df_dose["Dose"].apply(lambda s: _extrair("Longa", s))
 
-                cols_d = ["Data", "Hora", "Momento", "Rápida", "Longa"]
-                data_d = [cols_d] + df_dose[cols_d].astype(str).values.tolist()
-                tD = Table(data_d, repeatRows=1, colWidths=[3*cm, 2*cm, 6.5*cm, 2.5*cm, 2.5*cm])
-                tD.setStyle(TableStyle([
+                # Formata célula compacta (para caber como a tabela de glicemia)
+                def _fmt_cell(r: str, l: str) -> str:
+                    r = (r or "").strip()
+                    l = (l or "").strip()
+                    if r and l:
+                        return f"R:{r} / L:{l}"
+                    if r:
+                        return f"R:{r}"
+                    if l:
+                        return f"L:{l}"
+                    return ""
+
+                df_dose["VAL"] = df_dose.apply(lambda x: _fmt_cell(x.get("R",""), x.get("L","")), axis=1)
+
+                # Pivot (Data x Momento), pegando o último registro do dia/momento
+                pivot_d = df_dose.pivot_table(index="Data", columns="Momento", values="VAL", aggfunc="last")
+                pivot_d = pivot_d.reindex(columns=ordenar_colunas_momentos(list(pivot_d.columns)))
+                pivot_d = pivot_d.sort_index()
+
+                # Limitar para caber no PDF (últimas 31 datas)
+                if len(pivot_d) > 31:
+                    pivot_d_show = pivot_d.tail(31).copy()
+                else:
+                    pivot_d_show = pivot_d.copy()
+
+                base_cols_present_d = [c for c in desired_order if c in pivot_d_show.columns]
+
+                cols_d = ["Data"] + base_cols_present_d
+                data_tbl_d = [cols_d]
+                for idx, row in pivot_d_show.iterrows():
+                    line = [str(idx)]
+                    for c in base_cols_present_d:
+                        v = row.get(c, "")
+                        if pd.isna(v):
+                            line.append("")
+                        else:
+                            line.append(str(v))
+                    data_tbl_d.append(line)
+
+                # larguras (igual glicemia)
+                ncols = len(cols_d)
+                total_w = 18.0 * cm
+                w_data = 3.0 * cm
+                w_rest = (total_w - w_data) / max(1, ncols - 1)
+                col_widths = [w_data] + [w_rest] * (ncols - 1)
+
+                table_d = Table(data_tbl_d, repeatRows=1, colWidths=col_widths)
+                table_d.setStyle(TableStyle([
                     ("BACKGROUND", (0,0), (-1,0), colors.lightgrey),
                     ("GRID", (0,0), (-1,-1), 0.25, colors.grey),
                     ("FONTSIZE", (0,0), (-1,-1), 7),
-                    ("VALIGN", (0,0), (-1,-1), "TOP"),
+                    ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+                    ("ALIGN", (0,0), (-1,0), "CENTER"),
+                    ("ALIGN", (0,1), (0,-1), "LEFT"),
+                    ("ALIGN", (1,1), (-1,-1), "CENTER"),
                     ("PADDING", (0,0), (-1,-1), 3),
                 ]))
-                story.append(tD)
+                story.append(table_d)
+                story.append(Spacer(1, 12))
         except Exception:
             story.append(Paragraph("Não foi possível montar a tabela de doses.", styles["Normal"]))
-
-        story.append(Spacer(1, 12))
+            story.append(Spacer(1, 12))
 
     # ===== Tendência por dia (últimos 30 dias) =====
     story.append(Paragraph("Tendência por dia (últimos 30 dias)", styles["Heading2"]))
