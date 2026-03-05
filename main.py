@@ -913,7 +913,7 @@ def gerar_pdf_trabalhando_no_dia(setor: str, ano: int, mes: int, dia: int, hist_
 
     # Mapa rápido chapa->(nome, subgrupo)
     meta = {}
-    for c in colaboradores:
+    for c in colaboradores_view:
         meta[str(c.get("Chapa", "")).strip()] = (str(c.get("Nome", "")).strip(), str(c.get("Subgrupo", "")).strip())
 
     rows = [["Chapa", "Nome", "Subgrupo", "Entrada", "Saída"]]
@@ -3401,6 +3401,26 @@ def page_app():
             with tgrid:
                 st.markdown("### 🧩 Folgas manuais em grade (por colaborador)")
                 st.caption("Marque/desmarque as folgas do mês. Isso cria/remove travas (overrides) de Status=Folga. Domingo é editável aqui (manual é soberano).")
+                # --- filtro de colaboradores (para facilitar)
+                show_all = st.checkbox("👥 Mostrar todos os colaboradores", value=True, key="grid_show_all")
+                chapas_opts = [str(c["Chapa"]) for c in colaboradores]
+                labels_opts = [f'{c["Nome"]} ({c["Chapa"]})' for c in colaboradores]
+                inv_label = {f'{c["Nome"]} ({c["Chapa"]})': str(c["Chapa"]) for c in colaboradores}
+
+                sel_chapas = []
+                if not show_all:
+                    sel_labels = st.multiselect(
+                        "Selecionar colaboradores para editar (somente os selecionados serão alterados):",
+                        options=labels_opts,
+                        default=st.session_state.get("grid_sel_labels", []),
+                        key="grid_sel_labels"
+                    )
+                    sel_chapas = [inv_label[l] for l in sel_labels if l in inv_label]
+                    if not sel_chapas:
+                        st.info("Selecione pelo menos 1 colaborador ou marque 'Mostrar todos'.")
+                # lista usada para montar a grade
+                colaboradores_view = colaboradores if show_all else [c for c in colaboradores if str(c["Chapa"]) in set(sel_chapas)]
+
 
                 qtd = calendar.monthrange(int(ano), int(mes))[1]
                 dias = list(range(1, qtd + 1))
