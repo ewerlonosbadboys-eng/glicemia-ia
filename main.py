@@ -85,20 +85,77 @@ def _detect_mes_ano_from_text(s: str):
     ano = int(m.group(2))
     return ano, mes
 
+def _normalize_chapa(chapa_raw: str | None) -> str | None:
+    if not chapa_raw:
+        return None
+    s = str(chapa_raw).strip()
+    # já no formato 00.00000
+    m = re.search(r"\b(\d{2}\.\d{5})\b", s)
+    if m:
+        return m.group(1)
+    # aceita 3.4 / 3.5 / 2.4 etc (ex.: 020.1906)
+    m = re.search(r"\b(\d{2,3})\.(\d{4,5})\b", s)
+    if m:
+        left = m.group(1)
+        right = m.group(2)
+        digits = re.sub(r"\D", "", left + right)
+    else:
+        digits = re.sub(r"\D", "", s)
+
+    if not digits:
+        return None
+
+    # tenta normalizar para 7 dígitos: 2 + 5
+    if len(digits) >= 7:
+        digits = digits[:7]
+        return f"{digits[:2]}.{digits[2:7]}"
+    if len(digits) == 6:
+        # 2 + 4 => pad na esquerda do bloco direito
+        return f"{digits[:2]}.0{digits[2:6]}"
+    if len(digits) == 5:
+        return f"{digits[:2]}.00{digits[2:5]}"
+    return None
+
+
 def _split_employee_blocks_ponto_new(s: str):
-    pat = re.compile(r"\n\s*([A-ZÁÉÍÓÚÃÕÇ ]{8,}?)(?:\s*\(([^\)]+)\))?\s*\n\s*M[eê]s\s*:", flags=re.IGNORECASE)
-    matches = list(pat.finditer(s))
+    """
+    Parser robusto para o relatório ESCALA_PONTO_NEW:
+    - Aceita 'NOME ... Mês:' na MESMA linha
+    - Aceita 'NOME (CHAPA) Mês:' e também chapa em outras partes do bloco
+    """
+    # garante que 'Mês:' comece um marcador claro
+    # (alguns extratores removem quebras)
+    t = s
+
+    # 1) localizar cabeçalhos de funcionário
+    # captura nome em caixa alta e opcional '(...)' antes de 'Mês:'
+    pat = re.compile(
+        r"(?i)(?m)(^|\n)\s*([A-ZÁÉÍÓÚÃÕÇ ]{8,}?)(?:\s*\(([^\)]+)\))?\s+M[eê]s\s*:",
+    )
+    matches = list(pat.finditer(t))
     out = []
     for i, m in enumerate(matches):
         start = m.start()
-        end = matches[i+1].start() if i+1 < len(matches) else len(s)
-        nome = (m.group(1) or "").strip()
-        chapa_raw = (m.group(2) or "").strip()
-        chapa = chapa_raw
-        block = s[start:end]
+        end = matches[i+1].start() if i+1 < len(matches) else len(t)
+        nome = (m.group(2) or "").strip()
+        chapa_raw = (m.group(3) or "").strip()
+        block = t[start:end]
+
+        # 2) tenta extrair chapa de QUALQUER lugar do bloco
+        chapa = _normalize_chapa(chapa_raw)
+        if not chapa:
+            # procurar qualquer id tipo 02.01447 no bloco
+            mm = re.search(r"\b\d{2}\.\d{5}\b", block)
+            if mm:
+                chapa = mm.group(0)
+            else:
+                # procurar formato alternativo e normalizar
+                mm = re.search(r"\b\d{2,3}\.\d{4,5}\b", block)
+                if mm:
+                    chapa = _normalize_chapa(mm.group(0))
+
         out.append({"nome": nome, "chapa_raw": chapa_raw, "chapa": chapa, "texto": block})
     return out
-
 def _extract_entrada_tokens(block_text: str, ndays: int):
     t = _norm_pdf_text(block_text)
     m = re.search(r"\bEntrada\b\s+(.*?)\s+\bSa[ií]da\s+Refei[cç][aã]o\b", t, flags=re.IGNORECASE | re.DOTALL)
@@ -130,6 +187,57 @@ def _group_consecutive_days(days: list[int]) -> list[tuple[int,int]]:
             start = prev = d
     ranges.append((start, prev))
     return ranges
+
+def _merge_placeholder_chapa_if_any(setor: str, nome: str, chapa_real: str, ano: int, mes: int) -> None:
+    """
+    Se existir um colaborador no banco com o MESMO nome e chapa "PDF-xxxxxx" (placeholder),
+    migra overrides/ferias para a chapa real e remove o placeholder.
+    Isso corrige casos em que uma importação anterior criou chapas falsas.
+    """
+    try:
+        con = db_conn()
+        cur = con.cursor()
+        nome_norm = (nome or "").strip().upper()
+
+        cur.execute(
+            "SELECT chapa, subgrupo, entrada, folga_sabado FROM colaboradores "
+            "WHERE setor=? AND UPPER(nome)=? AND (chapa LIKE 'PDF-%' OR chapa LIKE 'PDF_%')",
+            (setor, nome_norm),
+        )
+        rows = cur.fetchall() or []
+        if not rows:
+            con.close()
+            return
+
+        for chapa_fake, subg, ent, fs in rows:
+            if not chapa_fake or str(chapa_fake).strip() == chapa_real:
+                continue
+
+            # Migra overrides do mês (se existirem) para chapa_real
+            cur.execute(
+                "UPDATE OR IGNORE overrides SET chapa=? "
+                "WHERE setor=? AND ano=? AND mes=? AND chapa=?",
+                (chapa_real, setor, int(ano), int(mes), chapa_fake),
+            )
+
+            # Migra férias
+            cur.execute(
+                "UPDATE ferias SET chapa=? WHERE setor=? AND chapa=?",
+                (chapa_real, setor, chapa_fake),
+            )
+
+            # Remove colaborador placeholder (mantendo os dados no novo, via upsert depois)
+            cur.execute("DELETE FROM colaboradores WHERE setor=? AND chapa=?", (setor, chapa_fake))
+
+        con.commit()
+        con.close()
+    except Exception:
+        try:
+            con.close()
+        except Exception:
+            pass
+        return
+
 
 def _apply_pdf_import_to_db(
     setor_destino: str,
@@ -165,6 +273,7 @@ def _apply_pdf_import_to_db(
             continue
 
         if criar_colabs:
+            _merge_placeholder_chapa_if_any(setor_destino, nome, chapa, ano, mes)
             upsert_colaborador_nome(setor_destino, chapa, nome)
 
         ferias_days = []
@@ -225,6 +334,9 @@ def _parse_escala_ponto_new_pdf_text(extracted_text: str):
     for b in blocks:
         nome = b["nome"]
         chapa = b["chapa"]
+
+        if not chapa:
+            erros.append(f"Funcionário {nome}: não consegui identificar a CHAPA no PDF (não vou inventar).")
         tokens = _extract_entrada_tokens(b["texto"], ndays)
         if len(tokens) != ndays:
             erros.append(f"Funcionário {nome}: esperado {ndays} valores de Entrada, li {len(tokens)}.")
