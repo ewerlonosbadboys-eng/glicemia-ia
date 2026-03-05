@@ -4419,7 +4419,7 @@ def page_app():
                         st.rerun()
 
     with abas[4]:
-        sub_imp1, sub_imp2, sub_imp3 = st.tabs(["📊 Excel modelo", "🗓️ Quem trabalha no dia", "🖨️ Imprimir escala parede"])
+        sub_imp1, sub_imp2, sub_imp3, sub_imp4 = st.tabs(["📊 Excel modelo", "🗓️ Quem trabalha no dia", "📅 Escala", "🖨️ Imprimir escala parede"])
         with sub_imp1:
             st.subheader("📊 Excel modelo RH (separado por subgrupo)")
             ano = int(st.session_state["cfg_ano"])
@@ -4692,6 +4692,7 @@ def page_app():
                 ]
                 mapa_idx = {opcoes[i]: colabs_filtrados[i] for i in range(len(opcoes))}
         with sub_imp3:
+            st.subheader("📅 Escala")
             st.markdown("---")
             st.markdown("### 🏖️ Férias do mês (PDF)")
             cfx1, cfx2 = st.columns([1, 2])
@@ -4713,6 +4714,8 @@ def page_app():
                     use_container_width=True,
                     key="pdf_fer_dl"
                 )
+        with sub_imp4:
+            st.subheader("🖨️ Imprimir escala parede")
             st.markdown("### 👥 Colaboradores")
             sel = st.multiselect(
                 "Selecione (se vazio, imprime TODOS do filtro):",
@@ -4750,6 +4753,7 @@ def page_app():
                             mime="application/pdf",
                             key="pdf_down"
                         )
+
 
     # ------------------------------------------------------
     # ABA 6: Admin (somente ADMIN)
