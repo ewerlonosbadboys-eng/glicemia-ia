@@ -3677,7 +3677,7 @@ def page_app():
         if not colaboradores:
             st.warning("Cadastre colaboradores.")
         else:
-            b1, b2, _ = st.columns([1, 1, 6])
+            b1, b2, b3, _ = st.columns([1, 1, 1, 5])
             if b1.button("🚀 Gerar agora (respeita ajustes)", use_container_width=True, key="gen_btn"):
                 st.session_state["last_seed"] = int(seed)
                 ok = _regenerar_mes_inteiro(setor, int(ano), int(mes), seed=int(seed), respeitar_ajustes=True)
@@ -3688,6 +3688,16 @@ def page_app():
                 st.rerun()
 
             if b2.button("🔄 Recarregar do banco", use_container_width=True, key="gen_reload_btn"):
+                st.rerun()
+
+            # 🧹 Gerar do zero: ignora travas/ajustes (recalcula o mês totalmente)
+            if b3.button("🧹 Gerar do zero (ignorar ajustes)", use_container_width=True, key="gen_zero_btn"):
+                st.session_state["last_seed"] = int(seed)
+                ok = _regenerar_mes_inteiro(setor, int(ano), int(mes), seed=int(seed), respeitar_ajustes=False)
+                if ok:
+                    st.success("Escala gerada do zero (ajustes ignorados)!")
+                else:
+                    st.warning("Sem colaboradores.")
                 st.rerun()
 
             hist_db = load_escala_mes_db(setor, int(ano), int(mes))
