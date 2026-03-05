@@ -4684,6 +4684,7 @@ def page_app():
                 data_fim = cols_dates[1].date_input("Dia final:", value=date(int(ano), int(mes), calendar.monthrange(int(ano), int(mes))[1]), key="pdf_dt_fim")
                 cols_dates[2].caption("Obs.: o PDF segue o modelo oficial do mês. Aqui o filtro é para escolher colaboradores/Seções como no sistema.")
 
+                st.markdown("### 👥 Colaboradores")
                 colabs_filtrados = _filtrar_colaboradores(colaboradores, secoes_sel, busca_txt)
 
                 opcoes = [
