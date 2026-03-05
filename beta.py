@@ -1513,16 +1513,16 @@ else:
                 st.success("Refeição salva!")
                 st.session_state["_nutri_clear_pending"] = True
                 st.rerun()
-with cbtn2:
+        with cbtn2:
             if st.button("🧹 Limpar seleção", use_container_width=True):
                 st.session_state["_nutri_clear_pending"] = True
                 st.rerun()
-st.markdown("### Últimas refeições")
+
+        st.markdown("### Últimas refeições")
         if dfn is None or dfn.empty:
             st.info("Sem refeições registradas ainda.")
         else:
             st.dataframe(dfn.tail(12), use_container_width=True)
-
         st.markdown("</div>", unsafe_allow_html=True)
 
     # ====== RECEITA ======
