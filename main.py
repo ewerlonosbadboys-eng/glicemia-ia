@@ -85,18 +85,39 @@ def _detect_mes_ano_from_text(s: str):
     return ano, mes
 
 def _split_employee_blocks_ponto_new(s: str):
-    pat = re.compile(r"\n\s*([A-ZÁÉÍÓÚÃÕÇ ]{8,}?)(?:\s*\(([^\)]+)\))?\s*\n\s*M[eê]s\s*:", flags=re.IGNORECASE)
+    """
+    Divide o texto do PDF em blocos por funcionário para o modelo ESCALA_PONTO_NEW.
+    Robusto para variações onde o PDF extrai "NOME ... Mês: 03/2026" na MESMA linha
+    (sem quebra de linha antes de 'Mês:').
+    """
+    s = _norm_pdf_text(s)
+
+    # Padrão principal: "NOME (CHAPA) Mês: MM/AAAA" (na mesma linha ou após espaços)
+    pat = re.compile(
+        r"(?:\n|^)\s*([A-ZÁÉÍÓÚÃÕÇ ]{8,}?)(?:\s*\(([0-9\.\-]+)\))?\s+M[eê]s\s*:\s*\d{2}/\d{4}",
+        flags=re.IGNORECASE
+    )
     matches = list(pat.finditer(s))
+
+    # Fallback: algumas extrações removem o \n; procura o marcador "Mês:" e captura o nome antes dele
+    if not matches:
+        pat2 = re.compile(
+            r"([A-ZÁÉÍÓÚÃÕÇ ]{8,}?)(?:\s*\(([0-9\.\-]+)\))?\s+M[eê]s\s*:\s*\d{2}/\d{4}",
+            flags=re.IGNORECASE
+        )
+        matches = list(pat2.finditer(s))
+
     out = []
     for i, m in enumerate(matches):
         start = m.start()
-        end = matches[i+1].start() if i+1 < len(matches) else len(s)
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(s)
         nome = (m.group(1) or "").strip()
         chapa_raw = (m.group(2) or "").strip()
         chapa = chapa_raw
         block = s[start:end]
         out.append({"nome": nome, "chapa_raw": chapa_raw, "chapa": chapa, "texto": block})
     return out
+
 
 def _extract_entrada_tokens(block_text: str, ndays: int):
     t = _norm_pdf_text(block_text)
@@ -336,7 +357,15 @@ def auto_backup_if_due():
 
 
 def restore_backup_from_bytes(data: bytes) -> None:
-    _ensure_backup_dir()
+   
+
+def list_setores() -> list:
+    """Alias compatível para UI antiga."""
+    try:
+        return listar_setores_db()
+    except Exception:
+        return ["ADMIN"]
+ _ensure_backup_dir()
     # safety backup
     try:
         create_backup_now(prefix="pre_restore")
@@ -357,12 +386,6 @@ def listar_setores_db() -> list:
     conn.close()
     base_set = {"ADMIN", "GERAL"}
     return sorted(list(base_set.union({(x or "").strip().upper() for x in rows if x})))
-
-# Compatibilidade: versões antigas chamavam list_setores()
-def list_setores() -> list:
-    return listar_setores_db()
-
-
 
 
 def criar_setor_db(nome: str) -> None:
