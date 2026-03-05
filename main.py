@@ -1368,11 +1368,20 @@ def colaborador_exists(setor: str, chapa: str) -> bool:
     con.close()
     return ok
 
-def create_colaborador(nome: str, setor: str, chapa: str):
+def create_colaborador(nome: str, setor: str, chapa: str, subgrupo: str = "", entrada: str = "06:00", folga_sabado: bool = False):
+    """
+    Cadastra colaborador com perfil completo (subgrupo, entrada padrão, permitir folga sábado).
+    Mantém compatibilidade com o restante do sistema.
+    """
     con = db_conn()
     cur = con.cursor()
-    cur.execute("INSERT OR IGNORE INTO colaboradores(nome, setor, chapa, criado_em) VALUES (?, ?, ?, ?)",
-                (nome, setor, chapa, datetime.now().isoformat()))
+    cur.execute(
+        """
+        INSERT OR IGNORE INTO colaboradores(nome, setor, chapa, subgrupo, entrada, folga_sabado, criado_em)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (nome, setor, chapa, subgrupo or "", (entrada or "06:00"), 1 if folga_sabado else 0, datetime.now().isoformat()),
+    )
     con.commit()
     con.close()
     try:
@@ -3237,6 +3246,19 @@ def page_app():
             c1, c2 = st.columns(2)
             nome_n = c1.text_input("Nome:", key="col_nome")
             chapa_n = c2.text_input("Chapa:", key="col_chapa")
+
+            c3, c4, c5 = st.columns([1.2, 1.0, 1.0])
+            sg_opts_new = [""] + list_subgrupos(setor)
+            subgrupo_n = c3.selectbox("Subgrupo:", sg_opts_new, index=0, key="col_subgrupo")
+
+            # Entrada: usar presets + permitir digitar um valor novo
+            ent_default = "06:00"
+            ent_opts = list(HORARIOS_ENTRADA_PRESET) if "HORARIOS_ENTRADA_PRESET" in globals() else ["06:00", "07:00", "09:00", "10:00", "12:40", "00:10"]
+            if ent_default not in ent_opts:
+                ent_opts = [ent_default] + ent_opts
+            entrada_n = c4.selectbox("Entrada:", ent_opts, index=ent_opts.index(ent_default), key="col_entrada")
+            folga_sab_n = c5.checkbox("Permitir folga sábado", value=False, key="col_folga_sab")
+
             submitted = st.form_submit_button("Cadastrar colaborador", use_container_width=True)
             if submitted:
                 if not nome_n or not chapa_n:
@@ -3244,7 +3266,14 @@ def page_app():
                 elif colaborador_exists(setor, chapa_n.strip()):
                     st.error("Já existe essa chapa.")
                 else:
-                    create_colaborador(nome_n.strip(), setor, chapa_n.strip())
+                    create_colaborador(
+                        nome_n.strip(),
+                        setor,
+                        chapa_n.strip(),
+                        subgrupo=subgrupo_n.strip(),
+                        entrada=entrada_n.strip(),
+                        folga_sabado=bool(folga_sab_n),
+                    )
                     st.success("Cadastrado!")
                     st.rerun()
 
