@@ -3025,8 +3025,7 @@ def page_login():
             rec2["nome"] = ""
         con.close()
 
-        st.caption("🔎 Você pode digitar em minúsculo (ex.: flv) — o sistema normaliza e encontra igual.")
-        kw = st.text_input("Buscar (setor / chapa / nome):", key="lg_kw").strip()
+        kw = (st.session_state.get("lg_kw","") or "").strip()
 
         # opções recentes
         recentes_opts = []
@@ -3075,6 +3074,9 @@ def page_login():
 
         chapa = st.text_input("Chapa:", value=st.session_state.get("lg_chapa",""), key="lg_chapa")
         senha = st.text_input("Senha:", type="password", key="lg_senha")
+
+        st.caption("🔎 Buscar (setor / chapa / nome) — pode digitar em minúsculo (ex.: flv).")
+        st.text_input("Buscar (setor / chapa / nome):", key="lg_kw")
 
         if st.button("Entrar", key="lg_btn"):
             u = verify_login(setor_norm, chapa.strip(), senha)
