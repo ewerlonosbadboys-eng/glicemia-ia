@@ -38,6 +38,7 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta, date
+import datetime as dt
 import io
 import random
 import calendar
@@ -85,7 +86,7 @@ def _detect_mes_ano_from_text(s: str):
     return ano, mes
 
 def _split_employee_blocks_ponto_new(s: str):
-    pat = re.compile(r"(?:^|\n)\s*([A-ZÁÉÍÓÚÃÕÇ][A-ZÁÉÍÓÚÃÕÇ ]{7,}?)(?:\s*\(([^\)]+)\))?\s+M[eê]s\s*:\s*\d{2}/\d{4}", flags=re.IGNORECASE | re.MULTILINE)
+    pat = re.compile(r"\n\s*([A-ZÁÉÍÓÚÃÕÇ ]{8,}?)(?:\s*\(([^\)]+)\))?\s*\n\s*M[eê]s\s*:", flags=re.IGNORECASE)
     matches = list(pat.finditer(s))
     out = []
     for i, m in enumerate(matches):
@@ -102,12 +103,9 @@ def _extract_entrada_tokens(block_text: str, ndays: int):
     t = _norm_pdf_text(block_text)
     m = re.search(r"\bEntrada\b\s+(.*?)\s+\bSa[ií]da\s+Refei[cç][aã]o\b", t, flags=re.IGNORECASE | re.DOTALL)
     if not m:
-        # fallback: sem acentos (alguns extratores removem)
-        m = re.search(r"\bEntrada\b\s+(.*?)\s+\bSaida\s+Refeicao\b", t, flags=re.IGNORECASE | re.DOTALL)
-    if not m:
-        return []
-    # fallback_saidasem_acento
-
+        m2 = re.search(r"\bEntrada\b\s+(.*?)(?:\n\s*Entrada\b|\n\s*Sa[ií]da\b)", t, flags=re.IGNORECASE | re.DOTALL)
+        if not m2:
+            return []
         region = m2.group(1)
     else:
         region = m.group(1)
@@ -363,11 +361,11 @@ def listar_setores_db() -> list:
 
 
 def list_setores() -> list:
-    """Alias de compatibilidade para UI/versões antigas."""
+    """Alias de compatibilidade: algumas telas chamam list_setores()."""
     try:
         return listar_setores_db()
     except Exception:
-        return ["ADMIN", "GERAL"]
+        return ["ADMIN"]
 
 
 def criar_setor_db(nome: str) -> None:
