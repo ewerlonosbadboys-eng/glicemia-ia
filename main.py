@@ -3393,7 +3393,7 @@ def page_app():
 
             tgrid, t2, t3, t4 = st.tabs([
                 "🧩 Folgas manuais em grade",
-                "📅 Trocar horário mês inteiro",
+                "🔁 Troca de horários",
                 "✅ Preferência por subgrupo",
                 "📌 Subgrupos (editável)"
             ])
@@ -3499,31 +3499,46 @@ def page_app():
                     st.rerun()
 
             with t2:
-                st.markdown("### 📅 Trocar horário por dias (formato grade)")
-                st.caption("Selecione 1 ou mais colaboradores e marque os dias (quadradinhos) para aplicar um horário específico. Por padrão, aplica só em dias de trabalho.")
+                st.markdown("### 🔁 Troca de horários (por dias)")
+                st.caption("Mesmo formato da grade de folgas: selecione colaboradores (ou marque para aplicar em todos) e marque os dias (quadradinhos) para aplicar um horário específico. Por padrão, aplica só em dias de trabalho.")
 
                 qtd2 = calendar.monthrange(int(ano), int(mes))[1]
                 dias2 = list(range(1, qtd2 + 1))
 
-                # --- seleção de colaboradores
+                # --- seleção de colaboradores (mesmo layout da grade de folgas)
                 chapas_opts = list(hist_db.keys())
-                # mostra chapa + nome (se existir)
-                def _label_ch(ch):
+
+                show_all_th = st.checkbox("👥 Aplicar para TODOS os colaboradores do setor", value=False, key="th_show_all")
+
+                labels_opts = []
+                inv_label = {}
+                for ch in chapas_opts:
                     nm = (colab_by.get(ch, {}) or {}).get("Nome", "")
-                    return f"{ch} — {nm}" if nm else ch
+                    lab = f"{nm} ({ch})" if nm else str(ch)
+                    labels_opts.append(lab)
+                    inv_label[lab] = ch
 
                 sel_labels = st.multiselect(
-                    "Colaboradores (pode marcar vários):",
-                    options=[_label_ch(ch) for ch in chapas_opts],
+                    "Selecionar colaboradores (se selecionar, aplica somente nesses):",
+                    options=labels_opts,
                     default=[],
                     key="th_sel_labels"
                 )
-                sel_chapas = []
-                inv_map = {_label_ch(ch): ch for ch in chapas_opts}
-                for lb in sel_labels:
-                    ch = inv_map.get(lb)
-                    if ch:
-                        sel_chapas.append(ch)
+                target_chapas = [inv_label[x] for x in sel_labels if x in inv_label]
+
+                # Regra:
+                # - Se selecionou alguém => aplica só nos selecionados
+                # - Se não selecionou ninguém e marcou 'TODOS' => aplica em todos
+                # - Se não selecionou ninguém e NÃO marcou 'TODOS' => não aplica (mostra aviso)
+                if target_chapas:
+                    target_chapas = target_chapas
+                    st.caption(f"Mostrando/aplicando para {len(target_chapas)} colaborador(es) selecionado(s).")
+                elif show_all_th:
+                    target_chapas = chapas_opts
+                    st.caption(f"Mostrando/aplicando para TODOS ({len(target_chapas)}) colaboradores do setor.")
+                else:
+                    target_chapas = []
+                    st.caption("Selecione pelo menos 1 colaborador OU marque 'Aplicar para TODOS'.")
 
                 c1, c2, c3, c4 = st.columns([1.2, 1.2, 1.2, 2.4])
                 with c1:
@@ -3557,7 +3572,7 @@ def page_app():
                 dias_marcados = [d for d in dias2 if st.session_state.get(f"th_d_{d}", False)]
 
                 if st.button("✅ Aplicar horário nos dias marcados", key="th_apply"):
-                    if not sel_chapas:
+                    if not target_chapas:
                         st.error("Selecione pelo menos 1 colaborador.")
                     elif not dias_marcados:
                         st.error("Marque pelo menos 1 dia.")
@@ -3568,7 +3583,7 @@ def page_app():
                         aplicados = 0
                         pulados = 0
 
-                        for ch2 in sel_chapas:
+                        for ch2 in target_chapas:
                             dfm = hist_db[ch2].copy()
 
                             # pega perfil atual
@@ -3616,9 +3631,9 @@ def page_app():
                         st.rerun()
 
                 # preview rápido (1 colaborador)
-                if sel_chapas:
+                if target_chapas:
                     st.markdown("### Prévia (primeiro colaborador selecionado)")
-                    st.dataframe(hist_db[sel_chapas[0]], use_container_width=True, height=420)
+                    st.dataframe(hist_db[target_chapas[0]], use_container_width=True, height=420)
 
 
             with t3:
