@@ -85,18 +85,43 @@ def _detect_mes_ano_from_text(s: str):
     return ano, mes
 
 def _split_employee_blocks_ponto_new(s: str):
-    pat = re.compile(r"\n\s*([A-ZÁÉÍÓÚÃÕÇ ]{8,}?)(?:\s*\(([^\)]+)\))?\s*\n\s*M[eê]s\s*:", flags=re.IGNORECASE)
-    matches = list(pat.finditer(s))
+    """
+    Modelo ESCALA_PONTO_NEW (Savegnago):
+    No texto extraído, normalmente o cabeçalho do colaborador vem na MESMA LINHA:
+      NOME COMPLETO (CHAPA) Mês: 03/2026 ...
+    ou:
+      NOME COMPLETO Mês: 03/2026 ...
+
+    Esta função é robusta a quebras/ausência de quebras de linha.
+    Retorna lista de dicts: {nome, chapa_raw, chapa, texto}
+    """
+    # Normaliza (mantém \n, mas remove espaços duplicados)
+    t = _norm_pdf_text(s)
+
+    # Captura nome (caps), optional (chapa), e o marcador "Mês:"
+    # Não exige que "Mês:" esteja em outra linha.
+    pat = re.compile(
+        r"(?m)^\s*([A-ZÁÉÍÓÚÃÕÇ ]{8,}?)\s*(?:\(([^)]+)\))?\s*M[eê]s\s*:\s*\d{2}/\d{4}",
+        flags=re.IGNORECASE
+    )
+    matches = list(pat.finditer(t))
     out = []
+
     for i, m in enumerate(matches):
         start = m.start()
-        end = matches[i+1].start() if i+1 < len(matches) else len(s)
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(t)
+
         nome = (m.group(1) or "").strip()
         chapa_raw = (m.group(2) or "").strip()
-        chapa = chapa_raw
-        block = s[start:end]
+
+        # Normaliza chapa: alguns PDFs trazem espaços
+        chapa = re.sub(r"\s+", "", chapa_raw)
+
+        block = t[start:end]
         out.append({"nome": nome, "chapa_raw": chapa_raw, "chapa": chapa, "texto": block})
+
     return out
+
 
 def _extract_entrada_tokens(block_text: str, ndays: int):
     t = _norm_pdf_text(block_text)
@@ -357,11 +382,6 @@ def listar_setores_db() -> list:
     conn.close()
     base_set = {"ADMIN", "GERAL"}
     return sorted(list(base_set.union({(x or "").strip().upper() for x in rows if x})))
-
-
-def list_setores():
-    """Compat: alguns trechos do app usam list_setores()."""
-    return listar_setores_db()
 
 
 def criar_setor_db(nome: str) -> None:
