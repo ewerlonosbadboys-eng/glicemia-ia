@@ -2902,7 +2902,7 @@ def _counts_folgas_day_and_hour(hist_by_chapa: dict, colab_by_chapa: dict, chapa
         df = hist_by_chapa[ch]
         bucket = colab_by_chapa[ch].get("Entrada", "06:00")
         for i in idxs_semana:
-            if df_ref_cur.loc[i, "Dia"] == "dom":
+            if df_ref.loc[i, "Dia"] == "dom":
                 continue
             if df.loc[i, "Status"] == "Folga":
                 counts_day[i] += 1
