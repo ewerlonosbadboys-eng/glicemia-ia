@@ -1172,6 +1172,12 @@ def enforce_no_consecutive_folga(df: pd.DataFrame, locked_status: set[int] | Non
 def db_conn():
     return sqlite3.connect(DB_PATH, check_same_thread=False)
 
+def _norm_setor(v: str) -> str:
+    return str(v or "").strip().upper()
+
+def _norm_chapa(v: str) -> str:
+    return str(v or "").strip()
+
 def hash_password(password: str, salt: str) -> str:
     return hashlib.sha256((salt + password).encode("utf-8")).hexdigest()
 
@@ -1361,114 +1367,116 @@ def is_past_competencia(ano: int, mes: int) -> bool:
 # =========================================================
 # AUTH
 # =========================================================
-def _norm_setor_login(setor: str) -> str:
-    return (setor or "").strip().upper()
-
-def _norm_chapa_login(chapa: str) -> str:
-    return (chapa or "").strip()
-
-def list_setores_login() -> list[str]:
-    """
-    Lista de setores para a tela de login.
-    Junta setores cadastrados + setores vindos dos usuários + colaboradores.
-    Assim o setor FLV aparece mesmo se a tabela `setores` estiver incompleta.
-    """
-    con = db_conn()
-    cur = con.cursor()
-    nomes = set()
-    queries = [
-        "SELECT nome FROM setores",
-        "SELECT DISTINCT setor AS nome FROM usuarios_sistema",
-        "SELECT DISTINCT setor AS nome FROM colaboradores",
-    ]
-    for q in queries:
-        try:
-            cur.execute(q)
-            for (nome,) in cur.fetchall():
-                nome = _norm_setor_login(nome)
-                if nome:
-                    nomes.add(nome)
-        except Exception:
-            pass
-    con.close()
-    nomes.update({"ADMIN", "GERAL", "GESTAO"})
-    return sorted(nomes)
-
 def system_user_exists(setor: str, chapa: str) -> bool:
-    setor = _norm_setor_login(setor)
-    chapa = _norm_chapa_login(chapa)
+    setor = _norm_setor(setor)
+    chapa = _norm_chapa(chapa)
     con = db_conn()
     cur = con.cursor()
-    cur.execute(
-        """
-        SELECT 1
-        FROM usuarios_sistema
-        WHERE UPPER(TRIM(COALESCE(setor,''))) = ?
-          AND TRIM(COALESCE(chapa,'')) = ?
-        LIMIT 1
-        """,
-        (setor, chapa),
-    )
+    cur.execute("SELECT 1 FROM usuarios_sistema WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=? LIMIT 1", (setor, chapa))
     ok = cur.fetchone() is not None
     con.close()
     return ok
 
+def colaborador_lookup(setor: str, chapa: str):
+    setor = _norm_setor(setor)
+    chapa = _norm_chapa(chapa)
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute(
+        """
+        SELECT nome, setor, chapa
+        FROM colaboradores
+        WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?
+        LIMIT 1
+        """,
+        (setor, chapa),
+    )
+    row = cur.fetchone()
+    con.close()
+    return row
+
 def create_system_user(nome: str, setor: str, chapa: str, senha: str, is_lider: int = 0, is_admin: int = 0):
-    nome = (nome or "").strip()
-    setor = _norm_setor_login(setor)
-    chapa = _norm_chapa_login(chapa)
+    nome = (nome or "").strip() or _norm_chapa(chapa)
+    setor = _norm_setor(setor)
+    chapa = _norm_chapa(chapa)
     salt = secrets.token_hex(16)
     senha_hash = hash_password(senha, salt)
     con = db_conn()
     cur = con.cursor()
     cur.execute("INSERT OR IGNORE INTO setores(nome) VALUES (?)", (setor,))
-    cur.execute("""
-        INSERT INTO usuarios_sistema(nome, setor, chapa, senha_hash, salt, is_admin, is_lider, criado_em)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (nome, setor, chapa, senha_hash, salt, int(is_admin), int(is_lider), datetime.now().isoformat()))
+    cur.execute(
+        """
+        SELECT id FROM usuarios_sistema
+        WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?
+        LIMIT 1
+        """,
+        (setor, chapa),
+    )
+    row = cur.fetchone()
+    if row:
+        cur.execute(
+            """
+            UPDATE usuarios_sistema
+            SET nome=?, setor=?, chapa=?, senha_hash=?, salt=?, is_admin=?, is_lider=?
+            WHERE id=?
+            """,
+            (nome, setor, chapa, senha_hash, salt, int(is_admin), int(is_lider), int(row[0])),
+        )
+    else:
+        cur.execute(
+            """
+            INSERT INTO usuarios_sistema(nome, setor, chapa, senha_hash, salt, is_admin, is_lider, criado_em)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (nome, setor, chapa, senha_hash, salt, int(is_admin), int(is_lider), datetime.now().isoformat()),
+        )
     con.commit()
     con.close()
 
+def recover_system_user_from_colaborador(setor: str, chapa: str, senha: str, is_lider: int = 0, is_admin: int = 0):
+    row = colaborador_lookup(setor, chapa)
+    if not row:
+        return False
+    nome, setor_db, chapa_db = row
+    create_system_user(nome or chapa_db, setor_db, chapa_db, senha, is_lider=is_lider, is_admin=is_admin)
+    return True
+
 def verify_login(setor: str, chapa: str, senha: str):
-    setor = _norm_setor_login(setor)
-    chapa = _norm_chapa_login(chapa)
+    setor = _norm_setor(setor)
+    chapa = _norm_chapa(chapa)
     con = db_conn()
     cur = con.cursor()
-    cur.execute("""
-        SELECT nome, setor, chapa, senha_hash, salt, is_admin, is_lider
+    cur.execute(
+        """
+        SELECT nome, senha_hash, salt, is_admin, is_lider, setor, chapa
         FROM usuarios_sistema
-        WHERE UPPER(TRIM(COALESCE(setor,''))) = ?
-          AND TRIM(COALESCE(chapa,'')) = ?
+        WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?
         LIMIT 1
-    """, (setor, chapa))
+        """,
+        (setor, chapa),
+    )
     row = cur.fetchone()
     con.close()
     if not row:
         return None
-    nome, setor_db, chapa_db, senha_hash, salt, is_admin, is_lider = row
+    nome, senha_hash, salt, is_admin, is_lider, setor_db, chapa_db = row
     if hash_password(senha, salt) == senha_hash:
         return {
             "nome": nome,
-            "setor": _norm_setor_login(setor_db),
-            "chapa": _norm_chapa_login(chapa_db),
+            "setor": _norm_setor(setor_db),
+            "chapa": _norm_chapa(chapa_db),
             "is_admin": bool(is_admin),
             "is_lider": bool(is_lider),
         }
     return None
 
 def is_lider_chapa(setor: str, chapa_lider: str) -> bool:
-    setor = _norm_setor_login(setor)
-    chapa_lider = _norm_chapa_login(chapa_lider)
+    setor = _norm_setor(setor)
+    chapa_lider = _norm_chapa(chapa_lider)
     con = db_conn()
     cur = con.cursor()
     cur.execute(
-        """
-        SELECT is_lider
-        FROM usuarios_sistema
-        WHERE UPPER(TRIM(COALESCE(setor,''))) = ?
-          AND TRIM(COALESCE(chapa,'')) = ?
-        LIMIT 1
-        """,
+        "SELECT is_lider FROM usuarios_sistema WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=? LIMIT 1",
         (setor, chapa_lider),
     )
     row = cur.fetchone()
@@ -1476,24 +1484,18 @@ def is_lider_chapa(setor: str, chapa_lider: str) -> bool:
     return bool(row and row[0] == 1)
 
 def update_password(setor: str, chapa: str, nova_senha: str):
-    setor = _norm_setor_login(setor)
-    chapa = _norm_chapa_login(chapa)
+    setor = _norm_setor(setor)
+    chapa = _norm_chapa(chapa)
     salt = secrets.token_hex(16)
     senha_hash = hash_password(nova_senha, salt)
     con = db_conn()
     cur = con.cursor()
     cur.execute(
-        """
-        UPDATE usuarios_sistema
-        SET senha_hash=?, salt=?
-        WHERE UPPER(TRIM(COALESCE(setor,''))) = ?
-          AND TRIM(COALESCE(chapa,'')) = ?
-        """,
+        "UPDATE usuarios_sistema SET senha_hash=?, salt=? WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?",
         (senha_hash, salt, setor, chapa),
     )
     con.commit()
     con.close()
-
 # =========================================================
 # ADMIN
 # =========================================================
@@ -1538,8 +1540,8 @@ def create_colaborador(nome: str, setor: str, chapa: str, subgrupo: str = "", en
     Mantém compatibilidade: parâmetros adicionais são opcionais.
     """
     nome = (nome or "").strip()
-    setor = (setor or "").strip()
-    chapa = (chapa or "").strip()
+    setor = _norm_setor(setor)
+    chapa = _norm_chapa(chapa)
     subgrupo = (subgrupo or "").strip()
     entrada = (entrada or "06:00").strip()
 
@@ -3762,6 +3764,7 @@ if "last_seed" not in st.session_state:
 
 
 db_init()
+auto_backup_if_due()
 
 def page_login():
     st.title("🔐 Login por Setor (Usuário / Líder / Admin)")
@@ -3769,7 +3772,13 @@ def page_login():
 
     with tab_login:
         con = db_conn()
-        setores = list_setores_login()
+        setores_df = pd.concat([
+            pd.read_sql_query("SELECT nome AS setor FROM setores", con),
+            pd.read_sql_query("SELECT DISTINCT setor FROM usuarios_sistema", con),
+            pd.read_sql_query("SELECT DISTINCT setor FROM colaboradores", con),
+        ], ignore_index=True)
+        setores = sorted({_norm_setor(x) for x in setores_df["setor"].dropna().tolist() if str(x).strip()})
+        con.close()
 
         # --- Login (melhorado): recentes + busca (case-insensitive) + salvar setor/chapa
         con = db_conn()
@@ -3864,7 +3873,10 @@ def page_login():
                 st.success("Login efetuado!")
                 st.rerun()
             else:
-                st.error("Usuário ou senha inválidos.")
+                if colaborador_lookup(setor_norm, chapa.strip()) and not system_user_exists(setor_norm, chapa.strip()):
+                    st.error("Este colaborador existe, mas o login do sistema foi apagado ou ainda não foi criado. Peça para o ADMIN recuperar o usuário na aba Admin.")
+                else:
+                    st.error("Usuário ou senha inválidos.")
 
         st.caption("Admin padrão: setor ADMIN | chapa admin | senha 123")
 
@@ -3872,7 +3884,7 @@ def page_login():
         st.subheader("Cadastrar usuário do sistema (com senha)")
         st.info("⚠️ Somente usuário do sistema tem senha. Colaborador é SEM senha.")
         nome = st.text_input("Nome:", key="cl_nome")
-        setor = st.text_input("Setor:", key="cl_setor").strip().upper()
+        setor = _norm_setor(st.text_input("Setor:", key="cl_setor"))
         chapa = st.text_input("Chapa:", key="cl_chapa")
         senha = st.text_input("Senha:", type="password", key="cl_senha")
         senha2 = st.text_input("Confirmar senha:", type="password", key="cl_senha2")
@@ -3887,14 +3899,20 @@ def page_login():
             elif system_user_exists(setor, chapa):
                 st.error("Já existe.")
             else:
-                create_system_user(nome.strip(), setor, chapa.strip(), senha, is_lider=1 if is_lider else 0, is_admin=1 if is_admin else 0)
+                create_system_user(nome.strip(), setor, _norm_chapa(chapa), senha, is_lider=1 if is_lider else 0, is_admin=1 if is_admin else 0)
                 st.success("Criado! Faça login.")
                 st.rerun()
 
     with tab_esqueci:
         st.subheader("Redefinir senha (com chapa do líder do setor)")
         con = db_conn()
-        setores = list_setores_login()
+        setores_df = pd.concat([
+            pd.read_sql_query("SELECT nome AS setor FROM setores", con),
+            pd.read_sql_query("SELECT DISTINCT setor FROM usuarios_sistema", con),
+            pd.read_sql_query("SELECT DISTINCT setor FROM colaboradores", con),
+        ], ignore_index=True)
+        setores = sorted({_norm_setor(x) for x in setores_df["setor"].dropna().tolist() if str(x).strip()})
+        con.close()
 
         setor = st.selectbox("Setor:", setores, key="fp_setor")
         chapa = st.text_input("Sua chapa (usuário do sistema):", key="fp_chapa")
@@ -5375,6 +5393,41 @@ def page_app():
                         st.rerun()
 
             st.markdown("---")
+            st.subheader("♻️ Recuperar usuário do sistema")
+            st.caption("Use esta área quando o colaborador existe, mas sumiu do login.")
+            con = db_conn()
+            df_colabs_adm = pd.read_sql_query("SELECT nome, setor, chapa FROM colaboradores ORDER BY setor, nome", con)
+            con.close()
+            if df_colabs_adm.empty:
+                st.info("Nenhum colaborador cadastrado para recuperar.")
+            else:
+                colr1, colr2, colr3 = st.columns([1.1, 1.2, 1.0])
+                with colr1:
+                    setores_rec = sorted({_norm_setor(x) for x in df_colabs_adm["setor"].dropna().tolist() if str(x).strip()})
+                    setor_rec = st.selectbox("Setor do colaborador", setores_rec, key="adm_rec_setor")
+                df_setor_rec = df_colabs_adm[df_colabs_adm["setor"].astype(str).str.strip().str.upper() == _norm_setor(setor_rec)].copy()
+                opts_rec = [f"{str(r['nome']).strip()} ({str(r['chapa']).strip()})" for _, r in df_setor_rec.iterrows()]
+                with colr2:
+                    pick_rec = st.selectbox("Colaborador", opts_rec, key="adm_rec_pick") if opts_rec else None
+                with colr3:
+                    senha_rec = st.text_input("Nova senha do usuário", type="password", key="adm_rec_pwd")
+                if st.button("Recuperar / recriar usuário", key="adm_rec_btn"):
+                    if not pick_rec or not senha_rec:
+                        st.error("Selecione o colaborador e digite a senha.")
+                    else:
+                        chapa_rec = pick_rec.rsplit("(", 1)[-1].replace(")", "").strip()
+                        ok = recover_system_user_from_colaborador(setor_rec, chapa_rec, senha_rec)
+                        if ok:
+                            try:
+                                st.cache_data.clear()
+                            except Exception:
+                                pass
+                            st.success("Usuário recuperado com sucesso.")
+                            st.rerun()
+                        else:
+                            st.error("Não encontrei esse colaborador para recuperar.")
+
+            st.markdown("---")
             st.subheader("🗄️ Backup / Restauração (escala.db)")
 
             c1, c2 = st.columns([1, 2])
@@ -5561,6 +5614,7 @@ def page_app():
 # MAIN
 # =========================================================
 db_init()
+auto_backup_if_due()
 
 if st.session_state["auth"] is None:
     page_login()
