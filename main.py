@@ -2197,6 +2197,54 @@ def load_escala_mes_db(setor: str, ano: int, mes: int):
         })
     return {ch: pd.DataFrame(items) for ch, items in hist.items()}
 
+
+def build_df_ref_prev_mes(setor: str, ano: int, mes: int) -> pd.DataFrame | None:
+    """Carrega o mês anterior do SQLite e devolve um DataFrame (Data, Chapa, Status) para semana contínua."""
+    try:
+        ano_prev = int(ano)
+        mes_prev = int(mes) - 1
+        if mes_prev <= 0:
+            mes_prev = 12
+            ano_prev -= 1
+
+        prev_obj = load_escala_mes_db(setor, ano_prev, mes_prev)
+        if not prev_obj:
+            return None
+
+        if isinstance(prev_obj, dict):
+            parts = []
+            for ch, dfp in prev_obj.items():
+                if dfp is None or getattr(dfp, "empty", True):
+                    continue
+                dfx = dfp.copy()
+                dfx["Chapa"] = str(ch)
+                if "Data" not in dfx.columns and "data" in dfx.columns:
+                    dfx["Data"] = dfx["data"]
+                if "Status" not in dfx.columns and "status" in dfx.columns:
+                    dfx["Status"] = dfx["status"]
+                parts.append(dfx[["Data", "Chapa", "Status"]].copy())
+            if parts:
+                out = pd.concat(parts, ignore_index=True)
+                out["Data"] = pd.to_datetime(out["Data"], errors="coerce")
+                return out
+            return None
+
+        if isinstance(prev_obj, pd.DataFrame) and (not prev_obj.empty):
+            out = prev_obj.copy()
+            if "Chapa" not in out.columns:
+                out["Chapa"] = out.get("chapa", "")
+            if "Data" not in out.columns:
+                out["Data"] = out.get("data", None)
+            if "Status" not in out.columns:
+                out["Status"] = out.get("status", None)
+            out = out[["Data", "Chapa", "Status"]].copy()
+            out["Data"] = pd.to_datetime(out["Data"], errors="coerce")
+            return out
+
+        return None
+    except Exception:
+        return None
+
 def apply_overrides_to_hist(setor: str, ano: int, mes: int, hist_db: dict[str, pd.DataFrame]):
     """
     Aplica overrides no histórico carregado do banco.
@@ -3003,6 +3051,14 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
     datas = _dias_mes(ano, mes)
     weeks = _all_weeks_seg_dom(datas)
     df_ref = pd.DataFrame({"Data": datas, "Dia": [D_PT[d.day_name()] for d in datas]})
+    # df_prev_ref: mês anterior (para semana contínua na virada)
+    df_prev_ref = None
+    try:
+        if not _past:
+            df_prev_ref = build_df_ref_prev_mes(setor, int(ano), int(mes))
+    except Exception:
+        df_prev_ref = None
+
     # Meses passados: não aplicar continuidade/travamentos do mês anterior.
     _past = is_past_competencia(ano, mes)
     estado_prev = {} if _past else load_estado_prev(setor, ano, mes)
@@ -3185,7 +3241,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
         enforce_no_consecutive_folga(df, locked_status=locked)
 
         # 2) Metas semanais podem REMOVER folga => pode criar >5 de novo
-        enforce_weekly_folga_targets(df, df_ref=df_ref, pode_folgar_sabado=pode_sab, locked_status=locked)
+        enforce_weekly_folga_targets(df, df_ref=df_prev_ref, pode_folgar_sabado=pode_sab, locked_status=locked)
 
         # 3) Reforça novamente o limite de 5 depois das metas semanais
         enforce_max_5_consecutive_work(
@@ -3233,7 +3289,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
         )
 
         # 2) Regra semanal SEG→DOM (remove excesso e completa falta)
-        enforce_weekly_folga_targets(df, df_ref=df_ref, pode_folgar_sabado=pode_sab, locked_status=locked)
+        enforce_weekly_folga_targets(df, df_ref=df_prev_ref, pode_folgar_sabado=pode_sab, locked_status=locked)
 
         # 3) Reforça 5 dias novamente (regra semanal pode remover folga e criar sequência >5)
         enforce_max_5_consecutive_work(
@@ -3243,7 +3299,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
         )
 
         # 4) Regra semanal novamente (se o max_5 criou folga extra, normaliza para alvo)
-        enforce_weekly_folga_targets(df, df_ref=df_ref, pode_folgar_sabado=pode_sab, locked_status=locked)
+        enforce_weekly_folga_targets(df, df_ref=df_prev_ref, pode_folgar_sabado=pode_sab, locked_status=locked)
 
         # 5) Proíbe folga consecutiva automática (DOM+SEG etc.)
         enforce_no_consecutive_folga(df, locked_status=locked)
@@ -3270,7 +3326,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
                 base_first = None
         enforce_sundays_1x1_for_employee(df, ent, locked_status=locked, base_first=base_first)
         enforce_no_consecutive_folga(df, locked_status=locked)
-        enforce_weekly_folga_targets(df, df_ref=df_ref, pode_folgar_sabado=bool(colab_by_chapa[ch].get('Folga_Sab', False)), locked_status=locked)
+        enforce_weekly_folga_targets(df, df_ref=df_prev_ref, pode_folgar_sabado=bool(colab_by_chapa[ch].get('Folga_Sab', False)), locked_status=locked)
 
         # ✅ garante 5 dias depois do weekly (porque weekly pode remover folga)
         enforce_max_5_consecutive_work(
@@ -3325,7 +3381,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
         pass
 
     try:
-        df = enforce_weekly_folga_targets(df, df_ref=df_ref, pode_folgar_sabado=pode_sab, locked_status=locked)
+        df = enforce_weekly_folga_targets(df, df_ref=df_prev_ref, pode_folgar_sabado=pode_sab, locked_status=locked)
     except Exception:
         pass
 
@@ -3335,17 +3391,17 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
         pass
 
     try:
-        df = enforce_weekly_folga_targets(df, df_ref=df_ref, pode_folgar_sabado=pode_sab, locked_status=locked)
+        df = enforce_weekly_folga_targets(df, df_ref=df_prev_ref, pode_folgar_sabado=pode_sab, locked_status=locked)
     except Exception:
         pass
 
     try:
-        df = _cap_total_folgas_por_semana(df, target_total=2, locked_status=locked, df_ref=df_ref)
+        df = _cap_total_folgas_por_semana(df, target_total=2, locked_status=locked, df_ref=df_prev_ref)
     except Exception:
         pass
 
     try:
-        df = enforce_weekly_folga_targets(df, df_ref=df_ref, pode_folgar_sabado=pode_sab, locked_status=locked)
+        df = enforce_weekly_folga_targets(df, df_ref=df_prev_ref, pode_folgar_sabado=pode_sab, locked_status=locked)
     except Exception:
         pass
 
@@ -3365,7 +3421,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
     # - Cap final: nunca deixa 3 folgas na mesma semana (exceto se travado)
     # ============================
     try:
-        df = enforce_weekly_folga_targets(df, df_ref=df_ref, pode_folgar_sabado=pode_sab, locked_status=locked)
+        df = enforce_weekly_folga_targets(df, df_ref=df_prev_ref, pode_folgar_sabado=pode_sab, locked_status=locked)
     except Exception:
         try:
             df = enforce_weekly_folga_targets(df)
@@ -3378,7 +3434,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
         pass
 
     try:
-        df = enforce_weekly_folga_targets(df, df_ref=df_ref, pode_folgar_sabado=pode_sab, locked_status=locked)
+        df = enforce_weekly_folga_targets(df, df_ref=df_prev_ref, pode_folgar_sabado=pode_sab, locked_status=locked)
     except Exception:
         try:
             df = enforce_weekly_folga_targets(df)
@@ -3386,7 +3442,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
             pass
 
     try:
-        df = _cap_total_folgas_por_semana(df, target_total=2, locked_status=locked, df_ref=df_ref)
+        df = _cap_total_folgas_por_semana(df, target_total=2, locked_status=locked, df_ref=df_prev_ref)
     except Exception:
         try:
             df = _cap_total_folgas_por_semana(df, target_total=2)
