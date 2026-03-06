@@ -3832,9 +3832,28 @@ def _regenerar_mes_inteiro(setor: str, ano: int, mes: int, seed: int = 0, respei
             mes_prev = 12
             ano_prev -= 1
 
-        prev_df = load_escala_mes_db(setor, ano_prev, mes_prev) if "load_escala_mes_db" in globals() else None
-        if prev_df is not None and hasattr(prev_df, "empty") and (not prev_df.empty):
-            prev = prev_df.copy()
+        prev_obj = load_escala_mes_db(setor, ano_prev, mes_prev) if "load_escala_mes_db" in globals() else None
+
+        # load_escala_mes_db retorna dict[chapa] -> DataFrame
+        if isinstance(prev_obj, dict) and prev_obj:
+            parts = []
+            for ch, dfp in prev_obj.items():
+                if dfp is None or getattr(dfp, "empty", True):
+                    continue
+                dfx = dfp.copy()
+                dfx["Chapa"] = str(ch)
+                # garante colunas
+                if "Data" not in dfx.columns and "data" in dfx.columns:
+                    dfx["Data"] = dfx["data"]
+                if "Status" not in dfx.columns and "status" in dfx.columns:
+                    dfx["Status"] = dfx["status"]
+                parts.append(dfx[["Data", "Chapa", "Status"]].copy())
+            if parts:
+                df_ref = pd.concat(parts, ignore_index=True)
+
+        # Caso antigo: se algum dia retornar DataFrame único
+        elif isinstance(prev_obj, pd.DataFrame) and (not prev_obj.empty):
+            prev = prev_obj.copy()
             if "Data" not in prev.columns:
                 for c in ("data", "dia", "DataDia"):
                     if c in prev.columns:
@@ -3851,6 +3870,7 @@ def _regenerar_mes_inteiro(setor: str, ano: int, mes: int, seed: int = 0, respei
                         prev["Status"] = prev[c]
                         break
             df_ref = prev[["Data", "Chapa", "Status"]].copy()
+
     except Exception:
         df_ref = None
 
