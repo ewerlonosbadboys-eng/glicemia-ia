@@ -3964,9 +3964,9 @@ def _regenerar_mes_inteiro(setor: str, ano: int, mes: int, seed: int = 0, respei
 
 
     hist, estado_out = gerar_escala_setor_por_subgrupo(
-        setor, colaboradores, int(ano, df_ref_prev=df_ref_prev)
-, int(mes),
-        respeitar_ajustes=bool(respeitar_ajustes)
+        setor, colaboradores, int(ano), int(mes),
+        respeitar_ajustes=bool(respeitar_ajustes),
+        df_ref_prev=df_ref_prev
     )
 
     # 1) grava a geração
