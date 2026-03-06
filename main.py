@@ -2902,7 +2902,7 @@ def _counts_folgas_day_and_hour(hist_by_chapa: dict, colab_by_chapa: dict, chapa
         df = hist_by_chapa[ch]
         bucket = colab_by_chapa[ch].get("Entrada", "06:00")
         for i in idxs_semana:
-            if df_ref.loc[i, "Dia"] == "dom":
+            if df_ref_cur.loc[i, "Dia"] == "dom":
                 continue
             if df.loc[i, "Status"] == "Folga":
                 counts_day[i] += 1
@@ -2933,7 +2933,7 @@ def rebalance_folgas_dia(
 
     _past = bool(past_flag)
 
-    def is_dom(i): return df_ref.loc[i, "Dia"] == "dom"
+    def is_dom(i): return df_ref_cur.loc[i, "Dia"] == "dom"
 
     def is_locked(ch, i):
         return bool(i in (locked_idx.get(ch, set()) or set()))
@@ -3085,8 +3085,8 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
         pref = regras_cache.get(sg, {"seg": 0, "ter": 0, "qua": 0, "qui": 0, "sex": 0, "sáb": 0})
 
         for week in weeks:
-            idxs_week = sorted(week, key=lambda i: df_ref.loc[i, "Data"])
-            domingos = [i for i in idxs_week if df_ref.loc[i, "Dia"] == "dom"]
+            idxs_week = sorted(week, key=lambda i: df_ref_cur.loc[i, "Data"])
+            domingos = [i for i in idxs_week if df_ref_cur.loc[i, "Dia"] == "dom"]
             dom_idx = domingos[0] if domingos else None
 
             for ch in chapas:
@@ -3096,14 +3096,14 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
                 ent_bucket = colab_by_chapa[ch].get("Entrada", "06:00")
 
                 segunda_idx = idxs_week[0]
-                segunda_date = df_ref.loc[segunda_idx, "Data"].date()
+                segunda_date = df_ref_cur.loc[segunda_idx, "Data"].date()
                 if is_first_week_after_return(setor, ch, segunda_date):
                     continue
 
                 # candidatos seg-sex e sábado só se permitido
                 cand_days = []
                 for i in idxs_week:
-                    dia = df_ref.loc[i, "Dia"]
+                    dia = df_ref_cur.loc[i, "Dia"]
                     if dia == "dom":
                         continue
                     if dia == "sáb" and not pode_sab:
@@ -3125,7 +3125,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
                     for j in cand_days:
                         if j in locked:
                             continue
-                        dia = df_ref.loc[j, "Dia"]
+                        dia = df_ref_cur.loc[j, "Dia"]
                         if df.loc[j, "Status"] != "Trabalho":
                             continue
                         if dia == "sáb" and not pode_sab:
@@ -3140,7 +3140,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
                     random.shuffle(possiveis)
 
                     def score(j):
-                        dia = df_ref.loc[j, "Dia"]
+                        dia = df_ref_cur.loc[j, "Dia"]
                         weekday_prio = 0 if dia in ["seg", "ter", "qua", "qui", "sex"] else 1
                         pref_pen = PREF_EVITAR_PENALTY if pref.get(dia, 0) == 1 else 0
                         return (
