@@ -291,6 +291,7 @@ DB_PATH = "escala.db"
 # =========================
 BACKUP_DIR = "backups"
 AUTO_BACKUP_HOUR = 3  # 03:00
+AUTO_BACKUP_INTERVAL_HOURS = 6  # roda quando o app abre
 
 
 def _ensure_backup_dir():
@@ -319,19 +320,37 @@ def _auto_backup_marker_path() -> Path:
 
 
 def auto_backup_if_due():
-    """1 backup/dia após 03:00 (Streamlit não agenda sozinho; roda quando o app abre)."""
+    """
+    Cria backup automático quando o app abre:
+    - nunca antes das 03:00
+    - no máximo 1 backup a cada AUTO_BACKUP_INTERVAL_HOURS
+    Observação: Streamlit não executa em segundo plano; só roda ao abrir/recarregar o app.
+    """
     try:
         _ensure_backup_dir()
         now = datetime.now()
         if now.hour < AUTO_BACKUP_HOUR:
             return
         marker = _auto_backup_marker_path()
-        last = marker.read_text(encoding="utf-8").strip() if marker.exists() else ""
-        today = now.strftime("%Y-%m-%d")
-        if last == today:
-            return
-        create_backup_now(prefix=f"auto_{today.replace('-', '')}")
-        marker.write_text(today, encoding="utf-8")
+        last_raw = marker.read_text(encoding="utf-8").strip() if marker.exists() else ""
+        last_dt = None
+        if last_raw:
+            try:
+                last_dt = datetime.fromisoformat(last_raw)
+            except Exception:
+                last_dt = None
+                try:
+                    last_day = datetime.strptime(last_raw, "%Y-%m-%d")
+                    if now.date() == last_day.date():
+                        return
+                except Exception:
+                    pass
+        if last_dt is not None:
+            hours_since = (now - last_dt).total_seconds() / 3600.0
+            if hours_since < float(AUTO_BACKUP_INTERVAL_HOURS):
+                return
+        create_backup_now(prefix=f"auto_{now.strftime('%Y%m%d_%H%M%S')}")
+        marker.write_text(now.isoformat(), encoding="utf-8")
     except Exception:
         return
 
@@ -429,6 +448,10 @@ def importar_colaboradores_df(setor: str, df: pd.DataFrame) -> tuple[int,int]:
             cur.execute("INSERT INTO colaboradores(nome,setor,chapa,subgrupo,entrada,folga_sabado) VALUES(?,?,?,?,?,?)",
                         (nome, setor, chapa, sg, ent, sab_i))
             inserted += 1
+        try:
+            ensure_system_user_from_colaborador(nome, setor, chapa)
+        except Exception:
+            pass
     conn.commit(); conn.close()
     return inserted, updated
 
@@ -1395,6 +1418,23 @@ def colaborador_lookup(setor: str, chapa: str):
     con.close()
     return row
 
+def default_password_for_chapa(chapa: str) -> str:
+    chapa = _norm_chapa(chapa)
+    nums = re.sub(r"\D+", "", chapa)
+    return nums or chapa or "123456"
+
+
+def ensure_system_user_from_colaborador(nome: str, setor: str, chapa: str, senha_padrao: str | None = None, is_lider: int = 0, is_admin: int = 0):
+    setor = _norm_setor(setor)
+    chapa = _norm_chapa(chapa)
+    nome = (nome or "").strip() or chapa
+    if system_user_exists(setor, chapa):
+        return False
+    senha_final = (senha_padrao or default_password_for_chapa(chapa)).strip()
+    create_system_user(nome, setor, chapa, senha_final, is_lider=is_lider, is_admin=is_admin)
+    return True
+
+
 def create_system_user(nome: str, setor: str, chapa: str, senha: str, is_lider: int = 0, is_admin: int = 0):
     nome = (nome or "").strip() or _norm_chapa(chapa)
     setor = _norm_setor(setor)
@@ -1534,10 +1574,11 @@ def colaborador_exists(setor: str, chapa: str) -> bool:
     con.close()
     return ok
 
-def create_colaborador(nome: str, setor: str, chapa: str, subgrupo: str = "", entrada: str = "06:00", folga_sab: bool = False):
+def create_colaborador(nome: str, setor: str, chapa: str, subgrupo: str = "", entrada: str = "06:00", folga_sab: bool = False, criar_login: bool = True, senha_padrao: str | None = None):
     """
     Cria colaborador (se não existir) já com perfil completo.
     Mantém compatibilidade: parâmetros adicionais são opcionais.
+    Se criar_login=True, também garante usuário em usuarios_sistema.
     """
     nome = (nome or "").strip()
     setor = _norm_setor(setor)
@@ -1569,6 +1610,11 @@ def create_colaborador(nome: str, setor: str, chapa: str, subgrupo: str = "", en
     )
     con.commit()
     con.close()
+    if criar_login:
+        try:
+            ensure_system_user_from_colaborador(nome or chapa, setor, chapa, senha_padrao=senha_padrao)
+        except Exception:
+            pass
     try:
         st.cache_data.clear()
     except Exception:
@@ -1596,6 +1642,10 @@ def upsert_colaborador_nome(setor: str, chapa: str, nome: str):
             cur.execute("UPDATE colaboradores SET nome=? WHERE setor=? AND chapa=?", (nome, setor, chapa))
     con.commit()
     con.close()
+    try:
+        ensure_system_user_from_colaborador(nome or chapa, setor, chapa)
+    except Exception:
+        pass
 
 def apply_manual_base_folgas(setor: str, ano: int, mes: int, base_rows: list[dict], limpar_overrides_mes: bool = False):
     """
@@ -5394,12 +5444,12 @@ def page_app():
 
             st.markdown("---")
             st.subheader("♻️ Recuperar usuário do sistema")
-            st.caption("Use esta área quando o colaborador existe, mas sumiu do login.")
+            st.caption("Use esta área quando o colaborador existe, mas sumiu do login. Se não existir colaborador, use o cadastro manual logo abaixo.")
             con = db_conn()
             df_colabs_adm = pd.read_sql_query("SELECT nome, setor, chapa FROM colaboradores ORDER BY setor, nome", con)
             con.close()
             if df_colabs_adm.empty:
-                st.info("Nenhum colaborador cadastrado para recuperar.")
+                st.info("Nenhum colaborador cadastrado para recuperar. Use o cadastro manual de usuário abaixo.")
             else:
                 colr1, colr2, colr3 = st.columns([1.1, 1.2, 1.0])
                 with colr1:
@@ -5426,6 +5476,43 @@ def page_app():
                             st.rerun()
                         else:
                             st.error("Não encontrei esse colaborador para recuperar.")
+
+            st.markdown("### ➕ Cadastro manual de usuário do sistema")
+            cman1, cman2, cman3 = st.columns([1, 1, 1])
+            with cman1:
+                setor_man = st.text_input("Setor do usuário", value="FLV", key="adm_man_setor")
+            with cman2:
+                chapa_man = st.text_input("Chapa do usuário", key="adm_man_chapa")
+            with cman3:
+                nome_man = st.text_input("Nome do usuário", key="adm_man_nome")
+            senha_man = st.text_input("Senha do usuário", type="password", key="adm_man_pwd", help="Se deixar em branco, a senha padrão será a própria chapa sem símbolos.")
+            cman4, cman5, cman6 = st.columns([1, 1, 1])
+            with cman4:
+                lider_man = st.checkbox("É líder", value=False, key="adm_man_lider")
+            with cman5:
+                admin_man = st.checkbox("É admin", value=False, key="adm_man_admin")
+            with cman6:
+                criar_colab_man = st.checkbox("Criar colaborador junto", value=True, key="adm_man_colab")
+            if st.button("Salvar usuário manualmente", key="adm_man_btn"):
+                setor_norm = _norm_setor(setor_man)
+                chapa_norm = _norm_chapa(chapa_man)
+                nome_final = (nome_man or chapa_norm).strip()
+                senha_final = (senha_man or default_password_for_chapa(chapa_norm)).strip()
+                if not setor_norm or not chapa_norm:
+                    st.error("Digite setor e chapa.")
+                else:
+                    try:
+                        if criar_colab_man and not colaborador_exists(setor_norm, chapa_norm):
+                            create_colaborador(nome_final, setor_norm, chapa_norm, criar_login=False)
+                        create_system_user(nome_final, setor_norm, chapa_norm, senha_final, is_lider=int(lider_man), is_admin=int(admin_man))
+                        try:
+                            st.cache_data.clear()
+                        except Exception:
+                            pass
+                        st.success(f"Usuário salvo com sucesso. Senha ativa: {senha_final}")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Falha ao salvar usuário: {e}")
 
             st.markdown("---")
             st.subheader("🗄️ Backup / Restauração (escala.db)")
