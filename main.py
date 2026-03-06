@@ -1,6 +1,6 @@
 # app.py
 # =========================================================
-# ESCALA 5x2 OFICIAL — V3.1 — COMPLETO (SUBGRUPO = REGRAS)
+# ESCALA 5x2 OFICIAL — COMPLETO (SUBGRUPO = REGRAS)
 # + Preferência "Evitar folga" por subgrupo
 # + Persistência real (SQLite) de ajustes (overrides)
 # + Calendário RH visual + Banco de Horas
@@ -22,10 +22,8 @@
 # 7) REGRA SEMANAL (SEG→DOM):
 #    - Semana inicia SEG e termina DOM.
 #    - Domingo 1x1 permanece.
-#    - Se o colaborador FOLGA no domingo => domingo já conta 1 folga; precisa +1 folga no restante da semana.
-#    - Se o colaborador TRABALHA no domingo => precisa 2 folgas no restante da semana.
-#    - Sábado só entra como folga se a caixinha permitir, e sempre como ÚLTIMA opção.
-#    - A virada do mês (ex.: 30/03 a 05/04) é tratada como uma única semana contínua.
+#    - Se o colaborador FOLGA no domingo => 1 folga no período SEG–SÁB (SÁB só se permitir).
+#    - Se o colaborador TRABALHA no domingo => 2 folgas no período SEG–SÁB (SÁB só se permitir).
 #
 # ✅ ALTERAÇÃO PEDIDA ANTES:
 # - Removido tudo relacionado a "Balanço Madrugada" e ciclo "saída tarde"
@@ -2199,54 +2197,6 @@ def load_escala_mes_db(setor: str, ano: int, mes: int):
         })
     return {ch: pd.DataFrame(items) for ch, items in hist.items()}
 
-
-def build_df_ref_prev_mes(setor: str, ano: int, mes: int) -> pd.DataFrame | None:
-    """Carrega o mês anterior do SQLite e devolve um DataFrame (Data, Chapa, Status) para semana contínua."""
-    try:
-        ano_prev = int(ano)
-        mes_prev = int(mes) - 1
-        if mes_prev <= 0:
-            mes_prev = 12
-            ano_prev -= 1
-
-        prev_obj = load_escala_mes_db(setor, ano_prev, mes_prev)
-        if not prev_obj:
-            return None
-
-        if isinstance(prev_obj, dict):
-            parts = []
-            for ch, dfp in prev_obj.items():
-                if dfp is None or getattr(dfp, "empty", True):
-                    continue
-                dfx = dfp.copy()
-                dfx["Chapa"] = str(ch)
-                if "Data" not in dfx.columns and "data" in dfx.columns:
-                    dfx["Data"] = dfx["data"]
-                if "Status" not in dfx.columns and "status" in dfx.columns:
-                    dfx["Status"] = dfx["status"]
-                parts.append(dfx[["Data", "Chapa", "Status"]].copy())
-            if parts:
-                out = pd.concat(parts, ignore_index=True)
-                out["Data"] = pd.to_datetime(out["Data"], errors="coerce")
-                return out
-            return None
-
-        if isinstance(prev_obj, pd.DataFrame) and (not prev_obj.empty):
-            out = prev_obj.copy()
-            if "Chapa" not in out.columns:
-                out["Chapa"] = out.get("chapa", "")
-            if "Data" not in out.columns:
-                out["Data"] = out.get("data", None)
-            if "Status" not in out.columns:
-                out["Status"] = out.get("status", None)
-            out = out[["Data", "Chapa", "Status"]].copy()
-            out["Data"] = pd.to_datetime(out["Data"], errors="coerce")
-            return out
-
-        return None
-    except Exception:
-        return None
-
 def apply_overrides_to_hist(setor: str, ano: int, mes: int, hist_db: dict[str, pd.DataFrame]):
     """
     Aplica overrides no histórico carregado do banco.
@@ -2621,15 +2571,11 @@ def enforce_max_5_consecutive_work(df, ent_padrao, pode_folgar_sabado: bool, ini
             consec = 0
         i += 1
 
-
 TARGET_FOLGAS_POR_SEMANA = 2  # 5x2: 2 folgas totais por semana (SEG->DOM). Domingo conta se for folga.
 
 def _is_folga_status(stt: str) -> bool:
     s = str(stt or "").strip().lower()
     return s in ("folga", "f", "folg")
-
-def _is_ferias_status(stt: str) -> bool:
-    return str(stt or "").strip().lower() == "férias"
 
 def _is_work_status(stt: str) -> bool:
     s = str(stt or "").strip().lower()
@@ -2646,16 +2592,15 @@ def _week_start_monday(d: pd.Timestamp) -> pd.Timestamp:
 
 def enforce_weekly_folga_targets(df: pd.DataFrame, df_ref=None, pode_folgar_sabado=None, locked_status=None, **kwargs) -> pd.DataFrame:
     """
-    REGRA SUPREMA SEMANAL (SEG->DOM) — SOBERANA
-
-    Regra do usuário, acima das demais:
-      - cada semana fecha com EXATAMENTE 2 folgas totais;
-      - se domingo = folga, ele já é uma das 2 e sobra APENAS 1 entre SEG..SEX
-        (SÁB só entra se a caixinha permitir e apenas como última opção);
-      - se domingo = trabalho, precisam existir 2 folgas entre SEG..SEX
-        (SÁB só entra se a caixinha permitir e apenas como última opção);
-      - FÉRIAS não entram nessa conta e não são mexidas;
-      - esta regra PODE desfazer folga travada/override/manual, porque é a regra suprema.
+    REGRA SEMANAL (SEG->DOM) — SEMANA CONTÍNUA (corrige virada de mês):
+      - Semana sempre tem 2 folgas no total (5x2).
+      - Domingo conta como folga quando é Folga.
+      - Se domingo = Folga => precisa completar para 2 no total (então SEG-SÁB tende a 1, mas pode variar na virada).
+      - Se domingo = Trabalho => precisa completar para 2 no total (SEG-SÁB tende a 2).
+    Importante (virada de mês):
+      - Se a semana começou no mês anterior, usamos df_ref (se fornecido) para contar as folgas já existentes
+        nos dias anteriores (SEG..dia anterior ao 1º do mês).
+      - Ajustamos APENAS os dias do mês atual (não mexe no mês anterior).
     """
     if df is None or df.empty:
         return df
@@ -2667,8 +2612,10 @@ def enforce_weekly_folga_targets(df: pd.DataFrame, df_ref=None, pode_folgar_saba
     df["week_start"] = df["Data_dt"].apply(_week_start_monday)
     df.sort_values(["Chapa", "Data_dt"], inplace=True)
 
+    # Data mínima do mês corrente dentro do df (para saber onde começa o "mês atual")
     min_cur = df["Data_dt"].min().normalize()
 
+    # df_ref (se vier) deve conter pelo menos Data, Chapa, Status
     ref_ok = isinstance(df_ref, pd.DataFrame) and {"Data", "Chapa", "Status"}.issubset(set(df_ref.columns))
     if ref_ok:
         ref = df_ref.copy()
@@ -2676,6 +2623,7 @@ def enforce_weekly_folga_targets(df: pd.DataFrame, df_ref=None, pode_folgar_saba
     else:
         ref = None
 
+    # Permissão de sábado: pode ser bool global ou dict por chapa; ou coluna do df
     sab_col = None
     for c in ("Pode_Folgar_Sabado", "pode_folgar_sabado", "folga_sabado", "Folga_Sabado", "pode_sabado"):
         if c in df.columns:
@@ -2693,108 +2641,129 @@ def enforce_weekly_folga_targets(df: pd.DataFrame, df_ref=None, pode_folgar_saba
             except Exception:
                 pass
         if sab_col is None:
-            return False
+            return True
         try:
             v = df.at[idx_row, sab_col]
-            if str(v).strip() == "":
-                return False
-            return bool(int(v)) if str(v).strip().isdigit() else bool(v)
+            return bool(int(v)) if str(v).strip() != "" else bool(v)
         except Exception:
             try:
                 return bool(df.at[idx_row, sab_col])
             except Exception:
-                return False
+                return True
 
-    def _get_row(chapa: str, day: pd.Timestamp):
-        day_d = pd.to_datetime(day).normalize()
+    # Lock (travado): pode vir como set/list de índices, Series/DataFrame booleana, ou coluna no df
+    lock_col = None
+    for c in ("Travado_Status", "travado_status", "Lock_Status", "lock_status", "Status_Travado", "status_travado"):
+        if c in df.columns:
+            lock_col = c
+            break
+
+    def _is_locked(idx_row) -> bool:
+        if locked_status is not None:
+            try:
+                if isinstance(locked_status, (set, list, tuple)) and idx_row in locked_status:
+                    return True
+                if hasattr(locked_status, "get") and locked_status.get(idx_row, False):
+                    return True
+            except Exception:
+                pass
+        if lock_col is None:
+            return False
+        try:
+            return bool(df.at[idx_row, lock_col])
+        except Exception:
+            return False
+
+    # Helper: status combinado (df tem prioridade, senão df_ref)
+    def _status_comb(chapa: str, day: pd.Timestamp) -> str:
+        day_d = day.normalize()
+        # procura no df (mês atual)
         rows = df[(df["Chapa"].astype(str) == str(chapa)) & (df["Data_dt"].dt.normalize() == day_d)]
         if not rows.empty:
-            return ("cur", rows.index[0], rows.iloc[0]["Status"])
+            return rows.iloc[0]["Status"]
+        # procura no df_ref (mês anterior / contexto), se existir
         if ref is not None:
             r2 = ref[(ref["Chapa"].astype(str) == str(chapa)) & (ref["Data_dt"].dt.normalize() == day_d)]
             if not r2.empty:
-                return ("ref", None, r2.iloc[0]["Status"])
-        return (None, None, "")
+                return r2.iloc[0]["Status"]
+        return ""
 
-    def _prio_add(i: int):
-        wd = int(df.at[i, "Data_dt"].weekday())
-        return ({0: 0, 1: 1, 2: 2, 3: 3, 4: 4, 5: 99}.get(wd, 999), df.at[i, "Data_dt"])
-
-    def _prio_remove(i: int):
-        wd = int(df.at[i, "Data_dt"].weekday())
-        # remove primeiro sábado, depois o dia mais recente da semana
-        return (0 if wd == 5 else 1, -int(df.at[i, "Data_dt"].value))
-
+    # Para cada colaborador, para cada semana que intersecta o mês atual:
     for ch in df["Chapa"].astype(str).unique():
         sub = df[df["Chapa"].astype(str) == str(ch)]
-        for ws in sorted(pd.to_datetime(sub["week_start"].unique())):
+        for ws in sub["week_start"].unique():
             ws = pd.to_datetime(ws).normalize()
             we = ws + pd.Timedelta(days=6)
 
-            week_rows = []
-            for d in range(7):
-                day = ws + pd.Timedelta(days=d)
-                src_kind, idx_cur, stt = _get_row(ch, day)
-                week_rows.append({"day": day, "weekday": int(day.weekday()), "src": src_kind, "idx": idx_cur, "status": stt})
+            # domingo da semana
+            sunday = we
+            dom_status = _status_comb(ch, sunday)
+            dom_folga = 1 if _is_folga_status(dom_status) else 0
 
-            sunday = next((r for r in week_rows if r["weekday"] == 6), None)
-            sunday_is_folga = bool(sunday and _is_folga_status(sunday["status"]))
-            target_non_sunday = 1 if sunday_is_folga else 2
+            # Conta folgas SEG-SÁB na parte "antes do mês" (se semana começou antes de min_cur)
+            folgas_prev_seg_sab = 0
+            if ws < min_cur:
+                for d in range(0, 6):  # SEG..SÁB
+                    day = ws + pd.Timedelta(days=d)
+                    if day < min_cur:
+                        if _is_folga_status(_status_comb(ch, day)):
+                            folgas_prev_seg_sab += 1
 
-            current_non_sunday = 0
-            cur_non_sunday_folgas = []
-            cur_non_sunday_trabalho = []
+            # Target de folgas total = 2
+            # Folgas que precisam existir em SEG-SÁB no mês atual para fechar 2:
+            needed_seg_sab_total = max(0, int(TARGET_FOLGAS_POR_SEMANA) - dom_folga)
+            needed_seg_sab_current = max(0, needed_seg_sab_total - folgas_prev_seg_sab)
 
-            for r in week_rows:
-                wd = r["weekday"]
-                stt = r["status"]
-                if wd == 6 or _is_ferias_status(stt):
-                    continue
-                if _is_folga_status(stt):
-                    current_non_sunday += 1
-                    if r["src"] == "cur":
-                        cur_non_sunday_folgas.append(r["idx"])
-                elif r["src"] == "cur":
-                    if wd == 5 and not _allow_sab(r["idx"]):
-                        continue
-                    cur_non_sunday_trabalho.append(r["idx"])
+            # Linhas do df no intervalo SEG-SÁB desta semana (somente mês atual)
+            wk_mask = (df["Chapa"].astype(str) == str(ch)) & (df["Data_dt"] >= ws) & (df["Data_dt"] <= we)
+            wk = df[wk_mask].copy()
+            seg_sab = wk[wk["Data_dt"].dt.weekday <= 5].copy()
 
-            # sábado sem caixinha nunca pode ficar folga
-            for r in week_rows:
-                if r["weekday"] == 5 and r["src"] == "cur" and not _allow_sab(r["idx"]):
-                    if _is_folga_status(df.at[r["idx"], "Status"]):
-                        df.at[r["idx"], "Status"] = "Trabalho"
-                        current_non_sunday -= 1
-                        if r["idx"] in cur_non_sunday_folgas:
-                            cur_non_sunday_folgas.remove(r["idx"])
+            if seg_sab.empty:
+                continue
 
-            if current_non_sunday > target_non_sunday:
-                excesso = current_non_sunday - target_non_sunday
-                for i in sorted(cur_non_sunday_folgas, key=_prio_remove):
-                    if excesso <= 0:
-                        break
-                    if _is_folga_status(df.at[i, "Status"]):
-                        df.at[i, "Status"] = "Trabalho"
-                        excesso -= 1
+            seg_sab = seg_sab[seg_sab["Data_dt"] >= min_cur]  # só ajusta no mês atual
+            if seg_sab.empty:
+                continue
 
-            elif current_non_sunday < target_non_sunday:
-                falta = target_non_sunday - current_non_sunday
-                for i in sorted(cur_non_sunday_trabalho, key=_prio_add):
-                    if falta <= 0:
-                        break
-                    if not _is_folga_status(df.at[i, "Status"]) and not _is_ferias_status(df.at[i, "Status"]):
-                        df.at[i, "Status"] = "Folga"
-                        falta -= 1
+            seg_sab_folgas = seg_sab["Status"].apply(_is_folga_status)
+            folgas_seg_sab_current = int(seg_sab_folgas.sum())
+
+            # candidatos (respeita lock e sábado permitido)
+            cand_folga = [i for i in seg_sab[seg_sab_folgas].index.tolist()
+                          if (not _is_locked(i)) and (_allow_sab(i) or df.at[i, "Data_dt"].weekday() != 5)]
+            cand_trab = [i for i in seg_sab[~seg_sab_folgas].index.tolist()
+                         if (not _is_locked(i)) and (_allow_sab(i) or df.at[i, "Data_dt"].weekday() != 5)]
+
+            # Se excesso no mês atual (considerando o que já veio do mês anterior), remove
+            if folgas_seg_sab_current > needed_seg_sab_current:
+                excesso = folgas_seg_sab_current - needed_seg_sab_current
+                # remove do fim da semana primeiro
+                cand_sorted = sorted(cand_folga, key=lambda i: df.at[i, "Data_dt"], reverse=True)
+                for i in cand_sorted[:excesso]:
+                    df.at[i, "Status"] = "Trabalho"
+
+            # Se falta no mês atual, adiciona folga
+            elif folgas_seg_sab_current < needed_seg_sab_current:
+                falta = needed_seg_sab_current - folgas_seg_sab_current
+
+                # heurística: preferir quarta/quinta, depois terça/sexta, depois segunda/sábado
+                def _prio(i):
+                    wd = int(df.at[i, "Data_dt"].weekday())
+                    return {2:0, 3:0, 1:1, 4:1, 0:2, 5:3}.get(wd, 9)
+
+                cand_sorted = sorted(cand_trab, key=_prio)
+                for i in cand_sorted[:falta]:
+                    df.at[i, "Status"] = "Folga"
 
     return df
 
 def _cap_total_folgas_por_semana(df: pd.DataFrame, target_total: int = 2, locked_status=None, df_ref=None) -> pd.DataFrame:
     """
-    Segurança final soberana:
-      - nunca deixa passar de 2 folgas por semana SEG->DOM;
-      - domingo conta como uma delas;
-      - férias não entram na conta;
-      - remove excesso mesmo se a folga estiver travada/manual.
+    Segurança extra (SEMANA CONTÍNUA): garante que cada semana (SEG->DOM) tenha no máximo `target_total` folgas.
+    - Considera folgas que já existam no mês anterior via df_ref (se fornecido).
+    - Remove excesso APENAS no mês atual (df), preferindo SEG-SÁB e respeitando lock/travado.
+    - NÃO mexe em 'Férias' (elas não contam como Folga no seu modelo se quiser tratar diferente; aqui só olha Status=Folga/F).
     """
     if df is None or df.empty:
         return df
@@ -2815,6 +2784,28 @@ def _cap_total_folgas_por_semana(df: pd.DataFrame, target_total: int = 2, locked
     else:
         ref = None
 
+    lock_col = None
+    for c in ("Travado_Status", "travado_status", "Lock_Status", "lock_status", "Status_Travado", "status_travado"):
+        if c in df.columns:
+            lock_col = c
+            break
+
+    def _is_locked(i):
+        if locked_status is not None:
+            try:
+                if isinstance(locked_status, (set, list, tuple)) and i in locked_status:
+                    return True
+                if hasattr(locked_status, "get") and locked_status.get(i, False):
+                    return True
+            except Exception:
+                pass
+        if lock_col is None:
+            return False
+        try:
+            return bool(df.at[i, lock_col])
+        except Exception:
+            return False
+
     def _status_comb(chapa: str, day: pd.Timestamp) -> str:
         day_d = pd.to_datetime(day).normalize()
         rows = df[(df["Chapa"].astype(str) == str(chapa)) & (df["Data_dt"].dt.normalize() == day_d)]
@@ -2826,45 +2817,37 @@ def _cap_total_folgas_por_semana(df: pd.DataFrame, target_total: int = 2, locked
                 return r2.iloc[0]["Status"]
         return ""
 
-    def _prio_remove(i: int):
-        wd = int(df.at[i, "Data_dt"].weekday())
-        return (0 if wd == 5 else 1, -int(df.at[i, "Data_dt"].value))
-
     for ch in df["Chapa"].astype(str).unique():
         sub = df[df["Chapa"].astype(str) == str(ch)]
-        for ws in sorted(pd.to_datetime(sub["week_start"].unique())):
+        for ws in sub["week_start"].unique():
             ws = pd.to_datetime(ws).normalize()
             we = ws + pd.Timedelta(days=6)
 
-            total_folgas = 0
-            for d in range(7):
-                stt = _status_comb(ch, ws + pd.Timedelta(days=d))
-                if _is_folga_status(stt):
-                    total_folgas += 1
+            # conta folgas total na semana (combinado)
+            folgas_total = 0
+            for d in range(0, 7):
+                day = ws + pd.Timedelta(days=d)
+                if _is_folga_status(_status_comb(ch, day)):
+                    folgas_total += 1
 
-            if total_folgas <= target_total:
+            if folgas_total <= target_total:
                 continue
 
-            wk_mask = (
-                (df["Chapa"].astype(str) == str(ch)) &
-                (df["Data_dt"] >= ws) &
-                (df["Data_dt"] <= we) &
-                (df["Data_dt"] >= min_cur)
-            )
-            wk = df[wk_mask].copy()
-            folga_idxs = [
-                i for i in wk.index.tolist()
-                if not _is_ferias_status(df.at[i, "Status"]) and _is_folga_status(df.at[i, "Status"])
-            ]
+            excesso = folgas_total - target_total
 
-            excesso = total_folgas - target_total
-            for i in sorted(folga_idxs, key=_prio_remove):
-                if excesso <= 0:
-                    break
+            # remove somente no mês atual: candidatos SEG-SÁB (dias >= min_cur)
+            wk_mask = (df["Chapa"].astype(str) == str(ch)) & (df["Data_dt"] >= ws) & (df["Data_dt"] <= we)
+            wk = df[wk_mask].copy()
+            seg_sab = wk[(wk["Data_dt"].dt.weekday <= 5) & (wk["Data_dt"] >= min_cur)]
+            cand = [i for i in seg_sab[seg_sab["Status"].apply(_is_folga_status)].index.tolist() if not _is_locked(i)]
+
+            # remove do fim primeiro
+            cand_sorted = sorted(cand, key=lambda i: df.at[i, "Data_dt"], reverse=True)
+            for i in cand_sorted[:excesso]:
                 df.at[i, "Status"] = "Trabalho"
-                excesso -= 1
 
     return df
+
 
 
 def enforce_no_consecutive_folgas(df: pd.DataFrame, locked_status=None) -> pd.DataFrame:
@@ -3016,18 +2999,11 @@ def rebalance_folgas_dia(
 # =========================================================
 # GERAR ESCALA — POR SUBGRUPO
 # =========================================================
-def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: int, mes: int, respeitar_ajustes: bool = True):
+def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: int, mes: int, respeitar_ajustes: bool = True, df_ref_prev: 'pd.DataFrame|None' = None):
     datas = _dias_mes(ano, mes)
     weeks = _all_weeks_seg_dom(datas)
-    df_ref = pd.DataFrame({"Data": datas, "Dia": [D_PT[d.day_name()] for d in datas]})
-    # df_prev_ref: mês anterior (para semana contínua na virada)
-    df_prev_ref = None
-    try:
-        if not _past:
-            df_prev_ref = build_df_ref_prev_mes(setor, int(ano), int(mes))
-    except Exception:
-        df_prev_ref = None
-
+    df_ref_cur = pd.DataFrame({'Data': datas, 'Dia': [D_PT[d.day_name()] for d in datas]})
+    df_ref_use = df_ref_prev if isinstance(df_ref_prev, pd.DataFrame) and (not df_ref_prev.empty) else None
     # Meses passados: não aplicar continuidade/travamentos do mês anterior.
     _past = is_past_competencia(ano, mes)
     estado_prev = {} if _past else load_estado_prev(setor, ano, mes)
@@ -3053,7 +3029,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
     # base de cada colaborador
     for c in colaboradores:
         ch = c["Chapa"]
-        df = df_ref.copy()
+        df = df_ref_cur.copy()
         df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
         df["Status"] = "Trabalho"
         df["H_Entrada"] = ""
@@ -3210,7 +3186,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
         enforce_no_consecutive_folga(df, locked_status=locked)
 
         # 2) Metas semanais podem REMOVER folga => pode criar >5 de novo
-        enforce_weekly_folga_targets(df, df_ref=df_prev_ref, pode_folgar_sabado=pode_sab, locked_status=locked)
+        enforce_weekly_folga_targets(df, df_ref=(df_ref_use if df_ref_use is not None else df_ref_cur), pode_folgar_sabado=pode_sab, locked_status=locked)
 
         # 3) Reforça novamente o limite de 5 depois das metas semanais
         enforce_max_5_consecutive_work(
@@ -3258,7 +3234,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
         )
 
         # 2) Regra semanal SEG→DOM (remove excesso e completa falta)
-        enforce_weekly_folga_targets(df, df_ref=df_prev_ref, pode_folgar_sabado=pode_sab, locked_status=locked)
+        enforce_weekly_folga_targets(df, df_ref=(df_ref_use if df_ref_use is not None else df_ref_cur), pode_folgar_sabado=pode_sab, locked_status=locked)
 
         # 3) Reforça 5 dias novamente (regra semanal pode remover folga e criar sequência >5)
         enforce_max_5_consecutive_work(
@@ -3268,7 +3244,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
         )
 
         # 4) Regra semanal novamente (se o max_5 criou folga extra, normaliza para alvo)
-        enforce_weekly_folga_targets(df, df_ref=df_prev_ref, pode_folgar_sabado=pode_sab, locked_status=locked)
+        enforce_weekly_folga_targets(df, df_ref=(df_ref_use if df_ref_use is not None else df_ref_cur), pode_folgar_sabado=pode_sab, locked_status=locked)
 
         # 5) Proíbe folga consecutiva automática (DOM+SEG etc.)
         enforce_no_consecutive_folga(df, locked_status=locked)
@@ -3295,7 +3271,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
                 base_first = None
         enforce_sundays_1x1_for_employee(df, ent, locked_status=locked, base_first=base_first)
         enforce_no_consecutive_folga(df, locked_status=locked)
-        enforce_weekly_folga_targets(df, df_ref=df_prev_ref, pode_folgar_sabado=bool(colab_by_chapa[ch].get('Folga_Sab', False)), locked_status=locked)
+        enforce_weekly_folga_targets(df, df_ref=(df_ref_use if df_ref_use is not None else df_ref_cur), pode_folgar_sabado=bool(colab_by_chapa[ch].get('Folga_Sab', False)), locked_status=locked)
 
         # ✅ garante 5 dias depois do weekly (porque weekly pode remover folga)
         enforce_max_5_consecutive_work(
@@ -3339,48 +3315,72 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
                     break
 
         estado_out[ch] = {"consec_trab_final": consec, "ultima_saida": ultima_saida, "ultimo_domingo_status": ultimo_dom}
+
     # ============================
-    # GARANTIA FINAL (motor profissional)
-    # - semana contínua SEG->DOM (considera df_ref para virada de mês)
-    # - rebalance e max5 não podem quebrar a regra semanal
+    # GARANTIA FINAL CORRETA (TODOS OS COLABORADORES)
+    # A versão anterior aplicava a garantia final só no último `df` da função.
+    # Aqui roda para cada colaborador do hist_all, usando a referência do mês anterior
+    # para a semana contínua SEG->DOM (virada de mês).
     # ============================
-    try:
-        enforce_max_5_consecutive_work(df, ent, pode_sab)
-    except Exception:
-        pass
+    for ch, df in list(hist_all.items()):
+        ent = colab_by_chapa[ch].get("Entrada", "06:00")
+        pode_sab = bool(colab_by_chapa[ch].get("Folga_Sab", False))
+        locked = locked_idx.get(ch, set())
 
-    try:
-        df = enforce_weekly_folga_targets(df, df_ref=df_prev_ref, pode_folgar_sabado=pode_sab, locked_status=locked)
-    except Exception:
-        pass
+        try:
+            enforce_max_5_consecutive_work(df, ent, pode_sab, locked_status=locked)
+        except Exception:
+            pass
 
-    try:
-        df = enforce_no_consecutive_folgas(df, locked_status=locked)
-    except Exception:
-        pass
+        try:
+            df = enforce_weekly_folga_targets(
+                df,
+                df_ref=(df_ref_use if df_ref_use is not None else df_ref_cur),
+                pode_folgar_sabado=pode_sab,
+                locked_status=locked
+            )
+        except Exception:
+            pass
 
-    try:
-        df = enforce_weekly_folga_targets(df, df_ref=df_prev_ref, pode_folgar_sabado=pode_sab, locked_status=locked)
-    except Exception:
-        pass
+        try:
+            df = enforce_no_consecutive_folgas(df, locked_status=locked)
+        except Exception:
+            pass
 
-    try:
-        df = _cap_total_folgas_por_semana(df, target_total=2, locked_status=locked, df_ref=df_prev_ref)
-    except Exception:
-        pass
+        try:
+            df = enforce_weekly_folga_targets(
+                df,
+                df_ref=(df_ref_use if df_ref_use is not None else df_ref_cur),
+                pode_folgar_sabado=pode_sab,
+                locked_status=locked
+            )
+        except Exception:
+            pass
 
-    try:
-        df = enforce_weekly_folga_targets(df, df_ref=df_prev_ref, pode_folgar_sabado=pode_sab, locked_status=locked)
-    except Exception:
-        pass
+        try:
+            df = _cap_total_folgas_por_semana(
+                df,
+                target_total=2,
+                locked_status=locked,
+                df_ref=(df_ref_use if df_ref_use is not None else df_ref_cur)
+            )
+        except Exception:
+            pass
 
-    # REGRA SUPREMA FINAL: reaplica no último instante antes de salvar
-    try:
-        df = enforce_weekly_folga_targets(df, df_ref=df_prev_ref, pode_folgar_sabado=pode_sab, locked_status=locked)
-        df = _cap_total_folgas_por_semana(df, target_total=2, locked_status=locked, df_ref=df_prev_ref)
-        df = enforce_weekly_folga_targets(df, df_ref=df_prev_ref, pode_folgar_sabado=pode_sab, locked_status=locked)
-    except Exception:
-        pass
+        try:
+            df = enforce_weekly_folga_targets(
+                df,
+                df_ref=(df_ref_use if df_ref_use is not None else df_ref_cur),
+                pode_folgar_sabado=pode_sab,
+                locked_status=locked
+            )
+        except Exception:
+            pass
+
+        hist_all[ch] = df
+
+
+
 
     return hist_all, estado_out
 
@@ -3397,7 +3397,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
     # - Cap final: nunca deixa 3 folgas na mesma semana (exceto se travado)
     # ============================
     try:
-        df = enforce_weekly_folga_targets(df, df_ref=df_prev_ref, pode_folgar_sabado=pode_sab, locked_status=locked)
+        df = enforce_weekly_folga_targets(df, df_ref=(df_ref_use if df_ref_use is not None else df_ref_cur), pode_folgar_sabado=pode_sab, locked_status=locked)
     except Exception:
         try:
             df = enforce_weekly_folga_targets(df)
@@ -3410,7 +3410,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
         pass
 
     try:
-        df = enforce_weekly_folga_targets(df, df_ref=df_prev_ref, pode_folgar_sabado=pode_sab, locked_status=locked)
+        df = enforce_weekly_folga_targets(df, df_ref=(df_ref_use if df_ref_use is not None else df_ref_cur), pode_folgar_sabado=pode_sab, locked_status=locked)
     except Exception:
         try:
             df = enforce_weekly_folga_targets(df)
@@ -3418,7 +3418,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
             pass
 
     try:
-        df = _cap_total_folgas_por_semana(df, target_total=2, locked_status=locked, df_ref=df_prev_ref)
+        df = _cap_total_folgas_por_semana(df, target_total=2, locked_status=locked, df_ref=(df_ref_use if df_ref_use is not None else df_ref_cur))
     except Exception:
         try:
             df = _cap_total_folgas_por_semana(df, target_total=2)
@@ -3842,202 +3842,6 @@ def page_login():
                 st.success("Senha alterada.")
                 st.rerun()
 
-
-
-# =========================================================
-# REGRA SUPREMA — Semana contínua (SEG→DOM) atravessando meses
-# - Aplica a regra semanal em um DF estendido (pega dias do mês anterior e do próximo quando existirem)
-# - Se precisar corrigir dias do mês anterior/próximo (por estourar 2 folgas), também grava esses meses no banco.
-# =========================================================
-def _apply_regra_semanal_continua_e_gravar(setor: str, ano: int, mes: int, hist_mes: dict, colaboradores: list[dict] | None = None) -> dict:
-    """Aplica a regra semanal soberana considerando virada de mês (SEG→DOM contínuo).
-
-    Retorna o hist do mês atual possivelmente ajustado. Se houver ajustes em dias do mês anterior/próximo
-    que estejam dentro das semanas que tocam o mês atual, grava esses meses também no SQLite.
-
-    Observações importantes (regras do usuário):
-      - Semana = SEG..DOM
-      - Total = 2 folgas por semana
-      - Se DOM = Folga => DOM já conta 1; sobra apenas 1 folga em SEG..SÁB
-      - Se DOM = Trabalho => precisa 2 folgas em SEG..SÁB
-      - Sábado só pode ser Folga se a caixinha permitir (folga_sabado=1)
-      - Férias não entram na conta e não são mexidas
-    """
-    try:
-        if not hist_mes:
-            return hist_mes
-
-        # ---- mapa de colaborador (entrada padrão e permissão sábado)
-        col_map = {}
-        if colaboradores:
-            for c in colaboradores:
-                ch = str(c.get("Chapa") or c.get("chapa") or "").strip()
-                if not ch:
-                    continue
-                col_map[ch] = {
-                    "Entrada": (c.get("Entrada") or c.get("entrada") or "06:00"),
-                    "Folga_Sabado": int(c.get("Folga_Sabado") or c.get("folga_sabado") or c.get("folga_sabado_int") or 0) if str(c.get("Folga_Sabado") or c.get("folga_sabado") or 0).strip() != "" else 0,
-                }
-
-        def _ensure_times(dfx: pd.DataFrame) -> pd.DataFrame:
-            if dfx is None or dfx.empty:
-                return dfx
-            dfx = dfx.copy()
-            if "H_Entrada" not in dfx.columns:
-                dfx["H_Entrada"] = ""
-            if "H_Saida" not in dfx.columns:
-                dfx["H_Saida"] = ""
-            # preenche horários de trabalho quando estiver vazio
-            for i in dfx.index:
-                stt = str(dfx.at[i, "Status"])
-                if stt == "Trabalho" or stt in WORK_STATUSES:
-                    if not str(dfx.at[i, "H_Entrada"] or "").strip():
-                        ent = str(col_map.get(str(dfx.at[i, "Chapa"]), {}).get("Entrada") or "06:00")
-                        dfx.at[i, "H_Entrada"] = ent
-                    if not str(dfx.at[i, "H_Saida"] or "").strip():
-                        dfx.at[i, "H_Saida"] = _saida_from_entrada(str(dfx.at[i, "H_Entrada"]))
-                else:
-                    # folga/férias: limpa horários
-                    dfx.at[i, "H_Entrada"] = ""
-                    dfx.at[i, "H_Saida"] = ""
-            return dfx
-
-        # ---- mês anterior e próximo (se já existirem no banco)
-        ano_prev = int(ano); mes_prev = int(mes) - 1
-        if mes_prev <= 0:
-            mes_prev = 12; ano_prev -= 1
-        ano_next = int(ano); mes_next = int(mes) + 1
-        if mes_next >= 13:
-            mes_next = 1; ano_next += 1
-
-        hist_prev = load_escala_mes_db(setor, ano_prev, mes_prev) or {}
-        hist_next = load_escala_mes_db(setor, ano_next, mes_next) or {}
-
-        # ---- período estendido = de SEG da semana do dia 1 até DOM da semana do último dia do mês
-        first_day = pd.Timestamp(dt.date(int(ano), int(mes), 1))
-        last_day = pd.Timestamp(dt.date(int(ano), int(mes), calendar.monthrange(int(ano), int(mes))[1]))
-        ext_start = _week_start_monday(first_day)
-        ext_end = _week_start_monday(last_day) + pd.Timedelta(days=6)
-
-        # ---- junta tudo em DF grande (cur + fatias de prev/next que caem no range)
-        parts = []
-        def _hist_to_df(h: dict, tag: str):
-            out = []
-            for ch, dfx in (h or {}).items():
-                if dfx is None or getattr(dfx, "empty", True):
-                    continue
-                tmp = dfx.copy()
-                tmp["Chapa"] = str(ch)
-                if "Data" not in tmp.columns and "data" in tmp.columns:
-                    tmp["Data"] = tmp["data"]
-                tmp["Data"] = pd.to_datetime(tmp["Data"], errors="coerce")
-                tmp = tmp[(tmp["Data"] >= ext_start) & (tmp["Data"] <= ext_end)].copy()
-                if tmp.empty:
-                    continue
-                if "Status" not in tmp.columns and "status" in tmp.columns:
-                    tmp["Status"] = tmp["status"]
-                tmp["__tag"] = tag
-                # injeta permissão sábado
-                tmp["folga_sabado"] = int(col_map.get(str(ch), {}).get("Folga_Sabado", 0))
-                out.append(tmp[["Data","Chapa","Status","H_Entrada","H_Saida","folga_sabado","__tag"]].copy() if "H_Entrada" in tmp.columns else tmp[["Data","Chapa","Status","folga_sabado","__tag"]].copy())
-            return out
-
-        # current month
-        cur_list = []
-        for ch, dfx in hist_mes.items():
-            if dfx is None or getattr(dfx, "empty", True):
-                continue
-            tmp = dfx.copy()
-            tmp["Chapa"] = str(ch)
-            tmp["Data"] = pd.to_datetime(tmp["Data"], errors="coerce")
-            tmp["__tag"] = "cur"
-            tmp["folga_sabado"] = int(col_map.get(str(ch), {}).get("Folga_Sabado", 0))
-            cur_list.append(tmp[["Data","Chapa","Status","H_Entrada","H_Saida","folga_sabado","__tag"]].copy())
-        parts += cur_list
-        parts += _hist_to_df(hist_prev, "prev")
-        parts += _hist_to_df(hist_next, "next")
-
-        if not parts:
-            return hist_mes
-
-        big = pd.concat(parts, ignore_index=True)
-        big["Data"] = pd.to_datetime(big["Data"], errors="coerce")
-        big = big[(big["Data"] >= ext_start) & (big["Data"] <= ext_end)].copy()
-
-        # garante colunas
-        if "H_Entrada" not in big.columns:
-            big["H_Entrada"] = ""
-        if "H_Saida" not in big.columns:
-            big["H_Saida"] = ""
-        big["folga_sabado"] = big.get("folga_sabado", 0).fillna(0)
-
-        # aplica regra semanal soberana em tudo
-        big2 = enforce_weekly_folga_targets(big.rename(columns={"Data":"Data"}), pode_folgar_sabado=None)
-
-        # aplica horários coerentes após trocas Folga<->Trabalho
-        big2 = _ensure_times(big2)
-
-        # ---- split: grava mudanças para prev/cur/next
-        def _df_to_hist_dict(df_part: pd.DataFrame) -> dict:
-            out = {}
-            if df_part is None or df_part.empty:
-                return out
-            for ch, g in df_part.groupby("Chapa"):
-                gg = g.sort_values("Data").copy()
-                gg["Dia"] = gg["Data"].apply(lambda x: D_PT[pd.to_datetime(x).day_name()])
-                out[str(ch)] = gg[["Data","Dia","Status","H_Entrada","H_Saida"]].copy()
-            return out
-
-        prev_changed = big2[big2["__tag"] == "prev"].copy()
-        cur_changed = big2[big2["__tag"] == "cur"].copy()
-        next_changed = big2[big2["__tag"] == "next"].copy()
-
-        # atualiza hist_mes (apenas mês atual)
-        cur_changed = cur_changed[(pd.to_datetime(cur_changed["Data"]).dt.month == int(mes)) & (pd.to_datetime(cur_changed["Data"]).dt.year == int(ano))].copy()
-        hist_mes_out = _df_to_hist_dict(cur_changed)
-
-        # grava prev/next se houve qualquer linha dentro do range (e mês bate)
-        if not prev_changed.empty:
-            prev_changed = prev_changed[(pd.to_datetime(prev_changed["Data"]).dt.month == int(mes_prev)) & (pd.to_datetime(prev_changed["Data"]).dt.year == int(ano_prev))].copy()
-            if not prev_changed.empty:
-                hist_prev_out = _df_to_hist_dict(prev_changed)
-                # mescla com o restante do mês anterior já salvo
-                for ch, dfc in hist_prev_out.items():
-                    base = hist_prev.get(ch)
-                    if base is None or getattr(base, "empty", True):
-                        hist_prev[ch] = dfc
-                    else:
-                        b = base.copy()
-                        b["Data"] = pd.to_datetime(b["Data"], errors="coerce")
-                        dfc2 = dfc.copy()
-                        dfc2["Data"] = pd.to_datetime(dfc2["Data"], errors="coerce")
-                        # substitui pelas datas corrigidas
-                        b = b[~b["Data"].dt.normalize().isin(dfc2["Data"].dt.normalize())].copy()
-                        hist_prev[ch] = pd.concat([b, dfc2], ignore_index=True).sort_values("Data")
-                save_escala_mes_db(setor, int(ano_prev), int(mes_prev), hist_prev)
-
-        if not next_changed.empty:
-            next_changed = next_changed[(pd.to_datetime(next_changed["Data"]).dt.month == int(mes_next)) & (pd.to_datetime(next_changed["Data"]).dt.year == int(ano_next))].copy()
-            if not next_changed.empty:
-                hist_next_out = _df_to_hist_dict(next_changed)
-                for ch, dfc in hist_next_out.items():
-                    base = hist_next.get(ch)
-                    if base is None or getattr(base, "empty", True):
-                        hist_next[ch] = dfc
-                    else:
-                        b = base.copy()
-                        b["Data"] = pd.to_datetime(b["Data"], errors="coerce")
-                        dfc2 = dfc.copy()
-                        dfc2["Data"] = pd.to_datetime(dfc2["Data"], errors="coerce")
-                        b = b[~b["Data"].dt.normalize().isin(dfc2["Data"].dt.normalize())].copy()
-                        hist_next[ch] = pd.concat([b, dfc2], ignore_index=True).sort_values("Data")
-                save_escala_mes_db(setor, int(ano_next), int(mes_next), hist_next)
-
-        return hist_mes_out
-
-    except Exception:
-        return hist_mes
-
 def _regenerar_mes_inteiro(setor: str, ano: int, mes: int, seed: int = 0, respeitar_ajustes: bool = True):
     """
     Regera a escala do mês inteiro para TODO o setor.
@@ -4101,9 +3905,66 @@ def _regenerar_mes_inteiro(setor: str, ano: int, mes: int, seed: int = 0, respei
 
     except Exception:
         df_ref = None
+    # ===== df_ref_prev (mês anterior) para semana contínua SEG->DOM =====
+    df_ref_prev = None
+    try:
+        ano_prev = int(ano)
+        mes_prev = int(mes) - 1
+        if mes_prev <= 0:
+            mes_prev = 12
+            ano_prev -= 1
+
+        prev_obj = load_escala_mes_db(setor, ano_prev, mes_prev) if "load_escala_mes_db" in globals() else None
+
+        # load_escala_mes_db normalmente retorna dict[chapa] -> DataFrame
+        if isinstance(prev_obj, dict) and prev_obj:
+            parts = []
+            for ch_prev, dfp in prev_obj.items():
+                if dfp is None or getattr(dfp, "empty", True):
+                    continue
+                dfx = dfp.copy()
+                # garante colunas Data/Status
+                if "Data" not in dfx.columns:
+                    for c in ("data","dia","DataDia"):
+                        if c in dfx.columns:
+                            dfx["Data"] = dfx[c]
+                            break
+                if "Status" not in dfx.columns:
+                    for c in ("status","STATUS"):
+                        if c in dfx.columns:
+                            dfx["Status"] = dfx[c]
+                            break
+                dfx["Chapa"] = str(ch_prev)
+                if "Data" in dfx.columns and "Status" in dfx.columns:
+                    parts.append(dfx[["Data","Chapa","Status"]].copy())
+            if parts:
+                df_ref_prev = pd.concat(parts, ignore_index=True)
+
+        elif isinstance(prev_obj, pd.DataFrame) and (not prev_obj.empty):
+            dfx = prev_obj.copy()
+            if "Data" not in dfx.columns:
+                for c in ("data","dia","DataDia"):
+                    if c in dfx.columns:
+                        dfx["Data"] = dfx[c]
+                        break
+            if "Chapa" not in dfx.columns:
+                for c in ("chapa","CHAPA"):
+                    if c in dfx.columns:
+                        dfx["Chapa"] = dfx[c]
+                        break
+            if "Status" not in dfx.columns:
+                for c in ("status","STATUS"):
+                    if c in dfx.columns:
+                        dfx["Status"] = dfx[c]
+                        break
+            if {"Data","Chapa","Status"}.issubset(set(dfx.columns)):
+                df_ref_prev = dfx[["Data","Chapa","Status"]].copy()
+    except Exception:
+        df_ref_prev = None
+
 
     hist, estado_out = gerar_escala_setor_por_subgrupo(
-        setor, colaboradores, int(ano)
+        setor, colaboradores, int(ano, df_ref_prev=df_ref_prev)
 , int(mes),
         respeitar_ajustes=bool(respeitar_ajustes)
     )
@@ -4117,21 +3978,9 @@ def _regenerar_mes_inteiro(setor: str, ano: int, mes: int, seed: int = 0, respei
         hist_db = load_escala_mes_db(setor, int(ano), int(mes))
         hist_db = apply_overrides_to_hist(setor, int(ano), int(mes), hist_db)
         if hist_db:
-            # ✅ REGRA SUPREMA FINAL (SEMANA CONTÍNUA SEG→DOM, ATRAVESSA MÊS)
-            # aplica acima de tudo e, se precisar, também corrige dias do mês anterior/próximo no banco
-            hist_db = _apply_regra_semanal_continua_e_gravar(setor, int(ano), int(mes), hist_db, colaboradores)
-
-            # garantia final: não deixar 5+ dias seguidos após mexer nas folgas
-            try:
-                for ch, dfx in list(hist_db.items()):
-                    if dfx is None or getattr(dfx, "empty", True):
-                        continue
-                    hist_db[ch] = enforce_max_5_consecutive_work(dfx.copy(), ent="06:00", pode_sab=True, initial_consec=0)
-            except Exception:
-                pass
-
             save_escala_mes_db(setor, int(ano), int(mes), hist_db)
-            return True
+
+    return True
 
 
 
