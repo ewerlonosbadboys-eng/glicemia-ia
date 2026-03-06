@@ -3842,6 +3842,202 @@ def page_login():
                 st.success("Senha alterada.")
                 st.rerun()
 
+
+
+# =========================================================
+# REGRA SUPREMA — Semana contínua (SEG→DOM) atravessando meses
+# - Aplica a regra semanal em um DF estendido (pega dias do mês anterior e do próximo quando existirem)
+# - Se precisar corrigir dias do mês anterior/próximo (por estourar 2 folgas), também grava esses meses no banco.
+# =========================================================
+def _apply_regra_semanal_continua_e_gravar(setor: str, ano: int, mes: int, hist_mes: dict, colaboradores: list[dict] | None = None) -> dict:
+    """Aplica a regra semanal soberana considerando virada de mês (SEG→DOM contínuo).
+
+    Retorna o hist do mês atual possivelmente ajustado. Se houver ajustes em dias do mês anterior/próximo
+    que estejam dentro das semanas que tocam o mês atual, grava esses meses também no SQLite.
+
+    Observações importantes (regras do usuário):
+      - Semana = SEG..DOM
+      - Total = 2 folgas por semana
+      - Se DOM = Folga => DOM já conta 1; sobra apenas 1 folga em SEG..SÁB
+      - Se DOM = Trabalho => precisa 2 folgas em SEG..SÁB
+      - Sábado só pode ser Folga se a caixinha permitir (folga_sabado=1)
+      - Férias não entram na conta e não são mexidas
+    """
+    try:
+        if not hist_mes:
+            return hist_mes
+
+        # ---- mapa de colaborador (entrada padrão e permissão sábado)
+        col_map = {}
+        if colaboradores:
+            for c in colaboradores:
+                ch = str(c.get("Chapa") or c.get("chapa") or "").strip()
+                if not ch:
+                    continue
+                col_map[ch] = {
+                    "Entrada": (c.get("Entrada") or c.get("entrada") or "06:00"),
+                    "Folga_Sabado": int(c.get("Folga_Sabado") or c.get("folga_sabado") or c.get("folga_sabado_int") or 0) if str(c.get("Folga_Sabado") or c.get("folga_sabado") or 0).strip() != "" else 0,
+                }
+
+        def _ensure_times(dfx: pd.DataFrame) -> pd.DataFrame:
+            if dfx is None or dfx.empty:
+                return dfx
+            dfx = dfx.copy()
+            if "H_Entrada" not in dfx.columns:
+                dfx["H_Entrada"] = ""
+            if "H_Saida" not in dfx.columns:
+                dfx["H_Saida"] = ""
+            # preenche horários de trabalho quando estiver vazio
+            for i in dfx.index:
+                stt = str(dfx.at[i, "Status"])
+                if stt == "Trabalho" or stt in WORK_STATUSES:
+                    if not str(dfx.at[i, "H_Entrada"] or "").strip():
+                        ent = str(col_map.get(str(dfx.at[i, "Chapa"]), {}).get("Entrada") or "06:00")
+                        dfx.at[i, "H_Entrada"] = ent
+                    if not str(dfx.at[i, "H_Saida"] or "").strip():
+                        dfx.at[i, "H_Saida"] = _saida_from_entrada(str(dfx.at[i, "H_Entrada"]))
+                else:
+                    # folga/férias: limpa horários
+                    dfx.at[i, "H_Entrada"] = ""
+                    dfx.at[i, "H_Saida"] = ""
+            return dfx
+
+        # ---- mês anterior e próximo (se já existirem no banco)
+        ano_prev = int(ano); mes_prev = int(mes) - 1
+        if mes_prev <= 0:
+            mes_prev = 12; ano_prev -= 1
+        ano_next = int(ano); mes_next = int(mes) + 1
+        if mes_next >= 13:
+            mes_next = 1; ano_next += 1
+
+        hist_prev = load_escala_mes_db(setor, ano_prev, mes_prev) or {}
+        hist_next = load_escala_mes_db(setor, ano_next, mes_next) or {}
+
+        # ---- período estendido = de SEG da semana do dia 1 até DOM da semana do último dia do mês
+        first_day = pd.Timestamp(dt.date(int(ano), int(mes), 1))
+        last_day = pd.Timestamp(dt.date(int(ano), int(mes), calendar.monthrange(int(ano), int(mes))[1]))
+        ext_start = _week_start_monday(first_day)
+        ext_end = _week_start_monday(last_day) + pd.Timedelta(days=6)
+
+        # ---- junta tudo em DF grande (cur + fatias de prev/next que caem no range)
+        parts = []
+        def _hist_to_df(h: dict, tag: str):
+            out = []
+            for ch, dfx in (h or {}).items():
+                if dfx is None or getattr(dfx, "empty", True):
+                    continue
+                tmp = dfx.copy()
+                tmp["Chapa"] = str(ch)
+                if "Data" not in tmp.columns and "data" in tmp.columns:
+                    tmp["Data"] = tmp["data"]
+                tmp["Data"] = pd.to_datetime(tmp["Data"], errors="coerce")
+                tmp = tmp[(tmp["Data"] >= ext_start) & (tmp["Data"] <= ext_end)].copy()
+                if tmp.empty:
+                    continue
+                if "Status" not in tmp.columns and "status" in tmp.columns:
+                    tmp["Status"] = tmp["status"]
+                tmp["__tag"] = tag
+                # injeta permissão sábado
+                tmp["folga_sabado"] = int(col_map.get(str(ch), {}).get("Folga_Sabado", 0))
+                out.append(tmp[["Data","Chapa","Status","H_Entrada","H_Saida","folga_sabado","__tag"]].copy() if "H_Entrada" in tmp.columns else tmp[["Data","Chapa","Status","folga_sabado","__tag"]].copy())
+            return out
+
+        # current month
+        cur_list = []
+        for ch, dfx in hist_mes.items():
+            if dfx is None or getattr(dfx, "empty", True):
+                continue
+            tmp = dfx.copy()
+            tmp["Chapa"] = str(ch)
+            tmp["Data"] = pd.to_datetime(tmp["Data"], errors="coerce")
+            tmp["__tag"] = "cur"
+            tmp["folga_sabado"] = int(col_map.get(str(ch), {}).get("Folga_Sabado", 0))
+            cur_list.append(tmp[["Data","Chapa","Status","H_Entrada","H_Saida","folga_sabado","__tag"]].copy())
+        parts += cur_list
+        parts += _hist_to_df(hist_prev, "prev")
+        parts += _hist_to_df(hist_next, "next")
+
+        if not parts:
+            return hist_mes
+
+        big = pd.concat(parts, ignore_index=True)
+        big["Data"] = pd.to_datetime(big["Data"], errors="coerce")
+        big = big[(big["Data"] >= ext_start) & (big["Data"] <= ext_end)].copy()
+
+        # garante colunas
+        if "H_Entrada" not in big.columns:
+            big["H_Entrada"] = ""
+        if "H_Saida" not in big.columns:
+            big["H_Saida"] = ""
+        big["folga_sabado"] = big.get("folga_sabado", 0).fillna(0)
+
+        # aplica regra semanal soberana em tudo
+        big2 = enforce_weekly_folga_targets(big.rename(columns={"Data":"Data"}), pode_folgar_sabado=None)
+
+        # aplica horários coerentes após trocas Folga<->Trabalho
+        big2 = _ensure_times(big2)
+
+        # ---- split: grava mudanças para prev/cur/next
+        def _df_to_hist_dict(df_part: pd.DataFrame) -> dict:
+            out = {}
+            if df_part is None or df_part.empty:
+                return out
+            for ch, g in df_part.groupby("Chapa"):
+                gg = g.sort_values("Data").copy()
+                gg["Dia"] = gg["Data"].apply(lambda x: D_PT[pd.to_datetime(x).day_name()])
+                out[str(ch)] = gg[["Data","Dia","Status","H_Entrada","H_Saida"]].copy()
+            return out
+
+        prev_changed = big2[big2["__tag"] == "prev"].copy()
+        cur_changed = big2[big2["__tag"] == "cur"].copy()
+        next_changed = big2[big2["__tag"] == "next"].copy()
+
+        # atualiza hist_mes (apenas mês atual)
+        cur_changed = cur_changed[(pd.to_datetime(cur_changed["Data"]).dt.month == int(mes)) & (pd.to_datetime(cur_changed["Data"]).dt.year == int(ano))].copy()
+        hist_mes_out = _df_to_hist_dict(cur_changed)
+
+        # grava prev/next se houve qualquer linha dentro do range (e mês bate)
+        if not prev_changed.empty:
+            prev_changed = prev_changed[(pd.to_datetime(prev_changed["Data"]).dt.month == int(mes_prev)) & (pd.to_datetime(prev_changed["Data"]).dt.year == int(ano_prev))].copy()
+            if not prev_changed.empty:
+                hist_prev_out = _df_to_hist_dict(prev_changed)
+                # mescla com o restante do mês anterior já salvo
+                for ch, dfc in hist_prev_out.items():
+                    base = hist_prev.get(ch)
+                    if base is None or getattr(base, "empty", True):
+                        hist_prev[ch] = dfc
+                    else:
+                        b = base.copy()
+                        b["Data"] = pd.to_datetime(b["Data"], errors="coerce")
+                        dfc2 = dfc.copy()
+                        dfc2["Data"] = pd.to_datetime(dfc2["Data"], errors="coerce")
+                        # substitui pelas datas corrigidas
+                        b = b[~b["Data"].dt.normalize().isin(dfc2["Data"].dt.normalize())].copy()
+                        hist_prev[ch] = pd.concat([b, dfc2], ignore_index=True).sort_values("Data")
+                save_escala_mes_db(setor, int(ano_prev), int(mes_prev), hist_prev)
+
+        if not next_changed.empty:
+            next_changed = next_changed[(pd.to_datetime(next_changed["Data"]).dt.month == int(mes_next)) & (pd.to_datetime(next_changed["Data"]).dt.year == int(ano_next))].copy()
+            if not next_changed.empty:
+                hist_next_out = _df_to_hist_dict(next_changed)
+                for ch, dfc in hist_next_out.items():
+                    base = hist_next.get(ch)
+                    if base is None or getattr(base, "empty", True):
+                        hist_next[ch] = dfc
+                    else:
+                        b = base.copy()
+                        b["Data"] = pd.to_datetime(b["Data"], errors="coerce")
+                        dfc2 = dfc.copy()
+                        dfc2["Data"] = pd.to_datetime(dfc2["Data"], errors="coerce")
+                        b = b[~b["Data"].dt.normalize().isin(dfc2["Data"].dt.normalize())].copy()
+                        hist_next[ch] = pd.concat([b, dfc2], ignore_index=True).sort_values("Data")
+                save_escala_mes_db(setor, int(ano_next), int(mes_next), hist_next)
+
+        return hist_mes_out
+
+    except Exception:
+        return hist_mes
+
 def _regenerar_mes_inteiro(setor: str, ano: int, mes: int, seed: int = 0, respeitar_ajustes: bool = True):
     """
     Regera a escala do mês inteiro para TODO o setor.
@@ -3921,9 +4117,20 @@ def _regenerar_mes_inteiro(setor: str, ano: int, mes: int, seed: int = 0, respei
         hist_db = load_escala_mes_db(setor, int(ano), int(mes))
         hist_db = apply_overrides_to_hist(setor, int(ano), int(mes), hist_db)
         if hist_db:
-            save_escala_mes_db(setor, int(ano), int(mes), hist_db)
+            # ✅ REGRA SUPREMA FINAL (SEMANA CONTÍNUA SEG→DOM, ATRAVESSA MÊS)
+            # aplica acima de tudo e, se precisar, também corrige dias do mês anterior/próximo no banco
+            hist_db = _apply_regra_semanal_continua_e_gravar(setor, int(ano), int(mes), hist_db, colaboradores)
 
-    return True
+            # garantia final: não deixar 5+ dias seguidos após mexer nas folgas
+            try:
+                for ch, dfx in list(hist_db.items()):
+                    if dfx is None or getattr(dfx, "empty", True):
+                        continue
+                    hist_db[ch] = enforce_max_5_consecutive_work(dfx.copy(), ent="06:00", pode_sab=True, initial_consec=0)
+            except Exception:
+                pass
+
+            save_escala_mes_db(setor, int(ano), int(mes), hist_db)return True
 
 
 
