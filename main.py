@@ -4130,7 +4130,8 @@ def _regenerar_mes_inteiro(setor: str, ano: int, mes: int, seed: int = 0, respei
             except Exception:
                 pass
 
-            save_escala_mes_db(setor, int(ano), int(mes), hist_db)return True
+            save_escala_mes_db(setor, int(ano), int(mes), hist_db)
+            return True
 
 
 
