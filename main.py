@@ -3119,7 +3119,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
                 folgas_sem = int((df.loc[cand_days, "Status"] == "Folga").sum()) if cand_days else 0
 
                 while folgas_sem < target_folgas:
-                    counts_day, counts_day_hour = _counts_folgas_day_and_hour(hist_all, colab_by_chapa, chapas, cand_days, df_ref)
+                    counts_day, counts_day_hour = _counts_folgas_day_and_hour(hist_all, colab_by_chapa, chapas, cand_days, df_ref_cur)
 
                     possiveis = []
                     for j in cand_days:
@@ -3213,7 +3213,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
         chapas = [m["Chapa"] for m in membros]
         if chapas:
             rebalance_folgas_dia(
-                hist_all, colab_by_chapa, chapas, weeks, df_ref,
+                hist_all, colab_by_chapa, chapas, weeks, df_ref_cur,
                 estado_prev=estado_prev,
                 locked_idx=locked_idx,
                 past_flag=_past,
