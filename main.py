@@ -1361,15 +1361,62 @@ def is_past_competencia(ano: int, mes: int) -> bool:
 # =========================================================
 # AUTH
 # =========================================================
-def system_user_exists(setor: str, chapa: str) -> bool:
+def _norm_setor_login(setor: str) -> str:
+    return (setor or "").strip().upper()
+
+def _norm_chapa_login(chapa: str) -> str:
+    return (chapa or "").strip()
+
+def list_setores_login() -> list[str]:
+    """
+    Lista de setores para a tela de login.
+    Junta setores cadastrados + setores vindos dos usuários + colaboradores.
+    Assim o setor FLV aparece mesmo se a tabela `setores` estiver incompleta.
+    """
     con = db_conn()
     cur = con.cursor()
-    cur.execute("SELECT 1 FROM usuarios_sistema WHERE setor=? AND chapa=? LIMIT 1", (setor, chapa))
+    nomes = set()
+    queries = [
+        "SELECT nome FROM setores",
+        "SELECT DISTINCT setor AS nome FROM usuarios_sistema",
+        "SELECT DISTINCT setor AS nome FROM colaboradores",
+    ]
+    for q in queries:
+        try:
+            cur.execute(q)
+            for (nome,) in cur.fetchall():
+                nome = _norm_setor_login(nome)
+                if nome:
+                    nomes.add(nome)
+        except Exception:
+            pass
+    con.close()
+    nomes.update({"ADMIN", "GERAL", "GESTAO"})
+    return sorted(nomes)
+
+def system_user_exists(setor: str, chapa: str) -> bool:
+    setor = _norm_setor_login(setor)
+    chapa = _norm_chapa_login(chapa)
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute(
+        """
+        SELECT 1
+        FROM usuarios_sistema
+        WHERE UPPER(TRIM(COALESCE(setor,''))) = ?
+          AND TRIM(COALESCE(chapa,'')) = ?
+        LIMIT 1
+        """,
+        (setor, chapa),
+    )
     ok = cur.fetchone() is not None
     con.close()
     return ok
 
 def create_system_user(nome: str, setor: str, chapa: str, senha: str, is_lider: int = 0, is_admin: int = 0):
+    nome = (nome or "").strip()
+    setor = _norm_setor_login(setor)
+    chapa = _norm_chapa_login(chapa)
     salt = secrets.token_hex(16)
     senha_hash = hash_password(senha, salt)
     con = db_conn()
@@ -1383,38 +1430,67 @@ def create_system_user(nome: str, setor: str, chapa: str, senha: str, is_lider: 
     con.close()
 
 def verify_login(setor: str, chapa: str, senha: str):
+    setor = _norm_setor_login(setor)
+    chapa = _norm_chapa_login(chapa)
     con = db_conn()
     cur = con.cursor()
     cur.execute("""
-        SELECT nome, senha_hash, salt, is_admin, is_lider
+        SELECT nome, setor, chapa, senha_hash, salt, is_admin, is_lider
         FROM usuarios_sistema
-        WHERE setor=? AND chapa=?
+        WHERE UPPER(TRIM(COALESCE(setor,''))) = ?
+          AND TRIM(COALESCE(chapa,'')) = ?
         LIMIT 1
     """, (setor, chapa))
     row = cur.fetchone()
     con.close()
     if not row:
         return None
-    nome, senha_hash, salt, is_admin, is_lider = row
+    nome, setor_db, chapa_db, senha_hash, salt, is_admin, is_lider = row
     if hash_password(senha, salt) == senha_hash:
-        return {"nome": nome, "setor": setor, "chapa": chapa, "is_admin": bool(is_admin), "is_lider": bool(is_lider)}
+        return {
+            "nome": nome,
+            "setor": _norm_setor_login(setor_db),
+            "chapa": _norm_chapa_login(chapa_db),
+            "is_admin": bool(is_admin),
+            "is_lider": bool(is_lider),
+        }
     return None
 
 def is_lider_chapa(setor: str, chapa_lider: str) -> bool:
+    setor = _norm_setor_login(setor)
+    chapa_lider = _norm_chapa_login(chapa_lider)
     con = db_conn()
     cur = con.cursor()
-    cur.execute("SELECT is_lider FROM usuarios_sistema WHERE setor=? AND chapa=? LIMIT 1", (setor, chapa_lider))
+    cur.execute(
+        """
+        SELECT is_lider
+        FROM usuarios_sistema
+        WHERE UPPER(TRIM(COALESCE(setor,''))) = ?
+          AND TRIM(COALESCE(chapa,'')) = ?
+        LIMIT 1
+        """,
+        (setor, chapa_lider),
+    )
     row = cur.fetchone()
     con.close()
     return bool(row and row[0] == 1)
 
 def update_password(setor: str, chapa: str, nova_senha: str):
+    setor = _norm_setor_login(setor)
+    chapa = _norm_chapa_login(chapa)
     salt = secrets.token_hex(16)
     senha_hash = hash_password(nova_senha, salt)
     con = db_conn()
     cur = con.cursor()
-    cur.execute("UPDATE usuarios_sistema SET senha_hash=?, salt=? WHERE setor=? AND chapa=?",
-                (senha_hash, salt, setor, chapa))
+    cur.execute(
+        """
+        UPDATE usuarios_sistema
+        SET senha_hash=?, salt=?
+        WHERE UPPER(TRIM(COALESCE(setor,''))) = ?
+          AND TRIM(COALESCE(chapa,'')) = ?
+        """,
+        (senha_hash, salt, setor, chapa),
+    )
     con.commit()
     con.close()
 
@@ -3693,8 +3769,7 @@ def page_login():
 
     with tab_login:
         con = db_conn()
-        setores = pd.read_sql_query("SELECT nome FROM setores ORDER BY nome ASC", con)["nome"].tolist()
-        con.close()
+        setores = list_setores_login()
 
         # --- Login (melhorado): recentes + busca (case-insensitive) + salvar setor/chapa
         con = db_conn()
@@ -3819,8 +3894,7 @@ def page_login():
     with tab_esqueci:
         st.subheader("Redefinir senha (com chapa do líder do setor)")
         con = db_conn()
-        setores = pd.read_sql_query("SELECT nome FROM setores ORDER BY nome ASC", con)["nome"].tolist()
-        con.close()
+        setores = list_setores_login()
 
         setor = st.selectbox("Setor:", setores, key="fp_setor")
         chapa = st.text_input("Sua chapa (usuário do sistema):", key="fp_chapa")
