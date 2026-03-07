@@ -3849,7 +3849,8 @@ def page_login():
             rec2["nome"] = ""
         con.close()
 
-        kw = (st.session_state.get("lg_kw","") or "").strip()
+        st.caption("🔎 Buscar (setor / chapa / nome) — pode digitar em minúsculo (ex.: flv).")
+        kw = st.text_input("Buscar acesso:", value=st.session_state.get("lg_kw", ""), key="lg_kw").strip()
 
         # opções recentes
         recentes_opts = []
@@ -3862,7 +3863,7 @@ def page_login():
 
         # filtro por keyword
         if kw:
-            kwu = kw.strip().upper()
+            kwu = kw.upper()
             recentes_opts_f = [t for t in recentes_opts if kwu in t[0].upper()]
             setores_f = [s for s in setores if kwu in s.upper()]
         else:
@@ -3880,27 +3881,29 @@ def page_login():
                 )
                 chosen = next((t for t in recentes_opts_f if t[0] == pick), None)
                 if chosen:
-                    # pré-preenche setor/chapa
                     st.session_state["lg_setor_txt"] = chosen[1]
                     st.session_state["lg_chapa"] = chosen[2]
 
         with colB:
             lembrar = st.checkbox("✅ Salvar setor/chapa neste dispositivo", value=True, key="lg_remember")
 
-        setor_txt = st.text_input("Setor (digite ou selecione):", value=st.session_state.get("lg_setor_txt",""), key="lg_setor_txt")
-        # se usuário não digitou, oferece selectbox filtrado
-        if not setor_txt.strip():
-            setor_sel = st.selectbox("Setor (lista):", setores_f, key="lg_setor_sel")
-            setor_txt = setor_sel
+        setor_base = _norm_setor(st.session_state.get("lg_setor_txt", ""))
+        opcoes_setor = setores_f[:] if setores_f else setores[:]
+        if setor_base and setor_base not in opcoes_setor:
+            opcoes_setor = [setor_base] + opcoes_setor
+        if not opcoes_setor:
+            opcoes_setor = [setor_base] if setor_base else [""]
 
-        # normaliza setor (case-insensitive)
-        setor_norm = setor_txt.strip().upper()
+        idx_setor = 0
+        if setor_base in opcoes_setor:
+            idx_setor = opcoes_setor.index(setor_base)
+
+        setor_escolhido = st.selectbox("Setor:", opcoes_setor, index=idx_setor, key="lg_setor_sel")
+        st.session_state["lg_setor_txt"] = setor_escolhido
+        setor_norm = _norm_setor(setor_escolhido)
 
         chapa = st.text_input("Chapa:", value=st.session_state.get("lg_chapa",""), key="lg_chapa")
         senha = st.text_input("Senha:", type="password", key="lg_senha")
-
-        st.caption("🔎 Buscar (setor / chapa / nome) — pode digitar em minúsculo (ex.: flv).")
-        st.text_input("Buscar (setor / chapa / nome):", key="lg_kw")
 
         if st.button("Entrar", key="lg_btn"):
             u = verify_login(setor_norm, chapa.strip(), senha)
