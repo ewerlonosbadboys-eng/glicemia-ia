@@ -47,6 +47,7 @@ import os
 import re
 import shutil
 from pathlib import Path
+import unicodedata
 
 import hashlib
 import secrets
@@ -155,6 +156,49 @@ def _extract_entrada_tokens(block_text: str, ndays: int):
         tokens = tokens[:ndays]
     return tokens
 
+def _normalize_person_name(s: str) -> str:
+    s = (s or "").strip().upper()
+    s = unicodedata.normalize("NFKD", s)
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    s = re.sub(r"[^A-Z0-9 ]+", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+def _find_chapa_by_name_in_colaboradores(setor: str, nome: str) -> str:
+    """
+    Quando o PDF não traz a chapa no cabeçalho, tenta localizar pelo nome
+    dentro do setor informado. Só retorna chapa quando a correspondência é única.
+    """
+    nome_norm = _normalize_person_name(nome)
+    if not nome_norm:
+        return ""
+
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute("SELECT chapa, nome FROM colaboradores WHERE UPPER(TRIM(setor)) = UPPER(TRIM(?))", (setor,))
+    rows = cur.fetchall()
+    con.close()
+
+    # 1) Match exato pelo nome normalizado
+    exact = []
+    for chapa, nome_db in rows:
+        if _normalize_person_name(nome_db) == nome_norm:
+            exact.append((chapa, nome_db))
+    if len(exact) == 1:
+        return str(exact[0][0] or "").strip()
+
+    # 2) Match por contenção (útil quando o PDF corta um sobrenome ou junta espaços)
+    partial = []
+    for chapa, nome_db in rows:
+        db_norm = _normalize_person_name(nome_db)
+        if nome_norm and db_norm and (nome_norm in db_norm or db_norm in nome_norm):
+            partial.append((chapa, nome_db))
+    uniq = {str(ch or '').strip() for ch, _ in partial if str(ch or '').strip()}
+    if len(uniq) == 1:
+        return next(iter(uniq))
+
+    return ""
+
 def _group_consecutive_days(days: list[int]) -> list[tuple[int,int]]:
     if not days:
         return []
@@ -196,11 +240,22 @@ def _apply_pdf_import_to_db(
         con.commit()
         con.close()
 
+    resolvidos_por_nome = 0
+    ignorados_sem_chapa = []
+
     for it in items:
         nome = (it.get("nome") or "").strip()
         chapa = (it.get("chapa") or "").strip()
         tokens = it.get("tokens") or []
+
+        if not chapa and nome:
+            chapa = _find_chapa_by_name_in_colaboradores(setor_destino, nome)
+            if chapa:
+                it["chapa"] = chapa
+                resolvidos_por_nome += 1
+
         if not chapa:
+            ignorados_sem_chapa.append(nome or "(sem nome)")
             continue
 
         if criar_colabs:
@@ -244,6 +299,14 @@ def _apply_pdf_import_to_db(
     except Exception:
         pass
 
+    try:
+        if resolvidos_por_nome:
+            st.info(f"Importação PDF: {resolvidos_por_nome} colaborador(es) tiveram a chapa localizada automaticamente pelo nome no cadastro do setor.")
+        if ignorados_sem_chapa:
+            st.warning("PDF importado parcialmente. Sem chapa no PDF e sem correspondência única no cadastro para: " + ", ".join(ignorados_sem_chapa[:15]) + ("..." if len(ignorados_sem_chapa) > 15 else ""))
+    except Exception:
+        pass
+
 def _parse_escala_ponto_new_pdf_text(extracted_text: str):
     """
     Retorna: (ano, mes, parsed_items, erros)
@@ -267,6 +330,8 @@ def _parse_escala_ponto_new_pdf_text(extracted_text: str):
         tokens = _extract_entrada_tokens(b["texto"], ndays)
         if len(tokens) != ndays:
             erros.append(f"Funcionário {nome}: esperado {ndays} valores de Entrada, li {len(tokens)}.")
+        elif not chapa:
+            erros.append(f"Funcionário {nome}: PDF sem chapa no cabeçalho; vou tentar localizar pelo nome no cadastro do setor na hora de aplicar.")
         items.append({"nome": nome, "chapa": chapa, "tokens": tokens})
 
     return int(ano), int(mes), items, erros
