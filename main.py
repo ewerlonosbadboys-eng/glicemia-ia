@@ -5610,6 +5610,7 @@ def page_app():
 
 
             map_afa = st.checkbox("Tratar AFA como Folga", value=True, key="pdf_map_afa")
+            auto_gerar_pdf = st.checkbox("Após importar, gerar mês automaticamente respeitando ajustes", value=True, key="pdf_auto_gerar_mes")
 
 
             pdf = st.file_uploader("Enviar PDF da escala (ESCALA_PONTO_NEW)", type=["pdf"], key="adm_pdf_auto")
@@ -5691,7 +5692,29 @@ def page_app():
 
                                 )
 
-                                st.success("Importação aplicada com sucesso! Vá em Gerar Escala e marque 'Respeitar ajustes' para ver refletido.")
+                                if bool(auto_gerar_pdf):
+                                    st.session_state["cfg_ano"] = int(ano)
+                                    st.session_state["cfg_mes"] = int(mes)
+                                    st.session_state["last_seed"] = int(st.session_state.get("last_seed", 0) or 0)
+                                    try:
+                                        ok_pdf = _regenerar_mes_inteiro(
+                                            setor_dest,
+                                            int(ano),
+                                            int(mes),
+                                            seed=int(st.session_state.get("last_seed", 0)),
+                                            respeitar_ajustes=True,
+                                        )
+                                    except Exception as e_reg:
+                                        ok_pdf = False
+                                        st.error(f"Importou o PDF, mas falhou ao gerar o mês automaticamente: {e_reg}")
+
+                                    if ok_pdf:
+                                        st.success("Importação aplicada com sucesso! As folgas e horários do PDF já foram puxados e o mês foi gerado automaticamente respeitando os ajustes.")
+                                        st.rerun()
+                                    else:
+                                        st.warning("O PDF foi importado, mas a geração automática do mês não concluiu. Tente em 'Gerar Escala' com 'Respeitar ajustes'.")
+                                else:
+                                    st.success("Importação aplicada com sucesso! As folgas do PDF foram salvas como ajustes. Agora é só gerar o mês respeitando ajustes.")
 
                 except Exception as e:
 
