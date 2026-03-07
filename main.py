@@ -68,7 +68,7 @@ st.set_page_config(page_title="Escala 5x2 Oficial", layout="wide")
 # Aplica no sistema via overrides + (opcional) cadastro de férias
 # =========================================================
 
-_PDF_TOKEN_RE = re.compile(r"\b(\d{2}:\d{2}|FOLG|FER|AFA)\b", flags=re.IGNORECASE)
+_PDF_TOKEN_RE = re.compile(r"(\d{2}:\d{2}|FOLG|FER|AFA)", flags=re.IGNORECASE)
 
 def _norm_pdf_text(s: str) -> str:
     s = (s or "")
@@ -86,32 +86,71 @@ def _detect_mes_ano_from_text(s: str):
     return ano, mes
 
 def _split_employee_blocks_ponto_new(s: str):
-    pat = re.compile(r"\n\s*([A-ZÁÉÍÓÚÃÕÇ ]{8,}?)(?:\s*\(([^\)]+)\))?\s*\n\s*M[eê]s\s*:", flags=re.IGNORECASE)
-    matches = list(pat.finditer(s))
+    """
+    Divide os blocos do PDF ESCALA_PONTO_NEW de forma mais tolerante.
+    Aceita:
+      - nome + "Mês:" na MESMA linha
+      - nome + chapa entre parênteses opcional
+      - nomes sem chapa no texto extraído
+    """
+    t = _norm_pdf_text(s)
+
+    # Cabeçalhos de colaborador normalmente vêm sozinhos em uma linha.
+    # Exemplos aceitos:
+    #   LUCAS EDUARDO DOS SANTOS SANTILLO Mês: 03/2026
+    #   EWERLON DE JESUS DA SILVA E SILVA (020.1984) Mês: 03/2026
+    pat = re.compile(
+        r'(?im)^(?!Data\s*/\s*Dia\b)(?!Dia\s*/\s*Semana\b)(?!Entrada\b)(?!Sa[ií]da\b)'
+        r'(?!Sa[ií]da\s+Refei[cç][aã]o\b)(?!Horas\s+Trab\b)(?!É\s+DE\b)'
+        r'([A-ZÁÉÍÓÚÃÕÇ][A-ZÁÉÍÓÚÃÕÇ ]{7,}?)(?:\s*\(([\d\.\-\/]+)\))?\s+M[eê]s\s*:\s*(\d{2}/\d{4}).*$'
+    )
+    matches = list(pat.finditer(t))
     out = []
     for i, m in enumerate(matches):
         start = m.start()
-        end = matches[i+1].start() if i+1 < len(matches) else len(s)
-        nome = (m.group(1) or "").strip()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(t)
+        nome = re.sub(r"\s{2,}", " ", (m.group(1) or "").strip())
         chapa_raw = (m.group(2) or "").strip()
-        chapa = chapa_raw
-        block = s[start:end]
-        out.append({"nome": nome, "chapa_raw": chapa_raw, "chapa": chapa, "texto": block})
+        block = t[start:end]
+        out.append({"nome": nome, "chapa_raw": chapa_raw, "chapa": chapa_raw, "texto": block})
+
+    # Fallback: se a regex acima falhar, tenta quebrar por "Mês: MM/AAAA"
+    # aproveitando linhas anteriores com nome/chapa.
+    if out:
+        return out
+
+    pat2 = re.compile(r'(?im)^(.{8,}?)\s+M[eê]s\s*:\s*(\d{2}/\d{4}).*$')
+    matches2 = list(pat2.finditer(t))
+    for i, m in enumerate(matches2):
+        line = re.sub(r"\s{2,}", " ", (m.group(1) or "").strip())
+        if any(line.lower().startswith(x.lower()) for x in ["data / dia", "dia / semana", "entrada", "saída", "saida", "horas trab", "é de responsabilidade"]):
+            continue
+        mm = re.match(r'^(.*?)(?:\s*\(([\d\.\-\/]+)\))?$', line)
+        nome = re.sub(r"\s{2,}", " ", (mm.group(1) or "").strip()) if mm else line
+        chapa_raw = (mm.group(2) or "").strip() if mm else ""
+        start = m.start()
+        end = matches2[i + 1].start() if i + 1 < len(matches2) else len(t)
+        out.append({"nome": nome, "chapa_raw": chapa_raw, "chapa": chapa_raw, "texto": t[start:end]})
     return out
 
 def _extract_entrada_tokens(block_text: str, ndays: int):
     t = _norm_pdf_text(block_text)
+
+    # 1) Padrão principal: primeira linha "Entrada" vai até "Saída Refeição"
     m = re.search(r"\bEntrada\b\s+(.*?)\s+\bSa[ií]da\s+Refei[cç][aã]o\b", t, flags=re.IGNORECASE | re.DOTALL)
-    if not m:
-        m2 = re.search(r"\bEntrada\b\s+(.*?)(?:\n\s*Entrada\b|\n\s*Sa[ií]da\b)", t, flags=re.IGNORECASE | re.DOTALL)
+    if m:
+        region = m.group(1)
+    else:
+        # 2) Fallback: pega a PRIMEIRA ocorrência de "Entrada" até a próxima linha de seção
+        m2 = re.search(
+            r"(?is)\bEntrada\b\s+(.*?)(?=\bSa[ií]da\s+Refei[cç][aã]o\b|\bSa[ií]da\b|\bHoras\s+Trab\b|É\s+DE\s+RESPONSABILIDADE\b)",
+            t,
+        )
         if not m2:
             return []
         region = m2.group(1)
-    else:
-        region = m.group(1)
 
-    tokens = _PDF_TOKEN_RE.findall(region)
-    tokens = [x.upper() for x in tokens]
+    tokens = [x.upper() for x in _PDF_TOKEN_RE.findall(region)]
     if len(tokens) > ndays:
         tokens = tokens[:ndays]
     return tokens
@@ -5610,7 +5649,6 @@ def page_app():
 
 
             map_afa = st.checkbox("Tratar AFA como Folga", value=True, key="pdf_map_afa")
-            auto_gerar_pdf = st.checkbox("Após importar, gerar mês automaticamente respeitando ajustes", value=True, key="pdf_auto_gerar_mes")
 
 
             pdf = st.file_uploader("Enviar PDF da escala (ESCALA_PONTO_NEW)", type=["pdf"], key="adm_pdf_auto")
@@ -5692,29 +5730,7 @@ def page_app():
 
                                 )
 
-                                if bool(auto_gerar_pdf):
-                                    st.session_state["cfg_ano"] = int(ano)
-                                    st.session_state["cfg_mes"] = int(mes)
-                                    st.session_state["last_seed"] = int(st.session_state.get("last_seed", 0) or 0)
-                                    try:
-                                        ok_pdf = _regenerar_mes_inteiro(
-                                            setor_dest,
-                                            int(ano),
-                                            int(mes),
-                                            seed=int(st.session_state.get("last_seed", 0)),
-                                            respeitar_ajustes=True,
-                                        )
-                                    except Exception as e_reg:
-                                        ok_pdf = False
-                                        st.error(f"Importou o PDF, mas falhou ao gerar o mês automaticamente: {e_reg}")
-
-                                    if ok_pdf:
-                                        st.success("Importação aplicada com sucesso! As folgas e horários do PDF já foram puxados e o mês foi gerado automaticamente respeitando os ajustes.")
-                                        st.rerun()
-                                    else:
-                                        st.warning("O PDF foi importado, mas a geração automática do mês não concluiu. Tente em 'Gerar Escala' com 'Respeitar ajustes'.")
-                                else:
-                                    st.success("Importação aplicada com sucesso! As folgas do PDF foram salvas como ajustes. Agora é só gerar o mês respeitando ajustes.")
+                                st.success("Importação aplicada com sucesso! Vá em Gerar Escala e marque 'Respeitar ajustes' para ver refletido.")
 
                 except Exception as e:
 
