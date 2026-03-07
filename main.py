@@ -4701,22 +4701,26 @@ def page_app():
                     st.session_state["pf_last_chapa"] = ch_sel
 
                 colp1, colp2, colp3 = st.columns(3)
-                # Entrada: usar presets (inclui 06:50 e 12:40) para facilitar
+                # Entrada/Subgrupo: refletir exatamente o cadastro atual do colaborador selecionado.
                 ent_atual = (csel.get("Entrada") or BALANCO_DIA_ENTRADA).strip()
-                if ent_atual not in HORARIOS_ENTRADA_PRESET:
-                    opcoes_ent = HORARIOS_ENTRADA_PRESET + [ent_atual]
-                else:
-                    opcoes_ent = HORARIOS_ENTRADA_PRESET
+                opcoes_ent = list(HORARIOS_ENTRADA_PRESET)
+                if ent_atual and ent_atual not in opcoes_ent:
+                    opcoes_ent = opcoes_ent + [ent_atual]
+
+                # quando usa key + session_state, o valor do widget vem do session_state;
+                # por isso não devemos forçar index baseado no colaborador atual aqui.
                 ent_sel = colp1.selectbox(
                     "Entrada:",
                     options=opcoes_ent,
-                    index=opcoes_ent.index(ent_atual),
                     key="pf_ent_sel",
                 )
+
                 sg_opts = [""] + list_subgrupos(setor)
-                idx_default = sg_opts.index(csel["Subgrupo"]) if csel["Subgrupo"] in sg_opts else 0
-                sg = colp2.selectbox("Subgrupo:", sg_opts, index=idx_default, key="pf_sg")
-                sab = colp3.checkbox("Permitir folga sábado", value=bool(csel["Folga_Sab"]), key="pf_sab")
+                sg_atual = (csel.get("Subgrupo") or "").strip()
+                if sg_atual and sg_atual not in sg_opts:
+                    sg_opts.append(sg_atual)
+                sg = colp2.selectbox("Subgrupo:", sg_opts, key="pf_sg")
+                sab = colp3.checkbox("Permitir folga sábado", key="pf_sab")
 
                 if st.button("Salvar perfil", key="pf_save"):
                     update_colaborador_perfil(setor, ch_sel, sg, ent_sel, sab)
