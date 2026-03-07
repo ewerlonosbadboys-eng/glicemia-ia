@@ -134,80 +134,42 @@ def _split_employee_blocks_ponto_new(s: str):
         out.append({"nome": nome, "chapa_raw": chapa_raw, "chapa": chapa_raw, "texto": t[start:end]})
     return out
 
-
-def _canon_pdf_label(s: str) -> str:
-    s = unicodedata.normalize("NFKD", str(s or ""))
-    s = "".join(ch for ch in s if not unicodedata.combining(ch))
-    s = re.sub(r"\s+", " ", s).strip().lower()
-    if s.startswith("saida refeicao"):
-        return "saida_refeicao"
-    if s.startswith("horas trab"):
-        return "horas_trab"
-    if s == "entrada":
-        return "entrada"
-    if s == "saida":
-        return "saida"
-    return s
-
-def _tokenize_pdf_row(region: str, ndays: int) -> list[str]:
-    s = _norm_pdf_text(region or "")
-    # separa tokens colados
-    s = re.sub(r"(?i)(FOLG|FER|AFA)(?=(?:FOLG|FER|AFA|\d{2}:\d{2}))", r"\1 ", s)
-    s = re.sub(r"(\d{2}:\d{2})(?=(?:\d{2}:\d{2}|FOLG|FER|AFA))", r"\1 ", s, flags=re.IGNORECASE)
-    toks = re.findall(r"\d{2}:\d{2}|FOLG|FER|AFA", s, flags=re.IGNORECASE)
-    out = []
-    for tok in toks:
-        out.append(tok if re.match(r"^\d{2}:\d{2}$", tok) else tok.upper())
-    if len(out) > ndays:
-        out = out[:ndays]
-    return out
-
-def _extract_pdf_rows_tokens(block_text: str, ndays: int) -> dict:
+def _extract_entrada_tokens(block_text: str, ndays: int):
     """
-    Extrai as 4 linhas do quadro do colaborador:
-    - entrada1
-    - saida_refeicao
-    - entrada2
-    - saida
-
-    Faz isso pelo quadro completo do PDF, em vez de depender só da primeira linha.
+    Extrai os tokens da PRIMEIRA linha "Entrada" do quadro do colaborador.
+    Este PDF costuma vir com rótulos colados no primeiro valor da linha seguinte
+    (ex.: "Saída Refeição14:00"), então a regex precisa respeitar a quebra de linha
+    e não depender de espaços entre o rótulo e o primeiro horário.
     """
     t = _norm_pdf_text(block_text or "")
-    label_pat = re.compile(
-        r"Sa[ií]da\s*Refei[cç][aã]o|Horas\s*Trab\.?|\bEntrada\b|\bSa[ií]da\b",
-        flags=re.IGNORECASE
-    )
-    hits = list(label_pat.finditer(t))
-    if not hits:
-        return {}
 
-    labels = [(_canon_pdf_label(m.group(0)), m.start(), m.end()) for m in hits]
+    patterns = [
+        # Caminho principal: pega a linha após "\nEntrada" até a próxima linha "\nSaída Refeição"
+        r"(?is)\nEntrada\s+(.*?)\nSa[ií]da\s*Refei[cç][aã]o",
+        # Fallbacks mais tolerantes
+        r"(?is)\bEntrada\b\s*(.*?)(?=\nSa[ií]da\s*Refei[cç][aã]o)",
+        r"(?is)\bEntrada\b\s*(.*?)(?=Sa[ií]da\s*Refei[cç][aã]o)",
+    ]
 
-    seq = ["entrada", "saida_refeicao", "entrada", "saida", "horas_trab"]
-    idxs = None
-    for i in range(len(labels) - 4):
-        cand = [labels[i + j][0] for j in range(5)]
-        if cand == seq:
-            idxs = [i + j for j in range(5)]
+    region = ""
+    padded = "\n" + t
+    for pat in patterns:
+        m = re.search(pat, padded)
+        if m:
+            region = m.group(1)
             break
-    if idxs is None:
-        return {}
 
-    e1 = t[labels[idxs[0]][2]:labels[idxs[1]][1]]
-    sr = t[labels[idxs[1]][2]:labels[idxs[2]][1]]
-    e2 = t[labels[idxs[2]][2]:labels[idxs[3]][1]]
-    s4 = t[labels[idxs[3]][2]:labels[idxs[4]][1]]
+    if not region:
+        return []
 
-    return {
-        "entrada1": _tokenize_pdf_row(e1, ndays),
-        "saida_refeicao": _tokenize_pdf_row(sr, ndays),
-        "entrada2": _tokenize_pdf_row(e2, ndays),
-        "saida": _tokenize_pdf_row(s4, ndays),
-    }
+    # Corrige horários colados sem espaço, ex.: 12:4011:40
+    region = re.sub(r"(\d{2}:\d{2})(?=\d{2}:\d{2})", r"\1 ", region)
 
-def _extract_entrada_tokens(block_text: str, ndays: int):
-    rows = _extract_pdf_rows_tokens(block_text, ndays)
-    return list(rows.get("entrada1", []))
+    tokens = [x.upper() for x in _PDF_TOKEN_RE.findall(region)]
+    if len(tokens) > ndays:
+        tokens = tokens[:ndays]
+    return tokens
+
 def _normalize_person_name(s: str) -> str:
     s = (s or "").strip().upper()
     s = unicodedata.normalize("NFKD", s)
@@ -334,9 +296,13 @@ def _apply_pdf_import_to_db(
         if criar_colabs:
             upsert_colaborador_nome(setor_destino, chapa, nome)
 
+        saida_tokens = list(it.get("saida_tokens") or [])
         ferias_days = []
         for dia, tok in enumerate(tokens, start=1):
             tok = (tok or "").upper()
+            saida_tok = ""
+            if dia - 1 < len(saida_tokens):
+                saida_tok = str(saida_tokens[dia - 1] or "").upper()
             if tok == "FOLG":
                 set_override(setor_destino, ano, mes, chapa, dia, "Status", "Folga")
                 delete_override(setor_destino, ano, mes, chapa, dia, "H_Entrada")
@@ -359,6 +325,10 @@ def _apply_pdf_import_to_db(
                 if re.match(r"^\d{2}:\d{2}$", tok):
                     set_override(setor_destino, ano, mes, chapa, dia, "Status", "Trabalho")
                     set_override(setor_destino, ano, mes, chapa, dia, "H_Entrada", tok)
+                    if re.match(r"^\d{2}:\d{2}$", saida_tok):
+                        set_override(setor_destino, ano, mes, chapa, dia, "H_Saida", saida_tok)
+                    else:
+                        delete_override(setor_destino, ano, mes, chapa, dia, "H_Saida")
 
         if cadastrar_ferias and ferias_days:
             ranges = _group_consecutive_days(ferias_days)
@@ -380,7 +350,6 @@ def _apply_pdf_import_to_db(
     except Exception:
         pass
 
-
 def _build_hist_from_pdf_items(setor: str, ano: int, mes: int, items: list[dict], map_afa_para_folga: bool = True) -> tuple[dict, dict]:
     """Monta a escala do mês exatamente como veio no PDF.
 
@@ -397,12 +366,8 @@ def _build_hist_from_pdf_items(setor: str, ano: int, mes: int, items: list[dict]
         chapa = str(it.get('chapa') or '').strip()
         if not chapa:
             continue
-
-        rows = dict(it.get('row_tokens') or {})
-        e1 = list(rows.get('entrada1') or it.get('tokens') or [])
-        e2 = list(rows.get('entrada2') or [])
-        s4 = list(rows.get('saida') or [])
-
+        tokens = list(it.get('tokens') or [])
+        saida_tokens = list(it.get('saida_tokens') or [])
         df = df_ref.copy()
         df['Data'] = pd.to_datetime(df['Data'], errors='coerce')
         df['Status'] = 'Trabalho'
@@ -410,44 +375,46 @@ def _build_hist_from_pdf_items(setor: str, ano: int, mes: int, items: list[dict]
         df['H_Saida'] = ''
 
         ndays = len(df)
+        if len(tokens) < ndays:
+            tokens += [''] * (ndays - len(tokens))
+        else:
+            tokens = tokens[:ndays]
+        if len(saida_tokens) < ndays:
+            saida_tokens += [''] * (ndays - len(saida_tokens))
+        else:
+            saida_tokens = saida_tokens[:ndays]
 
-        def _pad(xs):
-            xs = list(xs or [])
-            if len(xs) < ndays:
-                xs += [''] * (ndays - len(xs))
-            else:
-                xs = xs[:ndays]
-            return xs
-
-        e1 = _pad(e1)
-        e2 = _pad(e2)
-        s4 = _pad(s4)
-
-        for i in range(ndays):
-            toks = [str(x or '').strip().upper() for x in [e1[i], e2[i], s4[i]] if str(x or '').strip()]
-            if 'FER' in toks:
-                df.loc[i, 'Status'] = 'Férias'
+        for i, tok in enumerate(tokens):
+            raw = str(tok or '').strip()
+            up = raw.upper()
+            raw_saida = str(saida_tokens[i] or '').strip()
+            up_saida = raw_saida.upper()
+            if up in ('FOLG', 'FER', 'AFA'):
+                if up == 'FOLG':
+                    df.loc[i, 'Status'] = 'Folga'
+                elif up == 'FER':
+                    df.loc[i, 'Status'] = 'Férias'
+                else:
+                    df.loc[i, 'Status'] = 'Folga' if bool(map_afa_para_folga) else 'Afastamento'
                 df.loc[i, 'H_Entrada'] = ''
                 df.loc[i, 'H_Saida'] = ''
-                continue
-            if 'AFA' in toks:
-                df.loc[i, 'Status'] = 'Folga' if bool(map_afa_para_folga) else 'Afastamento'
-                df.loc[i, 'H_Entrada'] = ''
-                df.loc[i, 'H_Saida'] = ''
-                continue
-            if 'FOLG' in toks:
-                df.loc[i, 'Status'] = 'Folga'
-                df.loc[i, 'H_Entrada'] = ''
-                df.loc[i, 'H_Saida'] = ''
-                continue
-
-            ent = e1[i] if re.match(r'^\d{2}:\d{2}$', str(e1[i] or '').strip()) else ''
-            sai = s4[i] if re.match(r'^\d{2}:\d{2}$', str(s4[i] or '').strip()) else ''
-
-            if ent or sai or (re.match(r'^\d{2}:\d{2}$', str(e2[i] or '').strip()) is not None):
+            elif re.match(r'^\d{2}:\d{2}$', raw):
                 df.loc[i, 'Status'] = 'Trabalho'
-                df.loc[i, 'H_Entrada'] = ent
-                df.loc[i, 'H_Saida'] = sai if sai else (_saida_from_entrada(ent) if ent else '')
+                df.loc[i, 'H_Entrada'] = raw
+                if re.match(r'^\d{2}:\d{2}$', raw_saida):
+                    df.loc[i, 'H_Saida'] = raw_saida
+                else:
+                    df.loc[i, 'H_Saida'] = _saida_from_entrada(raw)
+            elif up_saida in ('FOLG', 'FER', 'AFA'):
+                # Se a 1ª linha falhar mas a saída indicar status, respeita o status do PDF.
+                if up_saida == 'FOLG':
+                    df.loc[i, 'Status'] = 'Folga'
+                elif up_saida == 'FER':
+                    df.loc[i, 'Status'] = 'Férias'
+                else:
+                    df.loc[i, 'Status'] = 'Folga' if bool(map_afa_para_folga) else 'Afastamento'
+                df.loc[i, 'H_Entrada'] = ''
+                df.loc[i, 'H_Saida'] = ''
             else:
                 df.loc[i, 'Status'] = 'Trabalho'
                 df.loc[i, 'H_Entrada'] = ''
@@ -484,7 +451,7 @@ def _build_hist_from_pdf_items(setor: str, ano: int, mes: int, items: list[dict]
 def _parse_escala_ponto_new_pdf_text(extracted_text: str):
     """
     Retorna: (ano, mes, parsed_items, erros)
-    parsed_items: lista de dicts {nome, chapa, tokens, row_tokens}
+    parsed_items: lista de dicts {nome, chapa, tokens}
     """
     t = _norm_pdf_text(extracted_text)
     ano, mes = _detect_mes_ano_from_text(t)
@@ -501,17 +468,19 @@ def _parse_escala_ponto_new_pdf_text(extracted_text: str):
     for b in blocks:
         nome = b["nome"]
         chapa = b["chapa"]
-        row_tokens = _extract_pdf_rows_tokens(b["texto"], ndays)
-        tokens = list(row_tokens.get("entrada1", []))
+        rows = _extract_pdf_row_tokens(b["texto"], ndays)
+        tokens = list(rows.get("entrada_1") or [])
+        saida_tokens = list(rows.get("saida") or [])
         if len(tokens) != ndays:
-            erros.append(f"Funcionário {nome}: esperado {ndays} valores na linha Entrada, li {len(tokens)}.")
-        if len(row_tokens.get("saida", [])) not in (0, ndays):
-            erros.append(f"Funcionário {nome}: linha Saída veio com {len(row_tokens.get('saida', []))} valor(es); esperado {ndays}.")
+            erros.append(f"Funcionário {nome}: esperado {ndays} valores de Entrada, li {len(tokens)}.")
+        if saida_tokens and len(saida_tokens) != ndays:
+            erros.append(f"Funcionário {nome}: esperado {ndays} valores de Saída, li {len(saida_tokens)}.")
         elif not chapa:
             erros.append(f"Funcionário {nome}: PDF sem chapa no cabeçalho; vou tentar localizar pelo nome no cadastro do setor e, se não achar, criar chapa automática para cadastrar/importar mesmo assim.")
-        items.append({"nome": nome, "chapa": chapa, "tokens": tokens, "row_tokens": row_tokens})
+        items.append({"nome": nome, "chapa": chapa, "tokens": tokens, "saida_tokens": saida_tokens})
 
     return int(ano), int(mes), items, erros
+
 
 
 
