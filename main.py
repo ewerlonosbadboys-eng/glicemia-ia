@@ -199,6 +199,26 @@ def _find_chapa_by_name_in_colaboradores(setor: str, nome: str) -> str:
 
     return ""
 
+
+def _generate_fallback_pdf_chapa(setor: str, nome: str, ano: int, mes: int) -> str:
+    """
+    Gera uma chapa técnica estável para permitir cadastrar/importar colaboradores
+    do PDF mesmo quando a chapa não veio no texto extraído.
+    Formato: PDFYYMM_XXXXXX
+    """
+    base_nome = _normalize_person_name(nome) or "SEM_NOME"
+    digest = hashlib.sha1(f"{(setor or '').strip().upper()}|{base_nome}".encode("utf-8")).hexdigest().upper()[:6]
+    chapa = f"PDF{int(ano)%100:02d}{int(mes):02d}_{digest}"
+
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute("SELECT chapa, nome FROM colaboradores WHERE UPPER(TRIM(setor)) = UPPER(TRIM(?)) AND chapa=? LIMIT 1", (setor, chapa))
+    row = cur.fetchone()
+    con.close()
+    if row:
+        return str(row[0] or "").strip()
+    return chapa
+
 def _group_consecutive_days(days: list[int]) -> list[tuple[int,int]]:
     if not days:
         return []
@@ -241,7 +261,7 @@ def _apply_pdf_import_to_db(
         con.close()
 
     resolvidos_por_nome = 0
-    ignorados_sem_chapa = []
+    gerados_sem_chapa = []
 
     for it in items:
         nome = (it.get("nome") or "").strip()
@@ -255,8 +275,9 @@ def _apply_pdf_import_to_db(
                 resolvidos_por_nome += 1
 
         if not chapa:
-            ignorados_sem_chapa.append(nome or "(sem nome)")
-            continue
+            chapa = _generate_fallback_pdf_chapa(setor_destino, nome, int(ano), int(mes))
+            it["chapa"] = chapa
+            gerados_sem_chapa.append(f"{nome or '(sem nome)'} -> {chapa}")
 
         if criar_colabs:
             upsert_colaborador_nome(setor_destino, chapa, nome)
@@ -302,8 +323,8 @@ def _apply_pdf_import_to_db(
     try:
         if resolvidos_por_nome:
             st.info(f"Importação PDF: {resolvidos_por_nome} colaborador(es) tiveram a chapa localizada automaticamente pelo nome no cadastro do setor.")
-        if ignorados_sem_chapa:
-            st.warning("PDF importado parcialmente. Sem chapa no PDF e sem correspondência única no cadastro para: " + ", ".join(ignorados_sem_chapa[:15]) + ("..." if len(ignorados_sem_chapa) > 15 else ""))
+        if gerados_sem_chapa:
+            st.warning("Importação PDF: criei chapa automática para colaborador(es) sem chapa no texto do PDF: " + "; ".join(gerados_sem_chapa[:12]) + (" ..." if len(gerados_sem_chapa) > 12 else ""))
     except Exception:
         pass
 
@@ -331,7 +352,7 @@ def _parse_escala_ponto_new_pdf_text(extracted_text: str):
         if len(tokens) != ndays:
             erros.append(f"Funcionário {nome}: esperado {ndays} valores de Entrada, li {len(tokens)}.")
         elif not chapa:
-            erros.append(f"Funcionário {nome}: PDF sem chapa no cabeçalho; vou tentar localizar pelo nome no cadastro do setor na hora de aplicar.")
+            erros.append(f"Funcionário {nome}: PDF sem chapa no cabeçalho; vou tentar localizar pelo nome no cadastro do setor e, se não achar, criar chapa automática para cadastrar/importar mesmo assim.")
         items.append({"nome": nome, "chapa": chapa, "tokens": tokens})
 
     return int(ano), int(mes), items, erros
