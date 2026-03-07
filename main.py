@@ -3186,7 +3186,7 @@ def rebalance_folgas_dia(
 
     _past = bool(past_flag)
 
-    def is_dom(i): return df_ref_cur.loc[i, "Dia"] == "dom"
+    def is_dom(i): return df_ref.loc[i, "Dia"] == "dom"
 
     def is_locked(ch, i):
         return bool(i in (locked_idx.get(ch, set()) or set()))
