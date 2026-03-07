@@ -170,6 +170,68 @@ def _extract_entrada_tokens(block_text: str, ndays: int):
         tokens = tokens[:ndays]
     return tokens
 
+
+
+def _canon_pdf_label(s: str) -> str:
+    s = unicodedata.normalize("NFKD", str(s or ""))
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    s = re.sub(r"\s+", " ", s).strip().lower()
+    if s.startswith("saida refeicao"):
+        return "saida_refeicao"
+    if s.startswith("horas trab"):
+        return "horas_trab"
+    if s == "entrada":
+        return "entrada"
+    if s == "saida":
+        return "saida"
+    return s
+
+
+def _tokenize_pdf_row(region: str, ndays: int) -> list[str]:
+    s = _norm_pdf_text(region or "")
+    s = re.sub(r"(?i)(FOLG|FER|AFA)(?=(?:FOLG|FER|AFA|\d{2}:\d{2}))", r"\1 ", s)
+    s = re.sub(r"(\d{2}:\d{2})(?=(?:\d{2}:\d{2}|FOLG|FER|AFA))", r"\1 ", s, flags=re.IGNORECASE)
+    toks = re.findall(r"\d{2}:\d{2}|FOLG|FER|AFA", s, flags=re.IGNORECASE)
+    out = []
+    for tok in toks:
+        out.append(tok if re.match(r"^\d{2}:\d{2}$", tok) else tok.upper())
+    if len(out) > ndays:
+        out = out[:ndays]
+    return out
+
+
+def _extract_pdf_row_tokens(block_text: str, ndays: int) -> dict:
+    """
+    Extrai as linhas principais do quadro do colaborador.
+    Retorna pelo menos:
+    - entrada_1
+    - saida
+    Usa fallback para a linha de entrada antiga se o quadro completo falhar.
+    """
+    t = _norm_pdf_text(block_text or "")
+    label_pat = re.compile(
+        r"Sa[ií]da\s*Refei[cç][aã]o|Horas\s*Trab\.?|Entrada|Sa[ií]da",
+        flags=re.IGNORECASE,
+    )
+    hits = list(label_pat.finditer(t))
+    if hits:
+        labels = [(_canon_pdf_label(m.group(0)), m.start(), m.end()) for m in hits]
+        seq = ["entrada", "saida_refeicao", "entrada", "saida", "horas_trab"]
+        for i in range(len(labels) - 4):
+            cand = [labels[i + j][0] for j in range(5)]
+            if cand == seq:
+                e1 = t[labels[i + 0][2]:labels[i + 1][1]]
+                s4 = t[labels[i + 3][2]:labels[i + 4][1]]
+                return {
+                    "entrada_1": _tokenize_pdf_row(e1, ndays),
+                    "saida": _tokenize_pdf_row(s4, ndays),
+                }
+    # fallback seguro: mantém compatibilidade com a extração antiga
+    return {
+        "entrada_1": _extract_entrada_tokens(block_text, ndays),
+        "saida": [],
+    }
+
 def _normalize_person_name(s: str) -> str:
     s = (s or "").strip().upper()
     s = unicodedata.normalize("NFKD", s)
