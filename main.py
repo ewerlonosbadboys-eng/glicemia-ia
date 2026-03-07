@@ -5735,6 +5735,7 @@ def page_app():
 
 
             map_afa = st.checkbox("Tratar AFA como Folga", value=True, key="pdf_map_afa")
+            auto_gerar_pdf = st.checkbox("Após importar, gerar mês automaticamente respeitando ajustes", value=True, key="pdf_auto_gerar")
 
 
             pdf = st.file_uploader("Enviar PDF da escala (ESCALA_PONTO_NEW)", type=["pdf"], key="adm_pdf_auto")
@@ -5816,7 +5817,33 @@ def page_app():
 
                                 )
 
-                                st.success("Importação aplicada com sucesso! Vá em Gerar Escala e marque 'Respeitar ajustes' para ver refletido.")
+                                if bool(auto_gerar_pdf):
+
+                                    ok_auto = _regenerar_mes_inteiro(
+
+                                        setor_dest, int(ano), int(mes),
+
+                                        seed=int(st.session_state.get("last_seed", 0)),
+
+                                        respeitar_ajustes=True
+
+                                    )
+
+                                    if ok_auto:
+
+                                        st.session_state["ano"] = int(ano)
+
+                                        st.session_state["mes"] = int(mes)
+
+                                        st.success("PDF importado com sucesso! Folgas, AFA e férias aplicadas e a escala do mês foi gerada automaticamente respeitando os ajustes.")
+
+                                    else:
+
+                                        st.warning("PDF importado, mas não consegui gerar a escala automaticamente. Verifique se existem colaboradores cadastrados no setor.")
+
+                                else:
+
+                                    st.success("Importação aplicada com sucesso! Agora clique em 'Gerar agora (respeita ajustes)' para montar a escala do mês com folgas, AFA e férias do PDF.")
 
                 except Exception as e:
 
