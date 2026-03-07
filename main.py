@@ -510,6 +510,38 @@ def _build_hist_from_pdf_items(setor: str, ano: int, mes: int, items: list[dict]
 
     return hist, estado
 
+def _diagnostico_pdf_items(items: list[dict], ano: int, mes: int) -> dict:
+    ndays = calendar.monthrange(int(ano), int(mes))[1]
+    rows = []
+    incompletos = []
+    for it in (items or []):
+        nome = str(it.get("nome") or "").strip()
+        chapa = str(it.get("chapa") or "").strip()
+        tokens = list(it.get("tokens") or [])
+        saida_tokens = list(it.get("saida_tokens") or [])
+        valid_ent = sum(1 for x in tokens if str(x or '').strip())
+        valid_sai = sum(1 for x in saida_tokens if str(x or '').strip())
+        folg = sum(1 for x in tokens if str(x or '').strip().upper() == 'FOLG')
+        fer = sum(1 for x in tokens if str(x or '').strip().upper() == 'FER')
+        afa = sum(1 for x in tokens if str(x or '').strip().upper() == 'AFA')
+        horarios = sum(1 for x in tokens if re.match(r'^\d{2}:\d{2}$', str(x or '').strip()))
+        brancos = max(0, ndays - valid_ent)
+        row = {
+            'Nome': nome,
+            'Chapa': chapa,
+            'Entradas_lidas': valid_ent,
+            'Saidas_lidas': valid_sai,
+            'Horarios': horarios,
+            'FOLG': folg,
+            'FER': fer,
+            'AFA': afa,
+            'Brancos': brancos,
+        }
+        rows.append(row)
+        if valid_ent < ndays:
+            incompletos.append(row)
+    return {'ndays': ndays, 'rows': rows, 'incompletos': incompletos}
+
 def _parse_escala_ponto_new_pdf_text(extracted_text: str):
     """
     Retorna: (ano, mes, parsed_items, erros)
@@ -5996,6 +6028,8 @@ def page_app():
                             st.success(f"Modelo reconhecido ✅  Mês detectado: {mes:02d}/{ano} | Funcionários no PDF: {len(items)}")
 
 
+                            diag_pdf = _diagnostico_pdf_items(items, int(ano), int(mes))
+
                             with st.expander("Prévia (primeiros 3 funcionários)"):
 
                                 for it in items[:3]:
@@ -6004,8 +6038,19 @@ def page_app():
 
                                     st.write(it.get("tokens", [])[:10], " ...")
 
+                            with st.expander("Diagnóstico da leitura do PDF"):
+                                st.caption(f"Cada colaborador deveria ter {diag_pdf['ndays']} dias lidos.")
+                                df_diag = pd.DataFrame(diag_pdf['rows'])
+                                st.dataframe(df_diag, use_container_width=True, hide_index=True)
+                                if diag_pdf['incompletos']:
+                                    st.warning(f"Colaboradores com leitura incompleta: {len(diag_pdf['incompletos'])}")
+                                    st.dataframe(pd.DataFrame(diag_pdf['incompletos']), use_container_width=True, hide_index=True)
 
-                            if st.button("✅ Aplicar escala do PDF no sistema (1 clique)", key="btn_apply_pdf"):
+                            pode_aplicar_pdf = len(diag_pdf['incompletos']) == 0
+                            if not pode_aplicar_pdf:
+                                st.error("Leitura parcial detectada. Para evitar escala em branco ou incompleta, esta versão não aplica o PDF enquanto houver colaboradores com menos de 31 dias lidos.")
+
+                            if st.button("✅ Aplicar escala do PDF no sistema (1 clique)", key="btn_apply_pdf", disabled=not pode_aplicar_pdf):
 
                                 _apply_pdf_import_to_db(
 
