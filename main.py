@@ -2190,11 +2190,25 @@ def infer_ultimo_domingo_status_from_escala(setor: str, ano: int, mes: int, chap
 
 
 
+def _norm_override_campo(campo: str) -> str:
+    c = str(campo or '').strip().lower()
+    mapa = {
+        'status': 'status',
+        'h_entrada': 'h_entrada',
+        'entrada': 'h_entrada',
+        'h_saida': 'h_saida',
+        'saida': 'h_saida',
+    }
+    return mapa.get(c, c)
+
+
 def set_override(setor: str, ano: int, mes: int, chapa: str, dia: int, campo: str, valor: str):
     """
     Cria/atualiza um override (UPSERT) na tabela overrides.
-    - campo e valor são strings (ex.: "Status" -> "Folga", "H_Entrada" -> "06:00")
+    Todos os campos são normalizados para o padrão usado pelo motor:
+    status / h_entrada / h_saida.
     """
+    campo = _norm_override_campo(campo)
     con = db_conn()
     cur = con.cursor()
     cur.execute("""
@@ -2202,7 +2216,7 @@ def set_override(setor: str, ano: int, mes: int, chapa: str, dia: int, campo: st
         VALUES(?,?,?,?,?,?,?)
         ON CONFLICT(setor, ano, mes, chapa, dia, campo)
         DO UPDATE SET valor=excluded.valor
-    """, (str(setor).strip().upper(), int(ano), int(mes), str(chapa).strip(), int(dia), str(campo).strip(), str(valor).strip()))
+    """, (str(setor).strip().upper(), int(ano), int(mes), str(chapa).strip(), int(dia), campo, str(valor).strip()))
     con.commit()
     con.close()
     try:
@@ -2215,10 +2229,12 @@ def delete_override(setor: str, ano: int, mes: int, chapa: str, dia: int, campo:
     con = db_conn()
     cur = con.cursor()
     if campo:
-        cur.execute("""
+        campos = sorted({str(campo).strip(), _norm_override_campo(campo)})
+        placeholders = ",".join(["?"] * len(campos))
+        cur.execute(f"""
             DELETE FROM overrides
-            WHERE setor=? AND ano=? AND mes=? AND chapa=? AND dia=? AND campo=?
-        """, (setor, int(ano), int(mes), chapa, int(dia), campo))
+            WHERE setor=? AND ano=? AND mes=? AND chapa=? AND dia=? AND campo IN ({placeholders})
+        """, (setor, int(ano), int(mes), chapa, int(dia), *campos))
     else:
         cur.execute("""
             DELETE FROM overrides
@@ -2284,7 +2300,7 @@ def _ov_map(setor: str, ano: int, mes: int):
     for _, r in df.iterrows():
         ch = str(r["chapa"])
         dia = int(r["dia"])
-        campo = str(r["campo"])
+        campo = _norm_override_campo(r["campo"])
         valor = str(r["valor"])
         ov.setdefault(ch, {}).setdefault(dia, {})[campo] = valor
     return ov
@@ -2306,7 +2322,6 @@ def _apply_overrides_to_df_inplace(df: pd.DataFrame, setor: str, chapa: str, ovm
     if not ovmap:
         return df
 
-    # Garante tipo datetime na coluna Data
     if "Data" in df.columns and not pd.api.types.is_datetime64_any_dtype(df["Data"]):
         df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
 
@@ -2314,40 +2329,49 @@ def _apply_overrides_to_df_inplace(df: pd.DataFrame, setor: str, chapa: str, ovm
         if not payload:
             continue
 
-        # Normaliza data (aceita date/datetime/str ISO)
-        dd = None
-        if isinstance(d_raw, dt.datetime):
-            dd = d_raw.date()
-        elif isinstance(d_raw, dt.date):
-            dd = d_raw
-        elif isinstance(d_raw, str):
-            try:
-                dd = dt.date.fromisoformat(d_raw[:10])
-            except Exception:
-                dd = None
-        if dd is None:
-            continue
+        try:
+            dia = int(d_raw)
+        except Exception:
+            dd = None
+            if isinstance(d_raw, dt.datetime):
+                dd = d_raw.date()
+            elif isinstance(d_raw, dt.date):
+                dd = d_raw
+            elif isinstance(d_raw, str):
+                try:
+                    dd = dt.date.fromisoformat(d_raw[:10])
+                except Exception:
+                    dd = None
+            if dd is None:
+                continue
+            mask = df["Data"].dt.date == dd
+        else:
+            mask = df["Data"].dt.day == dia
+            dd = None
+            if bool(mask.any()):
+                dd = pd.to_datetime(df.loc[df.index[mask][0], "Data"]).date()
 
-        mask = df["Data"].dt.date == dd
         if not bool(mask.any()):
             continue
         i = df.index[mask][0]
+        if dd is None:
+            dd = pd.to_datetime(df.loc[i, "Data"]).date()
 
-        # Se é férias (tabela), férias sempre vence
         if is_de_ferias(setor, chapa, dd):
             df.loc[i, "Status"] = "Férias"
             df.loc[i, "H_Entrada"] = ""
             df.loc[i, "H_Saida"] = ""
             continue
 
-        # Status (exceto tentar marcar Férias)
         st_new = str(payload.get("status") or "").strip()
         if st_new and st_new.lower() not in ["férias", "ferias"]:
             df.loc[i, "Status"] = st_new
+            if st_new.strip().upper() in ("FOLGA", "FOLG", "AFA", "AFASTAMENTO"):
+                df.loc[i, "H_Entrada"] = ""
+                df.loc[i, "H_Saida"] = ""
 
-        # Entrada / Saída
         ent_new = str(payload.get("h_entrada") or payload.get("entrada") or "").strip()
-        if ent_new:
+        if ent_new and str(df.loc[i, "Status"]).strip().upper() not in ("FOLGA", "FOLG", "FÉRIAS", "FERIAS", "FER", "AFA", "AFASTAMENTO"):
             df.loc[i, "H_Entrada"] = ent_new
             df.loc[i, "H_Saida"] = _saida_from_entrada(ent_new)
 
