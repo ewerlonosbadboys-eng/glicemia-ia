@@ -135,21 +135,35 @@ def _split_employee_blocks_ponto_new(s: str):
     return out
 
 def _extract_entrada_tokens(block_text: str, ndays: int):
-    t = _norm_pdf_text(block_text)
+    """
+    Extrai os tokens da PRIMEIRA linha "Entrada" do quadro do colaborador.
+    Este PDF costuma vir com rótulos colados no primeiro valor da linha seguinte
+    (ex.: "Saída Refeição14:00"), então a regex precisa respeitar a quebra de linha
+    e não depender de espaços entre o rótulo e o primeiro horário.
+    """
+    t = _norm_pdf_text(block_text or "")
 
-    # 1) Padrão principal: primeira linha "Entrada" vai até "Saída Refeição"
-    m = re.search(r"\bEntrada\b\s+(.*?)\s+\bSa[ií]da\s+Refei[cç][aã]o\b", t, flags=re.IGNORECASE | re.DOTALL)
-    if m:
-        region = m.group(1)
-    else:
-        # 2) Fallback: pega a PRIMEIRA ocorrência de "Entrada" até a próxima linha de seção
-        m2 = re.search(
-            r"(?is)\bEntrada\b\s+(.*?)(?=\bSa[ií]da\s+Refei[cç][aã]o\b|\bSa[ií]da\b|\bHoras\s+Trab\b|É\s+DE\s+RESPONSABILIDADE\b)",
-            t,
-        )
-        if not m2:
-            return []
-        region = m2.group(1)
+    patterns = [
+        # Caminho principal: pega a linha após "\nEntrada" até a próxima linha "\nSaída Refeição"
+        r"(?is)\nEntrada\s+(.*?)\nSa[ií]da\s*Refei[cç][aã]o",
+        # Fallbacks mais tolerantes
+        r"(?is)\bEntrada\b\s*(.*?)(?=\nSa[ií]da\s*Refei[cç][aã]o)",
+        r"(?is)\bEntrada\b\s*(.*?)(?=Sa[ií]da\s*Refei[cç][aã]o)",
+    ]
+
+    region = ""
+    padded = "\n" + t
+    for pat in patterns:
+        m = re.search(pat, padded)
+        if m:
+            region = m.group(1)
+            break
+
+    if not region:
+        return []
+
+    # Corrige horários colados sem espaço, ex.: 12:4011:40
+    region = re.sub(r"(\d{2}:\d{2})(?=\d{2}:\d{2})", r"\1 ", region)
 
     tokens = [x.upper() for x in _PDF_TOKEN_RE.findall(region)]
     if len(tokens) > ndays:
