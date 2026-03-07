@@ -392,10 +392,158 @@ def _build_hist_from_pdf_items(setor: str, ano: int, mes: int, items: list[dict]
 
     return hist, estado
 
+
+def _extract_nome_chapa_from_header_text(header_text: str) -> tuple[str, str]:
+    s = _norm_pdf_text(header_text or "")
+    s = re.sub(r"\s+", " ", s).strip()
+    m = re.search(r"([A-ZÁÉÍÓÚÃÕÇ ]+?)(?:\s*\(([\d\.]+)\))?\s*M[eê]s\s*:\s*(\d{2})/(\d{4})", s, flags=re.IGNORECASE)
+    if not m:
+        return "", ""
+    nome_full = (m.group(1) or "").strip()
+    chapa = (m.group(2) or "").strip()
+    # remove cargo eventualmente grudado antes do nome; pega a última sequência longa em caixa alta
+    parts = [p.strip() for p in re.split(r"\s{2,}", nome_full) if p.strip()]
+    if parts:
+        nome = parts[-1]
+    else:
+        nome = nome_full
+    nome = re.sub(r"\s+", " ", nome).strip()
+    return nome, chapa
+
+def _merge_pdf_table_row_values(table_rows: list[list[str]], row_idx: int, day_cols: list[int]) -> list[str]:
+    vals = []
+    base_row = table_rows[row_idx]
+    overlay_row = table_rows[row_idx + 1] if row_idx + 1 < len(table_rows) else None
+    overlay_ok = False
+    if overlay_row is not None:
+        first = overlay_row[0] if len(overlay_row) > 0 else ""
+        overlay_ok = not str(first or "").strip()
+    for c in day_cols:
+        base = base_row[c] if c < len(base_row) else ""
+        base = "" if base is None else str(base).strip()
+        if overlay_ok:
+            ov = overlay_row[c] if c < len(overlay_row) else ""
+            ov = "" if ov is None else str(ov).strip()
+            if ov and not base:
+                base = ov
+        vals.append(str(base).strip())
+    return [str(x or "").strip().upper() for x in vals]
+
+def _parse_escala_ponto_new_pdf_bytes(pdf_bytes: bytes):
+    """
+    Parser principal para o layout ESCALA_PONTO_NEW usando extração tabular via pdfplumber.
+    Lê o quadro completo do colaborador e usa apenas a 1ª linha Entrada + linha Saída final.
+    """
+    try:
+        import io
+        import pdfplumber
+    except Exception as e:
+        return None, None, [], [f"Biblioteca de leitura tabular do PDF indisponível: {e}"]
+
+    items = []
+    erros = []
+    ano = mes = None
+
+    try:
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            for page_num, page in enumerate(pdf.pages, start=1):
+                tables = page.extract_tables() or []
+                for table in tables:
+                    rows = [[("" if c is None else str(c).strip()) for c in row] for row in (table or [])]
+                    if not rows:
+                        continue
+                    idx_data = next((i for i, row in enumerate(rows) if row and str(row[0]).strip() == "Data / Dia"), None)
+                    if idx_data is None:
+                        continue
+
+                    header_text = " ".join(" ".join(r) for r in rows[:idx_data])
+                    nome, chapa = _extract_nome_chapa_from_header_text(header_text)
+                    if not nome:
+                        continue
+
+                    m_mes = re.search(r"M[eê]s\s*:\s*(\d{2})/(\d{4})", header_text, flags=re.IGNORECASE)
+                    if m_mes and (ano is None or mes is None):
+                        mes = int(m_mes.group(1))
+                        ano = int(m_mes.group(2))
+
+                    day_cols = []
+                    day_nums = []
+                    for ci, cell in enumerate(rows[idx_data]):
+                        cell = str(cell or "").strip()
+                        if re.fullmatch(r"\d{1,2}", cell):
+                            day_cols.append(ci)
+                            day_nums.append(int(cell))
+                    if not day_nums:
+                        erros.append(f"Página {page_num}: tabela de {nome} sem colunas de dia identificadas.")
+                        continue
+
+                    label_map = {}
+                    for ridx in range(idx_data + 1, len(rows)):
+                        label = str(rows[ridx][0] if rows[ridx] else "").strip().lower()
+                        if label.startswith("entrada"):
+                            label_map.setdefault("entrada", []).append(ridx)
+                        elif label.startswith("saída refeição") or label.startswith("saida refeição") or label.startswith("saida refeicao") or label.startswith("saída refeicao"):
+                            label_map.setdefault("saida_refeicao", []).append(ridx)
+                        elif label.startswith("saída") or label.startswith("saida"):
+                            label_map.setdefault("saida", []).append(ridx)
+                        elif label.startswith("horas trab"):
+                            label_map.setdefault("horas", []).append(ridx)
+
+                    if not label_map.get("entrada") or not label_map.get("saida"):
+                        erros.append(f"Funcionário {nome}: não consegui localizar as linhas de Entrada/Saída na tabela da página {page_num}.")
+                        continue
+
+                    ent_tokens = _merge_pdf_table_row_values(rows, label_map["entrada"][0], day_cols)
+                    saida_tokens = _merge_pdf_table_row_values(rows, label_map["saida"][0], day_cols)
+
+                    if ano is None or mes is None:
+                        # fallback defensivo
+                        try:
+                            pg_txt = page.extract_text() or ""
+                            ano, mes = _detect_mes_ano_from_text(pg_txt)
+                        except Exception:
+                            pass
+
+                    if ano is None or mes is None:
+                        erros.append(f"Funcionário {nome}: mês/ano não detectado.")
+                        continue
+
+                    ndays = calendar.monthrange(int(ano), int(mes))[1]
+
+                    # Remonta exatamente da lista de dias da própria tabela
+                    ent_by_day = {int(d): str(v or "").strip().upper() for d, v in zip(day_nums, ent_tokens)}
+                    sai_by_day = {int(d): str(v or "").strip().upper() for d, v in zip(day_nums, saida_tokens)}
+                    full_ent = [ent_by_day.get(d, "") for d in range(1, ndays + 1)]
+                    full_sai = [sai_by_day.get(d, "") for d in range(1, ndays + 1)]
+
+                    blanks = sum(1 for x in full_ent if not str(x or "").strip())
+                    if blanks:
+                        erros.append(f"Funcionário {nome}: {blanks} dia(s) ficaram sem valor de Entrada após leitura tabular.")
+
+                    items.append({
+                        "nome": nome,
+                        "chapa": chapa,
+                        "tokens": full_ent,
+                        "saida_tokens": full_sai,
+                        "raw_rows": {
+                            "entrada": full_ent,
+                            "saida": full_sai,
+                            "day_nums": day_nums,
+                            "page": page_num,
+                        },
+                    })
+    except Exception as e:
+        return None, None, [], [f"Falha na leitura tabular do PDF: {e}"]
+
+    if ano is None or mes is None:
+        return None, None, [], ["Não consegui detectar Mês: MM/AAAA no PDF."]
+
+    # Se o pdfplumber falhar em parte, os itens ainda assim podem ser válidos; não bloqueia aqui.
+    return int(ano), int(mes), items, erros
+
 def _parse_escala_ponto_new_pdf_text(extracted_text: str):
     """
-    Retorna: (ano, mes, items, erros)
-    items: lista com nome, chapa, tokens(entrada), saida_tokens
+    Fallback legível por texto corrido. Mantido como reserva caso a extração tabular falhe.
     """
     t = _norm_pdf_text(extracted_text)
     ano, mes = _detect_mes_ano_from_text(t)
@@ -414,7 +562,6 @@ def _parse_escala_ponto_new_pdf_text(extracted_text: str):
         ent = list(rows.get("entrada") or [])
         saida = list(rows.get("saida") or [])
 
-        # se a saída veio curta, completa com vazio; o build usa fallback
         if len(saida) < len(ent):
             saida += [''] * (len(ent) - len(saida))
         if len(ent) != ndays:
@@ -428,6 +575,7 @@ def _parse_escala_ponto_new_pdf_text(extracted_text: str):
         })
 
     return int(ano), int(mes), items, erros
+
 
 
 # =========================================================
@@ -4019,6 +4167,175 @@ def _filtrar_colaboradores(colaboradores: list[dict], subgrupos_sel: list[str] |
         styles[c] = df[c].apply(lambda v: cell_style(v, c))
     return df.style.apply(lambda _: styles, axis=None)
 
+
+
+def _month_iter(start_d: date, end_d: date):
+    y, m = start_d.year, start_d.month
+    while (y, m) <= (end_d.year, end_d.month):
+        yield y, m
+        if m == 12:
+            y += 1
+            m = 1
+        else:
+            m += 1
+
+def _load_hist_periodo(setor: str, data_ini: date, data_fim: date) -> dict[str, pd.DataFrame]:
+    hist_all: dict[str, list[pd.DataFrame]] = {}
+    for y, m in _month_iter(data_ini, data_fim):
+        hist_mes = load_escala_mes_db(setor, int(y), int(m)) or {}
+        if not hist_mes:
+            continue
+        hist_mes = apply_overrides_to_hist(setor, int(y), int(m), hist_mes)
+        for ch, df in hist_mes.items():
+            dfx = df.copy()
+            dfx["Data"] = pd.to_datetime(dfx["Data"]).dt.date
+            dfx = dfx[(dfx["Data"] >= data_ini) & (dfx["Data"] <= data_fim)]
+            if dfx.empty:
+                continue
+            hist_all.setdefault(str(ch), []).append(dfx)
+    out = {}
+    for ch, parts in hist_all.items():
+        dfc = pd.concat(parts, ignore_index=True).sort_values("Data").drop_duplicates(subset=["Data"], keep="last")
+        out[ch] = dfc.reset_index(drop=True)
+    return out
+
+def _fmt_periodo_cell(row: pd.Series) -> str:
+    stt = str(row.get("Status", "") or "").strip()
+    ent = str(row.get("H_Entrada", "") or "").strip()
+    sai = str(row.get("H_Saida", "") or "").strip()
+    if stt == "Folga":
+        return "F"
+    if stt == "Férias":
+        return "FER"
+    if stt == "Afastamento":
+        return "AFA"
+    if stt in WORK_STATUSES:
+        if ent and sai:
+            return f"{ent}\n{sai}"
+        if ent:
+            return ent
+        return "T"
+    return ""
+
+def gerar_pdf_periodo_panoramico(setor: str, data_ini: date, data_fim: date, hist_db: dict, colaboradores: list[dict]) -> bytes:
+    from io import BytesIO
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
+    from reportlab.lib.pagesizes import landscape, A3, A4
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib import colors
+    from reportlab.lib.units import mm
+
+    total_days = (data_fim - data_ini).days + 1
+    page_size = landscape(A3 if total_days > 35 else A4)
+    W, H = page_size
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=page_size, leftMargin=8*mm, rightMargin=8*mm, topMargin=10*mm, bottomMargin=8*mm)
+
+    styles = getSampleStyleSheet()
+    normal = ParagraphStyle('periodo_cell', parent=styles['BodyText'], fontName='Helvetica', fontSize=5.6 if total_days > 45 else 6.2, leading=6.2 if total_days > 45 else 6.8, alignment=1)
+    left_small = ParagraphStyle('periodo_left', parent=styles['BodyText'], fontName='Helvetica', fontSize=6.4, leading=7.0, alignment=0)
+    left_small_b = ParagraphStyle('periodo_left_b', parent=left_small, fontName='Helvetica-Bold')
+    title_st = ParagraphStyle('periodo_title', parent=styles['Title'], fontName='Helvetica-Bold', fontSize=13, leading=15, alignment=1)
+    meta_st = ParagraphStyle('periodo_meta', parent=styles['BodyText'], fontName='Helvetica', fontSize=8, leading=10, alignment=1)
+
+    datas = [data_ini + timedelta(days=i) for i in range(total_days)]
+    colab_by = {str(c.get('Chapa')): c for c in colaboradores}
+
+    usable_w = W - doc.leftMargin - doc.rightMargin
+    first_col_w = 52*mm
+    day_w = max(8*mm, min(12*mm, (usable_w - first_col_w) / max(1, total_days)))
+
+    def build_group_rows(group_name: str, items: list[dict]):
+        rows = []
+        rows.append([Paragraph(f'<b>SUBGRUPO: {group_name}</b>', left_small_b)] + [''] * total_days)
+        for c in items:
+            ch = str(c.get('Chapa'))
+            nome = str(c.get('Nome') or '').strip()
+            df = hist_db.get(ch, pd.DataFrame())
+            row_map = {}
+            if not df.empty:
+                for _, r in df.iterrows():
+                    dd = r['Data'] if isinstance(r['Data'], date) else pd.to_datetime(r['Data']).date()
+                    row_map[dd] = _fmt_periodo_cell(r)
+            label = f"{nome}<br/><font size='5'>CHAPA: {ch}</font>"
+            row = [Paragraph(label, left_small)]
+            for dd in datas:
+                row.append(Paragraph((row_map.get(dd, '') or '').replace('\n', '<br/>'), normal))
+            rows.append(row)
+        return rows
+
+    story = []
+    title = f"Escala panorâmica - {setor} - {data_ini.strftime('%d/%m/%Y')} a {data_fim.strftime('%d/%m/%Y')}"
+    story.append(Paragraph(title, title_st))
+    story.append(Paragraph('Visual panorâmico para conferência. Células exibem entrada e saída; F = Folga; FER = Férias; AFA = Afastamento.', meta_st))
+    story.append(Spacer(1, 4*mm))
+
+    # group cols by subgrupo
+    filtered = [c for c in colaboradores if str(c.get('Chapa')) in set(hist_db.keys())]
+    filtered.sort(key=lambda x: ((x.get('Subgrupo') or '').strip() or 'SEM SUBGRUPO', (x.get('Nome') or '').strip()))
+    groups = {}
+    for c in filtered:
+        sg = (c.get('Subgrupo') or '').strip() or 'SEM SUBGRUPO'
+        groups.setdefault(sg, []).append(c)
+
+    header1 = [Paragraph('<b>COLABORADOR</b>', left_small_b)] + [Paragraph(f"<b>{d.day}</b>", normal) for d in datas]
+    header2 = [''] + [Paragraph(f"<b>{D_PT[pd.Timestamp(d).day_name()]}</b>", normal) for d in datas]
+
+    all_rows = [header1, header2]
+    for sg, items in groups.items():
+        all_rows.extend(build_group_rows(sg, items))
+
+    tbl = Table(all_rows, colWidths=[first_col_w] + [day_w] * total_days, repeatRows=2)
+    ts = TableStyle([
+        ('GRID', (0,0), (-1,-1), 0.35, colors.black),
+        ('BACKGROUND', (0,0), (-1,1), colors.HexColor('#1f4e78')),
+        ('TEXTCOLOR', (0,0), (-1,1), colors.white),
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ('ALIGN', (1,0), (-1,-1), 'CENTER'),
+        ('LEFTPADDING', (0,0), (-1,-1), 2),
+        ('RIGHTPADDING', (0,0), (-1,-1), 2),
+        ('TOPPADDING', (0,0), (-1,-1), 1),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 1),
+        ('FONTNAME', (0,0), (-1,1), 'Helvetica-Bold'),
+    ])
+
+    # style body/day columns
+    row_idx = 2
+    for sg, items in groups.items():
+        ts.add('BACKGROUND', (0, row_idx), (-1, row_idx), colors.HexColor('#d9e2f3'))
+        ts.add('SPAN', (0, row_idx), (-1, row_idx))
+        row_idx += 1
+        for _ in items:
+            ts.add('BACKGROUND', (0, row_idx), (0, row_idx), colors.HexColor('#d9e2f3'))
+            row_idx += 1
+
+    for cidx, dd in enumerate(datas, start=1):
+        if dd.weekday() == 6:
+            ts.add('BACKGROUND', (cidx, 0), (cidx, -1), colors.HexColor('#fde9d9'))
+        elif dd.weekday() == 5:
+            ts.add('BACKGROUND', (cidx, 2), (cidx, -1), colors.HexColor('#f7f7f7'))
+
+    # cell-specific colors by content
+    for r in range(2, len(all_rows)):
+        if isinstance(all_rows[r][0], Paragraph) and 'SUBGRUPO:' in all_rows[r][0].text:
+            continue
+        for cidx in range(1, total_days+1):
+            txt = all_rows[r][cidx].text if isinstance(all_rows[r][cidx], Paragraph) else str(all_rows[r][cidx])
+            plain = txt.replace('<br/>', ' ').replace('<b>', '').replace('</b>', '').strip().upper()
+            if plain == 'F':
+                ts.add('BACKGROUND', (cidx, r), (cidx, r), colors.HexColor('#FFF2CC'))
+                ts.add('FONTNAME', (cidx, r), (cidx, r), 'Helvetica-Bold')
+            elif plain == 'FER':
+                ts.add('BACKGROUND', (cidx, r), (cidx, r), colors.HexColor('#92D050'))
+                ts.add('FONTNAME', (cidx, r), (cidx, r), 'Helvetica-Bold')
+            elif plain == 'AFA':
+                ts.add('BACKGROUND', (cidx, r), (cidx, r), colors.HexColor('#D9EAD3'))
+                ts.add('FONTNAME', (cidx, r), (cidx, r), 'Helvetica-Bold')
+    tbl.setStyle(ts)
+    story.append(tbl)
+    doc.build(story)
+    return buffer.getvalue()
+
 # =========================================================
 # UI
 # =========================================================
@@ -5595,10 +5912,20 @@ def page_app():
             secoes_sel = cfx2.multiselect("Seções (Subgrupo):", options=all_subgrupos, default=[], key="pdf_secoes_sel")
             busca_txt = cfx3.text_input("Filtro (nome/chapa/subgrupo):", value="", key="pdf_busca")
 
+            modo_pdf = st.radio(
+                "Formato de impressão:",
+                options=["Modelo oficial do mês", "Panorâmico por período"],
+                horizontal=True,
+                key="pdf_modo_impressao"
+            )
+
             cols_dates = st.columns([1, 1, 2])
             data_ini = cols_dates[0].date_input("Dia inicial:", value=date(int(ano), int(mes), 1), key="pdf_dt_ini")
             data_fim = cols_dates[1].date_input("Dia final:", value=date(int(ano), int(mes), calendar.monthrange(int(ano), int(mes))[1]), key="pdf_dt_fim")
-            cols_dates[2].caption("Obs.: o PDF segue o modelo oficial do mês. Aqui o filtro é para escolher colaboradores/Seções como no sistema.")
+            if modo_pdf == "Panorâmico por período":
+                cols_dates[2].caption("Use qualquer período contínuo, inclusive dois meses juntos (ex.: 01/03/2026 até 30/04/2026).")
+            else:
+                cols_dates[2].caption("Obs.: o PDF segue o modelo oficial do mês. Aqui o filtro é para escolher colaboradores/Seções como no sistema.")
 
             colabs_filtrados = _filtrar_colaboradores(colaboradores, secoes_sel, busca_txt)
 
@@ -5621,30 +5948,46 @@ def page_app():
             cbtn2.caption("Dica: selecione uma seção, depois marque os colaboradores. Se não marcar nenhum, imprime todos os filtrados.")
 
             if gerar:
-                hist_db_pdf = load_escala_mes_db(setor, ano, mes)
-                if not hist_db_pdf:
-                    st.warning("Gere a escala antes na aba 🚀 Gerar Escala.")
+                if data_fim < data_ini:
+                    st.warning("O dia final precisa ser maior ou igual ao dia inicial.")
                 else:
-                    hist_db_pdf = apply_overrides_to_hist(setor, ano, mes, hist_db_pdf)
-
                     if sel:
                         chapas_sel = [str(mapa_idx[x].get("Chapa")) for x in sel if x in mapa_idx]
                     else:
                         chapas_sel = [str(c.get("Chapa")) for c in colabs_filtrados]
 
-                    hist_db_pdf = {ch: df for ch, df in hist_db_pdf.items() if ch in set(chapas_sel)}
-
-                    if not hist_db_pdf:
-                        st.warning("Nenhum colaborador para imprimir com os filtros atuais.")
+                    if modo_pdf == "Panorâmico por período":
+                        hist_db_pdf = _load_hist_periodo(setor, data_ini, data_fim)
+                        hist_db_pdf = {ch: df for ch, df in hist_db_pdf.items() if ch in set(chapas_sel)}
+                        if not hist_db_pdf:
+                            st.warning("Nenhum colaborador com escala salva no período informado.")
+                        else:
+                            pdf_bytes = gerar_pdf_periodo_panoramico(loja_txt.strip() or str(setor), data_ini, data_fim, hist_db_pdf, colaboradores)
+                            st.download_button(
+                                "⬇️ Baixar PDF panorâmico",
+                                data=pdf_bytes,
+                                file_name=f"escala_panoramica_{(loja_txt.strip() or str(setor))}_{data_ini.strftime('%Y%m%d')}_{data_fim.strftime('%Y%m%d')}.pdf",
+                                mime="application/pdf",
+                                key="pdf_down_pan"
+                            )
                     else:
-                        pdf_bytes = gerar_pdf_modelo_oficial(loja_txt.strip() or str(setor), ano, mes, hist_db_pdf, colaboradores)
-                        st.download_button(
-                            "⬇️ Baixar PDF",
-                            data=pdf_bytes,
-                            file_name=f"escala_{(loja_txt.strip() or str(setor))}_{mes:02d}_{ano}.pdf",
-                            mime="application/pdf",
-                            key="pdf_down"
-                        )
+                        hist_db_pdf = load_escala_mes_db(setor, ano, mes)
+                        if not hist_db_pdf:
+                            st.warning("Gere a escala antes na aba 🚀 Gerar Escala.")
+                        else:
+                            hist_db_pdf = apply_overrides_to_hist(setor, ano, mes, hist_db_pdf)
+                            hist_db_pdf = {ch: df for ch, df in hist_db_pdf.items() if ch in set(chapas_sel)}
+                            if not hist_db_pdf:
+                                st.warning("Nenhum colaborador para imprimir com os filtros atuais.")
+                            else:
+                                pdf_bytes = gerar_pdf_modelo_oficial(loja_txt.strip() or str(setor), ano, mes, hist_db_pdf, colaboradores)
+                                st.download_button(
+                                    "⬇️ Baixar PDF",
+                                    data=pdf_bytes,
+                                    file_name=f"escala_{(loja_txt.strip() or str(setor))}_{mes:02d}_{ano}.pdf",
+                                    mime="application/pdf",
+                                    key="pdf_down"
+                                )
 
 
     # ------------------------------------------------------
@@ -5852,16 +6195,19 @@ def page_app():
 
                         parts.append(page.extract_text() or "")
 
+                    pdf_bytes = pdf.getvalue()
                     extracted = "\n".join(parts).strip()
 
-
-                    if not extracted:
+                    if not extracted and not pdf_bytes:
 
                         st.warning("Não consegui extrair texto desse PDF (provável PDF imagem). Converta para PDF pesquisável ou envie CSV/Excel. OCR exige tesseract+poppler no servidor.")
 
                     else:
 
-                        ano, mes, items, erros = _parse_escala_ponto_new_pdf_text(extracted)
+                        ano, mes, items, erros = _parse_escala_ponto_new_pdf_bytes(pdf_bytes) if pdf_bytes else (None, None, [], [])
+                        if not items:
+                            ano, mes, items, erros_txt = _parse_escala_ponto_new_pdf_text(extracted)
+                            erros = (erros or []) + (erros_txt or [])
 
 
                         if erros:
