@@ -328,6 +328,87 @@ def _apply_pdf_import_to_db(
     except Exception:
         pass
 
+def _build_hist_from_pdf_items(setor: str, ano: int, mes: int, items: list[dict], map_afa_para_folga: bool = True) -> tuple[dict, dict]:
+    """Monta a escala do mês exatamente como veio no PDF.
+
+    Para a competência importada, o PDF vira a fonte da verdade.
+    As regras do gerador não podem mover FOLG / FER / AFA desse mês.
+    O estado final ainda é salvo para que o mês seguinte continue usando as regras do app.
+    """
+    datas = _dias_mes(int(ano), int(mes))
+    df_ref = pd.DataFrame({'Data': datas, 'Dia': [D_PT[d.day_name()] for d in datas]})
+    hist = {}
+    estado = {}
+
+    for it in (items or []):
+        chapa = str(it.get('chapa') or '').strip()
+        if not chapa:
+            continue
+        tokens = list(it.get('tokens') or [])
+        df = df_ref.copy()
+        df['Data'] = pd.to_datetime(df['Data'], errors='coerce')
+        df['Status'] = 'Trabalho'
+        df['H_Entrada'] = ''
+        df['H_Saida'] = ''
+
+        ndays = len(df)
+        if len(tokens) < ndays:
+            tokens += [''] * (ndays - len(tokens))
+        else:
+            tokens = tokens[:ndays]
+
+        for i, tok in enumerate(tokens):
+            raw = str(tok or '').strip()
+            up = raw.upper()
+            if up == 'FOLG':
+                df.loc[i, 'Status'] = 'Folga'
+                df.loc[i, 'H_Entrada'] = ''
+                df.loc[i, 'H_Saida'] = ''
+            elif up == 'FER':
+                df.loc[i, 'Status'] = 'Férias'
+                df.loc[i, 'H_Entrada'] = ''
+                df.loc[i, 'H_Saida'] = ''
+            elif up == 'AFA':
+                df.loc[i, 'Status'] = 'Folga' if bool(map_afa_para_folga) else 'Afastamento'
+                df.loc[i, 'H_Entrada'] = ''
+                df.loc[i, 'H_Saida'] = ''
+            elif re.match(r'^\d{2}:\d{2}$', raw):
+                df.loc[i, 'Status'] = 'Trabalho'
+                df.loc[i, 'H_Entrada'] = raw
+                df.loc[i, 'H_Saida'] = _saida_from_entrada(raw)
+            else:
+                df.loc[i, 'Status'] = 'Trabalho'
+                df.loc[i, 'H_Entrada'] = ''
+                df.loc[i, 'H_Saida'] = ''
+
+        hist[chapa] = df
+
+        consec = 0
+        for j in range(len(df) - 1, -1, -1):
+            if df.loc[j, 'Status'] in WORK_STATUSES:
+                consec += 1
+            else:
+                break
+
+        ultima_saida = ''
+        for j in range(len(df) - 1, -1, -1):
+            if df.loc[j, 'Status'] in WORK_STATUSES and (df.loc[j, 'H_Saida'] or ''):
+                ultima_saida = str(df.loc[j, 'H_Saida'] or '')
+                break
+
+        ultimo_dom = None
+        doms = [j for j in range(len(df)) if str(df.loc[j, 'Dia']) == 'dom']
+        if doms:
+            ultimo_dom = str(df.loc[doms[-1], 'Status'])
+
+        estado[chapa] = {
+            'consec_trab_final': int(consec),
+            'ultima_saida': ultima_saida,
+            'ultimo_domingo_status': ultimo_dom,
+        }
+
+    return hist, estado
+
 def _parse_escala_ponto_new_pdf_text(extracted_text: str):
     """
     Retorna: (ano, mes, parsed_items, erros)
@@ -5843,27 +5924,35 @@ def page_app():
 
                                 if bool(auto_gerar_pdf):
 
-                                    ok_auto = _regenerar_mes_inteiro(
+                                    try:
 
-                                        setor_dest, int(ano), int(mes),
+                                        hist_pdf, estado_pdf = _build_hist_from_pdf_items(
 
-                                        seed=int(st.session_state.get("last_seed", 0)),
+                                            setor_dest, int(ano), int(mes), items,
 
-                                        respeitar_ajustes=True
+                                            map_afa_para_folga=bool(map_afa)
 
-                                    )
+                                        )
 
-                                    if ok_auto:
+                                        if hist_pdf:
 
-                                        st.session_state["ano"] = int(ano)
+                                            save_escala_mes_db(setor_dest, int(ano), int(mes), hist_pdf)
 
-                                        st.session_state["mes"] = int(mes)
+                                            save_estado_mes(setor_dest, int(ano), int(mes), estado_pdf)
 
-                                        st.success("PDF importado com sucesso! Folgas, AFA e férias aplicadas e a escala do mês foi gerada automaticamente respeitando os ajustes.")
+                                            st.session_state["ano"] = int(ano)
 
-                                    else:
+                                            st.session_state["mes"] = int(mes)
 
-                                        st.warning("PDF importado, mas não consegui gerar a escala automaticamente. Verifique se existem colaboradores cadastrados no setor.")
+                                            st.success("PDF importado com sucesso! Para este mês, o PDF virou a fonte da verdade: folgas, férias e AFA foram salvos exatamente como estão no PDF. As regras do aplicativo voltam a valer normalmente na geração do mês seguinte.")
+
+                                        else:
+
+                                            st.warning("PDF importado, mas não consegui montar a escala final do mês a partir dos itens lidos.")
+
+                                    except Exception as e_auto:
+
+                                        st.warning(f"PDF importado, mas falhou ao salvar a escala final exatamente como veio no PDF: {e_auto}")
 
                                 else:
 
