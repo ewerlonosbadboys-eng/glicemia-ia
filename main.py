@@ -6344,7 +6344,7 @@ def page_app():
 
                 except Exception as e:
 
-                    st.error(f"Falha ao ler/importar PDF: {e}")
+                    st.error(f"Falha ao ler/importar PDF: {e}") 
 
 
 
