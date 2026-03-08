@@ -626,13 +626,59 @@ div[data-testid="stDataFrame"] { border-radius: 12px; overflow: hidden; }
 </style>
 """, unsafe_allow_html=True)
 
-DB_PATH = "escala.db"
+# =========================================================
+# Persistência estável do banco / backups
+# - usa /mount/data quando existir (Streamlit Cloud)
+# - fallback para ./data ao lado do arquivo
+# - migra automaticamente banco antigo local, se necessário
+# =========================================================
+def _persistent_root() -> Path:
+    candidates = [
+        Path("/mount/data"),
+        Path(__file__).resolve().parent / "data",
+        Path.cwd() / "data",
+    ]
+    for c in candidates:
+        try:
+            c.mkdir(parents=True, exist_ok=True)
+            test = c / ".write_test"
+            test.write_text("ok", encoding="utf-8")
+            test.unlink(missing_ok=True)
+            return c
+        except Exception:
+            continue
+    return Path.cwd()
+
+PERSIST_ROOT = _persistent_root()
+DB_PATH = str(PERSIST_ROOT / "escala.db")
+BACKUP_DIR = str(PERSIST_ROOT / "backups")
+
+def _migrate_legacy_db_if_needed():
+    try:
+        target = Path(DB_PATH)
+        legacy_candidates = [
+            Path("escala.db"),
+            Path(__file__).resolve().parent / "escala.db",
+            Path.cwd() / "escala.db",
+        ]
+        if target.exists():
+            return
+        for src in legacy_candidates:
+            try:
+                if src.exists() and src.resolve() != target.resolve():
+                    target.write_bytes(src.read_bytes())
+                    break
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+_migrate_legacy_db_if_needed()
 
 
 # =========================
 # ADMIN: Backup / Restore + Setores + Import
 # =========================
-BACKUP_DIR = "backups"
 AUTO_BACKUP_HOUR = 3  # 03:00
 AUTO_BACKUP_INTERVAL_HOURS = 6  # roda quando o app abre
 
@@ -700,7 +746,6 @@ def auto_backup_if_due():
 
 def restore_backup_from_bytes(data: bytes) -> None:
     _ensure_backup_dir()
-    # safety backup
     try:
         create_backup_now(prefix="pre_restore")
     except Exception:
@@ -710,7 +755,17 @@ def restore_backup_from_bytes(data: bytes) -> None:
     Path(DB_PATH).write_bytes(tmp.read_bytes())
     tmp.unlink(missing_ok=True)
 
+def restore_backup_from_path(path: str) -> None:
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(f"Backup não encontrado: {path}")
+    restore_backup_from_bytes(p.read_bytes())
 
+def safe_backup_before_change(prefix: str = "safety") -> None:
+    try:
+        create_backup_now(prefix=prefix)
+    except Exception:
+        pass
 def listar_setores_db() -> list:
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
@@ -6116,6 +6171,7 @@ def page_app():
                     st.error("Digite setor e chapa.")
                 else:
                     try:
+                        safe_backup_before_change(prefix="pre_user_save")
                         if criar_colab_man and not colaborador_exists(setor_norm, chapa_norm):
                             create_colaborador(nome_final, setor_norm, chapa_norm, criar_login=False)
                         create_system_user(nome_final, setor_norm, chapa_norm, senha_final, is_lider=int(lider_man), is_admin=int(admin_man))
@@ -6142,10 +6198,17 @@ def page_app():
 
             bks = list_backups()
             bk_sel = st.selectbox("Backups disponíveis", bks, key="adm_bk_sel") if bks else None
-            if bk_sel:
-                bk_path = os.path.join(BACKUP_DIR, bk_sel)
+            bk_path = os.path.join(BACKUP_DIR, bk_sel) if bk_sel else None
+            if bk_sel and bk_path and os.path.exists(bk_path):
                 with open(bk_path, "rb") as f:
                     st.download_button("⬇️ Baixar backup selecionado", data=f, file_name=bk_sel, mime="application/octet-stream", key="adm_bk_dl")
+                if st.button("♻️ Restaurar backup selecionado", key="adm_bk_restore_selected"):
+                    try:
+                        restore_backup_from_path(bk_path)
+                        st.success(f"Backup restaurado: {bk_sel}")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Falha ao restaurar backup selecionado: {e}")
 
             st.markdown("### Restaurar um backup")
             up = st.file_uploader("Envie um arquivo .db (backup do escala.db)", type=["db"], key="adm_bk_up")
@@ -6158,7 +6221,7 @@ def page_app():
                     except Exception as e:
                         st.error(f"Falha ao restaurar: {e}")
 
-            st.caption(f"Backup automático (1x/dia) após {AUTO_BACKUP_HOUR:02d}:00. Pasta: {BACKUP_DIR}/")
+            st.caption(f"Backup automático estável (a cada {AUTO_BACKUP_INTERVAL_HOURS}h após {AUTO_BACKUP_HOUR:02d}:00). Pasta persistente: {BACKUP_DIR}")
 
             st.markdown("---")
             st.subheader("🏷️ Setores (criar / listar)")
@@ -6168,6 +6231,7 @@ def page_app():
             novo_setor = st.text_input("Novo setor (ex: FLV)", key="adm_new_setor")
             if st.button("➕ Criar setor", key="adm_create_setor"):
                 try:
+                    safe_backup_before_change(prefix="pre_setor")
                     criar_setor_db(novo_setor)
                     st.success("Setor criado/garantido.")
                     st.rerun()
@@ -6187,6 +6251,7 @@ def page_app():
                         df_imp = pd.read_excel(imp)
                     st.dataframe(df_imp.head(50), use_container_width=True, height=260)
                     if st.button("Importar agora", key="adm_imp_run"):
+                        safe_backup_before_change(prefix="pre_import_colabs")
                         ins, upd = importar_colaboradores_df(setor_imp, df_imp)
                         st.success(f"Importação concluída. Inseridos: {ins} | Atualizados: {upd}")
                 except Exception as e:
@@ -6286,6 +6351,7 @@ def page_app():
 
                             if st.button("✅ Aplicar escala do PDF no sistema (1 clique)", key="btn_apply_pdf"):
 
+                                safe_backup_before_change(prefix="pre_pdf_import")
                                 _apply_pdf_import_to_db(
 
                                     setor_destino=setor_dest,
@@ -6344,7 +6410,7 @@ def page_app():
 
                 except Exception as e:
 
-                    st.error(f"Falha ao ler/importar PDF: {e}") 
+                    st.error(f"Falha ao ler/importar PDF: {e}")
 
 
 
