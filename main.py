@@ -4219,31 +4219,67 @@ def _fmt_periodo_cell(row: pd.Series) -> str:
 
 def gerar_pdf_periodo_panoramico(setor: str, data_ini: date, data_fim: date, hist_db: dict, colaboradores: list[dict]) -> bytes:
     from io import BytesIO
-    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
-    from reportlab.lib.pagesizes import landscape, A3, A4
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from reportlab.lib.pagesizes import landscape, A1, A2, A3, A4
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib import colors
     from reportlab.lib.units import mm
 
     total_days = (data_fim - data_ini).days + 1
-    page_size = landscape(A3 if total_days > 35 else A4)
+
+    # Papel automático maior para não cortar nome nem esmagar os dias
+    if total_days <= 20:
+        page_size = landscape(A4)
+    elif total_days <= 35:
+        page_size = landscape(A3)
+    elif total_days <= 50:
+        page_size = landscape(A2)
+    else:
+        page_size = landscape(A1)
+
     W, H = page_size
     buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=page_size, leftMargin=8*mm, rightMargin=8*mm, topMargin=10*mm, bottomMargin=8*mm)
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=page_size,
+        leftMargin=8*mm,
+        rightMargin=8*mm,
+        topMargin=10*mm,
+        bottomMargin=8*mm
+    )
 
     styles = getSampleStyleSheet()
-    normal = ParagraphStyle('periodo_cell', parent=styles['BodyText'], fontName='Helvetica', fontSize=5.6 if total_days > 45 else 6.2, leading=6.2 if total_days > 45 else 6.8, alignment=1)
-    left_small = ParagraphStyle('periodo_left', parent=styles['BodyText'], fontName='Helvetica', fontSize=6.4, leading=7.0, alignment=0)
+    font_small = 4.6 if total_days > 60 else (5.0 if total_days > 45 else 5.6)
+    leading_small = font_small + 0.8
+    normal = ParagraphStyle(
+        'periodo_cell',
+        parent=styles['BodyText'],
+        fontName='Helvetica',
+        fontSize=font_small,
+        leading=leading_small,
+        alignment=1,
+    )
+    left_small = ParagraphStyle(
+        'periodo_left',
+        parent=styles['BodyText'],
+        fontName='Helvetica',
+        fontSize=6.2 if total_days > 45 else 6.8,
+        leading=7.0 if total_days > 45 else 7.6,
+        alignment=0,
+    )
     left_small_b = ParagraphStyle('periodo_left_b', parent=left_small, fontName='Helvetica-Bold')
     title_st = ParagraphStyle('periodo_title', parent=styles['Title'], fontName='Helvetica-Bold', fontSize=13, leading=15, alignment=1)
     meta_st = ParagraphStyle('periodo_meta', parent=styles['BodyText'], fontName='Helvetica', fontSize=8, leading=10, alignment=1)
 
     datas = [data_ini + timedelta(days=i) for i in range(total_days)]
-    colab_by = {str(c.get('Chapa')): c for c in colaboradores}
 
     usable_w = W - doc.leftMargin - doc.rightMargin
-    first_col_w = 52*mm
-    day_w = max(8*mm, min(12*mm, (usable_w - first_col_w) / max(1, total_days)))
+
+    # Coluna bem mais larga: Nome + Chapa + Subgrupo
+    first_col_w = 78 * mm if total_days <= 35 else (88 * mm if total_days <= 50 else 98 * mm)
+
+    # Todos os dias do período, sem pular
+    day_w = max(5.2*mm, (usable_w - first_col_w) / max(1, total_days))
 
     def build_group_rows(group_name: str, items: list[dict]):
         rows = []
@@ -4251,26 +4287,35 @@ def gerar_pdf_periodo_panoramico(setor: str, data_ini: date, data_fim: date, his
         for c in items:
             ch = str(c.get('Chapa'))
             nome = str(c.get('Nome') or '').strip()
+            subgrupo = (c.get('Subgrupo') or '').strip() or 'SEM SUBGRUPO'
             df = hist_db.get(ch, pd.DataFrame())
             row_map = {}
+
             if not df.empty:
-                for _, r in df.iterrows():
-                    dd = r['Data'] if isinstance(r['Data'], date) else pd.to_datetime(r['Data']).date()
-                    row_map[dd] = _fmt_periodo_cell(r)
-            label = f"{nome}<br/><font size='5'>CHAPA: {ch}</font>"
+                tmp = df.copy()
+                if 'Data' in tmp.columns:
+                    tmp['Data'] = pd.to_datetime(tmp['Data']).dt.date
+                    for _, r in tmp.iterrows():
+                        row_map[r['Data']] = _fmt_periodo_cell(r)
+
+            label = (
+                f"<b>{nome}</b><br/>"
+                f"<font size='5'>CHAPA: {ch}</font><br/>"
+                f"<font size='5'>SUBGRUPO: {subgrupo}</font>"
+            )
             row = [Paragraph(label, left_small)]
             for dd in datas:
-                row.append(Paragraph((row_map.get(dd, '') or '').replace('\n', '<br/>'), normal))
+                txt = row_map.get(dd, '') or ''
+                row.append(Paragraph(str(txt).replace('\n', '<br/>'), normal))
             rows.append(row)
         return rows
 
     story = []
     title = f"Escala panorâmica - {setor} - {data_ini.strftime('%d/%m/%Y')} a {data_fim.strftime('%d/%m/%Y')}"
     story.append(Paragraph(title, title_st))
-    story.append(Paragraph('Visual panorâmico para conferência. Células exibem entrada e saída; F = Folga; FER = Férias; AFA = Afastamento.', meta_st))
+    story.append(Paragraph('Visual panorâmico por período. Células exibem entrada e saída; F = Folga; FER = Férias; AFA = Afastamento.', meta_st))
     story.append(Spacer(1, 4*mm))
 
-    # group cols by subgrupo
     filtered = [c for c in colaboradores if str(c.get('Chapa')) in set(hist_db.keys())]
     filtered.sort(key=lambda x: ((x.get('Subgrupo') or '').strip() or 'SEM SUBGRUPO', (x.get('Nome') or '').strip()))
     groups = {}
@@ -4278,7 +4323,7 @@ def gerar_pdf_periodo_panoramico(setor: str, data_ini: date, data_fim: date, his
         sg = (c.get('Subgrupo') or '').strip() or 'SEM SUBGRUPO'
         groups.setdefault(sg, []).append(c)
 
-    header1 = [Paragraph('<b>COLABORADOR</b>', left_small_b)] + [Paragraph(f"<b>{d.day}</b>", normal) for d in datas]
+    header1 = [Paragraph('<b>COLABORADOR / CHAPA / SUBGRUPO</b>', left_small_b)] + [Paragraph(f"<b>{d.day}</b>", normal) for d in datas]
     header2 = [''] + [Paragraph(f"<b>{D_PT[pd.Timestamp(d).day_name()]}</b>", normal) for d in datas]
 
     all_rows = [header1, header2]
@@ -4287,7 +4332,7 @@ def gerar_pdf_periodo_panoramico(setor: str, data_ini: date, data_fim: date, his
 
     tbl = Table(all_rows, colWidths=[first_col_w] + [day_w] * total_days, repeatRows=2)
     ts = TableStyle([
-        ('GRID', (0,0), (-1,-1), 0.35, colors.black),
+        ('GRID', (0,0), (-1,-1), 0.30, colors.black),
         ('BACKGROUND', (0,0), (-1,1), colors.HexColor('#1f4e78')),
         ('TEXTCOLOR', (0,0), (-1,1), colors.white),
         ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
@@ -4299,7 +4344,6 @@ def gerar_pdf_periodo_panoramico(setor: str, data_ini: date, data_fim: date, his
         ('FONTNAME', (0,0), (-1,1), 'Helvetica-Bold'),
     ])
 
-    # style body/day columns
     row_idx = 2
     for sg, items in groups.items():
         ts.add('BACKGROUND', (0, row_idx), (-1, row_idx), colors.HexColor('#d9e2f3'))
@@ -4315,12 +4359,12 @@ def gerar_pdf_periodo_panoramico(setor: str, data_ini: date, data_fim: date, his
         elif dd.weekday() == 5:
             ts.add('BACKGROUND', (cidx, 2), (cidx, -1), colors.HexColor('#f7f7f7'))
 
-    # cell-specific colors by content
     for r in range(2, len(all_rows)):
-        if isinstance(all_rows[r][0], Paragraph) and 'SUBGRUPO:' in all_rows[r][0].text:
+        if isinstance(all_rows[r][0], Paragraph) and 'SUBGRUPO:' in getattr(all_rows[r][0], 'text', ''):
             continue
         for cidx in range(1, total_days+1):
-            txt = all_rows[r][cidx].text if isinstance(all_rows[r][cidx], Paragraph) else str(all_rows[r][cidx])
+            cell = all_rows[r][cidx]
+            txt = cell.text if isinstance(cell, Paragraph) else str(cell)
             plain = txt.replace('<br/>', ' ').replace('<b>', '').replace('</b>', '').strip().upper()
             if plain == 'F':
                 ts.add('BACKGROUND', (cidx, r), (cidx, r), colors.HexColor('#FFF2CC'))
@@ -4331,6 +4375,7 @@ def gerar_pdf_periodo_panoramico(setor: str, data_ini: date, data_fim: date, his
             elif plain == 'AFA':
                 ts.add('BACKGROUND', (cidx, r), (cidx, r), colors.HexColor('#D9EAD3'))
                 ts.add('FONTNAME', (cidx, r), (cidx, r), 'Helvetica-Bold')
+
     tbl.setStyle(ts)
     story.append(tbl)
     doc.build(story)
