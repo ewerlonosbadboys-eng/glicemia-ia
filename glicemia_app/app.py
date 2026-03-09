@@ -65,7 +65,6 @@ st.set_page_config(page_title="Saúde Kids BETA", page_icon="🧪", layout="wide
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 BACKUP_DIR = BASE_DIR / "backups"
-
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -73,6 +72,7 @@ ARQ_G = DATA_DIR / "dados_glicemia_BETA.csv"
 ARQ_N = DATA_DIR / "dados_nutricao_BETA.csv"
 ARQ_R = DATA_DIR / "config_receita_BETA.csv"
 ARQ_M = DATA_DIR / "mensagens_admin_BETA.csv"
+ARQ_M_ROOT = BASE_DIR / "mensagens_admin_BETA.csv"
 DB_USERS = DATA_DIR / "usuarios.db"
 
 # ================= NORMALIZAÇÃO =================
@@ -103,9 +103,9 @@ def criar_backup_zip_em_bytes():
     out = BytesIO()
     with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as z:
         for arq in ARQUIVOS_BACKUP:
-            p = Path(arq)
-            if p.exists():
-                z.write(p, arcname=p.name)
+            arq_path = Path(arq)
+            if arq_path.exists():
+                z.write(arq_path, arcname=arq_path.name)
     out.seek(0)
     return out.getvalue(), nome
 
@@ -115,9 +115,9 @@ def criar_backup_zip_em_disco():
     caminho = BACKUP_DIR / nome
     with zipfile.ZipFile(caminho, "w", compression=zipfile.ZIP_DEFLATED) as z:
         for arq in ARQUIVOS_BACKUP:
-            p = Path(arq)
-            if p.exists():
-                z.write(p, arcname=p.name)
+            arq_path = Path(arq)
+            if arq_path.exists():
+                z.write(arq_path, arcname=arq_path.name)
     return caminho
 
 def restaurar_backup_zip_bytes(zip_bytes: bytes):
@@ -138,9 +138,18 @@ def restaurar_backup_zip_bytes(zip_bytes: bytes):
     }
 
     restaurados = []
+
     for nome_zip, destino in mapa_destinos.items():
-        src = tmp_dir / nome_zip
-        if src.exists():
+        src = None
+        candidato = tmp_dir / nome_zip
+        if candidato.exists():
+            src = candidato
+        else:
+            encontrados = list(tmp_dir.rglob(nome_zip))
+            if encontrados:
+                src = encontrados[0]
+
+        if src and src.exists():
             Path(destino).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, destino)
             restaurados.append(nome_zip)
@@ -1245,12 +1254,8 @@ if st.session_state.user_email == "admin":
         up = st.file_uploader("Enviar arquivo .zip de backup", type=["zip"])
         if up is not None:
             if st.button("✅ Restaurar Agora", use_container_width=True):
-                restaurados = restaurar_backup_zip_bytes(up.getvalue())
-                if restaurados:
-                    st.success(f"Restauração concluída: {', '.join(restaurados)}")
-                    st.rerun()
-                else:
-                    st.error("O ZIP foi lido, mas não foram encontrados arquivos compatíveis para restaurar.")
+                restaurar_backup_zip_bytes(up.getvalue())
+                st.success("Restauração concluída! Recarregue o app (F5).")
 
         st.markdown("---")
         st.write("### ⏰ Backup Automático")
