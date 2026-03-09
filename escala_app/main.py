@@ -4110,9 +4110,14 @@ def rebalance_folgas_dia(
     max_iters=2200
 ):
     """
-    Correções:
-    - NÃO usa variável global: estado_prev é parâmetro (evita NameError)
-    - Não faz swap em células travadas por override (locked_idx)
+    Rebalance pesado por semana/subgrupo.
+    Regras:
+    - domingo nunca entra no balanceamento
+    - sábado só recebe folga se a regra do colaborador permitir
+    - nunca mexe em célula travada por override
+    - não cria folga dupla automática
+    - mantém a quantidade de folgas do colaborador na semana (faz troca 1x1)
+    - procura a MELHOR troca local por pontuação, não a primeira válida
     """
     estado_prev = estado_prev or {}
     locked_idx = locked_idx or {}
@@ -4124,19 +4129,52 @@ def rebalance_folgas_dia(
     def is_locked(ch, i):
         return bool(i in (locked_idx.get(ch, set()) or set()))
 
+    def _day_penalty(counts: dict, eligible_days: list[int]) -> float:
+        if not eligible_days:
+            return 0.0
+        vals = [counts[i] for i in eligible_days]
+        if not vals:
+            return 0.0
+        avg = sum(vals) / float(len(vals))
+        spread = max(vals) - min(vals)
+        # penaliza desvio da média e diferença entre mais pesado e mais leve
+        return sum((v - avg) ** 2 for v in vals) + (spread ** 2) * 3.0
+
+    def _eligible_days_for_group() -> list[int]:
+        # domingo nunca; demais dias entram para a conta de equilíbrio.
+        return [i for i in week if not is_dom(i)]
+
     def can_swap(ch, i_from, i_to):
         df = hist_by_chapa[ch]
         pode_sab = bool(colab_by_chapa[ch].get("Folga_Sab", False))
 
-        if is_dom(i_from) or is_dom(i_to): return False
-        if is_locked(ch, i_from) or is_locked(ch, i_to): return False
-
-        if df.loc[i_from, "Status"] == "Férias" or df.loc[i_to, "Status"] == "Férias": return False
-        if df.loc[i_from, "Status"] != "Folga": return False
-        if df.loc[i_to, "Status"] != "Trabalho": return False
-        if df_ref.loc[i_to, "Dia"] == "sáb" and not pode_sab: return False
-        if (i_to > 0 and df.loc[i_to - 1, "Status"] == "Folga") or (i_to < len(df)-1 and df.loc[i_to + 1, "Status"] == "Folga"):
+        if i_from == i_to:
             return False
+        if is_dom(i_from) or is_dom(i_to):
+            return False
+        if is_locked(ch, i_from) or is_locked(ch, i_to):
+            return False
+
+        st_from = str(df.loc[i_from, "Status"])
+        st_to = str(df.loc[i_to, "Status"])
+
+        if st_from == "Férias" or st_to == "Férias":
+            return False
+        if st_from == "Afastamento" or st_to == "Afastamento":
+            return False
+        if st_from != "Folga":
+            return False
+        if st_to != "Trabalho":
+            return False
+        if df_ref.loc[i_to, "Dia"] == "sáb" and not pode_sab:
+            return False
+
+        # não permite criar folga dupla automática no destino
+        if (i_to > 0 and str(df.loc[i_to - 1, "Status"]) == "Folga") or (i_to < len(df) - 1 and str(df.loc[i_to + 1, "Status"]) == "Folga"):
+            return False
+
+        # não permite deixar trabalho "colado" que quebre restrições locais óbvias
+        # (na origem vamos recolocar trabalho, então não há risco de dupla folga)
         return True
 
     def do_swap(ch, i_from, i_to):
@@ -4156,32 +4194,61 @@ def rebalance_folgas_dia(
 
     it = 0
     for week in weeks:
-        week_idxs = [i for i in week if not is_dom(i)]
-        if not week_idxs:
+        eligible_days = _eligible_days_for_group()
+        if len(eligible_days) <= 1:
             continue
+
         while it < max_iters:
             it += 1
-            counts = {i: 0 for i in week_idxs}
+
+            counts = {i: 0 for i in eligible_days}
             for ch in chapas_grupo:
                 df = hist_by_chapa[ch]
-                for i in week_idxs:
-                    if df.loc[i, "Status"] == "Folga":
+                for i in eligible_days:
+                    if str(df.loc[i, "Status"]) == "Folga":
                         counts[i] += 1
-            mx = max(counts, key=lambda x: counts[x])
-            mn = min(counts, key=lambda x: counts[x])
-            if counts[mx] - counts[mn] <= 1:
-                break
-            candidates = [ch for ch in chapas_grupo if hist_by_chapa[ch].loc[mx, "Status"] == "Folga" and hist_by_chapa[ch].loc[mn, "Status"] == "Trabalho"]
-            random.shuffle(candidates)
-            moved = False
-            for ch in candidates:
-                if can_swap(ch, mx, mn):
-                    do_swap(ch, mx, mn)
-                    moved = True
-                    break
-            if not moved:
+
+            current_penalty = _day_penalty(counts, eligible_days)
+            spread = max(counts.values()) - min(counts.values())
+            if spread <= 1:
                 break
 
+            heavy_days = sorted(eligible_days, key=lambda i: (counts[i], i), reverse=True)
+            light_days = sorted(eligible_days, key=lambda i: (counts[i], i))
+
+            best_move = None
+            best_penalty = current_penalty
+
+            for i_from in heavy_days:
+                for i_to in light_days:
+                    if i_from == i_to:
+                        continue
+                    if counts[i_from] - counts[i_to] <= 1:
+                        continue
+
+                    candidates = [
+                        ch for ch in chapas_grupo
+                        if str(hist_by_chapa[ch].loc[i_from, "Status"]) == "Folga"
+                        and str(hist_by_chapa[ch].loc[i_to, "Status"]) == "Trabalho"
+                    ]
+
+                    for ch in candidates:
+                        if not can_swap(ch, i_from, i_to):
+                            continue
+
+                        sim_counts = dict(counts)
+                        sim_counts[i_from] -= 1
+                        sim_counts[i_to] += 1
+                        sim_penalty = _day_penalty(sim_counts, eligible_days)
+
+                        if sim_penalty + 1e-9 < best_penalty:
+                            best_penalty = sim_penalty
+                            best_move = (ch, i_from, i_to)
+
+            if not best_move:
+                break
+
+            do_swap(*best_move)
 # =========================================================
 # GERAR ESCALA — POR SUBGRUPO
 # =========================================================
