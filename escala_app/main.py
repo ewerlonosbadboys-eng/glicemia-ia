@@ -626,32 +626,13 @@ div[data-testid="stDataFrame"] { border-radius: 12px; overflow: hidden; }
 </style>
 """, unsafe_allow_html=True)
 
-# =========================
-# CAMINHOS PERSISTENTES (nova estrutura)
-# Coloque este arquivo em: escala_app/main.py
-# Banco em: escala_app/data/escala.db
-# Backups em: escala_app/backups/
-# =========================
-APP_DIR = Path(__file__).resolve().parent
-DATA_DIR = APP_DIR / "data"
-BACKUP_DIR = APP_DIR / "backups"
-DATA_DIR.mkdir(parents=True, exist_ok=True)
-BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-
-DB_PATH = str(DATA_DIR / "escala.db")
-
-# Migração automática do banco antigo da raiz, se existir
-try:
-    legacy_db = APP_DIR.parent / "escala.db"
-    if legacy_db.exists() and not Path(DB_PATH).exists():
-        shutil.copy2(legacy_db, DB_PATH)
-except Exception:
-    pass
+DB_PATH = "escala.db"
 
 
 # =========================
 # ADMIN: Backup / Restore + Setores + Import
 # =========================
+BACKUP_DIR = "backups"
 AUTO_BACKUP_HOUR = 3  # 03:00
 AUTO_BACKUP_INTERVAL_HOURS = 6  # roda quando o app abre
 
@@ -4472,13 +4453,23 @@ def page_login():
 
         colA, colB = st.columns([1.4, 1.0])
         with colA:
-            if recentes_opts_f:
-                pick = st.selectbox(
-                    "Recentes (clique para preencher):",
-                    [t[0] for t in recentes_opts_f],
-                    index=0,
-                    key="lg_recent_pick"
-                )
+            placeholder_recent = "— selecionar recente —"
+            if "lg_recent_pick" not in st.session_state:
+                st.session_state["lg_recent_pick"] = placeholder_recent
+
+            recent_labels = [placeholder_recent] + [t[0] for t in recentes_opts_f]
+
+            pick = st.selectbox(
+                "Recentes (clique para preencher):",
+                recent_labels,
+                index=recent_labels.index(st.session_state.get("lg_recent_pick", placeholder_recent))
+                if st.session_state.get("lg_recent_pick", placeholder_recent) in recent_labels else 0,
+                key="lg_recent_pick"
+            )
+
+            # Só preenche quando o usuário escolhe um recente de propósito.
+            # Não sobrescreve mais a chapa digitada automaticamente.
+            if pick != placeholder_recent:
                 chosen = next((t for t in recentes_opts_f if t[0] == pick), None)
                 if chosen:
                     st.session_state["lg_setor_txt"] = chosen[1]
