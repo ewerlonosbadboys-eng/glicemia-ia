@@ -70,10 +70,11 @@ COOKIE_DIAS = 30
 fuso_br = pytz.timezone("America/Sao_Paulo")
 st.set_page_config(page_title="Saúde Kids BETA", page_icon="🧪", layout="wide")
 
-ARQ_G = "dados_glicemia_BETA.csv"
-ARQ_N = "dados_nutricao_BETA.csv"
-ARQ_R = "config_receita_BETA.csv"
-ARQ_M = "mensagens_admin_BETA.csv"
+ARQ_G = DATA_DIR / "dados_glicemia_BETA.csv"
+ARQ_N = DATA_DIR / "dados_nutricao_BETA.csv"
+ARQ_R = DATA_DIR / "config_receita_BETA.csv"
+ARQ_M = DATA_DIR / "mensagens_admin_BETA.csv"
+DB_USERS = DATA_DIR / "usuarios.db"
 
 # ================= NORMALIZAÇÃO =================
 def norm_email(x: str) -> str:
