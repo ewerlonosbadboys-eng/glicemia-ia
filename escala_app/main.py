@@ -226,13 +226,14 @@ def _group_consecutive_days(days: list[int]) -> list[tuple[int,int]]:
 
 def enforce_max_two_folgas_per_week(hist_all: dict, chapas: list, df_ref_cur: pd.DataFrame, setor: str, ano: int, mes: int) -> None:
     """
-    v65 — REGRA DEFINITIVA
-    Semana = SEG -> DOM
-    Domingo conta como folga da semana
-    Máximo absoluto = 2 folgas por semana
-    Não pode sobrar folga dupla se isso fizer a semana estourar
-    Corrige inclusive virada de mês
-    Não mexe em Férias nem Afastamento
+    v67 — REGRA DEFINITIVA
+    - Semana = SEG -> DOM
+    - Domingo conta como folga da semana
+    - Máximo absoluto = 2 folgas por semana
+    - Não pode existir folga dupla consecutiva
+    - Corrige inclusive virada de mês
+    - Ao converter Folga -> Trabalho, usa o horário salvo do colaborador/sistema
+    - Não mexe em Férias nem Afastamento
     """
     if hist_all is None or df_ref_cur is None or len(df_ref_cur) == 0:
         return
@@ -268,20 +269,41 @@ def enforce_max_two_folgas_per_week(hist_all: dict, chapas: list, df_ref_cur: pd
         except Exception:
             prev_hist = {}
 
+    # mapa de entrada salva no sistema
+    entrada_por_chapa = {}
+    try:
+        for c in load_colaboradores(setor):
+            entrada_por_chapa[str(c.get("Chapa", "")).strip()] = str(c.get("Entrada", "") or "").strip()
+    except Exception:
+        entrada_por_chapa = {}
+
     def _is_folga_status(s: str) -> bool:
         return str(s) == "Folga"
 
-    def _make_work(df: pd.DataFrame, i: int, entrada_base: str) -> None:
+    def _entrada_base_for(df: pd.DataFrame, chapa: str) -> str:
+        ent = str(entrada_por_chapa.get(str(chapa).strip(), "") or "").strip()
+        if ent:
+            return ent
+        try:
+            vals = [str(v).strip() for v in df["H_Entrada"].astype(str).tolist() if str(v).strip()]
+            if vals:
+                return vals[0]
+        except Exception:
+            pass
+        return "06:00"
+
+    def _make_work(df: pd.DataFrame, i: int, chapa: str) -> None:
+        entrada_base = _entrada_base_for(df, chapa)
         df.loc[i, "Status"] = "Trabalho"
-        ent = str(df.loc[i, "H_Entrada"] or "").strip() or entrada_base
-        df.loc[i, "H_Entrada"] = ent
-        df.loc[i, "H_Saida"] = _saida_from_entrada(ent)
+        df.loc[i, "H_Entrada"] = entrada_base
+        df.loc[i, "H_Saida"] = _saida_from_entrada(entrada_base)
 
     _changed_any = True
     _guard = 0
-    while _changed_any and _guard < 10:
+    while _changed_any and _guard < 12:
         _changed_any = False
         _guard += 1
+
         for chapa in list(hist_all.keys()):
             if chapa not in hist_all:
                 continue
@@ -289,15 +311,6 @@ def enforce_max_two_folgas_per_week(hist_all: dict, chapas: list, df_ref_cur: pd
             if df is None or len(df) == 0:
                 continue
             df = df.reset_index(drop=True).copy()
-
-            entrada_base = ""
-            try:
-                vals = [str(v).strip() for v in df["H_Entrada"].astype(str).tolist() if str(v).strip()]
-                entrada_base = vals[0] if vals else ""
-            except Exception:
-                entrada_base = ""
-            if not entrada_base:
-                entrada_base = "06:00"
 
             prev_tail_statuses = []
             if carry_days > 0 and chapa in prev_hist:
@@ -310,64 +323,73 @@ def enforce_max_two_folgas_per_week(hist_all: dict, chapas: list, df_ref_cur: pd
                 except Exception:
                     prev_tail_statuses = []
 
+            # 1) quebrar folga dupla consecutiva no mês atual inteiro
+            folgas_mes = [i for i in range(len(df)) if _is_folga_status(df.loc[i, "Status"])]
+            for a, b in zip(folgas_mes, folgas_mes[1:]):
+                if b == a + 1:
+                    _make_work(df, b, chapa)   # remove a segunda folga da dupla
+                    _changed_any = True
+
+            # 2) quebrar dupla herdada da virada de mês (último dia do mês anterior + 1º do atual)
+            if prev_tail_statuses and len(prev_tail_statuses) > 0:
+                if str(prev_tail_statuses[-1]) == "Folga" and len(df) > 0 and _is_folga_status(df.loc[0, "Status"]):
+                    _make_work(df, 0, chapa)
+                    _changed_any = True
+
+            # 3) limite máximo de 2 folgas por semana, contando domingo
             for w_idx, week in enumerate(weeks):
                 prev_folgas = 0
                 if w_idx == 0 and carry_days > 0 and prev_tail_statuses:
                     prev_folgas = sum(1 for s in prev_tail_statuses if _is_folga_status(s))
-    
+
                 current_folga_idxs = [i for i in week if _is_folga_status(df.loc[i, "Status"])]
                 total = prev_folgas + len(current_folga_idxs)
                 if total <= 2:
                     continue
-    
+
                 excesso = total - 2
                 to_remove = []
-    
-                # domingo conta dentro da semana; se estourou, ele também pode ser removido
+
+                # domingo conta; se for a 3a folga, remove primeiro
                 sundays = [i for i in current_folga_idxs if str(ref.loc[i, "Dia"]) == "dom"]
                 for i in sundays:
                     if excesso <= 0:
                         break
                     to_remove.append(i)
                     excesso -= 1
-    
+
                 remaining = [i for i in current_folga_idxs if i not in to_remove]
-    
-                # quebra folga dupla/consecutiva
-                if excesso > 0 and remaining:
-                    rem_sorted = sorted(remaining)
-                    consec_extra = []
-                    for a, b in zip(rem_sorted, rem_sorted[1:]):
-                        if b == a + 1:
-                            consec_extra.append(b)
-                    for i in consec_extra:
-                        if excesso <= 0:
-                            break
-                        if i not in to_remove:
-                            to_remove.append(i)
-                            excesso -= 1
-    
+
+                # depois remove a segunda de folga dupla
+                rem_sorted = sorted(remaining)
+                for a, b in zip(rem_sorted, rem_sorted[1:]):
+                    if excesso <= 0:
+                        break
+                    if b == a + 1 and b not in to_remove:
+                        to_remove.append(b)
+                        excesso -= 1
+
                 remaining = [i for i in current_folga_idxs if i not in to_remove]
-    
-                if excesso > 0:
-                    for i in remaining:
-                        if excesso <= 0:
-                            break
-                        if i not in to_remove:
-                            to_remove.append(i)
-                            excesso -= 1
-    
+
+                # por fim remove o restante até fechar em 2
+                for i in remaining:
+                    if excesso <= 0:
+                        break
+                    if i not in to_remove:
+                        to_remove.append(i)
+                        excesso -= 1
+
                 for i in sorted(set(to_remove)):
-                    _make_work(df, i, entrada_base)
+                    _make_work(df, i, chapa)
                     _changed_any = True
-    
+
                 final_count = prev_folgas + sum(1 for i in week if _is_folga_status(df.loc[i, "Status"]))
                 if final_count > 2:
                     still = [i for i in week if _is_folga_status(df.loc[i, "Status"])]
                     for i in still[:max(0, final_count - 2)]:
-                        _make_work(df, i, entrada_base)
+                        _make_work(df, i, chapa)
                         _changed_any = True
-    
+
             hist_all[chapa] = df
     
     def _apply_pdf_import_to_db(
