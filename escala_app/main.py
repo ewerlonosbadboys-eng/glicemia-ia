@@ -224,7 +224,7 @@ def _group_consecutive_days(days: list[int]) -> list[tuple[int,int]]:
     return ranges
 
 
-def enforce_max_two_folgas_per_week(hist_all: dict, chapas: list, df_ref_cur: pd.DataFrame) -> None:
+def enforce_max_two_folgas_per_week(hist_all: dict, chapas: list, df_ref_cur: pd.DataFrame, setor: str, ano: int, mes: int) -> None:
     """
     Regra máxima final:
     semana sempre SEG -> DOM;
@@ -232,13 +232,18 @@ def enforce_max_two_folgas_per_week(hist_all: dict, chapas: list, df_ref_cur: pd
     Domingo conta dentro da mesma semana.
     Excedente de folga vira Trabalho.
     Não mexe em Férias nem Afastamento.
+
+    ✅ v64:
+    também valida a semana quebrada na VIRADA DE MÊS.
+    Ex.: 30/03 a 05/04 precisa contar como uma única semana.
     """
     if hist_all is None or df_ref_cur is None or len(df_ref_cur) == 0:
         return
 
     ref = df_ref_cur.reset_index(drop=True).copy()
+    ref["Data"] = pd.to_datetime(ref["Data"], errors="coerce")
 
-    # Quebra o mês em semanas reais SEG->DOM
+    # quebra o mês em semanas reais SEG->DOM
     weeks = []
     current = []
     for i in range(len(ref)):
@@ -248,6 +253,25 @@ def enforce_max_two_folgas_per_week(hist_all: dict, chapas: list, df_ref_cur: pd
             current = []
     if current:
         weeks.append(current)
+
+    # quantos dias da semana anterior entram no começo do mês atual
+    first_date = pd.to_datetime(ref.loc[0, "Data"])
+    carry_days = int(first_date.weekday())  # seg=0 ... dom=6
+
+    prev_hist = {}
+    if carry_days > 0:
+        prev_ano, prev_mes = int(ano), int(mes) - 1
+        if prev_mes == 0:
+            prev_mes = 12
+            prev_ano -= 1
+        try:
+            prev_hist = load_escala_mes_db(setor, int(prev_ano), int(prev_mes)) or {}
+            try:
+                apply_overrides_to_hist(setor, int(prev_ano), int(prev_mes), prev_hist)
+            except Exception:
+                pass
+        except Exception:
+            prev_hist = {}
 
     for chapa in (chapas or list(hist_all.keys())):
         if chapa not in hist_all:
@@ -267,13 +291,36 @@ def enforce_max_two_folgas_per_week(hist_all: dict, chapas: list, df_ref_cur: pd
         if not entrada_base:
             entrada_base = "06:00"
 
-        for week in weeks:
-            folga_idxs = [i for i in week if str(df.loc[i, "Status"]) == "Folga"]
-            if len(folga_idxs) <= 2:
+        prev_tail_statuses = []
+        if carry_days > 0 and chapa in prev_hist:
+            try:
+                dfp = prev_hist[chapa].copy().reset_index(drop=True)
+                if "Data" in dfp.columns:
+                    dfp["Data"] = pd.to_datetime(dfp["Data"], errors="coerce")
+                    dfp = dfp.sort_values("Data")
+                prev_tail_statuses = [str(x) for x in dfp["Status"].tolist()[-carry_days:]]
+            except Exception:
+                prev_tail_statuses = []
+
+        for w_idx, week in enumerate(weeks):
+            # conta apenas Folga; Férias/Afastamento não entram aqui
+            current_folga_idxs = [i for i in week if str(df.loc[i, "Status"]) == "Folga"]
+
+            total_folgas = len(current_folga_idxs)
+
+            # na primeira semana do mês, soma as folgas herdadas da semana anterior
+            if w_idx == 0 and carry_days > 0 and prev_tail_statuses:
+                total_folgas += sum(1 for s in prev_tail_statuses if str(s) == "Folga")
+
+            if total_folgas <= 2:
                 continue
 
-            # mantém apenas as 2 primeiras folgas da semana
-            for i in folga_idxs[2:]:
+            # só podemos mexer nas folgas do mês atual
+            remove_needed = total_folgas - 2
+
+            # remove primeiro as folgas mais cedo do mês atual
+            # assim mata o caso 30/03-05/04 com 3 folgas na semana contínua
+            for i in current_folga_idxs[:remove_needed]:
                 df.loc[i, "Status"] = "Trabalho"
                 ent = str(df.loc[i, "H_Entrada"] or "").strip() or entrada_base
                 df.loc[i, "H_Entrada"] = ent
@@ -3976,7 +4023,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
 
 
 
-        enforce_max_two_folgas_per_week(hist_all, chapas, df_ref_cur)
+        enforce_max_two_folgas_per_week(hist_all, chapas, df_ref_cur, setor, ano, mes)
 
 
 
