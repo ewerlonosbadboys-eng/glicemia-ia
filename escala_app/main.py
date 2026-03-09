@@ -226,16 +226,13 @@ def _group_consecutive_days(days: list[int]) -> list[tuple[int,int]]:
 
 def enforce_max_two_folgas_per_week(hist_all: dict, chapas: list, df_ref_cur: pd.DataFrame, setor: str, ano: int, mes: int) -> None:
     """
-    Regra máxima final:
-    semana sempre SEG -> DOM;
-    nenhum colaborador pode ter mais de 2 folgas na mesma semana.
-    Domingo conta dentro da mesma semana.
-    Excedente de folga vira Trabalho.
-    Não mexe em Férias nem Afastamento.
-
-    ✅ v64:
-    também valida a semana quebrada na VIRADA DE MÊS.
-    Ex.: 30/03 a 05/04 precisa contar como uma única semana.
+    v65 — REGRA DEFINITIVA
+    Semana = SEG -> DOM
+    Domingo conta como folga da semana
+    Máximo absoluto = 2 folgas por semana
+    Não pode sobrar folga dupla se isso fizer a semana estourar
+    Corrige inclusive virada de mês
+    Não mexe em Férias nem Afastamento
     """
     if hist_all is None or df_ref_cur is None or len(df_ref_cur) == 0:
         return
@@ -243,7 +240,6 @@ def enforce_max_two_folgas_per_week(hist_all: dict, chapas: list, df_ref_cur: pd
     ref = df_ref_cur.reset_index(drop=True).copy()
     ref["Data"] = pd.to_datetime(ref["Data"], errors="coerce")
 
-    # quebra o mês em semanas reais SEG->DOM
     weeks = []
     current = []
     for i in range(len(ref)):
@@ -254,7 +250,6 @@ def enforce_max_two_folgas_per_week(hist_all: dict, chapas: list, df_ref_cur: pd
     if current:
         weeks.append(current)
 
-    # quantos dias da semana anterior entram no começo do mês atual
     first_date = pd.to_datetime(ref.loc[0, "Data"])
     carry_days = int(first_date.weekday())  # seg=0 ... dom=6
 
@@ -273,6 +268,15 @@ def enforce_max_two_folgas_per_week(hist_all: dict, chapas: list, df_ref_cur: pd
         except Exception:
             prev_hist = {}
 
+    def _is_folga_status(s: str) -> bool:
+        return str(s) == "Folga"
+
+    def _make_work(df: pd.DataFrame, i: int, entrada_base: str) -> None:
+        df.loc[i, "Status"] = "Trabalho"
+        ent = str(df.loc[i, "H_Entrada"] or "").strip() or entrada_base
+        df.loc[i, "H_Entrada"] = ent
+        df.loc[i, "H_Saida"] = _saida_from_entrada(ent)
+
     for chapa in (chapas or list(hist_all.keys())):
         if chapa not in hist_all:
             continue
@@ -283,8 +287,7 @@ def enforce_max_two_folgas_per_week(hist_all: dict, chapas: list, df_ref_cur: pd
 
         entrada_base = ""
         try:
-            vals = df["H_Entrada"].astype(str).tolist()
-            vals = [v.strip() for v in vals if str(v).strip()]
+            vals = [str(v).strip() for v in df["H_Entrada"].astype(str).tolist() if str(v).strip()]
             entrada_base = vals[0] if vals else ""
         except Exception:
             entrada_base = ""
@@ -303,28 +306,60 @@ def enforce_max_two_folgas_per_week(hist_all: dict, chapas: list, df_ref_cur: pd
                 prev_tail_statuses = []
 
         for w_idx, week in enumerate(weeks):
-            # conta apenas Folga; Férias/Afastamento não entram aqui
-            current_folga_idxs = [i for i in week if str(df.loc[i, "Status"]) == "Folga"]
-
-            total_folgas = len(current_folga_idxs)
-
-            # na primeira semana do mês, soma as folgas herdadas da semana anterior
+            prev_folgas = 0
             if w_idx == 0 and carry_days > 0 and prev_tail_statuses:
-                total_folgas += sum(1 for s in prev_tail_statuses if str(s) == "Folga")
+                prev_folgas = sum(1 for s in prev_tail_statuses if _is_folga_status(s))
 
-            if total_folgas <= 2:
+            current_folga_idxs = [i for i in week if _is_folga_status(df.loc[i, "Status"])]
+            total = prev_folgas + len(current_folga_idxs)
+            if total <= 2:
                 continue
 
-            # só podemos mexer nas folgas do mês atual
-            remove_needed = total_folgas - 2
+            excesso = total - 2
+            to_remove = []
 
-            # remove primeiro as folgas mais cedo do mês atual
-            # assim mata o caso 30/03-05/04 com 3 folgas na semana contínua
-            for i in current_folga_idxs[:remove_needed]:
-                df.loc[i, "Status"] = "Trabalho"
-                ent = str(df.loc[i, "H_Entrada"] or "").strip() or entrada_base
-                df.loc[i, "H_Entrada"] = ent
-                df.loc[i, "H_Saida"] = _saida_from_entrada(ent)
+            # domingo conta dentro da semana; se estourou, ele também pode ser removido
+            sundays = [i for i in current_folga_idxs if str(ref.loc[i, "Dia"]) == "dom"]
+            for i in sundays:
+                if excesso <= 0:
+                    break
+                to_remove.append(i)
+                excesso -= 1
+
+            remaining = [i for i in current_folga_idxs if i not in to_remove]
+
+            # quebra folga dupla/consecutiva
+            if excesso > 0 and remaining:
+                rem_sorted = sorted(remaining)
+                consec_extra = []
+                for a, b in zip(rem_sorted, rem_sorted[1:]):
+                    if b == a + 1:
+                        consec_extra.append(b)
+                for i in consec_extra:
+                    if excesso <= 0:
+                        break
+                    if i not in to_remove:
+                        to_remove.append(i)
+                        excesso -= 1
+
+            remaining = [i for i in current_folga_idxs if i not in to_remove]
+
+            if excesso > 0:
+                for i in remaining:
+                    if excesso <= 0:
+                        break
+                    if i not in to_remove:
+                        to_remove.append(i)
+                        excesso -= 1
+
+            for i in sorted(set(to_remove)):
+                _make_work(df, i, entrada_base)
+
+            final_count = prev_folgas + sum(1 for i in week if _is_folga_status(df.loc[i, "Status"]))
+            if final_count > 2:
+                still = [i for i in week if _is_folga_status(df.loc[i, "Status"])]
+                for i in still[:max(0, final_count - 2)]:
+                    _make_work(df, i, entrada_base)
 
         hist_all[chapa] = df
 
