@@ -4032,7 +4032,8 @@ def rebalance_folgas_dia(
     estado_prev: dict | None = None,
     locked_idx: dict | None = None,
     past_flag: bool = False,
-    max_iters=2200
+    max_iters=2200,
+    pref: dict | None = None
 ):
     """
     Correções:
@@ -4048,6 +4049,31 @@ def rebalance_folgas_dia(
 
     def is_locked(ch, i):
         return bool(i in (locked_idx.get(ch, set()) or set()))
+
+    pref = pref or {}
+
+    def _day_key(i):
+        return str(df_ref.loc[i, "Dia"] or "")
+
+    def _target_counts_for_week(week_idxs):
+        valid = [i for i in week_idxs if not is_dom(i)]
+        if not valid:
+            return {}
+        total = 0
+        counts_now = {i: 0 for i in valid}
+        for chx in chapas_grupo:
+            dfx = hist_by_chapa[chx]
+            for ix in valid:
+                if str(dfx.loc[ix, "Status"]) == "Folga":
+                    counts_now[ix] += 1
+                    total += 1
+        ordered = sorted(valid, key=lambda ix: (1 if pref.get(_day_key(ix), 0) == 1 else 0, counts_now.get(ix, 0), int(ix)))
+        base = total // len(valid)
+        rem = total % len(valid)
+        targets = {ix: base for ix in valid}
+        for ix in ordered[:rem]:
+            targets[ix] += 1
+        return targets
 
     def can_swap(ch, i_from, i_to):
         df = hist_by_chapa[ch]
@@ -4092,17 +4118,34 @@ def rebalance_folgas_dia(
                 for i in week_idxs:
                     if df.loc[i, "Status"] == "Folga":
                         counts[i] += 1
-            mx = max(counts, key=lambda x: counts[x])
-            mn = min(counts, key=lambda x: counts[x])
-            if counts[mx] - counts[mn] <= 1:
-                break
-            candidates = [ch for ch in chapas_grupo if hist_by_chapa[ch].loc[mx, "Status"] == "Folga" and hist_by_chapa[ch].loc[mn, "Status"] == "Trabalho"]
-            random.shuffle(candidates)
+
+            targets = _target_counts_for_week(week_idxs)
+            excess_days = [i for i in week_idxs if counts.get(i, 0) > targets.get(i, 0)]
+            lack_days = [i for i in week_idxs if counts.get(i, 0) < targets.get(i, 0)]
+            if not excess_days or not lack_days:
+                mx = max(counts, key=lambda x: counts[x])
+                mn = min(counts, key=lambda x: counts[x])
+                if counts[mx] - counts[mn] <= 1:
+                    break
+                excess_days = [mx]
+                lack_days = [mn]
+
+            excess_days = sorted(excess_days, key=lambda i: (counts.get(i, 0) - targets.get(i, 0), counts.get(i, 0), pref.get(_day_key(i), 0)), reverse=True)
+            lack_days = sorted(lack_days, key=lambda i: (targets.get(i, 0) - counts.get(i, 0), pref.get(_day_key(i), 0), counts.get(i, 0)), reverse=True)
+
             moved = False
-            for ch in candidates:
-                if can_swap(ch, mx, mn):
-                    do_swap(ch, mx, mn)
-                    moved = True
+            for mx in excess_days:
+                for mn in lack_days:
+                    candidates = [ch for ch in chapas_grupo if hist_by_chapa[ch].loc[mx, "Status"] == "Folga" and hist_by_chapa[ch].loc[mn, "Status"] == "Trabalho"]
+                    random.shuffle(candidates)
+                    for ch in candidates:
+                        if can_swap(ch, mx, mn):
+                            do_swap(ch, mx, mn)
+                            moved = True
+                            break
+                    if moved:
+                        break
+                if moved:
                     break
             if not moved:
                 break
@@ -4258,10 +4301,13 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
                         dia = df_ref_cur.loc[j, "Dia"]
                         weekday_prio = 0 if dia in ["seg", "ter", "qua", "qui", "sex"] else 1
                         pref_pen = PREF_EVITAR_PENALTY if pref.get(dia, 0) == 1 else 0
+                        # quando não há preferência marcada para evitar, distribuir o mais uniforme possível
+                        # dentro do subgrupo na semana atual.
+                        spread_bias = counts_day.get(j, 0)
                         return (
-                            counts_day.get(j, 0),
-                            counts_day_hour.get((j, ent_bucket), 0),
                             pref_pen,
+                            spread_bias,
+                            counts_day_hour.get((j, ent_bucket), 0),
                             weekday_prio,
                             random.random()
                         )
@@ -4333,7 +4379,8 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
                 estado_prev=estado_prev,
                 locked_idx=locked_idx,
                 past_flag=_past,
-                max_iters=2200
+                max_iters=2200,
+                pref=regras_cache.get(sg, {})
             )
 
     # ✅ Pós-rebalance: revalida regras por colaborador (evita semana com 3 folgas)
