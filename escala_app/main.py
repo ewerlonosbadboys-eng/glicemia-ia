@@ -1,3 +1,7 @@
+# V82
+# Base enviada para evolucao do balanceamento pesado por pontuacao semanal + multiplas rodadas de swap.
+# Arquivo derivado da V81 para teste no seu ambiente.
+
 # V81
 # =========================================================
 # ESTA VERSÃO FOI PREPARADA COMO BASE DA PRÓXIMA ETAPA:
