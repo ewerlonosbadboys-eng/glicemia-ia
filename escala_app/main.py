@@ -224,7 +224,7 @@ def _group_consecutive_days(days: list[int]) -> list[tuple[int,int]]:
     return ranges
 
 
-def enforce_max_two_folgas_per_week(hist_all: dict, chapas: list, df_ref_cur: pd.DataFrame, setor: str, ano: int, mes: int) -> None:
+def enforce_max_two_folgas_per_week(hist_all: dict, chapas: list, df_ref_cur: pd.DataFrame, setor: str, ano: int, mes: int, locked_idx_map: dict | None = None) -> None:
     """
     v68
     - Semana = SEG -> DOM
@@ -332,11 +332,15 @@ def enforce_max_two_folgas_per_week(hist_all: dict, chapas: list, df_ref_cur: pd
             pass
         return "06:00"
 
-    def _make_work(df: pd.DataFrame, i: int, chapa: str) -> None:
+    def _make_work(df: pd.DataFrame, i: int, chapa: str, blocked: set[int] | None = None) -> bool:
+        blocked = blocked or set()
+        if int(i) in blocked:
+            return False
         entrada_base = _entrada_base_for(df, chapa)
         df.loc[i, "Status"] = "Trabalho"
         df.loc[i, "H_Entrada"] = entrada_base
         df.loc[i, "H_Saida"] = _saida_from_entrada(entrada_base)
+        return True
 
     _changed_any = True
     _guard = 0
@@ -351,6 +355,7 @@ def enforce_max_two_folgas_per_week(hist_all: dict, chapas: list, df_ref_cur: pd
             if df is None or len(df) == 0:
                 continue
             df = df.reset_index(drop=True).copy()
+            sunday_locked = _merge_locked_status((locked_idx_map or {}).get(chapa, set()), _sunday_indices_df(df))
 
             # v68: corrige linhas vazias/sem horário mesmo quando já estão como Trabalho
             entrada_base_now = _entrada_base_for(df, chapa)
@@ -382,14 +387,14 @@ def enforce_max_two_folgas_per_week(hist_all: dict, chapas: list, df_ref_cur: pd
             folgas_mes = [i for i in range(len(df)) if _is_folga_status(df.loc[i, "Status"])]
             for a, b in zip(folgas_mes, folgas_mes[1:]):
                 if b == a + 1:
-                    _make_work(df, b, chapa)
-                    _changed_any = True
+                    if _make_work(df, b, chapa, sunday_locked):
+                        _changed_any = True
 
             # quebra dupla herdada da virada
             if prev_tail_statuses and len(prev_tail_statuses) > 0:
                 if str(prev_tail_statuses[-1]) == "Folga" and len(df) > 0 and _is_folga_status(df.loc[0, "Status"]):
-                    _make_work(df, 0, chapa)
-                    _changed_any = True
+                    if _make_work(df, 0, chapa, sunday_locked):
+                        _changed_any = True
 
             # limite de 2 folgas na semana contando domingo
             for w_idx, week in enumerate(weeks):
@@ -405,14 +410,14 @@ def enforce_max_two_folgas_per_week(hist_all: dict, chapas: list, df_ref_cur: pd
                 excesso = total - 2
                 to_remove = []
 
-                sundays = [i for i in current_folga_idxs if str(ref.loc[i, "Dia"]) == "dom"]
+                sundays = [i for i in current_folga_idxs if str(ref.loc[i, "Dia"]) == "dom" and i not in sunday_locked]
                 for i in sundays:
                     if excesso <= 0:
                         break
                     to_remove.append(i)
                     excesso -= 1
 
-                remaining = [i for i in current_folga_idxs if i not in to_remove]
+                remaining = [i for i in current_folga_idxs if i not in to_remove and i not in sunday_locked]
 
                 rem_sorted = sorted(remaining)
                 for a, b in zip(rem_sorted, rem_sorted[1:]):
@@ -422,7 +427,7 @@ def enforce_max_two_folgas_per_week(hist_all: dict, chapas: list, df_ref_cur: pd
                         to_remove.append(b)
                         excesso -= 1
 
-                remaining = [i for i in current_folga_idxs if i not in to_remove]
+                remaining = [i for i in current_folga_idxs if i not in to_remove and i not in sunday_locked]
                 for i in remaining:
                     if excesso <= 0:
                         break
@@ -431,15 +436,15 @@ def enforce_max_two_folgas_per_week(hist_all: dict, chapas: list, df_ref_cur: pd
                         excesso -= 1
 
                 for i in sorted(set(to_remove)):
-                    _make_work(df, i, chapa)
-                    _changed_any = True
+                    if _make_work(df, i, chapa, sunday_locked):
+                        _changed_any = True
 
                 final_count = prev_folgas + sum(1 for i in week if _is_folga_status(df.loc[i, "Status"]))
                 if final_count > 2:
-                    still = [i for i in week if _is_folga_status(df.loc[i, "Status"])]
+                    still = [i for i in week if _is_folga_status(df.loc[i, "Status"]) and i not in sunday_locked]
                     for i in still[:max(0, final_count - 2)]:
-                        _make_work(df, i, chapa)
-                        _changed_any = True
+                        if _make_work(df, i, chapa, sunday_locked):
+                            _changed_any = True
 
             hist_all[chapa] = df
     
@@ -3140,6 +3145,36 @@ def _all_weeks_seg_dom(datas: pd.DatetimeIndex):
             weeks.append(list(w))
     return weeks
 
+def _sunday_indices_df(df: pd.DataFrame) -> set[int]:
+    out = set()
+    if df is None or len(df) == 0 or "Data" not in df.columns:
+        return out
+    for i in df.index.tolist():
+        try:
+            if pd.to_datetime(df.loc[i, "Data"]).day_name() == "Sunday":
+                out.add(i)
+        except Exception:
+            pass
+    return out
+
+def _merge_locked_status(*parts) -> set[int]:
+    merged = set()
+    for part in parts:
+        if not part:
+            continue
+        try:
+            merged.update(int(x) for x in part)
+        except Exception:
+            try:
+                for x in list(part):
+                    try:
+                        merged.add(int(x))
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+    return merged
+
 # =========================================================
 # ✅ DOMINGO 1x1 POR COLABORADOR (GLOBAL, RESPEITA LOCK/FÉRIAS)
 # =========================================================
@@ -3969,32 +4004,33 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
             else:
                 base_first = None
         enforce_sundays_1x1_for_employee(df, ent, locked_status=locked, base_first=base_first)
+        locked_dom = _merge_locked_status(locked, _sunday_indices_df(df))
 
         # 1) Garante 5 dias seguidos antes de mexer em metas semanais
         enforce_max_5_consecutive_work(
             df, ent, pode_sab,
             initial_consec=(0 if _past else int((estado_prev.get(ch, {}) or {}).get('consec_trab_final', 0))),
-            locked_status=locked
+            locked_status=locked_dom
         )
-        enforce_no_consecutive_folga(df, locked_status=locked)
+        enforce_no_consecutive_folga(df, locked_status=locked_dom)
 
         # 2) Metas semanais podem REMOVER folga => pode criar >5 de novo
-        enforce_weekly_folga_targets(df, df_ref=(df_ref_use if df_ref_use is not None else df_ref_cur), pode_folgar_sabado=pode_sab, locked_status=locked)
+        enforce_weekly_folga_targets(df, df_ref=(df_ref_use if df_ref_use is not None else df_ref_cur), pode_folgar_sabado=pode_sab, locked_status=locked_dom)
 
         # 3) Reforça novamente o limite de 5 depois das metas semanais
         enforce_max_5_consecutive_work(
             df, ent, pode_sab,
             initial_consec=(0 if _past else int((estado_prev.get(ch, {}) or {}).get('consec_trab_final', 0))),
-            locked_status=locked
+            locked_status=locked_dom
         )
-        enforce_no_consecutive_folga(df, locked_status=locked)
+        enforce_no_consecutive_folga(df, locked_status=locked_dom)
 
         ultima_saida_prev = "" if _past else (estado_prev.get(ch, {}).get("ultima_saida", "") or "")
-        enforce_global_rest_keep_targets(df, ent, locked_status=locked, ultima_saida_prev=ultima_saida_prev)
+        enforce_global_rest_keep_targets(df, ent, locked_status=locked_dom, ultima_saida_prev=ultima_saida_prev)
 
         # limpeza
-        enforce_no_consecutive_folga(df, locked_status=locked)
-        enforce_global_rest_keep_targets(df, ent, locked_status=locked, ultima_saida_prev=ultima_saida_prev)
+        enforce_no_consecutive_folga(df, locked_status=locked_dom)
+        enforce_global_rest_keep_targets(df, ent, locked_status=locked_dom, ultima_saida_prev=ultima_saida_prev)
 
         if respeitar_ajustes:
             _apply_overrides_to_df_inplace(df, setor, ch, ovmap)
@@ -4018,29 +4054,30 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
         ent = colab_by_chapa[ch].get("Entrada", "06:00")
         locked = locked_idx.get(ch, set())
         pode_sab = bool(colab_by_chapa[ch].get("Folga_Sab", False))
+        locked_dom = _merge_locked_status(locked, _sunday_indices_df(df))
 
         # 1) Limite 5 dias (pode ter sido quebrado pelo rebalance)
         enforce_max_5_consecutive_work(
             df, ent, pode_sab,
             initial_consec=(0 if _past else int((estado_prev.get(ch, {}) or {}).get('consec_trab_final', 0))),
-            locked_status=locked
+            locked_status=locked_dom
         )
 
         # 2) Regra semanal SEG→DOM (remove excesso e completa falta)
-        enforce_weekly_folga_targets(df, df_ref=(df_ref_use if df_ref_use is not None else df_ref_cur), pode_folgar_sabado=pode_sab, locked_status=locked)
+        enforce_weekly_folga_targets(df, df_ref=(df_ref_use if df_ref_use is not None else df_ref_cur), pode_folgar_sabado=pode_sab, locked_status=locked_dom)
 
         # 3) Reforça 5 dias novamente (regra semanal pode remover folga e criar sequência >5)
         enforce_max_5_consecutive_work(
             df, ent, pode_sab,
             initial_consec=(0 if _past else int((estado_prev.get(ch, {}) or {}).get('consec_trab_final', 0))),
-            locked_status=locked
+            locked_status=locked_dom
         )
 
         # 4) Regra semanal novamente (se o max_5 criou folga extra, normaliza para alvo)
-        enforce_weekly_folga_targets(df, df_ref=(df_ref_use if df_ref_use is not None else df_ref_cur), pode_folgar_sabado=pode_sab, locked_status=locked)
+        enforce_weekly_folga_targets(df, df_ref=(df_ref_use if df_ref_use is not None else df_ref_cur), pode_folgar_sabado=pode_sab, locked_status=locked_dom)
 
         # 5) Proíbe folga consecutiva automática (DOM+SEG etc.)
-        enforce_no_consecutive_folga(df, locked_status=locked)
+        enforce_no_consecutive_folga(df, locked_status=locked_dom)
 
         hist_all[ch] = df
 
@@ -4063,16 +4100,17 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
             else:
                 base_first = None
         enforce_sundays_1x1_for_employee(df, ent, locked_status=locked, base_first=base_first)
-        enforce_no_consecutive_folga(df, locked_status=locked)
-        enforce_weekly_folga_targets(df, df_ref=(df_ref_use if df_ref_use is not None else df_ref_cur), pode_folgar_sabado=bool(colab_by_chapa[ch].get('Folga_Sab', False)), locked_status=locked)
+        locked_dom = _merge_locked_status(locked, _sunday_indices_df(df))
+        enforce_no_consecutive_folga(df, locked_status=locked_dom)
+        enforce_weekly_folga_targets(df, df_ref=(df_ref_use if df_ref_use is not None else df_ref_cur), pode_folgar_sabado=bool(colab_by_chapa[ch].get('Folga_Sab', False)), locked_status=locked_dom)
 
         # ✅ garante 5 dias depois do weekly (porque weekly pode remover folga)
         enforce_max_5_consecutive_work(
             df, ent, bool(colab_by_chapa[ch].get('Folga_Sab', False)),
             initial_consec=(0 if _past else int((estado_prev.get(ch, {}) or {}).get('consec_trab_final', 0))),
-            locked_status=locked
+            locked_status=locked_dom
         )
-        enforce_no_consecutive_folga(df, locked_status=locked)
+        enforce_no_consecutive_folga(df, locked_status=locked_dom)
 
         enforce_global_rest_keep_targets(df, ent, locked_status=locked, ultima_saida_prev=ultima_saida_prev)
 
@@ -4119,9 +4157,10 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
         ent = colab_by_chapa[ch].get("Entrada", "06:00")
         pode_sab = bool(colab_by_chapa[ch].get("Folga_Sab", False))
         locked = locked_idx.get(ch, set())
+        locked_dom = _merge_locked_status(locked, _sunday_indices_df(df))
 
         try:
-            enforce_max_5_consecutive_work(df, ent, pode_sab, locked_status=locked)
+            enforce_max_5_consecutive_work(df, ent, pode_sab, locked_status=locked_dom)
         except Exception:
             pass
 
@@ -4130,13 +4169,13 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
                 df,
                 df_ref=(df_ref_use if df_ref_use is not None else df_ref_cur),
                 pode_folgar_sabado=pode_sab,
-                locked_status=locked
+                locked_status=locked_dom
             )
         except Exception:
             pass
 
         try:
-            df = enforce_no_consecutive_folgas(df, locked_status=locked)
+            df = enforce_no_consecutive_folgas(df, locked_status=locked_dom)
         except Exception:
             pass
 
@@ -4145,7 +4184,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
                 df,
                 df_ref=(df_ref_use if df_ref_use is not None else df_ref_cur),
                 pode_folgar_sabado=pode_sab,
-                locked_status=locked
+                locked_status=locked_dom
             )
         except Exception:
             pass
@@ -4154,7 +4193,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
             df = _cap_total_folgas_por_semana(
                 df,
                 target_total=2,
-                locked_status=locked,
+                locked_status=locked_dom,
                 df_ref=(df_ref_use if df_ref_use is not None else df_ref_cur)
             )
         except Exception:
@@ -4165,7 +4204,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
                 df,
                 df_ref=(df_ref_use if df_ref_use is not None else df_ref_cur),
                 pode_folgar_sabado=pode_sab,
-                locked_status=locked
+                locked_status=locked_dom
             )
         except Exception:
             pass
@@ -4185,7 +4224,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
 
 
 
-        enforce_max_two_folgas_per_week(hist_all, list(hist_all.keys()), df_ref_cur, setor, ano, mes)
+        enforce_max_two_folgas_per_week(hist_all, list(hist_all.keys()), df_ref_cur, setor, ano, mes, locked_idx_map=locked_idx)
 
 
 
