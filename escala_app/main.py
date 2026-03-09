@@ -283,34 +283,34 @@ def enforce_max_two_folgas_per_week(hist_all: dict, chapas: list, df_ref_cur: pd
         _changed_any = False
         _guard += 1
         for chapa in list(hist_all.keys()):
-        if chapa not in hist_all:
-            continue
-        df = hist_all[chapa]
-        if df is None or len(df) == 0:
-            continue
-        df = df.reset_index(drop=True).copy()
+            if chapa not in hist_all:
+                continue
+            df = hist_all[chapa]
+            if df is None or len(df) == 0:
+                continue
+            df = df.reset_index(drop=True).copy()
 
-        entrada_base = ""
-        try:
-            vals = [str(v).strip() for v in df["H_Entrada"].astype(str).tolist() if str(v).strip()]
-            entrada_base = vals[0] if vals else ""
-        except Exception:
             entrada_base = ""
-        if not entrada_base:
-            entrada_base = "06:00"
-
-        prev_tail_statuses = []
-        if carry_days > 0 and chapa in prev_hist:
             try:
-                dfp = prev_hist[chapa].copy().reset_index(drop=True)
-                if "Data" in dfp.columns:
-                    dfp["Data"] = pd.to_datetime(dfp["Data"], errors="coerce")
-                    dfp = dfp.sort_values("Data")
-                prev_tail_statuses = [str(x) for x in dfp["Status"].tolist()[-carry_days:]]
+                vals = [str(v).strip() for v in df["H_Entrada"].astype(str).tolist() if str(v).strip()]
+                entrada_base = vals[0] if vals else ""
             except Exception:
-                prev_tail_statuses = []
+                entrada_base = ""
+            if not entrada_base:
+                entrada_base = "06:00"
 
-        for w_idx, week in enumerate(weeks):
+            prev_tail_statuses = []
+            if carry_days > 0 and chapa in prev_hist:
+                try:
+                    dfp = prev_hist[chapa].copy().reset_index(drop=True)
+                    if "Data" in dfp.columns:
+                        dfp["Data"] = pd.to_datetime(dfp["Data"], errors="coerce")
+                        dfp = dfp.sort_values("Data")
+                    prev_tail_statuses = [str(x) for x in dfp["Status"].tolist()[-carry_days:]]
+                except Exception:
+                    prev_tail_statuses = []
+
+            for w_idx, week in enumerate(weeks):
             prev_folgas = 0
             if w_idx == 0 and carry_days > 0 and prev_tail_statuses:
                 prev_folgas = sum(1 for s in prev_tail_statuses if _is_folga_status(s))
