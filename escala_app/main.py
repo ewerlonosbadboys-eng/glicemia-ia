@@ -3708,6 +3708,21 @@ def enforce_weekly_folga_targets(df: pd.DataFrame, df_ref=None, pode_folgar_saba
             # domingo da semana
             sunday = we
             dom_status = _status_comb(ch, sunday)
+
+            # V74: quando o domingo da semana cai no mês seguinte e ainda não existe no df atual,
+            # ele MESMO ASSIM precisa contar na meta semanal da virada.
+            # Regra: o domingo futuro segue a alternância do último domingo real anterior.
+            if not str(dom_status or '').strip():
+                prev_sundays = []
+                for back in range(7, 70, 7):
+                    prev_day = sunday - pd.Timedelta(days=back)
+                    st_prev = _status_comb(ch, prev_day)
+                    if str(st_prev or '').strip() in ('Trabalho', 'Folga'):
+                        prev_sundays.append(str(st_prev or '').strip())
+                        break
+                if prev_sundays:
+                    dom_status = 'Folga' if prev_sundays[0] == 'Trabalho' else 'Trabalho'
+
             dom_folga = 1 if _is_folga_status(dom_status) else 0
 
             # Conta folgas SEG-SÁB na parte "antes do mês" (se semana começou antes de min_cur)
@@ -3837,7 +3852,18 @@ def _cap_total_folgas_por_semana(df: pd.DataFrame, target_total: int = 2, locked
             folgas_total = 0
             for d in range(0, 7):
                 day = ws + pd.Timedelta(days=d)
-                if _is_folga_status(_status_comb(ch, day)):
+                st_day = _status_comb(ch, day)
+
+                # V74: se o domingo ainda está fora do mês atual, conta pela alternância esperada
+                if (not str(st_day or '').strip()) and int(day.weekday()) == 6:
+                    for back in range(7, 70, 7):
+                        prev_day = day - pd.Timedelta(days=back)
+                        st_prev = _status_comb(ch, prev_day)
+                        if str(st_prev or '').strip() in ('Trabalho', 'Folga'):
+                            st_day = 'Folga' if st_prev == 'Trabalho' else 'Trabalho'
+                            break
+
+                if _is_folga_status(st_day):
                     folgas_total += 1
 
             if folgas_total <= target_total:
