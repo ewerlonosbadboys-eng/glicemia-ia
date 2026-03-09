@@ -223,6 +223,64 @@ def _group_consecutive_days(days: list[int]) -> list[tuple[int,int]]:
     ranges.append((start, prev))
     return ranges
 
+
+def enforce_max_two_folgas_per_week(hist_all: dict, chapas: list, df_ref_cur: pd.DataFrame) -> None:
+    """
+    Regra máxima final:
+    semana sempre SEG -> DOM;
+    nenhum colaborador pode ter mais de 2 folgas na mesma semana.
+    Domingo conta dentro da mesma semana.
+    Excedente de folga vira Trabalho.
+    Não mexe em Férias nem Afastamento.
+    """
+    if hist_all is None or df_ref_cur is None or len(df_ref_cur) == 0:
+        return
+
+    ref = df_ref_cur.reset_index(drop=True).copy()
+
+    # Quebra o mês em semanas reais SEG->DOM
+    weeks = []
+    current = []
+    for i in range(len(ref)):
+        current.append(i)
+        if str(ref.loc[i, "Dia"]) == "dom":
+            weeks.append(current)
+            current = []
+    if current:
+        weeks.append(current)
+
+    for chapa in (chapas or list(hist_all.keys())):
+        if chapa not in hist_all:
+            continue
+        df = hist_all[chapa]
+        if df is None or len(df) == 0:
+            continue
+        df = df.reset_index(drop=True).copy()
+
+        entrada_base = ""
+        try:
+            vals = df["H_Entrada"].astype(str).tolist()
+            vals = [v.strip() for v in vals if str(v).strip()]
+            entrada_base = vals[0] if vals else ""
+        except Exception:
+            entrada_base = ""
+        if not entrada_base:
+            entrada_base = "06:00"
+
+        for week in weeks:
+            folga_idxs = [i for i in week if str(df.loc[i, "Status"]) == "Folga"]
+            if len(folga_idxs) <= 2:
+                continue
+
+            # mantém apenas as 2 primeiras folgas da semana
+            for i in folga_idxs[2:]:
+                df.loc[i, "Status"] = "Trabalho"
+                ent = str(df.loc[i, "H_Entrada"] or "").strip() or entrada_base
+                df.loc[i, "H_Entrada"] = ent
+                df.loc[i, "H_Saida"] = _saida_from_entrada(ent)
+
+        hist_all[chapa] = df
+
 def _apply_pdf_import_to_db(
     setor_destino: str,
     ano: int,
@@ -3908,6 +3966,32 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
 
 
 
+    # GARANTIA FINAL: semana SEG->DOM nunca pode ter mais de 2 folgas
+
+
+
+
+    try:
+
+
+
+
+        enforce_max_two_folgas_per_week(hist_all, chapas, df_ref_cur)
+
+
+
+
+    except Exception:
+
+
+
+
+        pass
+
+
+
+
+
     return hist_all, estado_out
 
 # =========================================================
@@ -4484,28 +4568,17 @@ def page_login():
 
         colA, colB = st.columns([1.4, 1.0])
         with colA:
-            placeholder_recent = "— selecionar recente —"
-
-            recent_labels = [placeholder_recent] + [t[0] for t in recentes_opts_f]
-            current_pick = st.session_state.get("lg_recent_pick", placeholder_recent)
-            if current_pick not in recent_labels:
-                current_pick = placeholder_recent
-
-            pick = st.selectbox(
-                "Recentes (clique para preencher):",
-                recent_labels,
-                index=recent_labels.index(current_pick),
-                key="lg_recent_pick"
-            )
-
-            # Só aplica quando o usuário escolhe um recente de propósito.
-            # Não deixa mais ADMIN/admin sobrescrever a chapa digitada sozinho.
-            if pick != placeholder_recent:
+            if recentes_opts_f:
+                pick = st.selectbox(
+                    "Recentes (clique para preencher):",
+                    [t[0] for t in recentes_opts_f],
+                    index=0,
+                    key="lg_recent_pick"
+                )
                 chosen = next((t for t in recentes_opts_f if t[0] == pick), None)
                 if chosen:
                     st.session_state["lg_setor_txt"] = chosen[1]
                     st.session_state["lg_chapa"] = chosen[2]
-                    st.session_state["_lg_recent_applied"] = True
 
         with colB:
             lembrar = st.checkbox("✅ Salvar setor/chapa neste dispositivo", value=True, key="lg_remember")
@@ -4521,16 +4594,9 @@ def page_login():
         if setor_base in opcoes_setor:
             idx_setor = opcoes_setor.index(setor_base)
 
-        prev_setor = _norm_setor(st.session_state.get("_lg_prev_setor", setor_base))
         setor_escolhido = st.selectbox("Setor:", opcoes_setor, index=idx_setor, key="lg_setor_sel")
         st.session_state["lg_setor_txt"] = setor_escolhido
         setor_norm = _norm_setor(setor_escolhido)
-
-        # Se o setor mudou manualmente, limpa a chapa para não herdar "admin".
-        if prev_setor and setor_norm != prev_setor and not st.session_state.get("_lg_recent_applied", False):
-            st.session_state["lg_chapa"] = ""
-        st.session_state["_lg_prev_setor"] = setor_norm
-        st.session_state["_lg_recent_applied"] = False
 
         chapa = st.text_input("Chapa:", value=st.session_state.get("lg_chapa",""), key="lg_chapa")
         senha = st.text_input("Senha:", type="password", key="lg_senha")
