@@ -89,35 +89,43 @@ def agora_br() -> datetime:
 # ================= BACKUP / RESTORE =================
 BACKUP_STATE_FILE = BACKUP_DIR / "last_auto_backup.txt"
 
-ARQUIVOS_BACKUP = [
-    DB_USERS,
-    ARQ_G,
-    ARQ_N,
-    ARQ_R,
-    ARQ_M,
-]
+ARQUIVOS_BACKUP_MAPA = {
+    "usuarios.db": DB_USERS,
+    "dados_glicemia_BETA.csv": ARQ_G,
+    "dados_nutricao_BETA.csv": ARQ_N,
+    "config_receita_BETA.csv": ARQ_R,
+    "mensagens_admin_BETA.csv": ARQ_M,
+}
 
 def criar_backup_zip_em_bytes():
     ts = agora_br().strftime("%Y-%m-%d_%H-%M-%S")
     nome = f"backup_saude_kids_{ts}.zip"
     out = BytesIO()
+
     with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as z:
-        for arq in ARQUIVOS_BACKUP:
-            arq_path = Path(arq)
-            if arq_path.exists():
-                z.write(arq_path, arcname=arq_path.name)
+        for nome_zip, caminho_real in ARQUIVOS_BACKUP_MAPA.items():
+            caminho_real = Path(caminho_real)
+            if caminho_real.exists():
+                z.write(caminho_real, arcname=nome_zip)
+
+        manifest = {
+            "criado_em": agora_br().strftime("%d/%m/%Y %H:%M:%S"),
+            "tipo": "backup_completo_global",
+            "inclui_todos_usuarios": True,
+            "arquivos": list(ARQUIVOS_BACKUP_MAPA.keys()),
+            "app": "Saúde Kids BETA",
+        }
+        z.writestr("manifest.json", pd.Series(manifest).to_json(force_ascii=False, indent=2))
+
     out.seek(0)
     return out.getvalue(), nome
 
 def criar_backup_zip_em_disco():
-    ts = agora_br().strftime("%Y-%m-%d_%H-%M-%S")
-    nome = f"backup_saude_kids_{ts}.zip"
+    zip_bytes, nome = criar_backup_zip_em_bytes()
     caminho = BACKUP_DIR / nome
-    with zipfile.ZipFile(caminho, "w", compression=zipfile.ZIP_DEFLATED) as z:
-        for arq in ARQUIVOS_BACKUP:
-            arq_path = Path(arq)
-            if arq_path.exists():
-                z.write(arq_path, arcname=arq_path.name)
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    with open(caminho, "wb") as f:
+        f.write(zip_bytes)
     return caminho
 
 def restaurar_backup_zip_bytes(zip_bytes: bytes):
@@ -129,18 +137,11 @@ def restaurar_backup_zip_bytes(zip_bytes: bytes):
     with zipfile.ZipFile(BytesIO(zip_bytes), "r") as z:
         z.extractall(tmp_dir)
 
-    mapa_destinos = {
-        "usuarios.db": DB_USERS,
-        "dados_glicemia_BETA.csv": ARQ_G,
-        "dados_nutricao_BETA.csv": ARQ_N,
-        "config_receita_BETA.csv": ARQ_R,
-        "mensagens_admin_BETA.csv": ARQ_M,
-    }
-
     restaurados = []
 
-    for nome_zip, destino in mapa_destinos.items():
+    for nome_zip, destino in ARQUIVOS_BACKUP_MAPA.items():
         src = None
+
         candidato = tmp_dir / nome_zip
         if candidato.exists():
             src = candidato
@@ -153,6 +154,10 @@ def restaurar_backup_zip_bytes(zip_bytes: bytes):
             Path(destino).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, destino)
             restaurados.append(nome_zip)
+
+    manifest = tmp_dir / "manifest.json"
+    if manifest.exists():
+        restaurados.append("manifest.json")
 
     shutil.rmtree(tmp_dir)
     return restaurados
@@ -1245,17 +1250,32 @@ if st.session_state.user_email == "admin":
         st.subheader("💾 Backup Manual / Automático / Restauração")
 
         st.write("### 📦 Gerar Backup Manual")
+        st.caption("Este backup é completo e global: leva todos os usuários cadastrados e todas as informações de todos os usuários.")
         if st.button("📦 Gerar Backup Agora", use_container_width=True):
+            caminho = criar_backup_zip_em_disco()
             b, nome = criar_backup_zip_em_bytes()
-            st.download_button("⬇️ Baixar Backup (.zip)", b, file_name=nome, use_container_width=True)
+            st.success(f"Backup completo gerado com sucesso: {caminho.name}")
+            st.download_button(
+                "⬇️ Baixar Backup Completo (.zip)",
+                data=b,
+                file_name=nome,
+                mime="application/zip",
+                use_container_width=True,
+                key=f"download_backup_manual_{nome}",
+            )
 
         st.markdown("---")
         st.write("### ♻️ Restauração Manual")
-        up = st.file_uploader("Enviar arquivo .zip de backup", type=["zip"])
+        st.caption("Ao restaurar, o sistema repõe usuários, glicemias, nutrição, configurações e mensagens do backup enviado.")
+        up = st.file_uploader("Enviar arquivo .zip de backup", type=["zip"], key="backup_restore_uploader")
         if up is not None:
             if st.button("✅ Restaurar Agora", use_container_width=True):
-                restaurar_backup_zip_bytes(up.getvalue())
-                st.success("Restauração concluída! Recarregue o app (F5).")
+                restaurados = restaurar_backup_zip_bytes(up.getvalue())
+                if restaurados:
+                    st.success("Restauração concluída com sucesso: " + ", ".join(restaurados))
+                else:
+                    st.warning("Nenhum arquivo do backup foi restaurado.")
+                st.rerun()
 
         st.markdown("---")
         st.write("### ⏰ Backup Automático")
@@ -1281,7 +1301,14 @@ if st.session_state.user_email == "admin":
             with colx1:
                 if p_sel.exists():
                     with open(p_sel, "rb") as f:
-                        st.download_button("⬇️ Baixar Selecionado", f.read(), file_name=selecionado, use_container_width=True)
+                        st.download_button(
+                            "⬇️ Baixar Selecionado",
+                            data=f.read(),
+                            file_name=selecionado,
+                            mime="application/zip",
+                            use_container_width=True,
+                            key=f"download_backup_existente_{selecionado}",
+                        )
             with colx2:
                 if st.button("🗑️ Apagar Selecionado", use_container_width=True):
                     if p_sel.exists():
