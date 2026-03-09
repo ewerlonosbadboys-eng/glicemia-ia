@@ -499,8 +499,23 @@ def enforce_max_two_folgas_per_week(hist_all: dict, chapas: list, df_ref_cur: pd
                 if w_idx == 0 and carry_days > 0 and prev_tail_statuses:
                     prev_folgas = sum(1 for s in prev_tail_statuses if _is_folga_status(s))
 
+                # se a semana termina antes de domingo (fim do mês), o domingo futuro também conta.
+                week_end_dia = str(ref.loc[week[-1], "Dia"])
+                future_dom_folga = 0
+                incomplete_to_next_month = week_end_dia != 'dom'
+                if incomplete_to_next_month:
+                    try:
+                        future_dom = _infer_week_target_sunday_status(
+                            df, week, setor, ano, mes, chapa,
+                            estado_prev={chapa: {'ultimo_domingo_status': None}},
+                            past_flag=False
+                        )
+                        future_dom_folga = 1 if future_dom == 'Folga' else 0
+                    except Exception:
+                        future_dom_folga = 0
+
                 current_folga_idxs = [i for i in week if _is_folga_status(df.loc[i, "Status"])]
-                total = prev_folgas + len(current_folga_idxs)
+                total = prev_folgas + len(current_folga_idxs) + future_dom_folga
 
                 # remove excesso preservando domingo
                 if total > 2:
@@ -509,10 +524,10 @@ def enforce_max_two_folgas_per_week(hist_all: dict, chapas: list, df_ref_cur: pd
                     if restante != excesso:
                         changed_any = True
 
-                # completa falta para fechar 2 na semana contínua
+                # semana aberta no fim do mês: só CAPA excesso; não completa falta no mês atual
                 current_folga_idxs = [i for i in week if _is_folga_status(df.loc[i, "Status"])]
-                total = prev_folgas + len(current_folga_idxs)
-                if total < 2:
+                total = prev_folgas + len(current_folga_idxs) + future_dom_folga
+                if (not incomplete_to_next_month) and total < 2:
                     falta = 2 - total
                     restante = _fill_missing_current_week(df, chapa, week, falta)
                     if restante != falta:
@@ -520,7 +535,7 @@ def enforce_max_two_folgas_per_week(hist_all: dict, chapas: list, df_ref_cur: pd
 
                 # garantia final da semana: nunca >2
                 current_folga_idxs = [i for i in week if _is_folga_status(df.loc[i, "Status"])]
-                total = prev_folgas + len(current_folga_idxs)
+                total = prev_folgas + len(current_folga_idxs) + future_dom_folga
                 if total > 2:
                     excesso = total - 2
                     restante = _remove_excess_current_week(df, chapa, week, excesso)
@@ -628,6 +643,66 @@ def _rebuild_estado_out(hist_all: dict) -> dict:
                     break
         estado_out[ch] = {'consec_trab_final': consec, 'ultima_saida': ultima_saida, 'ultimo_domingo_status': ultimo_dom}
     return estado_out
+
+
+def _infer_week_target_sunday_status(df: pd.DataFrame, week_idxs: list[int], setor: str, ano: int, mes: int, chapa: str, estado_prev: dict | None = None, past_flag: bool = False) -> str | None:
+    """
+    Trata a escala como semana contínua (SEG->DOM), mesmo quando o domingo cai no mês seguinte.
+    Retorna o status do domingo que fecha a semana do bloco informado.
+    - Se o domingo está no mês atual, usa o status real do DF.
+    - Se o domingo está fora do mês atual, infere pela alternância 1x1 do último domingo conhecido.
+    """
+    if df is None or len(df) == 0 or not week_idxs:
+        return None
+    estado_prev = estado_prev or {}
+    dfx = df.reset_index(drop=True).copy()
+    try:
+        dfx['Data'] = pd.to_datetime(dfx['Data'], errors='coerce')
+    except Exception:
+        return None
+
+    week_idxs = sorted([int(i) for i in week_idxs if 0 <= int(i) < len(dfx)])
+    if not week_idxs:
+        return None
+
+    last_day = pd.to_datetime(dfx.loc[week_idxs[-1], 'Data'])
+    sunday = last_day + pd.Timedelta(days=(6 - int(last_day.weekday())))
+
+    # domingo real dentro do mês atual
+    real = dfx[dfx['Data'].dt.normalize() == sunday.normalize()]
+    if not real.empty:
+        st = str(real.iloc[0].get('Status', '') or '').strip()
+        if st == 'Folga':
+            return 'Folga'
+        if st in WORK_STATUSES:
+            return 'Trabalho'
+        return None
+
+    # volta procurando o último domingo conhecido no mês atual
+    for back in range(7, 370, 7):
+        prev_day = sunday - pd.Timedelta(days=back)
+        rows = dfx[dfx['Data'].dt.normalize() == prev_day.normalize()]
+        if not rows.empty:
+            st = str(rows.iloc[0].get('Status', '') or '').strip()
+            if st == 'Folga':
+                return 'Trabalho'
+            if st in WORK_STATUSES:
+                return 'Folga'
+
+    # fallback: último domingo do mês anterior salvo no banco/estado
+    prev_dom = None
+    if not past_flag:
+        try:
+            prev_dom = infer_ultimo_domingo_status_from_escala(setor, int(ano), int(mes), str(chapa))
+        except Exception:
+            prev_dom = None
+        if prev_dom not in ('Folga', 'Trabalho'):
+            prev_dom = ((estado_prev.get(str(chapa), {}) or {}).get('ultimo_domingo_status', None))
+    if prev_dom == 'Folga':
+        return 'Trabalho'
+    if prev_dom == 'Trabalho':
+        return 'Folga'
+    return None
 
 
 def _apply_pdf_import_to_db(
@@ -4147,7 +4222,11 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
                     cand_days.append(i)
 
                 if dom_idx is None:
-                    target_folgas = 2
+                    dom_status = _infer_week_target_sunday_status(
+                        df, idxs_week, setor, ano, mes, ch,
+                        estado_prev=estado_prev, past_flag=_past
+                    )
+                    target_folgas = 1 if dom_status == "Folga" else 2
                 else:
                     dom_status = df.loc[dom_idx, "Status"]
                     target_folgas = 1 if dom_status == "Folga" else 2
