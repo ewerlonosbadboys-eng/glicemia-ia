@@ -2291,14 +2291,34 @@ def delete_colaborador_total(setor: str, chapa: str):
     except Exception:
         pass
 
-def update_colaborador_perfil(setor: str, chapa: str, subgrupo: str, entrada: str, folga_sab: bool):
+def update_colaborador_perfil(setor: str, chapa_antiga: str, chapa_nova: str, subgrupo: str, entrada: str, folga_sab: bool):
+    setor = _norm_setor(setor)
+    chapa_antiga = _norm_chapa(chapa_antiga)
+    chapa_nova = _norm_chapa(chapa_nova)
     con = db_conn()
     cur = con.cursor()
+
+    # Atualiza cadastro principal
     cur.execute("""
         UPDATE colaboradores
-        SET subgrupo=?, entrada=?, folga_sab=?
+        SET chapa=?, subgrupo=?, entrada=?, folga_sab=?
         WHERE setor=? AND chapa=?
-    """, (subgrupo or "", entrada, 1 if folga_sab else 0, setor, chapa))
+    """, (chapa_nova, subgrupo or "", entrada, 1 if folga_sab else 0, setor, chapa_antiga))
+
+    # Mantém tabelas relacionadas consistentes quando a chapa for alterada
+    tabelas = [
+        "usuarios_sistema",
+        "ferias",
+        "overrides",
+        "escala_mes",
+        "estado_mes_anterior",
+    ]
+    for tb in tabelas:
+        try:
+            cur.execute(f"UPDATE {tb} SET chapa=? WHERE setor=? AND chapa=?", (chapa_nova, setor, chapa_antiga))
+        except Exception:
+            pass
+
     con.commit()
     con.close()
     try:
@@ -5339,15 +5359,20 @@ def page_app():
                     st.session_state["pf_sab"] = bool(csel.get("Folga_Sab"))
                     st.session_state["pf_last_chapa"] = ch_sel
 
-                colp1, colp2, colp3 = st.columns(3)
+                if st.session_state.get("pf_last_chapa_edit") != ch_sel:
+                    st.session_state["pf_chapa_edit"] = ch_sel
+                    st.session_state["pf_last_chapa_edit"] = ch_sel
+
+                colp0, colp1, colp2, colp3 = st.columns(4)
+
+                chapa_edit = colp0.text_input("Chapa:", key="pf_chapa_edit")
+
                 # Entrada/Subgrupo: refletir exatamente o cadastro atual do colaborador selecionado.
                 ent_atual = (csel.get("Entrada") or BALANCO_DIA_ENTRADA).strip()
                 opcoes_ent = list(HORARIOS_ENTRADA_PRESET)
                 if ent_atual and ent_atual not in opcoes_ent:
                     opcoes_ent = opcoes_ent + [ent_atual]
 
-                # quando usa key + session_state, o valor do widget vem do session_state;
-                # por isso não devemos forçar index baseado no colaborador atual aqui.
                 ent_sel = colp1.selectbox(
                     "Entrada:",
                     options=opcoes_ent,
@@ -5362,9 +5387,12 @@ def page_app():
                 sab = colp3.checkbox("Permitir folga sábado", key="pf_sab")
 
                 if st.button("Salvar perfil", key="pf_save"):
-                    update_colaborador_perfil(setor, ch_sel, sg, ent_sel, sab)
-                    st.success("Salvo!")
-                    st.rerun()
+                    if not (chapa_edit or "").strip():
+                        st.error("Preencha a chapa.")
+                    else:
+                        update_colaborador_perfil(setor, ch_sel, chapa_edit, sg, ent_sel, sab)
+                        st.success("Salvo!")
+                        st.rerun()
 
                 # ------------------------------------------------------
                 # ABA 2: Gerar Escala
