@@ -1,3 +1,4 @@
+
 # =========================================================
 # SAÚDE KIDS - BETA (VERSÃO COMPLETA, ESTÁVEL)
 # - Login (SQLite) + Cookie opcional
@@ -41,15 +42,6 @@ try:
 except Exception:
     HAS_REPORTLAB = False
 
-from pathlib import Path
-
-BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = BASE_DIR / "data"
-BACKUP_DIR = BASE_DIR / "backups"
-
-DATA_DIR.mkdir(exist_ok=True)
-BACKUP_DIR.mkdir(exist_ok=True)
-
 
 # =========================================================
 # (OPCIONAL) LOGIN PERSISTENTE POR COOKIE (NÃO BUGA SE NÃO TIVER)
@@ -70,6 +62,13 @@ COOKIE_DIAS = 30
 fuso_br = pytz.timezone("America/Sao_Paulo")
 st.set_page_config(page_title="Saúde Kids BETA", page_icon="🧪", layout="wide")
 
+BASE_DIR = Path(__file__).resolve().parent
+DATA_DIR = BASE_DIR / "data"
+BACKUP_DIR = BASE_DIR / "backups"
+
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+
 ARQ_G = DATA_DIR / "dados_glicemia_BETA.csv"
 ARQ_N = DATA_DIR / "dados_nutricao_BETA.csv"
 ARQ_R = DATA_DIR / "config_receita_BETA.csv"
@@ -88,12 +87,10 @@ def agora_br() -> datetime:
     return datetime.now(fuso_br)
 
 # ================= BACKUP / RESTORE =================
-BACKUP_DIR = Path("backups")
-BACKUP_DIR.mkdir(exist_ok=True)
 BACKUP_STATE_FILE = BACKUP_DIR / "last_auto_backup.txt"
 
 ARQUIVOS_BACKUP = [
-    "usuarios.db",
+    DB_USERS,
     ARQ_G,
     ARQ_N,
     ARQ_R,
@@ -106,8 +103,9 @@ def criar_backup_zip_em_bytes():
     out = BytesIO()
     with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as z:
         for arq in ARQUIVOS_BACKUP:
-            if os.path.exists(arq):
-                z.write(arq)
+            p = Path(arq)
+            if p.exists():
+                z.write(p, arcname=p.name)
     out.seek(0)
     return out.getvalue(), nome
 
@@ -117,8 +115,9 @@ def criar_backup_zip_em_disco():
     caminho = BACKUP_DIR / nome
     with zipfile.ZipFile(caminho, "w", compression=zipfile.ZIP_DEFLATED) as z:
         for arq in ARQUIVOS_BACKUP:
-            if os.path.exists(arq):
-                z.write(arq)
+            p = Path(arq)
+            if p.exists():
+                z.write(p, arcname=p.name)
     return caminho
 
 def restaurar_backup_zip_bytes(zip_bytes: bytes):
@@ -130,12 +129,24 @@ def restaurar_backup_zip_bytes(zip_bytes: bytes):
     with zipfile.ZipFile(BytesIO(zip_bytes), "r") as z:
         z.extractall(tmp_dir)
 
-    for arq in ARQUIVOS_BACKUP:
-        src = tmp_dir / arq
+    mapa_destinos = {
+        "usuarios.db": DB_USERS,
+        "dados_glicemia_BETA.csv": ARQ_G,
+        "dados_nutricao_BETA.csv": ARQ_N,
+        "config_receita_BETA.csv": ARQ_R,
+        "mensagens_admin_BETA.csv": ARQ_M,
+    }
+
+    restaurados = []
+    for nome_zip, destino in mapa_destinos.items():
+        src = tmp_dir / nome_zip
         if src.exists():
-            shutil.copy(src, arq)
+            Path(destino).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, destino)
+            restaurados.append(nome_zip)
 
     shutil.rmtree(tmp_dir)
+    return restaurados
 
 def backup_automatico_diario_3h():
     """
@@ -236,7 +247,7 @@ TESTE_DIAS = 20
 MENSALIDADE_DIAS = 30
 
 def init_db():
-    conn = sqlite3.connect("usuarios.db")
+    conn = sqlite3.connect(DB_USERS)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS users (
             nome TEXT,
@@ -277,7 +288,7 @@ def init_db():
     conn.close()
 
 def _db_conn():
-    return sqlite3.connect("usuarios.db")
+    return sqlite3.connect(DB_USERS)
 
 def garantir_plano(email: str):
     email = norm_email(email)
@@ -956,7 +967,7 @@ if not st.session_state.logado:
         s = norm_senha(st.text_input("Senha", type="password", key="l_pass"))
 
         if st.button("Acessar Aplicativo", use_container_width=True):
-            conn = sqlite3.connect("usuarios.db")
+            conn = sqlite3.connect(DB_USERS)
             ok = conn.execute("SELECT * FROM users WHERE email=? AND senha=?", (u, s)).fetchone()
             conn.close()
             if ok:
@@ -985,7 +996,7 @@ if not st.session_state.logado:
                 st.warning("Preencha nome, e-mail e senha.")
             else:
                 try:
-                    conn = sqlite3.connect("usuarios.db")
+                    conn = sqlite3.connect(DB_USERS)
                     conn.execute("INSERT INTO users VALUES (?,?,?)", (n_cad, e_cad, s_cad))
                     conn.commit()
                     conn.close()
@@ -998,7 +1009,7 @@ if not st.session_state.logado:
     with abas_login[2]:
         email_alvo = norm_email(st.text_input("Digite seu e-mail cadastrado"))
         if st.button("Recuperar Acesso", use_container_width=True):
-            conn = sqlite3.connect("usuarios.db")
+            conn = sqlite3.connect(DB_USERS)
             c = conn.cursor()
             user = c.execute("SELECT email FROM users WHERE email=?", (email_alvo,)).fetchone()
 
@@ -1025,7 +1036,7 @@ if not st.session_state.logado:
         alt_n1 = norm_senha(st.text_input("Nova Senha", type="password", key="alt_n1"))
 
         if st.button("Confirmar Alteração", use_container_width=True):
-            conn = sqlite3.connect("usuarios.db")
+            conn = sqlite3.connect(DB_USERS)
             ok = conn.execute("SELECT * FROM users WHERE email=? AND senha=?", (alt_em, alt_at)).fetchone()
             if ok:
                 conn.execute("UPDATE users SET senha=? WHERE email=?", (alt_n1, alt_em))
@@ -1074,7 +1085,7 @@ if st.session_state.user_email == "admin":
         ["👥 Pessoas Cadastradas", "📈 Crescimento e App", "📩 Sugestões", "💳 Mensalidades", "💾 Backup & Restauração"]
     )
 
-    conn = sqlite3.connect("usuarios.db")
+    conn = sqlite3.connect(DB_USERS)
     df_users = pd.read_sql_query("SELECT nome, email FROM users", conn)
     conn.close()
 
@@ -1093,7 +1104,7 @@ if st.session_state.user_email == "admin":
             if del_email == "admin":
                 st.error("Não é permitido excluir o admin.")
             else:
-                conn = sqlite3.connect("usuarios.db")
+                conn = sqlite3.connect(DB_USERS)
                 conn.execute("DELETE FROM users WHERE email=?", (del_email,))
                 conn.execute("DELETE FROM plans WHERE email=?", (del_email,))
                 conn.commit()
@@ -1119,7 +1130,7 @@ if st.session_state.user_email == "admin":
         nova_senha_admin = norm_senha(st.text_input("Nova senha para este usuário", type="password"))
         if st.button("Confirmar Alteração de Senha", use_container_width=True):
             if nova_senha_admin:
-                conn = sqlite3.connect("usuarios.db")
+                conn = sqlite3.connect(DB_USERS)
                 conn.execute("UPDATE users SET senha=? WHERE email=?", (nova_senha_admin, user_selecionado))
                 conn.commit()
                 conn.close()
@@ -1162,7 +1173,7 @@ if st.session_state.user_email == "admin":
         st.subheader("💳 Mensalidades (Teste 20 dias + Plano 30 dias)")
 
         st.markdown("### Status de planos")
-        conn = sqlite3.connect("usuarios.db")
+        conn = sqlite3.connect(DB_USERS)
         try:
             df_pl = pd.read_sql_query("SELECT email, trial_end, paid_until FROM plans ORDER BY email", conn)
         except Exception:
@@ -1234,8 +1245,12 @@ if st.session_state.user_email == "admin":
         up = st.file_uploader("Enviar arquivo .zip de backup", type=["zip"])
         if up is not None:
             if st.button("✅ Restaurar Agora", use_container_width=True):
-                restaurar_backup_zip_bytes(up.getvalue())
-                st.success("Restauração concluída! Recarregue o app (F5).")
+                restaurados = restaurar_backup_zip_bytes(up.getvalue())
+                if restaurados:
+                    st.success(f"Restauração concluída: {', '.join(restaurados)}")
+                    st.rerun()
+                else:
+                    st.error("O ZIP foi lido, mas não foram encontrados arquivos compatíveis para restaurar.")
 
         st.markdown("---")
         st.write("### ⏰ Backup Automático")
