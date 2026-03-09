@@ -277,7 +277,12 @@ def enforce_max_two_folgas_per_week(hist_all: dict, chapas: list, df_ref_cur: pd
         df.loc[i, "H_Entrada"] = ent
         df.loc[i, "H_Saida"] = _saida_from_entrada(ent)
 
-    for chapa in (chapas or list(hist_all.keys())):
+    _changed_any = True
+    _guard = 0
+    while _changed_any and _guard < 10:
+        _changed_any = False
+        _guard += 1
+        for chapa in list(hist_all.keys()):
         if chapa not in hist_all:
             continue
         df = hist_all[chapa]
@@ -354,12 +359,14 @@ def enforce_max_two_folgas_per_week(hist_all: dict, chapas: list, df_ref_cur: pd
 
             for i in sorted(set(to_remove)):
                 _make_work(df, i, entrada_base)
+                _changed_any = True
 
             final_count = prev_folgas + sum(1 for i in week if _is_folga_status(df.loc[i, "Status"]))
             if final_count > 2:
                 still = [i for i in week if _is_folga_status(df.loc[i, "Status"])]
                 for i in still[:max(0, final_count - 2)]:
                     _make_work(df, i, entrada_base)
+                    _changed_any = True
 
         hist_all[chapa] = df
 
@@ -4058,7 +4065,7 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
 
 
 
-        enforce_max_two_folgas_per_week(hist_all, chapas, df_ref_cur, setor, ano, mes)
+        enforce_max_two_folgas_per_week(hist_all, list(hist_all.keys()), df_ref_cur, setor, ano, mes)
 
 
 
