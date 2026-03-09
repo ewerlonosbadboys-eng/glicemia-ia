@@ -2291,19 +2291,37 @@ def delete_colaborador_total(setor: str, chapa: str):
     except Exception:
         pass
 
-def update_colaborador_perfil(setor: str, chapa_antiga: str, chapa_nova: str, subgrupo: str, entrada: str, folga_sab: bool):
+def update_colaborador_perfil(setor: str, chapa_antiga: str, chapa_nova: str, nome_novo: str, subgrupo: str, entrada: str, folga_sab: bool):
     setor = _norm_setor(setor)
     chapa_antiga = _norm_chapa(chapa_antiga)
     chapa_nova = _norm_chapa(chapa_nova)
+    nome_novo = str(nome_novo or "").strip()
+    subgrupo = str(subgrupo or "").strip()
+    entrada = str(entrada or BALANCO_DIA_ENTRADA).strip()
+
+    if not chapa_antiga or not chapa_nova:
+        raise ValueError("Chapa antiga/nova inválida.")
+    if not nome_novo:
+        raise ValueError("Nome do colaborador é obrigatório.")
+
     con = db_conn()
     cur = con.cursor()
+
+    if chapa_antiga != chapa_nova:
+        cur.execute(
+            "SELECT 1 FROM colaboradores WHERE setor=? AND chapa=? LIMIT 1",
+            (setor, chapa_nova),
+        )
+        if cur.fetchone() is not None:
+            con.close()
+            raise ValueError(f"Já existe colaborador com a chapa {chapa_nova} neste setor.")
 
     # Atualiza cadastro principal
     cur.execute("""
         UPDATE colaboradores
-        SET chapa=?, subgrupo=?, entrada=?, folga_sab=?
+        SET nome=?, chapa=?, subgrupo=?, entrada=?, folga_sab=?
         WHERE setor=? AND chapa=?
-    """, (chapa_nova, subgrupo or "", entrada, 1 if folga_sab else 0, setor, chapa_antiga))
+    """, (nome_novo, chapa_nova, subgrupo, entrada, 1 if folga_sab else 0, setor, chapa_antiga))
 
     # Mantém tabelas relacionadas consistentes quando a chapa for alterada
     tabelas = [
@@ -2318,6 +2336,15 @@ def update_colaborador_perfil(setor: str, chapa_antiga: str, chapa_nova: str, su
             cur.execute(f"UPDATE {tb} SET chapa=? WHERE setor=? AND chapa=?", (chapa_nova, setor, chapa_antiga))
         except Exception:
             pass
+
+    # Atualiza nome também no usuário do sistema, se existir login
+    try:
+        cur.execute(
+            "UPDATE usuarios_sistema SET nome=? WHERE setor=? AND chapa=?",
+            (nome_novo, setor, chapa_nova),
+        )
+    except Exception:
+        pass
 
     con.commit()
     con.close()
@@ -5361,11 +5388,12 @@ def page_app():
 
                 if st.session_state.get("pf_last_chapa_edit") != ch_sel:
                     st.session_state["pf_chapa_edit"] = ch_sel
+                    st.session_state["pf_nome_edit"] = (csel.get("Nome") or "").strip()
                     st.session_state["pf_last_chapa_edit"] = ch_sel
 
-                colp0, colp1, colp2, colp3 = st.columns(4)
-
-                chapa_edit = colp0.text_input("Chapa:", key="pf_chapa_edit")
+                colp0, colp1 = st.columns(2)
+                nome_edit = colp0.text_input("Nome:", key="pf_nome_edit")
+                chapa_edit = colp1.text_input("Chapa:", key="pf_chapa_edit")
 
                 # Entrada/Subgrupo: refletir exatamente o cadastro atual do colaborador selecionado.
                 ent_atual = (csel.get("Entrada") or BALANCO_DIA_ENTRADA).strip()
@@ -5373,7 +5401,8 @@ def page_app():
                 if ent_atual and ent_atual not in opcoes_ent:
                     opcoes_ent = opcoes_ent + [ent_atual]
 
-                ent_sel = colp1.selectbox(
+                colp2, colp3, colp4 = st.columns(3)
+                ent_sel = colp2.selectbox(
                     "Entrada:",
                     options=opcoes_ent,
                     key="pf_ent_sel",
@@ -5383,16 +5412,21 @@ def page_app():
                 sg_atual = (csel.get("Subgrupo") or "").strip()
                 if sg_atual and sg_atual not in sg_opts:
                     sg_opts.append(sg_atual)
-                sg = colp2.selectbox("Subgrupo:", sg_opts, key="pf_sg")
-                sab = colp3.checkbox("Permitir folga sábado", key="pf_sab")
+                sg = colp3.selectbox("Subgrupo:", sg_opts, key="pf_sg")
+                sab = colp4.checkbox("Permitir folga sábado", key="pf_sab")
 
                 if st.button("Salvar perfil", key="pf_save"):
-                    if not (chapa_edit or "").strip():
+                    if not (nome_edit or "").strip():
+                        st.error("Preencha o nome.")
+                    elif not (chapa_edit or "").strip():
                         st.error("Preencha a chapa.")
                     else:
-                        update_colaborador_perfil(setor, ch_sel, chapa_edit, sg, ent_sel, sab)
-                        st.success("Salvo!")
-                        st.rerun()
+                        try:
+                            update_colaborador_perfil(setor, ch_sel, chapa_edit, nome_edit, sg, ent_sel, sab)
+                            st.success("Salvo!")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(str(e))
 
                 # ------------------------------------------------------
                 # ABA 2: Gerar Escala
