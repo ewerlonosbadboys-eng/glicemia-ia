@@ -532,6 +532,104 @@ def enforce_max_two_folgas_per_week(hist_all: dict, chapas: list, df_ref_cur: pd
 
 
 
+def _lock_and_fix_sundays_global(hist_all: dict, colab_by_chapa: dict, locked_idx: dict, setor: str, ano: int, mes: int, estado_prev: dict | None = None, past_flag: bool = False) -> dict:
+    """Travamento global de domingos para todos os setores/subgrupos."""
+    estado_prev = estado_prev or {}
+    sunday_locked = {}
+
+    def _entrada_base(ch: str, df: pd.DataFrame) -> str:
+        ent = str((colab_by_chapa.get(ch, {}) or {}).get('Entrada', '') or '').strip()
+        if ent:
+            return ent
+        try:
+            vals = [str(v).strip() for v in df['H_Entrada'].astype(str).tolist() if str(v).strip()]
+            if vals:
+                return vals[0]
+        except Exception:
+            pass
+        return '06:00'
+
+    for ch, df in list((hist_all or {}).items()):
+        if df is None or len(df) == 0:
+            sunday_locked[ch] = set()
+            continue
+        df = df.reset_index(drop=True).copy()
+        sidx = [i for i in range(len(df)) if str(df.loc[i, 'Dia']) == 'dom']
+        sunday_locked[ch] = set(sidx)
+        if not sidx:
+            hist_all[ch] = df
+            continue
+
+        prev_dom = None
+        if not past_flag:
+            try:
+                prev_dom = infer_ultimo_domingo_status_from_escala(setor, int(ano), int(mes), ch)
+            except Exception:
+                prev_dom = None
+            if prev_dom not in ('Folga', 'Trabalho'):
+                prev_dom = ((estado_prev.get(ch, {}) or {}).get('ultimo_domingo_status', None))
+
+        expected = 'Trabalho' if prev_dom == 'Folga' else 'Folga' if prev_dom == 'Trabalho' else None
+        ent_base = _entrada_base(ch, df)
+        manual_locked = set((locked_idx or {}).get(ch, set()))
+
+        for i in sidx:
+            atual = str(df.loc[i, 'Status'])
+            if expected in ('Folga', 'Trabalho') and i not in manual_locked and atual != 'Férias':
+                if expected == 'Folga':
+                    df.loc[i, 'Status'] = 'Folga'
+                    df.loc[i, 'H_Entrada'] = ''
+                    df.loc[i, 'H_Saida'] = ''
+                    atual = 'Folga'
+                else:
+                    df.loc[i, 'Status'] = 'Trabalho'
+                    df.loc[i, 'H_Entrada'] = ent_base
+                    df.loc[i, 'H_Saida'] = _saida_from_entrada(ent_base)
+                    atual = 'Trabalho'
+
+            if atual in WORK_STATUSES:
+                expected = 'Folga'
+            elif atual == 'Folga':
+                expected = 'Trabalho'
+
+        hist_all[ch] = df
+
+    merged = {}
+    for ch in set(list((hist_all or {}).keys()) + list((locked_idx or {}).keys())):
+        merged[ch] = set((locked_idx or {}).get(ch, set())) | set(sunday_locked.get(ch, set()))
+    return merged
+
+
+def _rebuild_estado_out(hist_all: dict) -> dict:
+    estado_out = {}
+    for ch, df in (hist_all or {}).items():
+        if df is None or len(df) == 0:
+            estado_out[ch] = {'consec_trab_final': 0, 'ultima_saida': '', 'ultimo_domingo_status': None}
+            continue
+        consec = 0
+        for i in range(len(df) - 1, -1, -1):
+            if df.loc[i, 'Status'] in WORK_STATUSES:
+                consec += 1
+            else:
+                break
+        ultima_saida = ''
+        for i in range(len(df) - 1, -1, -1):
+            if df.loc[i, 'Status'] in WORK_STATUSES and (df.loc[i, 'H_Saida'] or ''):
+                ultima_saida = df.loc[i, 'H_Saida']
+                break
+        ultimo_dom = None
+        for i in range(len(df) - 1, -1, -1):
+            if str(df.loc[i, 'Dia']) == 'dom':
+                if df.loc[i, 'Status'] == 'Folga':
+                    ultimo_dom = 'Folga'
+                    break
+                if df.loc[i, 'Status'] in WORK_STATUSES:
+                    ultimo_dom = 'Trabalho'
+                    break
+        estado_out[ch] = {'consec_trab_final': consec, 'ultima_saida': ultima_saida, 'ultimo_domingo_status': ultimo_dom}
+    return estado_out
+
+
 def _apply_pdf_import_to_db(
     setor_destino: str,
     ano: int,
@@ -4203,6 +4301,16 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
 
         hist_all[ch] = df
 
+    # Travamento global final de domingo 1x1 (todos os setores/subgrupos)
+    locked_idx = _lock_and_fix_sundays_global(
+        hist_all, colab_by_chapa, locked_idx, setor, ano, mes,
+        estado_prev=estado_prev, past_flag=_past
+    )
+    try:
+        enforce_max_two_folgas_per_week(hist_all, list(hist_all.keys()), df_ref_cur, setor, ano, mes, locked_idx_map=locked_idx)
+    except Exception:
+        pass
+
     # Estado do mês
     estado_out = {}
     for ch, df in hist_all.items():
@@ -4299,31 +4407,16 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
 
 
     # GARANTIA FINAL: semana SEG->DOM nunca pode ter mais de 2 folgas
-
-
-
-
     try:
-
-
-
-
+        locked_idx = _lock_and_fix_sundays_global(
+            hist_all, colab_by_chapa, locked_idx, setor, ano, mes,
+            estado_prev=estado_prev, past_flag=_past
+        )
         enforce_max_two_folgas_per_week(hist_all, list(hist_all.keys()), df_ref_cur, setor, ano, mes, locked_idx_map=locked_idx)
-
-
-
-
     except Exception:
-
-
-
-
         pass
 
-
-
-
-
+    estado_out = _rebuild_estado_out(hist_all)
     return hist_all, estado_out
 
 # =========================================================
