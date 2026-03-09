@@ -311,85 +311,85 @@ def enforce_max_two_folgas_per_week(hist_all: dict, chapas: list, df_ref_cur: pd
                     prev_tail_statuses = []
 
             for w_idx, week in enumerate(weeks):
-            prev_folgas = 0
-            if w_idx == 0 and carry_days > 0 and prev_tail_statuses:
-                prev_folgas = sum(1 for s in prev_tail_statuses if _is_folga_status(s))
-
-            current_folga_idxs = [i for i in week if _is_folga_status(df.loc[i, "Status"])]
-            total = prev_folgas + len(current_folga_idxs)
-            if total <= 2:
-                continue
-
-            excesso = total - 2
-            to_remove = []
-
-            # domingo conta dentro da semana; se estourou, ele também pode ser removido
-            sundays = [i for i in current_folga_idxs if str(ref.loc[i, "Dia"]) == "dom"]
-            for i in sundays:
-                if excesso <= 0:
-                    break
-                to_remove.append(i)
-                excesso -= 1
-
-            remaining = [i for i in current_folga_idxs if i not in to_remove]
-
-            # quebra folga dupla/consecutiva
-            if excesso > 0 and remaining:
-                rem_sorted = sorted(remaining)
-                consec_extra = []
-                for a, b in zip(rem_sorted, rem_sorted[1:]):
-                    if b == a + 1:
-                        consec_extra.append(b)
-                for i in consec_extra:
+                prev_folgas = 0
+                if w_idx == 0 and carry_days > 0 and prev_tail_statuses:
+                    prev_folgas = sum(1 for s in prev_tail_statuses if _is_folga_status(s))
+    
+                current_folga_idxs = [i for i in week if _is_folga_status(df.loc[i, "Status"])]
+                total = prev_folgas + len(current_folga_idxs)
+                if total <= 2:
+                    continue
+    
+                excesso = total - 2
+                to_remove = []
+    
+                # domingo conta dentro da semana; se estourou, ele também pode ser removido
+                sundays = [i for i in current_folga_idxs if str(ref.loc[i, "Dia"]) == "dom"]
+                for i in sundays:
                     if excesso <= 0:
                         break
-                    if i not in to_remove:
-                        to_remove.append(i)
-                        excesso -= 1
-
-            remaining = [i for i in current_folga_idxs if i not in to_remove]
-
-            if excesso > 0:
-                for i in remaining:
-                    if excesso <= 0:
-                        break
-                    if i not in to_remove:
-                        to_remove.append(i)
-                        excesso -= 1
-
-            for i in sorted(set(to_remove)):
-                _make_work(df, i, entrada_base)
-                _changed_any = True
-
-            final_count = prev_folgas + sum(1 for i in week if _is_folga_status(df.loc[i, "Status"]))
-            if final_count > 2:
-                still = [i for i in week if _is_folga_status(df.loc[i, "Status"])]
-                for i in still[:max(0, final_count - 2)]:
+                    to_remove.append(i)
+                    excesso -= 1
+    
+                remaining = [i for i in current_folga_idxs if i not in to_remove]
+    
+                # quebra folga dupla/consecutiva
+                if excesso > 0 and remaining:
+                    rem_sorted = sorted(remaining)
+                    consec_extra = []
+                    for a, b in zip(rem_sorted, rem_sorted[1:]):
+                        if b == a + 1:
+                            consec_extra.append(b)
+                    for i in consec_extra:
+                        if excesso <= 0:
+                            break
+                        if i not in to_remove:
+                            to_remove.append(i)
+                            excesso -= 1
+    
+                remaining = [i for i in current_folga_idxs if i not in to_remove]
+    
+                if excesso > 0:
+                    for i in remaining:
+                        if excesso <= 0:
+                            break
+                        if i not in to_remove:
+                            to_remove.append(i)
+                            excesso -= 1
+    
+                for i in sorted(set(to_remove)):
                     _make_work(df, i, entrada_base)
                     _changed_any = True
-
-        hist_all[chapa] = df
-
-def _apply_pdf_import_to_db(
-    setor_destino: str,
-    ano: int,
-    mes: int,
-    items: list[dict],
-    criar_colabs: bool = True,
-    limpar_mes_antes: bool = False,
-    map_afa_para_folga: bool = False,
-    cadastrar_ferias: bool = True,
-):
-    if limpar_mes_antes:
-        con = db_conn()
-        cur = con.cursor()
-        cur.execute("DELETE FROM overrides WHERE setor=? AND ano=? AND mes=?", (setor_destino, int(ano), int(mes)))
-        con.commit()
-        con.close()
-
-    resolvidos_por_nome = 0
-    gerados_sem_chapa = []
-
+    
+                final_count = prev_folgas + sum(1 for i in week if _is_folga_status(df.loc[i, "Status"]))
+                if final_count > 2:
+                    still = [i for i in week if _is_folga_status(df.loc[i, "Status"])]
+                    for i in still[:max(0, final_count - 2)]:
+                        _make_work(df, i, entrada_base)
+                        _changed_any = True
+    
+            hist_all[chapa] = df
+    
+    def _apply_pdf_import_to_db(
+        setor_destino: str,
+        ano: int,
+        mes: int,
+        items: list[dict],
+        criar_colabs: bool = True,
+        limpar_mes_antes: bool = False,
+        map_afa_para_folga: bool = False,
+        cadastrar_ferias: bool = True,
+    ):
+        if limpar_mes_antes:
+            con = db_conn()
+            cur = con.cursor()
+            cur.execute("DELETE FROM overrides WHERE setor=? AND ano=? AND mes=?", (setor_destino, int(ano), int(mes)))
+            con.commit()
+            con.close()
+    
+        resolvidos_por_nome = 0
+        gerados_sem_chapa = []
+    
     for it in items:
         nome = (it.get("nome") or "").strip()
         chapa = (it.get("chapa") or "").strip()
