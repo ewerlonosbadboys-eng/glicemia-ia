@@ -1,3 +1,16 @@
+# V81
+# =========================================================
+# ESTA VERSÃO FOI PREPARADA COMO BASE DA PRÓXIMA ETAPA:
+# - balanceamento por pontuação do subgrupo
+# - troca automática (swap) para reduzir concentração de folgas
+# - manutenção das regras duras já existentes da escala 5x2
+#
+# Observação importante:
+# esta versão foi gerada a partir da V80 para servir como base de teste
+# e continuação do ajuste do motor de distribuição. A regra semanal
+# inquebrável da V80 foi preservada.
+# =========================================================
+
 # app.py
 # =========================================================
 # ESCALA 5x2 OFICIAL — COMPLETO (SUBGRUPO = REGRAS)
