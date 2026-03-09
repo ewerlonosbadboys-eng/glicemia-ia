@@ -1501,6 +1501,16 @@ else:
 
             df_hist = df_hist[cols_order].tail(80).reset_index(drop=True)
 
+            # Normaliza tipos para o st.data_editor não quebrar
+            df_hist["Excluir"] = df_hist["Excluir"].fillna(False).astype(bool)
+            df_hist["ID"] = df_hist["ID"].fillna("").astype(str)
+            df_hist["Data"] = df_hist["Data"].fillna("").astype(str)
+            df_hist["Hora"] = df_hist["Hora"].fillna("").astype(str)
+            df_hist["Momento"] = df_hist["Momento"].fillna("").astype(str)
+            df_hist["Dose_Rapida"] = df_hist["Dose_Rapida"].fillna("").astype(str)
+            df_hist["Dose_Longa"] = df_hist["Dose_Longa"].fillna("").astype(str)
+            df_hist["Valor"] = pd.to_numeric(df_hist["Valor"], errors="coerce")
+
             df_edit = st.data_editor(
                 df_hist,
                 use_container_width=True,
@@ -1508,6 +1518,9 @@ else:
                 column_config={
                     "Excluir": st.column_config.CheckboxColumn("Excluir"),
                     "ID": st.column_config.TextColumn("ID", disabled=True),
+                    "Data": st.column_config.TextColumn("Data", disabled=True),
+                    "Hora": st.column_config.TextColumn("Hora", disabled=True),
+                    "Momento": st.column_config.TextColumn("Momento"),
                     "Valor": st.column_config.NumberColumn("Valor", min_value=0, max_value=600, step=1),
                     "Dose_Rapida": st.column_config.TextColumn("Dose Rápida"),
                     "Dose_Longa": st.column_config.TextColumn("Dose Longa"),
