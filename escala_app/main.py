@@ -1,4 +1,3 @@
-
 # app.py
 # =========================================================
 # ESCALA 5x2 OFICIAL — COMPLETO (SUBGRUPO = REGRAS)
@@ -627,13 +626,32 @@ div[data-testid="stDataFrame"] { border-radius: 12px; overflow: hidden; }
 </style>
 """, unsafe_allow_html=True)
 
-DB_PATH = "escala.db"
+# =========================
+# CAMINHOS PERSISTENTES (nova estrutura)
+# Coloque este arquivo em: escala_app/main.py
+# Banco em: escala_app/data/escala.db
+# Backups em: escala_app/backups/
+# =========================
+APP_DIR = Path(__file__).resolve().parent
+DATA_DIR = APP_DIR / "data"
+BACKUP_DIR = APP_DIR / "backups"
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+
+DB_PATH = str(DATA_DIR / "escala.db")
+
+# Migração automática do banco antigo da raiz, se existir
+try:
+    legacy_db = APP_DIR.parent / "escala.db"
+    if legacy_db.exists() and not Path(DB_PATH).exists():
+        shutil.copy2(legacy_db, DB_PATH)
+except Exception:
+    pass
 
 
 # =========================
 # ADMIN: Backup / Restore + Setores + Import
 # =========================
-BACKUP_DIR = "backups"
 AUTO_BACKUP_HOUR = 3  # 03:00
 AUTO_BACKUP_INTERVAL_HOURS = 6  # roda quando o app abre
 
@@ -4398,43 +4416,19 @@ if "last_seed" not in st.session_state:
 db_init()
 auto_backup_if_due()
 
-def _load_login_setores_robusto() -> list:
-    """Monta a lista de setores do login juntando tabelas diferentes e normalizando."""
-    setores = []
-    con = db_conn()
-    try:
-        consultas = [
-            "SELECT nome AS setor FROM setores",
-            "SELECT DISTINCT UPPER(TRIM(setor)) AS setor FROM usuarios_sistema",
-            "SELECT DISTINCT UPPER(TRIM(setor)) AS setor FROM colaboradores",
-            "SELECT DISTINCT UPPER(TRIM(setor)) AS setor FROM login_recent",
-        ]
-        for sql in consultas:
-            try:
-                df = pd.read_sql_query(sql, con)
-                if "setor" in df.columns:
-                    setores.extend(df["setor"].dropna().astype(str).tolist())
-            except Exception:
-                pass
-    finally:
-        con.close()
-
-    setores_norm = []
-    for s in setores:
-        sn = _norm_setor(s)
-        if sn:
-            setores_norm.append(sn)
-
-    # garante setores-base importantes e preserva ordem alfabética
-    return sorted(set(setores_norm))
-
-
 def page_login():
     st.title("🔐 Login por Setor (Usuário / Líder / Admin)")
     tab_login, tab_cadastrar, tab_esqueci = st.tabs(["Entrar", "Cadastrar Usuário do Sistema", "Esqueci a senha"])
 
     with tab_login:
-        setores = _load_login_setores_robusto()
+        con = db_conn()
+        setores_df = pd.concat([
+            pd.read_sql_query("SELECT nome AS setor FROM setores", con),
+            pd.read_sql_query("SELECT DISTINCT setor FROM usuarios_sistema", con),
+            pd.read_sql_query("SELECT DISTINCT setor FROM colaboradores", con),
+        ], ignore_index=True)
+        setores = sorted({_norm_setor(x) for x in setores_df["setor"].dropna().tolist() if str(x).strip()})
+        con.close()
 
         # --- Login (melhorado): recentes + busca (case-insensitive) + salvar setor/chapa
         con = db_conn()
@@ -4495,12 +4489,6 @@ def page_login():
 
         setor_base = _norm_setor(st.session_state.get("lg_setor_txt", ""))
         opcoes_setor = setores_f[:] if setores_f else setores[:]
-
-        # reforço: garante que setores vistos em recentes também apareçam no combo
-        for _lbl, _set, _ch in recentes_opts:
-            srec = _norm_setor(_set)
-            if srec and srec not in opcoes_setor:
-                opcoes_setor.append(srec)
         if setor_base and setor_base not in opcoes_setor:
             opcoes_setor = [setor_base] + opcoes_setor
         if not opcoes_setor:
