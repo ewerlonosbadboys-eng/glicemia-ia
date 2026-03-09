@@ -710,7 +710,8 @@ def proxima_medida_apos(momento: str, dt_base: datetime):
     dt_apos = dt_base + timedelta(hours=2)
     return mapa[momento], dt_apos.strftime("%H:%M")
 
-def link_whatsapp_lembrete(momento: str, valor_glicemia: int, dose_rapida: str, dose_longa: str) -> str:
+def link_whatsapp_lembrete(momento: str, valor_glicemia: int, dose_rapida: str, dose_longa: str,
+                           alimentos=None, c_tot=0, p_tot=0, g_tot=0) -> str:
     dt_agora = agora_br()
     momento_apos, hora_apos = proxima_medida_apos(momento, dt_agora)
 
@@ -726,12 +727,21 @@ def link_whatsapp_lembrete(momento: str, valor_glicemia: int, dose_rapida: str, 
     if dose_longa and dose_longa != "—":
         linhas.append(f"🩸 Longa: {dose_longa}")
 
+    if alimentos:
+        linhas.append("")
+        linhas.append("🍽️ Nutrição:")
+        for a in alimentos:
+            linhas.append(f"• {a}")
+        linhas.append("")
+        linhas.append(f"📊 Carboidratos: {int(c_tot)}g")
+        linhas.append(f"🥩 Proteínas: {int(p_tot)}g")
+        linhas.append(f"🥑 Gorduras: {int(g_tot)}g")
+
     if momento_apos and hora_apos:
         linhas.extend(["", f"⏰ Próxima medida: {momento_apos} às {hora_apos} (2h após)"])
 
     mensagem = "\n".join(linhas)
     return "https://wa.me/?text=" + quote(mensagem)
-
 
 
 
@@ -750,130 +760,7 @@ def link_whatsapp_nutricao(momento: str, alimentos: list, c_tot: int, p_tot: int
     return "https://wa.me/?text=" + quote(msg)
 
 
-def link_whatsapp_relatorio_dia(usuario: str, data_ref: str) -> str:
-    if os.path.exists(ARQ_G):
-        dfg = pd.read_csv(ARQ_G)
-    else:
-        dfg = pd.DataFrame(columns=["Usuario", "Data", "Hora", "Valor", "Momento", "Dose_Rapida", "Dose_Longa"])
 
-    for col in ["Usuario", "Data", "Hora", "Valor", "Momento", "Dose_Rapida", "Dose_Longa"]:
-        if col not in dfg.columns:
-            dfg[col] = ""
-
-    dfg_u = dfg[
-        (dfg["Usuario"].astype(str).str.strip().str.lower() == str(usuario).strip().lower()) &
-        (dfg["Data"].astype(str).str.strip() == str(data_ref).strip())
-    ].copy()
-    dfg_u["Valor_num"] = pd.to_numeric(dfg_u["Valor"], errors="coerce")
-    try:
-        dfg_u = dfg_u.sort_values(by=["Hora"], ascending=True)
-    except Exception:
-        pass
-
-    if os.path.exists(ARQ_N):
-        dfn = pd.read_csv(ARQ_N)
-    else:
-        dfn = pd.DataFrame(columns=["Usuario", "Data", "Momento", "Info", "C", "P", "G"])
-
-    for col in ["Usuario", "Data", "Momento", "Info", "C", "P", "G"]:
-        if col not in dfn.columns:
-            dfn[col] = ""
-
-    dfn_u = dfn[
-        (dfn["Usuario"].astype(str).str.strip().str.lower() == str(usuario).strip().lower()) &
-        (dfn["Data"].astype(str).str.strip() == str(data_ref).strip())
-    ].copy()
-    dfn_u["C_num"] = pd.to_numeric(dfn_u["C"], errors="coerce").fillna(0)
-    dfn_u["P_num"] = pd.to_numeric(dfn_u["P"], errors="coerce").fillna(0)
-    dfn_u["G_num"] = pd.to_numeric(dfn_u["G"], errors="coerce").fillna(0)
-
-    linhas = []
-    linhas.append(f"📋 Relatório do dia - {data_ref}")
-    linhas.append(f"👧 Usuário: {usuario}")
-    linhas.append("")
-
-    if not dfg_u.empty and dfg_u["Valor_num"].notna().any():
-        media_gl = round(float(dfg_u["Valor_num"].mean()), 1)
-        min_gl = int(dfg_u["Valor_num"].min())
-        max_gl = int(dfg_u["Valor_num"].max())
-        total_medidas = int(dfg_u["Valor_num"].count())
-    else:
-        media_gl = "-"
-        min_gl = "-"
-        max_gl = "-"
-        total_medidas = 0
-
-    total_c = int(dfn_u["C_num"].sum()) if not dfn_u.empty else 0
-    total_p = int(dfn_u["P_num"].sum()) if not dfn_u.empty else 0
-    total_g = int(dfn_u["G_num"].sum()) if not dfn_u.empty else 0
-
-    linhas.append("📊 RESUMO DO DIA")
-    linhas.append(f"• Medidas de glicemia: {total_medidas}")
-    linhas.append(f"• Média glicemia: {media_gl}")
-    linhas.append(f"• Menor glicemia: {min_gl}")
-    linhas.append(f"• Maior glicemia: {max_gl}")
-    linhas.append(f"• Carboidratos totais: {total_c}g")
-    linhas.append(f"• Proteínas totais: {total_p}g")
-    linhas.append(f"• Gorduras totais: {total_g}g")
-    linhas.append("")
-
-    linhas.append("🩸 GLICEMIAS")
-    if dfg_u.empty:
-        linhas.append("Sem registros de glicemia.")
-    else:
-        for _, r in dfg_u.iterrows():
-            hora = str(r.get("Hora", "")).strip()
-            momento = str(r.get("Momento", "")).strip()
-            valor = str(r.get("Valor", "")).strip()
-            dr = str(r.get("Dose_Rapida", "")).strip()
-            dl = str(r.get("Dose_Longa", "")).strip()
-            linhas.append(f"• {hora} | {momento} | Glicemia: {valor} | Rápida: {dr} | Longa: {dl}")
-
-    linhas.append("")
-    linhas.append("🍽️ NUTRIÇÃO")
-    if dfn_u.empty:
-        linhas.append("Sem registros de nutrição.")
-    else:
-        for _, r in dfn_u.iterrows():
-            momento = str(r.get("Momento", "")).strip()
-            info = str(r.get("Info", "")).strip()
-            c = str(r.get("C", "")).strip()
-            p = str(r.get("P", "")).strip()
-            g = str(r.get("G", "")).strip()
-            linhas.append(f"• {momento}: {info}")
-            linhas.append(f"  C: {c}g | P: {p}g | G: {g}g")
-
-    linhas.append("")
-    linhas.append(f"⏰ Gerado em: {agora_br().strftime('%d/%m/%Y %H:%M')}")
-    texto = "\n".join(linhas)
-    return "https://wa.me/?text=" + quote(texto)
-
-def ordenar_colunas_momentos(colunas):
-    """
-    Ordem fixa (nessa sequência):
-      Antes Café, Após Café, Antes Almoço, Após Almoço, Antes Janta, Após Janta, Madrugada
-    Depois: momentos extras (ordem alfabética).
-    """
-    base = [
-        "Antes Café", "Após Café",
-        "Antes Almoço", "Após Almoço",
-        "Antes Janta", "Após Janta",
-        "Madrugada",
-    ]
-    base_set = set(base)
-    extras = sorted([c for c in colunas if c not in base_set])
-    return [c for c in base if c in colunas] + extras
-
-def separar_momentos_extras(colunas):
-    base = [
-        "Antes Café", "Após Café",
-        "Antes Almoço", "Após Almoço",
-        "Antes Janta", "Após Janta",
-        "Madrugada",
-    ]
-    base_set = set(base)
-    extras = [c for c in colunas if c not in base_set]
-    return base, extras
 
 
 # ================= MOMENTOS / ALIMENTOS =================
@@ -1546,34 +1433,54 @@ else:
                 st.caption("Longa: não aplicável neste momento.")
                 dose_l_final = ""
 
-            # WhatsApp (usa as doses editadas)
+            # WhatsApp (usa as doses editadas + última nutrição do mesmo momento)
             dose_r_msg = dose_r_final if dose_r_final else (dose_r_sug if dose_r_sug else "—")
             dose_l_msg = dose_l_final if dose_l_final else (dose_l_sug if dose_l_sug else "—")
+
+            alimentos_msg = []
+            c_msg = 0
+            p_msg = 0
+            g_msg = 0
+
+            try:
+                if os.path.exists(ARQ_N):
+                    dfn_msg = pd.read_csv(ARQ_N)
+                    if "Usuario" not in dfn_msg.columns:
+                        dfn_msg["Usuario"] = ""
+
+                    dfn_msg = dfn_msg[dfn_msg["Usuario"] == st.session_state.user_email].copy()
+
+                    if not dfn_msg.empty and "Momento" in dfn_msg.columns:
+                        dfn_momento = dfn_msg[dfn_msg["Momento"].astype(str) == str(m_gl)].copy()
+
+                        if not dfn_momento.empty:
+                            ult = dfn_momento.iloc[-1]
+                            alimentos_txt = str(ult.get("Info", "")).strip()
+                            alimentos_msg = [x.strip() for x in alimentos_txt.split(",") if x.strip()]
+                            c_msg = pd.to_numeric(ult.get("C", 0), errors="coerce")
+                            p_msg = pd.to_numeric(ult.get("P", 0), errors="coerce")
+                            g_msg = pd.to_numeric(ult.get("G", 0), errors="coerce")
+
+                            c_msg = 0 if pd.isna(c_msg) else int(c_msg)
+                            p_msg = 0 if pd.isna(p_msg) else int(p_msg)
+                            g_msg = 0 if pd.isna(g_msg) else int(g_msg)
+            except Exception:
+                alimentos_msg = []
+                c_msg = 0
+                p_msg = 0
+                g_msg = 0
 
             link_wpp = link_whatsapp_lembrete(
                 momento=m_gl,
                 valor_glicemia=int(v_gl),
                 dose_rapida=dose_r_msg,
                 dose_longa=dose_l_msg,
+                alimentos=alimentos_msg,
+                c_tot=c_msg,
+                p_tot=p_msg,
+                g_tot=g_msg,
             )
             st.link_button("📲 Abrir WhatsApp com mensagem pronta", link_wpp, use_container_width=True)
-
-            st.markdown("### 📋 Relatório Automático do Dia")
-            data_relatorio = st.date_input(
-                "Data do relatório",
-                value=agora_br().date(),
-                key="data_relatorio_dia"
-            )
-            data_relatorio_str = data_relatorio.strftime("%d/%m/%Y")
-            link_relatorio_dia = link_whatsapp_relatorio_dia(
-                usuario=st.session_state.user_email,
-                data_ref=data_relatorio_str
-            )
-            st.link_button(
-                "📲 Enviar relatório do dia no WhatsApp",
-                link_relatorio_dia,
-                use_container_width=True
-            )
 
             if st.button("💾 Salvar Glicemia", use_container_width=True):
                 # salva doses separadas (Rápida / Longa) para o histórico e para o PDF
