@@ -1545,7 +1545,36 @@ def _norm_chapa(v: str) -> str:
     return str(v or "").strip()
 
 def hash_password(password: str, salt: str) -> str:
+    password = (password or "").strip()
+    salt = (salt or "").strip()
     return hashlib.sha256((salt + password).encode("utf-8")).hexdigest()
+
+def hash_password_legacy(password: str, salt: str) -> str:
+    password = (password or "").strip()
+    salt = (salt or "").strip()
+    return hashlib.sha256((password + salt).encode("utf-8")).hexdigest()
+
+def verify_password_compat(password: str, senha_hash_db: str, salt_db: str) -> bool:
+    password = (password or "").strip()
+    senha_hash_db = (senha_hash_db or "").strip()
+    salt_db = (salt_db or "").strip()
+
+    if not senha_hash_db:
+        return False
+
+    # Formato atual
+    if hash_password(password, salt_db) == senha_hash_db:
+        return True
+
+    # Compatibilidade com versão antiga (ordem invertida)
+    if hash_password_legacy(password, salt_db) == senha_hash_db:
+        return True
+
+    # Compatibilidade com bases antigas onde a senha pode ter ficado salva sem hash
+    if password == senha_hash_db:
+        return True
+
+    return False
 
 def _safe_exec(cur, sql: str, params=None):
     try:
@@ -1782,6 +1811,7 @@ def create_system_user(nome: str, setor: str, chapa: str, senha: str, is_lider: 
     nome = (nome or "").strip() or _norm_chapa(chapa)
     setor = _norm_setor(setor)
     chapa = _norm_chapa(chapa)
+    senha = (senha or "").strip()
     salt = secrets.token_hex(16)
     senha_hash = hash_password(senha, salt)
     con = db_conn()
@@ -1843,7 +1873,7 @@ def verify_login(setor: str, chapa: str, senha: str):
     if not row:
         return None
     nome, senha_hash, salt, is_admin, is_lider, setor_db, chapa_db = row
-    if hash_password(senha, salt) == senha_hash:
+    if verify_password_compat(senha, senha_hash, salt):
         return {
             "nome": nome,
             "setor": _norm_setor(setor_db),
@@ -1869,6 +1899,7 @@ def is_lider_chapa(setor: str, chapa_lider: str) -> bool:
 def update_password(setor: str, chapa: str, nova_senha: str):
     setor = _norm_setor(setor)
     chapa = _norm_chapa(chapa)
+    nova_senha = (nova_senha or "").strip()
     salt = secrets.token_hex(16)
     senha_hash = hash_password(nova_senha, salt)
     con = db_conn()
@@ -4453,23 +4484,13 @@ def page_login():
 
         colA, colB = st.columns([1.4, 1.0])
         with colA:
-            placeholder_recent = "— selecionar recente —"
-            if "lg_recent_pick" not in st.session_state:
-                st.session_state["lg_recent_pick"] = placeholder_recent
-
-            recent_labels = [placeholder_recent] + [t[0] for t in recentes_opts_f]
-
-            pick = st.selectbox(
-                "Recentes (clique para preencher):",
-                recent_labels,
-                index=recent_labels.index(st.session_state.get("lg_recent_pick", placeholder_recent))
-                if st.session_state.get("lg_recent_pick", placeholder_recent) in recent_labels else 0,
-                key="lg_recent_pick"
-            )
-
-            # Só preenche quando o usuário escolhe um recente de propósito.
-            # Não sobrescreve mais a chapa digitada automaticamente.
-            if pick != placeholder_recent:
+            if recentes_opts_f:
+                pick = st.selectbox(
+                    "Recentes (clique para preencher):",
+                    [t[0] for t in recentes_opts_f],
+                    index=0,
+                    key="lg_recent_pick"
+                )
                 chosen = next((t for t in recentes_opts_f if t[0] == pick), None)
                 if chosen:
                     st.session_state["lg_setor_txt"] = chosen[1]
