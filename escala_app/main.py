@@ -224,18 +224,19 @@ def _group_consecutive_days(days: list[int]) -> list[tuple[int,int]]:
     return ranges
 
 
+
 def enforce_max_two_folgas_per_week(hist_all: dict, chapas: list, df_ref_cur: pd.DataFrame, setor: str, ano: int, mes: int, locked_idx_map: dict | None = None) -> None:
     """
-    v68
-    - Semana = SEG -> DOM
+    v72
+    - Semana = SEG -> DOM (contínua, inclusive virada de mês)
     - Domingo conta como folga da semana
-    - Máximo absoluto = 2 folgas por semana
-    - Não pode existir folga dupla consecutiva
-    - Corrige inclusive virada de mês
+    - Meta absoluta = 2 folgas por semana
+    - Nunca deixa folga dupla consecutiva automática
+    - Preserva a alternância de domingo: remove excesso primeiro em dias úteis / sábado
+    - Considera os dias carregados do mês anterior na 1ª semana do mês
     - Ao converter Folga -> Trabalho, usa o horário salvo do colaborador/sistema
     - Busca horário por chapa e por nome (fallback)
-    - Corrige casos de chapa provisória/XXYA
-    - Não mexe em Férias nem Afastamento
+    - Não mexe em Férias nem em travas manuais
     """
     if hist_all is None or df_ref_cur is None or len(df_ref_cur) == 0:
         return
@@ -276,7 +277,6 @@ def enforce_max_two_folgas_per_week(hist_all: dict, chapas: list, df_ref_cur: pd
         x = re.sub(r"\s+", " ", x)
         return x
 
-    # mapas do cadastro real
     entrada_por_chapa = {}
     entrada_por_nome = {}
     nome_por_chapa = {}
@@ -296,7 +296,6 @@ def enforce_max_two_folgas_per_week(hist_all: dict, chapas: list, df_ref_cur: pd
         entrada_por_nome = {}
         nome_por_chapa = {}
 
-    # tenta capturar nome da linha do histórico atual, se existir em colunas auxiliares
     def _guess_nome_do_hist(df: pd.DataFrame, chapa: str) -> str:
         for col in ["Nome", "nome", "Colaborador", "COLABORADOR"]:
             if col in df.columns:
@@ -311,13 +310,21 @@ def enforce_max_two_folgas_per_week(hist_all: dict, chapas: list, df_ref_cur: pd
     def _is_folga_status(s: str) -> bool:
         return str(s) == "Folga"
 
+    def _is_work_status(s: str) -> bool:
+        return str(s) in WORK_STATUSES
+
+    def _is_locked(chapa: str, idx: int) -> bool:
+        try:
+            return int(idx) in set(locked_idx_map.get(chapa, set())) if locked_idx_map else False
+        except Exception:
+            return False
+
     def _entrada_base_for(df: pd.DataFrame, chapa: str) -> str:
         ch = str(chapa or "").strip()
         ent = str(entrada_por_chapa.get(ch, "") or "").strip()
         if ent:
             return ent
 
-        # fallback por nome quando a chapa estiver provisória/errada (ex.: XXYA)
         nome_hist = _guess_nome_do_hist(df, ch)
         if nome_hist:
             ent = str(entrada_por_nome.get(_norm_name(nome_hist), "") or "").strip()
@@ -332,9 +339,10 @@ def enforce_max_two_folgas_per_week(hist_all: dict, chapas: list, df_ref_cur: pd
             pass
         return "06:00"
 
-    def _make_work(df: pd.DataFrame, i: int, chapa: str, blocked: set[int] | None = None) -> bool:
-        blocked = blocked or set()
-        if int(i) in blocked:
+    def _make_work(df: pd.DataFrame, i: int, chapa: str) -> bool:
+        if _is_locked(chapa, i):
+            return False
+        if str(df.loc[i, "Status"]) == "Férias":
             return False
         entrada_base = _entrada_base_for(df, chapa)
         df.loc[i, "Status"] = "Trabalho"
@@ -342,11 +350,98 @@ def enforce_max_two_folgas_per_week(hist_all: dict, chapas: list, df_ref_cur: pd
         df.loc[i, "H_Saida"] = _saida_from_entrada(entrada_base)
         return True
 
-    _changed_any = True
-    _guard = 0
-    while _changed_any and _guard < 12:
-        _changed_any = False
-        _guard += 1
+    def _make_folga(df: pd.DataFrame, i: int, chapa: str) -> bool:
+        if _is_locked(chapa, i):
+            return False
+        if str(df.loc[i, "Status"]) == "Férias":
+            return False
+        # evita criar folga consecutiva automática
+        if i - 1 >= 0 and _is_folga_status(df.loc[i - 1, "Status"]):
+            return False
+        if i + 1 < len(df) and _is_folga_status(df.loc[i + 1, "Status"]):
+            return False
+        df.loc[i, "Status"] = "Folga"
+        df.loc[i, "H_Entrada"] = ""
+        df.loc[i, "H_Saida"] = ""
+        return True
+
+    def _remove_excess_current_week(df: pd.DataFrame, chapa: str, week: list[int], excesso: int) -> int:
+        """
+        Remove folgas do mês atual preservando domingo 1x1:
+        1) remove dias úteis / sábado do fim para o começo
+        2) remove folga consecutiva automática, se sobrar
+        3) só remove domingo em último caso
+        """
+        if excesso <= 0:
+            return 0
+
+        current_folgas = [i for i in week if _is_folga_status(df.loc[i, "Status"])]
+        non_sunday = [i for i in current_folgas if str(ref.loc[i, "Dia"]) != "dom"]
+        sunday = [i for i in current_folgas if str(ref.loc[i, "Dia"]) == "dom"]
+
+        ordered = sorted(non_sunday, reverse=True)
+
+        # primeiro tenta limpar excesso em dias não-domingo
+        for i in ordered:
+            if excesso <= 0:
+                break
+            if _make_work(df, i, chapa):
+                excesso -= 1
+
+        if excesso <= 0:
+            return 0
+
+        # depois quebra folga dupla automática em qualquer ponto da semana atual
+        current_folgas = [i for i in week if _is_folga_status(df.loc[i, "Status"])]
+        for a, b in zip(current_folgas, current_folgas[1:]):
+            if excesso <= 0:
+                break
+            if b == a + 1 and str(ref.loc[b, "Dia"]) != "dom":
+                if _make_work(df, b, chapa):
+                    excesso -= 1
+
+        if excesso <= 0:
+            return 0
+
+        # domingo só em último caso
+        for i in sunday:
+            if excesso <= 0:
+                break
+            if _make_work(df, i, chapa):
+                excesso -= 1
+
+        return excesso
+
+    def _fill_missing_current_week(df: pd.DataFrame, chapa: str, week: list[int], falta: int) -> int:
+        """
+        Completa a 1ª semana/mês atual para fechar 2 folgas no total,
+        sempre preferindo SEG-SEX, depois SÁB, e nunca criando dupla automática.
+        Domingo não é usado aqui: ele já foi definido pela regra 1x1.
+        """
+        if falta <= 0:
+            return 0
+
+        def _prio(i: int):
+            dia = str(ref.loc[i, "Dia"])
+            wd = int(pd.to_datetime(ref.loc[i, "Data"]).weekday())
+            # quarta/quinta, depois terça/sexta, depois segunda, sábado por último
+            return ({2: 0, 3: 0, 1: 1, 4: 1, 0: 2, 5: 3}.get(wd, 9), -i)
+
+        cand = [i for i in week if str(ref.loc[i, "Dia"]) != "dom" and _is_work_status(df.loc[i, "Status"])]
+        cand = sorted(cand, key=_prio)
+
+        for i in cand:
+            if falta <= 0:
+                break
+            if _make_folga(df, i, chapa):
+                falta -= 1
+        return falta
+
+    changed_any = True
+    guard = 0
+    while changed_any and guard < 12:
+        changed_any = False
+        guard += 1
 
         for chapa in list(hist_all.keys()):
             if chapa not in hist_all:
@@ -355,9 +450,7 @@ def enforce_max_two_folgas_per_week(hist_all: dict, chapas: list, df_ref_cur: pd
             if df is None or len(df) == 0:
                 continue
             df = df.reset_index(drop=True).copy()
-            sunday_locked = _merge_locked_status((locked_idx_map or {}).get(chapa, set()), _sunday_indices_df(df))
 
-            # v68: corrige linhas vazias/sem horário mesmo quando já estão como Trabalho
             entrada_base_now = _entrada_base_for(df, chapa)
             for i in range(len(df)):
                 st = str(df.loc[i, "Status"])
@@ -367,10 +460,10 @@ def enforce_max_two_folgas_per_week(hist_all: dict, chapas: list, df_ref_cur: pd
                     if not ent:
                         df.loc[i, "H_Entrada"] = entrada_base_now
                         df.loc[i, "H_Saida"] = _saida_from_entrada(entrada_base_now)
-                        _changed_any = True
+                        changed_any = True
                     elif not sai:
                         df.loc[i, "H_Saida"] = _saida_from_entrada(ent)
-                        _changed_any = True
+                        changed_any = True
 
             prev_tail_statuses = []
             if carry_days > 0 and chapa in prev_hist:
@@ -383,20 +476,24 @@ def enforce_max_two_folgas_per_week(hist_all: dict, chapas: list, df_ref_cur: pd
                 except Exception:
                     prev_tail_statuses = []
 
-            # quebra folga dupla no mês atual
+            # quebra dupla herdada da virada: último dia do mês anterior + 1º dia do mês atual
+            if prev_tail_statuses:
+                if str(prev_tail_statuses[-1]) == "Folga" and len(df) > 0 and _is_folga_status(df.loc[0, "Status"]):
+                    if _make_work(df, 0, chapa):
+                        changed_any = True
+
+            # quebra dupla dentro do mês atual preservando domingo sempre que possível
             folgas_mes = [i for i in range(len(df)) if _is_folga_status(df.loc[i, "Status"])]
             for a, b in zip(folgas_mes, folgas_mes[1:]):
                 if b == a + 1:
-                    if _make_work(df, b, chapa, sunday_locked):
-                        _changed_any = True
+                    # remove o não-domingo; se ambos não-domingo remove o segundo
+                    alvo = b
+                    if str(ref.loc[b, "Dia"]) == "dom" and str(ref.loc[a, "Dia"]) != "dom":
+                        alvo = a
+                    if _make_work(df, alvo, chapa):
+                        changed_any = True
 
-            # quebra dupla herdada da virada
-            if prev_tail_statuses and len(prev_tail_statuses) > 0:
-                if str(prev_tail_statuses[-1]) == "Folga" and len(df) > 0 and _is_folga_status(df.loc[0, "Status"]):
-                    if _make_work(df, 0, chapa, sunday_locked):
-                        _changed_any = True
-
-            # limite de 2 folgas na semana contando domingo
+            # regra contínua SEG->DOM em todas as semanas do mês atual
             for w_idx, week in enumerate(weeks):
                 prev_folgas = 0
                 if w_idx == 0 and carry_days > 0 and prev_tail_statuses:
@@ -404,70 +501,57 @@ def enforce_max_two_folgas_per_week(hist_all: dict, chapas: list, df_ref_cur: pd
 
                 current_folga_idxs = [i for i in week if _is_folga_status(df.loc[i, "Status"])]
                 total = prev_folgas + len(current_folga_idxs)
-                if total <= 2:
-                    continue
 
-                excesso = total - 2
-                to_remove = []
+                # remove excesso preservando domingo
+                if total > 2:
+                    excesso = total - 2
+                    restante = _remove_excess_current_week(df, chapa, week, excesso)
+                    if restante != excesso:
+                        changed_any = True
 
-                sundays = [i for i in current_folga_idxs if str(ref.loc[i, "Dia"]) == "dom" and i not in sunday_locked]
-                for i in sundays:
-                    if excesso <= 0:
-                        break
-                    to_remove.append(i)
-                    excesso -= 1
+                # completa falta para fechar 2 na semana contínua
+                current_folga_idxs = [i for i in week if _is_folga_status(df.loc[i, "Status"])]
+                total = prev_folgas + len(current_folga_idxs)
+                if total < 2:
+                    falta = 2 - total
+                    restante = _fill_missing_current_week(df, chapa, week, falta)
+                    if restante != falta:
+                        changed_any = True
 
-                remaining = [i for i in current_folga_idxs if i not in to_remove and i not in sunday_locked]
-
-                rem_sorted = sorted(remaining)
-                for a, b in zip(rem_sorted, rem_sorted[1:]):
-                    if excesso <= 0:
-                        break
-                    if b == a + 1 and b not in to_remove:
-                        to_remove.append(b)
-                        excesso -= 1
-
-                remaining = [i for i in current_folga_idxs if i not in to_remove and i not in sunday_locked]
-                for i in remaining:
-                    if excesso <= 0:
-                        break
-                    if i not in to_remove:
-                        to_remove.append(i)
-                        excesso -= 1
-
-                for i in sorted(set(to_remove)):
-                    if _make_work(df, i, chapa, sunday_locked):
-                        _changed_any = True
-
-                final_count = prev_folgas + sum(1 for i in week if _is_folga_status(df.loc[i, "Status"]))
-                if final_count > 2:
-                    still = [i for i in week if _is_folga_status(df.loc[i, "Status"]) and i not in sunday_locked]
-                    for i in still[:max(0, final_count - 2)]:
-                        if _make_work(df, i, chapa, sunday_locked):
-                            _changed_any = True
+                # garantia final da semana: nunca >2
+                current_folga_idxs = [i for i in week if _is_folga_status(df.loc[i, "Status"])]
+                total = prev_folgas + len(current_folga_idxs)
+                if total > 2:
+                    excesso = total - 2
+                    restante = _remove_excess_current_week(df, chapa, week, excesso)
+                    if restante != excesso:
+                        changed_any = True
 
             hist_all[chapa] = df
-    
-    def _apply_pdf_import_to_db(
-        setor_destino: str,
-        ano: int,
-        mes: int,
-        items: list[dict],
-        criar_colabs: bool = True,
-        limpar_mes_antes: bool = False,
-        map_afa_para_folga: bool = False,
-        cadastrar_ferias: bool = True,
-    ):
-        if limpar_mes_antes:
-            con = db_conn()
-            cur = con.cursor()
-            cur.execute("DELETE FROM overrides WHERE setor=? AND ano=? AND mes=?", (setor_destino, int(ano), int(mes)))
-            con.commit()
-            con.close()
-    
-        resolvidos_por_nome = 0
-        gerados_sem_chapa = []
-    
+
+
+
+
+def _apply_pdf_import_to_db(
+    setor_destino: str,
+    ano: int,
+    mes: int,
+    items: list[dict],
+    criar_colabs: bool = True,
+    limpar_mes_antes: bool = False,
+    map_afa_para_folga: bool = False,
+    cadastrar_ferias: bool = True,
+):
+    if limpar_mes_antes:
+        con = db_conn()
+        cur = con.cursor()
+        cur.execute("DELETE FROM overrides WHERE setor=? AND ano=? AND mes=?", (setor_destino, int(ano), int(mes)))
+        con.commit()
+        con.close()
+
+    resolvidos_por_nome = 0
+    gerados_sem_chapa = []
+
     for it in items:
         nome = (it.get("nome") or "").strip()
         chapa = (it.get("chapa") or "").strip()
