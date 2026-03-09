@@ -4485,8 +4485,6 @@ def page_login():
         colA, colB = st.columns([1.4, 1.0])
         with colA:
             placeholder_recent = "— selecionar recente —"
-            if "lg_recent_pick" not in st.session_state:
-                st.session_state["lg_recent_pick"] = placeholder_recent
 
             recent_labels = [placeholder_recent] + [t[0] for t in recentes_opts_f]
             current_pick = st.session_state.get("lg_recent_pick", placeholder_recent)
@@ -4508,8 +4506,6 @@ def page_login():
                     st.session_state["lg_setor_txt"] = chosen[1]
                     st.session_state["lg_chapa"] = chosen[2]
                     st.session_state["_lg_recent_applied"] = True
-            else:
-                st.session_state["lg_recent_pick"] = placeholder_recent
 
         with colB:
             lembrar = st.checkbox("✅ Salvar setor/chapa neste dispositivo", value=True, key="lg_remember")
