@@ -4103,6 +4103,7 @@ def _counts_folgas_day_and_hour(hist_by_chapa: dict, colab_by_chapa: dict, chapa
 # =========================================================
 # ✅ REBALANCE (corrigido): recebe estado_prev e respeita locked_idx
 # =========================================================
+
 def rebalance_folgas_dia(
     hist_by_chapa: dict,
     colab_by_chapa: dict,
@@ -4112,44 +4113,77 @@ def rebalance_folgas_dia(
     estado_prev: dict | None = None,
     locked_idx: dict | None = None,
     past_flag: bool = False,
-    max_iters=2200
+    max_iters=240
 ):
     """
-    Rebalance pesado por semana/subgrupo.
-    Regras:
+    Rebalance do subgrupo por SEMANA REAL (seg->dom), com proteção anti-loop.
+
+    Objetivo:
+    - reduzir dias leves/zerados e dias muito carregados
     - domingo nunca entra no balanceamento
     - sábado só recebe folga se a regra do colaborador permitir
     - nunca mexe em célula travada por override
     - não cria folga dupla automática
-    - mantém a quantidade de folgas do colaborador na semana (faz troca 1x1)
-    - procura a MELHOR troca local por pontuação, não a primeira válida
+    - não altera a quantidade de folgas do colaborador na semana (troca 1x1)
+    - só aceita movimentos que melhoram a pontuação da semana
     """
     estado_prev = estado_prev or {}
     locked_idx = locked_idx or {}
-
     _past = bool(past_flag)
 
-    def is_dom(i): return df_ref.loc[i, "Dia"] == "dom"
+    def is_dom(i: int) -> bool:
+        return str(df_ref.loc[i, "Dia"]) == "dom"
 
-    def is_locked(ch, i):
+    def is_sab(i: int) -> bool:
+        return str(df_ref.loc[i, "Dia"]) == "sáb"
+
+    def is_locked(ch: str, i: int) -> bool:
         return bool(i in (locked_idx.get(ch, set()) or set()))
 
-    def _day_penalty(counts: dict, eligible_days: list[int]) -> float:
-        if not eligible_days:
-            return 0.0
-        vals = [counts[i] for i in eligible_days]
-        if not vals:
-            return 0.0
-        avg = sum(vals) / float(len(vals))
-        spread = max(vals) - min(vals)
-        # penaliza desvio da média e diferença entre mais pesado e mais leve
-        return sum((v - avg) ** 2 for v in vals) + (spread ** 2) * 3.0
-
-    def _eligible_days_for_group() -> list[int]:
-        # domingo nunca; demais dias entram para a conta de equilíbrio.
+    def _eligible_days_for_group(week: list[int]) -> list[int]:
         return [i for i in week if not is_dom(i)]
 
-    def can_swap(ch, i_from, i_to):
+    def _week_state_signature(week: list[int]) -> tuple:
+        sig = []
+        for ch in chapas_grupo:
+            df = hist_by_chapa[ch]
+            row = tuple("F" if str(df.loc[i, "Status"]) == "Folga" else "T" for i in week)
+            sig.append((ch, row))
+        return tuple(sig)
+
+    def _counts(week: list[int], eligible_days: list[int]) -> dict:
+        counts = {i: 0 for i in eligible_days}
+        for ch in chapas_grupo:
+            df = hist_by_chapa[ch]
+            for i in eligible_days:
+                if str(df.loc[i, "Status"]) == "Folga":
+                    counts[i] += 1
+        return counts
+
+    def _score_counts(counts: dict) -> float:
+        if not counts:
+            return 0.0
+        vals = list(counts.values())
+        avg = sum(vals) / float(len(vals))
+        spread = max(vals) - min(vals)
+        zeros = sum(1 for v in vals if v == 0)
+        ones = sum(1 for v in vals if v == 1)
+        heavies = sum(max(0, v - math.ceil(avg)) for v in vals)
+        # penalidade forte para zerado, depois dias muito leves, depois dispersão
+        return (
+            sum((v - avg) ** 2 for v in vals)
+            + (spread ** 2) * 6.0
+            + zeros * 40.0
+            + ones * 8.0
+            + heavies * 6.0
+        )
+
+    def _candidate_order(counts: dict) -> tuple[list[int], list[int]]:
+        heavy = sorted(counts.keys(), key=lambda i: (counts[i], i), reverse=True)
+        light = sorted(counts.keys(), key=lambda i: (counts[i], i))
+        return heavy, light
+
+    def can_swap(ch: str, i_from: int, i_to: int) -> bool:
         df = hist_by_chapa[ch]
         pode_sab = bool(colab_by_chapa[ch].get("Folga_Sab", False))
 
@@ -4163,26 +4197,37 @@ def rebalance_folgas_dia(
         st_from = str(df.loc[i_from, "Status"])
         st_to = str(df.loc[i_to, "Status"])
 
-        if st_from == "Férias" or st_to == "Férias":
+        if st_from in {"Férias", "Afastamento"} or st_to in {"Férias", "Afastamento"}:
             return False
-        if st_from == "Afastamento" or st_to == "Afastamento":
+        if st_from != "Folga" or st_to != "Trabalho":
             return False
-        if st_from != "Folga":
-            return False
-        if st_to != "Trabalho":
-            return False
-        if df_ref.loc[i_to, "Dia"] == "sáb" and not pode_sab:
+        if is_sab(i_to) and not pode_sab:
             return False
 
         # não permite criar folga dupla automática no destino
         if (i_to > 0 and str(df.loc[i_to - 1, "Status"]) == "Folga") or (i_to < len(df) - 1 and str(df.loc[i_to + 1, "Status"]) == "Folga"):
             return False
 
-        # não permite deixar trabalho "colado" que quebre restrições locais óbvias
-        # (na origem vamos recolocar trabalho, então não há risco de dupla folga)
-        return True
+        # simulação conservadora para não quebrar regras duras do colaborador
+        try:
+            sim = df.copy()
+            ent = colab_by_chapa[ch].get("Entrada", "06:00")
+            _set_trabalho(sim, i_from, ent, locked_status=locked_idx.get(ch, set()))
+            _set_folga(sim, i_to, locked_status=locked_idx.get(ch, set()))
+            sim = strict_weekly_5x2_never_break(
+                sim,
+                ch,
+                ent,
+                bool(colab_by_chapa[ch].get("Folga_Sab", False)),
+                locked_status=locked_idx.get(ch, set()),
+                df_ref=df_ref
+            )
+            # swap aceito apenas se preservou os pontos desejados
+            return str(sim.loc[i_from, "Status"]) == "Trabalho" and str(sim.loc[i_to, "Status"]) == "Folga"
+        except Exception:
+            return False
 
-    def do_swap(ch, i_from, i_to):
+    def do_swap(ch: str, i_from: int, i_to: int) -> None:
         df = hist_by_chapa[ch]
         ent = colab_by_chapa[ch].get("Entrada", "06:00")
         pode_sab = bool(colab_by_chapa[ch].get("Folga_Sab", False))
@@ -4190,70 +4235,95 @@ def rebalance_folgas_dia(
         _set_trabalho(df, i_from, ent, locked_status=locked_idx.get(ch, set()))
         _set_folga(df, i_to, locked_status=locked_idx.get(ch, set()))
 
+        # revalida regras duras no colaborador após a troca
+        df = strict_weekly_5x2_never_break(
+            df,
+            ch,
+            ent,
+            pode_sab,
+            locked_status=locked_idx.get(ch, set()),
+            df_ref=df_ref
+        )
         enforce_max_5_consecutive_work(
             df, ent, pode_sab,
-            initial_consec=(0 if _past else int((estado_prev.get(ch, {}) or {}).get('consec_trab_final', 0))),
+            initial_consec=(0 if _past else int((estado_prev.get(ch, {}) or {}).get("consec_trab_final", 0))),
             locked_status=locked_idx.get(ch, set())
         )
         hist_by_chapa[ch] = df
 
-    it = 0
     for week in weeks:
-        eligible_days = _eligible_days_for_group()
+        eligible_days = _eligible_days_for_group(week)
         if len(eligible_days) <= 1:
             continue
 
-        while it < max_iters:
-            it += 1
+        seen_states = set()
+        no_improve_rounds = 0
+        iter_count = 0
 
-            counts = {i: 0 for i in eligible_days}
-            for ch in chapas_grupo:
-                df = hist_by_chapa[ch]
-                for i in eligible_days:
-                    if str(df.loc[i, "Status"]) == "Folga":
-                        counts[i] += 1
+        while iter_count < int(max_iters):
+            iter_count += 1
+            sig = _week_state_signature(week)
+            if sig in seen_states:
+                break
+            seen_states.add(sig)
 
-            current_penalty = _day_penalty(counts, eligible_days)
-            spread = max(counts.values()) - min(counts.values())
+            counts = _counts(week, eligible_days)
+            current_score = _score_counts(counts)
+            heavy_days, light_days = _candidate_order(counts)
+
+            if not heavy_days or not light_days:
+                break
+
+            spread = counts[heavy_days[0]] - counts[light_days[0]]
             if spread <= 1:
                 break
 
-            heavy_days = sorted(eligible_days, key=lambda i: (counts[i], i), reverse=True)
-            light_days = sorted(eligible_days, key=lambda i: (counts[i], i))
-
             best_move = None
-            best_penalty = current_penalty
+            best_score = current_score
 
-            for i_from in heavy_days:
-                for i_to in light_days:
+            # prioriza tirar do mais pesado e jogar no mais leve
+            for i_to in light_days:
+                for i_from in heavy_days:
                     if i_from == i_to:
                         continue
-                    if counts[i_from] - counts[i_to] <= 1:
+                    if counts[i_from] <= counts[i_to]:
+                        continue
+                    # não gasta tentativa em trocas irrelevantes
+                    if (counts[i_from] - counts[i_to]) < 1:
                         continue
 
-                    candidates = [
-                        ch for ch in chapas_grupo
-                        if str(hist_by_chapa[ch].loc[i_from, "Status"]) == "Folga"
-                        and str(hist_by_chapa[ch].loc[i_to, "Status"]) == "Trabalho"
-                    ]
-
-                    for ch in candidates:
+                    # candidatos do dia pesado para o dia leve
+                    for ch in chapas_grupo:
+                        df = hist_by_chapa[ch]
+                        if str(df.loc[i_from, "Status"]) != "Folga":
+                            continue
+                        if str(df.loc[i_to, "Status"]) != "Trabalho":
+                            continue
                         if not can_swap(ch, i_from, i_to):
                             continue
 
                         sim_counts = dict(counts)
                         sim_counts[i_from] -= 1
                         sim_counts[i_to] += 1
-                        sim_penalty = _day_penalty(sim_counts, eligible_days)
+                        sim_score = _score_counts(sim_counts)
 
-                        if sim_penalty + 1e-9 < best_penalty:
-                            best_penalty = sim_penalty
+                        if sim_score + 1e-9 < best_score:
+                            best_score = sim_score
                             best_move = (ch, i_from, i_to)
 
+                # se já encontrou uma boa troca para o dia mais leve atual, usa
+                if best_move is not None and counts[i_to] == min(counts.values()):
+                    break
+
             if not best_move:
-                break
+                no_improve_rounds += 1
+                if no_improve_rounds >= 2:
+                    break
+                continue
 
             do_swap(*best_move)
+            no_improve_rounds = 0
+
 # =========================================================
 # GERAR ESCALA — POR SUBGRUPO
 # =========================================================
