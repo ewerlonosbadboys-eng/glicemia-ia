@@ -913,8 +913,7 @@ def proxima_medida_apos(momento: str, dt_base: datetime):
     dt_apos = dt_base + timedelta(hours=2)
     return mapa[momento], dt_apos.strftime("%H:%M")
 
-def link_whatsapp_lembrete(momento: str, valor_glicemia: int, dose_rapida: str, dose_longa: str,
-                           alimentos=None, c_tot=0, p_tot=0, g_tot=0) -> str:
+def link_whatsapp_lembrete(momento: str, valor_glicemia: int, dose_rapida: str, dose_longa: str) -> str:
     dt_agora = agora_br()
     momento_apos, hora_apos = proxima_medida_apos(momento, dt_agora)
 
@@ -930,23 +929,11 @@ def link_whatsapp_lembrete(momento: str, valor_glicemia: int, dose_rapida: str, 
     if dose_longa and dose_longa != "—":
         linhas.append(f"🩸 Longa: {dose_longa}")
 
-    if alimentos:
-        linhas.append("")
-        linhas.append("🍽️ Nutrição:")
-        for a in alimentos:
-            linhas.append(f"• {a}")
-        linhas.append("")
-        linhas.append(f"📊 Carboidratos: {int(c_tot)}g")
-        linhas.append(f"🥩 Proteínas: {int(p_tot)}g")
-        linhas.append(f"🥑 Gorduras: {int(g_tot)}g")
-
     if momento_apos and hora_apos:
         linhas.extend(["", f"⏰ Próxima medida: {momento_apos} às {hora_apos} (2h após)"])
 
     mensagem = "\n".join(linhas)
     return "https://wa.me/?text=" + quote(mensagem)
-
-
 
 def link_whatsapp_nutricao(momento: str, alimentos: list, c_tot: int, p_tot: int, g_tot: int) -> str:
     dt = agora_br().strftime("%d/%m/%Y %H:%M")
@@ -1624,49 +1611,17 @@ else:
                 st.caption("Longa: não aplicável neste momento.")
                 dose_l_final = ""
 
-            # WhatsApp (usa as doses editadas + última nutrição do mesmo momento)
+            # WhatsApp da glicemia separado da nutrição
             dose_r_msg = dose_r_final if dose_r_final else (dose_r_sug if dose_r_sug else "—")
             dose_l_msg = dose_l_final if dose_l_final else (dose_l_sug if dose_l_sug else "—")
-
-            alimentos_msg = []
-            c_msg = 0
-            p_msg = 0
-            g_msg = 0
-
-            try:
-                dfn_msg = _read_table_df("nutricao", "Usuario=?", (st.session_state.user_email,))
-
-                if not dfn_msg.empty and "Momento" in dfn_msg.columns:
-                        dfn_momento = dfn_msg[dfn_msg["Momento"].astype(str) == str(m_gl)].copy()
-
-                        if not dfn_momento.empty:
-                            ult = dfn_momento.iloc[-1]
-                            alimentos_txt = str(ult.get("Info", "")).strip()
-                            alimentos_msg = [x.strip() for x in alimentos_txt.split(",") if x.strip()]
-                            c_msg = pd.to_numeric(ult.get("C", 0), errors="coerce")
-                            p_msg = pd.to_numeric(ult.get("P", 0), errors="coerce")
-                            g_msg = pd.to_numeric(ult.get("G", 0), errors="coerce")
-
-                            c_msg = 0 if pd.isna(c_msg) else int(c_msg)
-                            p_msg = 0 if pd.isna(p_msg) else int(p_msg)
-                            g_msg = 0 if pd.isna(g_msg) else int(g_msg)
-            except Exception:
-                alimentos_msg = []
-                c_msg = 0
-                p_msg = 0
-                g_msg = 0
 
             link_wpp = link_whatsapp_lembrete(
                 momento=m_gl,
                 valor_glicemia=int(v_gl),
                 dose_rapida=dose_r_msg,
                 dose_longa=dose_l_msg,
-                alimentos=alimentos_msg,
-                c_tot=c_msg,
-                p_tot=p_msg,
-                g_tot=g_msg,
             )
-            st.link_button("📲 Abrir WhatsApp com mensagem pronta", link_wpp, use_container_width=True)
+            st.link_button("📲 Enviar glicemia no WhatsApp", link_wpp, use_container_width=True)
 
             if st.button("💾 Salvar Glicemia", use_container_width=True):
                 # salva doses separadas (Rápida / Longa) para o histórico e para o PDF
@@ -1994,7 +1949,7 @@ else:
                 g_tot=g_tot,
             )
             st.link_button(
-                "📲 Enviar refeição no WhatsApp",
+                "📲 Enviar nutrição no WhatsApp",
                 link_nutri,
                 use_container_width=True,
                 disabled=not bool(sel),
