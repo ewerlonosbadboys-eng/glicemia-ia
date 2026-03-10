@@ -30,7 +30,6 @@ except Exception:
 
 import pytz
 import streamlit as st
-from supabase import create_client
 from email.mime.text import MIMEText
 from openpyxl.styles import Alignment, PatternFill
 try:
@@ -75,99 +74,6 @@ ARQ_R = DATA_DIR / "config_receita_BETA.csv"
 ARQ_M = DATA_DIR / "mensagens_admin_BETA.csv"
 ARQ_M_ROOT = BASE_DIR / "mensagens_admin_BETA.csv"
 DB_USERS = DATA_DIR / "usuarios.db"
-APP_DB = DATA_DIR / "saude_kids.db"
-
-# ================= SUPABASE =================
-def _get_supabase_client():
-    try:
-        url = st.secrets["SUPABASE_URL"]
-        key = st.secrets["SUPABASE_KEY"]
-        return create_client(url, key)
-    except Exception:
-        st.error("Configure SUPABASE_URL e SUPABASE_KEY em Settings > Secrets do Streamlit.")
-        st.stop()
-
-supabase = _get_supabase_client()
-
-APP_TO_DB = {
-    "glicemia": {"ID": "id", "Usuario": "usuario", "Data": "data", "Hora": "hora", "Valor": "valor", "Momento": "momento", "Dose": "dose", "Dose_Rapida": "dose_rapida", "Dose_Longa": "dose_longa"},
-    "nutricao": {"ID": "id", "Usuario": "usuario", "Data": "data", "Momento": "momento", "Info": "info", "C": "c", "P": "p", "G": "g"},
-    "receita": {
-        "Usuario": "usuario",
-        "manha_f1_min": "manha_f1_min", "manha_f1_max": "manha_f1_max", "manha_f1_dose": "manha_f1_dose",
-        "manha_f2_min": "manha_f2_min", "manha_f2_max": "manha_f2_max", "manha_f2_dose": "manha_f2_dose",
-        "manha_f3_min": "manha_f3_min", "manha_f3_max": "manha_f3_max", "manha_f3_dose": "manha_f3_dose",
-        "noite_f1_min": "noite_f1_min", "noite_f1_max": "noite_f1_max", "noite_f1_dose": "noite_f1_dose",
-        "noite_f2_min": "noite_f2_min", "noite_f2_max": "noite_f2_max", "noite_f2_dose": "noite_f2_dose",
-        "noite_f3_min": "noite_f3_min", "noite_f3_max": "noite_f3_max", "noite_f3_dose": "noite_f3_dose",
-        "glargina_cafe_ui": "glargina_cafe_ui", "glargina_janta_ui": "glargina_janta_ui"
-    },
-    "sugestoes": {"ID": "id", "Usuario": "usuario", "Data": "data", "Sugestão": "Sugestão"},
-}
-DB_TO_APP = {t: {v: k for k, v in m.items()} for t, m in APP_TO_DB.items()}
-
-def sb_select(table: str, filters=None, order=None):
-    q = supabase.table(table).select("*")
-    for col, val in (filters or {}).items():
-        q = q.eq(col, val)
-    if order:
-        q = q.order(order)
-    resp = q.execute()
-    return resp.data or []
-
-def sb_insert(table: str, payload):
-    return supabase.table(table).insert(payload).execute()
-
-def sb_upsert(table: str, payload):
-    return supabase.table(table).upsert(payload).execute()
-
-def sb_update(table: str, filters: dict, payload: dict):
-    q = supabase.table(table).update(payload)
-    for col, val in filters.items():
-        q = q.eq(col, val)
-    return q.execute()
-
-def sb_delete(table: str, filters: dict):
-    q = supabase.table(table).delete()
-    for col, val in filters.items():
-        if isinstance(val, (list, tuple, set)):
-            q = q.in_(col, list(val))
-        else:
-            q = q.eq(col, val)
-    return q.execute()
-
-def _df_to_db_records(table: str, df: pd.DataFrame):
-    if df is None or df.empty:
-        return []
-    mapping = APP_TO_DB[table]
-    out = []
-    for rec in df.to_dict(orient="records"):
-        row = {}
-        for app_col, db_col in mapping.items():
-            if app_col in rec:
-                val = rec[app_col]
-                if pd.isna(val):
-                    val = None
-                row[db_col] = val
-        out.append(row)
-    return out
-
-def _records_to_df(table: str, records):
-    cols = list(APP_TO_DB[table].keys())
-    if not records:
-        return pd.DataFrame(columns=cols)
-    mapping = DB_TO_APP[table]
-    out = []
-    for rec in records:
-        row = {}
-        for db_col, val in rec.items():
-            row[mapping.get(db_col, db_col)] = val
-        out.append(row)
-    df = pd.DataFrame(out)
-    for c in cols:
-        if c not in df.columns:
-            df[c] = ""
-    return df
 
 # ================= NORMALIZAÇÃO =================
 def norm_email(x: str) -> str:
@@ -185,7 +91,6 @@ BACKUP_STATE_FILE = BACKUP_DIR / "last_auto_backup.txt"
 
 ARQUIVOS_BACKUP_MAPA = {
     "usuarios.db": DB_USERS,
-    "saude_kids.db": APP_DB,
     "dados_glicemia_BETA.csv": ARQ_G,
     "dados_nutricao_BETA.csv": ARQ_N,
     "config_receita_BETA.csv": ARQ_R,
@@ -356,71 +261,132 @@ TESTE_DIAS = 20
 MENSALIDADE_DIAS = 30
 
 def init_db():
-    if not sb_select("users", {"email": "admin"}):
-        sb_insert("users", {"nome": "Administrador", "email": "admin", "senha": "542820"})
-    if not sb_select("plans", {"email": "admin"}):
-        now = agora_br().isoformat()
-        sb_insert("plans", {"email": "admin", "created_at": now, "trial_end": now, "paid_until": "2099-12-31T23:59:59"})
+    conn = sqlite3.connect(DB_USERS)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            nome TEXT,
+            email TEXT PRIMARY KEY,
+            senha TEXT
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS plans (
+            email TEXT PRIMARY KEY,
+            created_at TEXT,
+            trial_end TEXT,
+            paid_until TEXT
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS billing_msgs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT,
+            data_hora TEXT,
+            mensagem TEXT,
+            status TEXT DEFAULT 'novo'
+        )
+    """)
+
+    if not conn.execute("SELECT 1 FROM users WHERE email='admin'").fetchone():
+        conn.execute("INSERT INTO users VALUES ('Administrador', 'admin', '542820')")
+
+    # garante plano admin
+    if not conn.execute("SELECT 1 FROM plans WHERE email='admin'").fetchone():
+        now = agora_br()
+        conn.execute(
+            "INSERT INTO plans(email, created_at, trial_end, paid_until) VALUES (?,?,?,?)",
+            ('admin', now.isoformat(), now.isoformat(), '2099-12-31T23:59:59')
+        )
+
+    conn.commit()
+    conn.close()
 
 def _db_conn():
-    return None
+    return sqlite3.connect(DB_USERS)
 
 def garantir_plano(email: str):
     email = norm_email(email)
     if not email or email == "admin":
         return
-    if not sb_select("plans", {"email": email}):
+    conn = _db_conn()
+    cur = conn.cursor()
+    if not cur.execute("SELECT 1 FROM plans WHERE email=?", (email,)).fetchone():
         now = agora_br()
         trial_end = now + timedelta(days=TESTE_DIAS)
-        sb_insert("plans", {"email": email, "created_at": now.isoformat(), "trial_end": trial_end.isoformat(), "paid_until": ""})
+        cur.execute(
+            "INSERT INTO plans(email, created_at, trial_end, paid_until) VALUES (?,?,?,?)",
+            (email, now.isoformat(), trial_end.isoformat(), "")
+        )
+        conn.commit()
+    conn.close()
 
 def get_plano_status(email: str):
     email = norm_email(email)
     if email == "admin":
         return {"allowed": True, "motivo": "admin", "trial_end": None, "paid_until": None, "dias_restantes": None}
+
     garantir_plano(email)
-    rows = sb_select("plans", {"email": email})
-    r = rows[0] if rows else {}
+
+    conn = _db_conn()
+    cur = conn.cursor()
+    r = cur.execute("SELECT trial_end, paid_until FROM plans WHERE email=?", (email,)).fetchone()
+    conn.close()
+
     now = agora_br()
     trial_end = None
     paid_until = None
-    try:
-        trial_end = datetime.fromisoformat(r.get("trial_end")) if r.get("trial_end") else None
-    except Exception:
-        pass
-    try:
-        paid_until = datetime.fromisoformat(r.get("paid_until")) if r.get("paid_until") else None
-    except Exception:
-        pass
+    if r:
+        try:
+            trial_end = datetime.fromisoformat(r[0]) if r[0] else None
+        except Exception:
+            trial_end = None
+        try:
+            paid_until = datetime.fromisoformat(r[1]) if r[1] else None
+        except Exception:
+            paid_until = None
+
     if paid_until and now <= paid_until:
         dias = (paid_until.date() - now.date()).days
         return {"allowed": True, "motivo": "pago", "trial_end": trial_end, "paid_until": paid_until, "dias_restantes": dias}
+
     if trial_end and now <= trial_end:
         dias = (trial_end.date() - now.date()).days
         return {"allowed": True, "motivo": "teste", "trial_end": trial_end, "paid_until": paid_until, "dias_restantes": dias}
+
     return {"allowed": False, "motivo": "expirado", "trial_end": trial_end, "paid_until": paid_until, "dias_restantes": 0}
 
 def registrar_mensagem_mensalidade(email: str, mensagem: str):
     email = norm_email(email)
     if not email:
         return
-    sb_insert("billing_msgs", {"email": email, "data_hora": agora_br().strftime("%d/%m/%Y %H:%M"), "mensagem": (mensagem or "").strip(), "status": "novo"})
+    conn = _db_conn()
+    conn.execute(
+        "INSERT INTO billing_msgs(email, data_hora, mensagem, status) VALUES (?,?,?,?)",
+        (email, agora_br().strftime("%d/%m/%Y %H:%M"), (mensagem or "").strip(), "novo")
+    )
+    conn.commit()
+    conn.close()
 
 def listar_mensagens_mensalidade():
+    conn = _db_conn()
     try:
-        rows = sb_select("billing_msgs", order="id")
-        df = pd.DataFrame(rows)
-        if df.empty:
-            return pd.DataFrame(columns=["id", "email", "data_hora", "mensagem", "status"])
-        return df.sort_values("id", ascending=False).reset_index(drop=True)
+        df = pd.read_sql_query("SELECT id, email, data_hora, mensagem, status FROM billing_msgs ORDER BY id DESC", conn)
     except Exception:
-        return pd.DataFrame(columns=["id", "email", "data_hora", "mensagem", "status"])
+        df = pd.DataFrame(columns=["id","email","data_hora","mensagem","status"])
+    conn.close()
+    return df
 
 def marcar_mensagem_status(msg_id: int, status: str):
-    sb_update("billing_msgs", {"id": int(msg_id)}, {"status": status})
+    conn = _db_conn()
+    conn.execute("UPDATE billing_msgs SET status=? WHERE id=?", (status, int(msg_id)))
+    conn.commit()
+    conn.close()
 
 def excluir_mensagem(msg_id: int):
-    sb_delete("billing_msgs", {"id": int(msg_id)})
+    conn = _db_conn()
+    conn.execute("DELETE FROM billing_msgs WHERE id=?", (int(msg_id),))
+    conn.commit()
+    conn.close()
 
 def ativar_mensalidade(email: str, dias: int = MENSALIDADE_DIAS):
     email = norm_email(email)
@@ -429,7 +395,10 @@ def ativar_mensalidade(email: str, dias: int = MENSALIDADE_DIAS):
     garantir_plano(email)
     now = agora_br()
     paid_until = now + timedelta(days=int(dias))
-    sb_update("plans", {"email": email}, {"paid_until": paid_until.isoformat()})
+    conn = _db_conn()
+    conn.execute("UPDATE plans SET paid_until=? WHERE email=?", (paid_until.isoformat(), email))
+    conn.commit()
+    conn.close()
 
 init_db()
 
@@ -489,44 +458,131 @@ TABLE_BY_FILE = {
 
 
 def _app_conn():
-    return None
+    conn = sqlite3.connect(APP_DB)
+    conn.row_factory = sqlite3.Row
+    return conn
+
 
 def _table_for_file(arq) -> str:
     return TABLE_BY_FILE.get(str(arq), "")
 
+
 def _read_table_df(table: str, where: str = "", params=()):
-    filters = {}
-    if where == "Usuario=?" and params:
-        db_col = APP_TO_DB.get(table, {}).get("Usuario", "usuario")
-        filters[db_col] = params[0]
-    rows = sb_select(table, filters=filters)
-    return _records_to_df(table, rows)
+    cols_map = {
+        "glicemia": ["ID", "Usuario", "Data", "Hora", "Valor", "Momento", "Dose", "Dose_Rapida", "Dose_Longa"],
+        "nutricao": ["ID", "Usuario", "Data", "Momento", "Info", "C", "P", "G"],
+        "receita": [
+            "Usuario",
+            "manha_f1_min", "manha_f1_max", "manha_f1_dose",
+            "manha_f2_min", "manha_f2_max", "manha_f2_dose",
+            "manha_f3_min", "manha_f3_max", "manha_f3_dose",
+            "noite_f1_min", "noite_f1_max", "noite_f1_dose",
+            "noite_f2_min", "noite_f2_max", "noite_f2_dose",
+            "noite_f3_min", "noite_f3_max", "noite_f3_dose",
+            "glargina_cafe_ui", "glargina_janta_ui"
+        ],
+        "sugestoes": ["ID", "Usuario", "Data", "Sugestão"],
+    }
+    cols = cols_map.get(table, [])
+    if not cols:
+        return pd.DataFrame()
+    sql = f"SELECT {', '.join(cols)} FROM {table}" + (f" WHERE {where}" if where else "")
+    conn = _app_conn()
+    try:
+        return pd.read_sql_query(sql, conn, params=params)
+    except Exception:
+        return pd.DataFrame(columns=cols)
+    finally:
+        conn.close()
+
 
 def _append_df_table(table: str, df: pd.DataFrame):
-    recs = _df_to_db_records(table, df)
-    if recs:
-        sb_insert(table, recs)
+    if df is None or df.empty:
+        return
+    conn = _app_conn()
+    df.to_sql(table, conn, if_exists="append", index=False)
+    conn.close()
+
 
 def _replace_user_rows(table: str, user_email: str, df_new: pd.DataFrame):
-    db_col = APP_TO_DB.get(table, {}).get("Usuario", "usuario")
-    sb_delete(table, {db_col: user_email})
-    recs = _df_to_db_records(table, df_new)
-    if recs:
-        sb_insert(table, recs)
+    conn = _app_conn()
+    cur = conn.cursor()
+    cur.execute(f"DELETE FROM {table} WHERE Usuario=?", (user_email,))
+    if df_new is not None and not df_new.empty:
+        df_new.to_sql(table, conn, if_exists="append", index=False)
+    conn.commit()
+    conn.close()
+
 
 def _delete_user_app_data(user_email: str):
+    conn = _app_conn()
+    cur = conn.cursor()
     for table in ["glicemia", "nutricao", "receita", "sugestoes"]:
-        db_col = APP_TO_DB.get(table, {}).get("Usuario", "usuario")
-        sb_delete(table, {db_col: user_email})
+        cur.execute(f"DELETE FROM {table} WHERE Usuario=?", (user_email,))
+    conn.commit()
+    conn.close()
+
 
 def init_app_db():
-    return
+    conn = _app_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS glicemia (
+            ID TEXT PRIMARY KEY,
+            Usuario TEXT,
+            Data TEXT,
+            Hora TEXT,
+            Valor INTEGER,
+            Momento TEXT,
+            Dose TEXT,
+            Dose_Rapida TEXT,
+            Dose_Longa TEXT
+        )
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS nutricao (
+            ID TEXT PRIMARY KEY,
+            Usuario TEXT,
+            Data TEXT,
+            Momento TEXT,
+            Info TEXT,
+            C INTEGER,
+            P INTEGER,
+            G INTEGER
+        )
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS receita (
+            Usuario TEXT PRIMARY KEY,
+            manha_f1_min REAL, manha_f1_max REAL, manha_f1_dose REAL,
+            manha_f2_min REAL, manha_f2_max REAL, manha_f2_dose REAL,
+            manha_f3_min REAL, manha_f3_max REAL, manha_f3_dose REAL,
+            noite_f1_min REAL, noite_f1_max REAL, noite_f1_dose REAL,
+            noite_f2_min REAL, noite_f2_max REAL, noite_f2_dose REAL,
+            noite_f3_min REAL, noite_f3_max REAL, noite_f3_dose REAL,
+            glargina_cafe_ui REAL,
+            glargina_janta_ui REAL
+        )
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS sugestoes (
+            ID TEXT PRIMARY KEY,
+            Usuario TEXT,
+            Data TEXT,
+            "Sugestão" TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
+
 
 def migrar_csvs_para_sqlite():
     init_app_db()
 
     if ARQ_G.exists():
-        qtd = len(sb_select("glicemia"))
+        conn = _app_conn()
+        qtd = conn.execute("SELECT COUNT(*) FROM glicemia").fetchone()[0]
+        conn.close()
         if qtd == 0:
             try:
                 df = pd.read_csv(ARQ_G)
@@ -562,7 +618,9 @@ def migrar_csvs_para_sqlite():
                 pass
 
     if ARQ_N.exists():
-        qtd = len(sb_select("nutricao"))
+        conn = _app_conn()
+        qtd = conn.execute("SELECT COUNT(*) FROM nutricao").fetchone()[0]
+        conn.close()
         if qtd == 0:
             try:
                 df = pd.read_csv(ARQ_N)
@@ -580,7 +638,9 @@ def migrar_csvs_para_sqlite():
                 pass
 
     if ARQ_R.exists():
-        qtd = len(sb_select("receita"))
+        conn = _app_conn()
+        qtd = conn.execute("SELECT COUNT(*) FROM receita").fetchone()[0]
+        conn.close()
         if qtd == 0:
             try:
                 df = pd.read_csv(ARQ_R)
@@ -601,13 +661,17 @@ def migrar_csvs_para_sqlite():
                     for c in keep:
                         if c not in df.columns:
                             df[c] = ""
-                    _append_df_table("receita", df[keep])
+                    conn = _app_conn()
+                    df[keep].to_sql("receita", conn, if_exists="append", index=False)
+                    conn.close()
             except Exception:
                 pass
 
     for sugest_path in [ARQ_M, ARQ_M_ROOT]:
         if sugest_path.exists():
-            qtd = len(sb_select("sugestoes"))
+            conn = _app_conn()
+            qtd = conn.execute("SELECT COUNT(*) FROM sugestoes").fetchone()[0]
+            conn.close()
             if qtd == 0:
                 try:
                     df = pd.read_csv(sugest_path)
@@ -758,26 +822,24 @@ def aplicar_edicoes_e_exclusoes_glicemia(df_editado: pd.DataFrame):
     df_editado["Dose"] = df_editado.apply(_mk_dose_display, axis=1)
     df_editado["Valor"] = pd.to_numeric(df_editado["Valor"], errors="coerce").fillna(0).astype(int)
 
+    conn = _app_conn()
+    cur = conn.cursor()
     ids_excluir = df_editado.loc[df_editado["Excluir"] == True, "ID"].astype(str).tolist()
     if ids_excluir:
-        for rid in ids_excluir:
-            sb_delete("glicemia", {"usuario": st.session_state.user_email, "id": rid})
+        cur.executemany("DELETE FROM glicemia WHERE Usuario=? AND ID=?", [(st.session_state.user_email, rid) for rid in ids_excluir])
 
     df_upd = df_editado.loc[df_editado["Excluir"] != True].copy()
     for _, r in df_upd.iterrows():
-        sb_update(
-            "glicemia",
-            {"usuario": st.session_state.user_email, "id": str(r["ID"])},
-            {
-                "data": r["Data"],
-                "hora": r["Hora"],
-                "valor": int(r["Valor"]),
-                "momento": r["Momento"],
-                "dose_rapida": r.get("Dose_Rapida", ""),
-                "dose_longa": r.get("Dose_Longa", ""),
-                "dose": r.get("Dose", ""),
-            }
+        cur.execute(
+            """
+            UPDATE glicemia
+               SET Data=?, Hora=?, Valor=?, Momento=?, Dose_Rapida=?, Dose_Longa=?, Dose=?
+             WHERE Usuario=? AND ID=?
+            """,
+            (r["Data"], r["Hora"], int(r["Valor"]), r["Momento"], r.get("Dose_Rapida", ""), r.get("Dose_Longa", ""), r.get("Dose", ""), st.session_state.user_email, str(r["ID"]))
         )
+    conn.commit()
+    conn.close()
 
 # ================= RECEITA (RÁPIDA/LONGA) =================
 def _schema_receita_nova(rec: pd.Series, periodo: str) -> bool:
@@ -849,7 +911,8 @@ def proxima_medida_apos(momento: str, dt_base: datetime):
     dt_apos = dt_base + timedelta(hours=2)
     return mapa[momento], dt_apos.strftime("%H:%M")
 
-def link_whatsapp_lembrete(momento: str, valor_glicemia: int, dose_rapida: str, dose_longa: str) -> str:
+def link_whatsapp_lembrete(momento: str, valor_glicemia: int, dose_rapida: str, dose_longa: str,
+                           alimentos=None, c_tot=0, p_tot=0, g_tot=0) -> str:
     dt_agora = agora_br()
     momento_apos, hora_apos = proxima_medida_apos(momento, dt_agora)
 
@@ -865,11 +928,23 @@ def link_whatsapp_lembrete(momento: str, valor_glicemia: int, dose_rapida: str, 
     if dose_longa and dose_longa != "—":
         linhas.append(f"🩸 Longa: {dose_longa}")
 
+    if alimentos:
+        linhas.append("")
+        linhas.append("🍽️ Nutrição:")
+        for a in alimentos:
+            linhas.append(f"• {a}")
+        linhas.append("")
+        linhas.append(f"📊 Carboidratos: {int(c_tot)}g")
+        linhas.append(f"🥩 Proteínas: {int(p_tot)}g")
+        linhas.append(f"🥑 Gorduras: {int(g_tot)}g")
+
     if momento_apos and hora_apos:
         linhas.extend(["", f"⏰ Próxima medida: {momento_apos} às {hora_apos} (2h após)"])
 
     mensagem = "\n".join(linhas)
     return "https://wa.me/?text=" + quote(mensagem)
+
+
 
 def link_whatsapp_nutricao(momento: str, alimentos: list, c_tot: int, p_tot: int, g_tot: int) -> str:
     dt = agora_br().strftime("%d/%m/%Y %H:%M")
@@ -1109,8 +1184,9 @@ if not st.session_state.logado:
         s = norm_senha(st.text_input("Senha", type="password", key="l_pass"))
 
         if st.button("Acessar Aplicativo", use_container_width=True):
-            rows = sb_select("users", {"email": u, "senha": s})
-            ok = rows[0] if rows else None
+            conn = sqlite3.connect(DB_USERS)
+            ok = conn.execute("SELECT * FROM users WHERE email=? AND senha=?", (u, s)).fetchone()
+            conn.close()
             if ok:
                 stt = get_plano_status(u)
                 if stt.get('allowed'):
@@ -1137,7 +1213,10 @@ if not st.session_state.logado:
                 st.warning("Preencha nome, e-mail e senha.")
             else:
                 try:
-                    sb_insert("users", {"nome": n_cad, "email": e_cad, "senha": s_cad})
+                    conn = sqlite3.connect(DB_USERS)
+                    conn.execute("INSERT INTO users VALUES (?,?,?)", (n_cad, e_cad, s_cad))
+                    conn.commit()
+                    conn.close()
                     garantir_plano(e_cad)
                     st.success("Conta criada com sucesso!")
                 except Exception:
@@ -1147,12 +1226,15 @@ if not st.session_state.logado:
     with abas_login[2]:
         email_alvo = norm_email(st.text_input("Digite seu e-mail cadastrado"))
         if st.button("Recuperar Acesso", use_container_width=True):
-            rows = sb_select("users", {"email": email_alvo})
-            user = rows[0] if rows else None
+            conn = sqlite3.connect(DB_USERS)
+            c = conn.cursor()
+            user = c.execute("SELECT email FROM users WHERE email=?", (email_alvo,)).fetchone()
 
             if user:
                 nova = gerar_senha_temporaria()
-                sb_update("users", {"email": email_alvo}, {"senha": nova})
+                c.execute("UPDATE users SET senha=? WHERE email=?", (nova, email_alvo))
+                conn.commit()
+                conn.close()
 
                 if enviar_senha_nova(email_alvo, nova):
                     st.success("Nova senha enviada para seu e-mail!")
@@ -1161,6 +1243,7 @@ if not st.session_state.logado:
                     st.info("Use a senha temporária abaixo para entrar e depois altere sua senha:")
                     st.code(nova)
             else:
+                conn.close()
                 st.error("E-mail não encontrado.")
 
     # -------- ALTERAR SENHA --------
@@ -1170,12 +1253,15 @@ if not st.session_state.logado:
         alt_n1 = norm_senha(st.text_input("Nova Senha", type="password", key="alt_n1"))
 
         if st.button("Confirmar Alteração", use_container_width=True):
-            ok_rows = sb_select("users", {"email": alt_em, "senha": alt_at})
-            ok = ok_rows[0] if ok_rows else None
+            conn = sqlite3.connect(DB_USERS)
+            ok = conn.execute("SELECT * FROM users WHERE email=? AND senha=?", (alt_em, alt_at)).fetchone()
             if ok:
-                sb_update("users", {"email": alt_em}, {"senha": alt_n1})
+                conn.execute("UPDATE users SET senha=? WHERE email=?", (alt_n1, alt_em))
+                conn.commit()
+                conn.close()
                 st.success("Senha alterada com sucesso!")
             else:
+                conn.close()
                 st.error("Dados atuais incorretos.")
 
 
@@ -1216,8 +1302,9 @@ if st.session_state.user_email == "admin":
         ["👥 Pessoas Cadastradas", "📈 Crescimento e App", "📩 Sugestões", "💳 Mensalidades", "💾 Backup & Restauração"]
     )
 
-    _users_rows = sb_select("users", order="email")
-    df_users = pd.DataFrame(_users_rows)[["nome", "email"]] if _users_rows else pd.DataFrame(columns=["nome", "email"])
+    conn = sqlite3.connect(DB_USERS)
+    df_users = pd.read_sql_query("SELECT nome, email FROM users", conn)
+    conn.close()
 
     with t_usuarios:
         st.subheader("Lista de Usuários")
@@ -1234,8 +1321,11 @@ if st.session_state.user_email == "admin":
             if del_email == "admin":
                 st.error("Não é permitido excluir o admin.")
             else:
-                sb_delete("users", {"email": del_email})
-                sb_delete("plans", {"email": del_email})
+                conn = sqlite3.connect(DB_USERS)
+                conn.execute("DELETE FROM users WHERE email=?", (del_email,))
+                conn.execute("DELETE FROM plans WHERE email=?", (del_email,))
+                conn.commit()
+                conn.close()
 
                 _delete_user_app_data(del_email)
 
@@ -1247,7 +1337,10 @@ if st.session_state.user_email == "admin":
         nova_senha_admin = norm_senha(st.text_input("Nova senha para este usuário", type="password"))
         if st.button("Confirmar Alteração de Senha", use_container_width=True):
             if nova_senha_admin:
-                sb_update("users", {"email": user_selecionado}, {"senha": nova_senha_admin})
+                conn = sqlite3.connect(DB_USERS)
+                conn.execute("UPDATE users SET senha=? WHERE email=?", (nova_senha_admin, user_selecionado))
+                conn.commit()
+                conn.close()
                 st.success(f"Senha de {user_selecionado} alterada com sucesso!")
             else:
                 st.warning("Digite uma senha antes de confirmar.")
@@ -1285,12 +1378,12 @@ if st.session_state.user_email == "admin":
         st.subheader("💳 Mensalidades (Teste 20 dias + Plano 30 dias)")
 
         st.markdown("### Status de planos")
+        conn = sqlite3.connect(DB_USERS)
         try:
-            df_pl = pd.DataFrame(sb_select("plans", order="email"))
-            if df_pl.empty:
-                df_pl = pd.DataFrame(columns=["email","trial_end","paid_until"])
+            df_pl = pd.read_sql_query("SELECT email, trial_end, paid_until FROM plans ORDER BY email", conn)
         except Exception:
             df_pl = pd.DataFrame(columns=["email","trial_end","paid_until"])
+        conn.close()
 
         def _fmt_iso(x):
             try:
@@ -1529,17 +1622,49 @@ else:
                 st.caption("Longa: não aplicável neste momento.")
                 dose_l_final = ""
 
-            # WhatsApp da glicemia separado da nutrição
+            # WhatsApp (usa as doses editadas + última nutrição do mesmo momento)
             dose_r_msg = dose_r_final if dose_r_final else (dose_r_sug if dose_r_sug else "—")
             dose_l_msg = dose_l_final if dose_l_final else (dose_l_sug if dose_l_sug else "—")
+
+            alimentos_msg = []
+            c_msg = 0
+            p_msg = 0
+            g_msg = 0
+
+            try:
+                dfn_msg = _read_table_df("nutricao", "Usuario=?", (st.session_state.user_email,))
+
+                if not dfn_msg.empty and "Momento" in dfn_msg.columns:
+                        dfn_momento = dfn_msg[dfn_msg["Momento"].astype(str) == str(m_gl)].copy()
+
+                        if not dfn_momento.empty:
+                            ult = dfn_momento.iloc[-1]
+                            alimentos_txt = str(ult.get("Info", "")).strip()
+                            alimentos_msg = [x.strip() for x in alimentos_txt.split(",") if x.strip()]
+                            c_msg = pd.to_numeric(ult.get("C", 0), errors="coerce")
+                            p_msg = pd.to_numeric(ult.get("P", 0), errors="coerce")
+                            g_msg = pd.to_numeric(ult.get("G", 0), errors="coerce")
+
+                            c_msg = 0 if pd.isna(c_msg) else int(c_msg)
+                            p_msg = 0 if pd.isna(p_msg) else int(p_msg)
+                            g_msg = 0 if pd.isna(g_msg) else int(g_msg)
+            except Exception:
+                alimentos_msg = []
+                c_msg = 0
+                p_msg = 0
+                g_msg = 0
 
             link_wpp = link_whatsapp_lembrete(
                 momento=m_gl,
                 valor_glicemia=int(v_gl),
                 dose_rapida=dose_r_msg,
                 dose_longa=dose_l_msg,
+                alimentos=alimentos_msg,
+                c_tot=c_msg,
+                p_tot=p_msg,
+                g_tot=g_msg,
             )
-            st.link_button("📲 Enviar glicemia no WhatsApp", link_wpp, use_container_width=True)
+            st.link_button("📲 Abrir WhatsApp com mensagem pronta", link_wpp, use_container_width=True)
 
             if st.button("💾 Salvar Glicemia", use_container_width=True):
                 # salva doses separadas (Rápida / Longa) para o histórico e para o PDF
@@ -1867,7 +1992,7 @@ else:
                 g_tot=g_tot,
             )
             st.link_button(
-                "📲 Enviar nutrição no WhatsApp",
+                "📲 Enviar refeição no WhatsApp",
                 link_nutri,
                 use_container_width=True,
                 disabled=not bool(sel),
@@ -1919,8 +2044,14 @@ else:
                             st.warning("Marque pelo menos 1 linha em 'Excluir'.")
                         else:
                             # Remove do arquivo completo (todas as pessoas), baseado no índice original
-                            for i in to_del:
-                                sb_delete("nutricao", {"id": str(i), "usuario": st.session_state.user_email})
+                            conn = _app_conn()
+                            cur = conn.cursor()
+                            cur.executemany(
+                                "DELETE FROM nutricao WHERE ID=? AND Usuario=?",
+                                [(str(i), st.session_state.user_email) for i in to_del]
+                            )
+                            conn.commit()
+                            conn.close()
                             st.success(f"Removido: {len(to_del)} registro(s).")
                             st.rerun()
                 with cdel2:
