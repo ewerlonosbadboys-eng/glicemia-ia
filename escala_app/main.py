@@ -4112,210 +4112,148 @@ def rebalance_folgas_dia(
     estado_prev: dict | None = None,
     locked_idx: dict | None = None,
     past_flag: bool = False,
-    max_iters=5000
+    max_iters=2200
 ):
     """
-    V85 — rebalance com meta SEMANAL do subgrupo.
-    Estratégia:
-    - domingo nunca entra; sábado só se a pessoa puder folgar sábado
-    - calcula meta-alvo por dia elegível da semana para o subgrupo
-    - aplica movimentos 1x1 (mesmo colaborador) e swaps 2x2 (dois colaboradores)
-      sempre preservando as regras individuais
-    - escolhe a melhor melhora de score, não a primeira válida
+    Rebalance pesado por semana/subgrupo.
+    Regras:
+    - domingo nunca entra no balanceamento
+    - sábado só recebe folga se a regra do colaborador permitir
+    - nunca mexe em célula travada por override
+    - não cria folga dupla automática
+    - mantém a quantidade de folgas do colaborador na semana (faz troca 1x1)
+    - procura a MELHOR troca local por pontuação, não a primeira válida
     """
     estado_prev = estado_prev or {}
     locked_idx = locked_idx or {}
+
     _past = bool(past_flag)
 
-    def is_dom(i):
-        return str(df_ref.loc[i, "Dia"]) == "dom"
+    def is_dom(i): return df_ref.loc[i, "Dia"] == "dom"
 
     def is_locked(ch, i):
         return bool(i in (locked_idx.get(ch, set()) or set()))
 
-    def _eligible_days_week(week):
+    def _day_penalty(counts: dict, eligible_days: list[int]) -> float:
+        if not eligible_days:
+            return 0.0
+        vals = [counts[i] for i in eligible_days]
+        if not vals:
+            return 0.0
+        avg = sum(vals) / float(len(vals))
+        spread = max(vals) - min(vals)
+        # penaliza desvio da média e diferença entre mais pesado e mais leve
+        return sum((v - avg) ** 2 for v in vals) + (spread ** 2) * 3.0
+
+    def _eligible_days_for_group() -> list[int]:
+        # domingo nunca; demais dias entram para a conta de equilíbrio.
         return [i for i in week if not is_dom(i)]
 
-    def _can_receive_folga(ch, i):
+    def can_swap(ch, i_from, i_to):
         df = hist_by_chapa[ch]
         pode_sab = bool(colab_by_chapa[ch].get("Folga_Sab", False))
-        if is_dom(i) or is_locked(ch, i):
-            return False
-        if str(df.loc[i, "Status"]) != "Trabalho":
-            return False
-        if str(df.loc[i, "Status"]) in ("Férias", "Afastamento"):
-            return False
-        if str(df_ref.loc[i, "Dia"]) == "sáb" and not pode_sab:
-            return False
-        # Não cria folga consecutiva automática
-        if i > 0 and str(df.loc[i - 1, "Status"]) == "Folga":
-            return False
-        if i < len(df) - 1 and str(df.loc[i + 1, "Status"]) == "Folga":
-            return False
-        return True
 
-    def _can_remove_folga(ch, i):
-        df = hist_by_chapa[ch]
-        if is_dom(i) or is_locked(ch, i):
-            return False
-        return str(df.loc[i, "Status"]) == "Folga"
-
-    def _move_valid(ch, i_from, i_to):
         if i_from == i_to:
             return False
-        if not _can_remove_folga(ch, i_from):
+        if is_dom(i_from) or is_dom(i_to):
             return False
-        if not _can_receive_folga(ch, i_to):
+        if is_locked(ch, i_from) or is_locked(ch, i_to):
             return False
+
+        st_from = str(df.loc[i_from, "Status"])
+        st_to = str(df.loc[i_to, "Status"])
+
+        if st_from == "Férias" or st_to == "Férias":
+            return False
+        if st_from == "Afastamento" or st_to == "Afastamento":
+            return False
+        if st_from != "Folga":
+            return False
+        if st_to != "Trabalho":
+            return False
+        if df_ref.loc[i_to, "Dia"] == "sáb" and not pode_sab:
+            return False
+
+        # não permite criar folga dupla automática no destino
+        if (i_to > 0 and str(df.loc[i_to - 1, "Status"]) == "Folga") or (i_to < len(df) - 1 and str(df.loc[i_to + 1, "Status"]) == "Folga"):
+            return False
+
+        # não permite deixar trabalho "colado" que quebre restrições locais óbvias
+        # (na origem vamos recolocar trabalho, então não há risco de dupla folga)
         return True
 
-    def _apply_move(ch, i_from, i_to):
+    def do_swap(ch, i_from, i_to):
         df = hist_by_chapa[ch]
         ent = colab_by_chapa[ch].get("Entrada", "06:00")
         pode_sab = bool(colab_by_chapa[ch].get("Folga_Sab", False))
+
         _set_trabalho(df, i_from, ent, locked_status=locked_idx.get(ch, set()))
         _set_folga(df, i_to, locked_status=locked_idx.get(ch, set()))
+
         enforce_max_5_consecutive_work(
             df, ent, pode_sab,
             initial_consec=(0 if _past else int((estado_prev.get(ch, {}) or {}).get('consec_trab_final', 0))),
             locked_status=locked_idx.get(ch, set())
         )
-        enforce_no_consecutive_folga(df, locked_status=locked_idx.get(ch, set()))
         hist_by_chapa[ch] = df
 
-    def _swap_valid(ch_a, i_from_a, i_to_a, ch_b, i_from_b, i_to_b):
-        # swap 2x2: A move folga from heavy->light; B move folga from light2->heavy2
-        return _move_valid(ch_a, i_from_a, i_to_a) and _move_valid(ch_b, i_from_b, i_to_b)
-
-    def _apply_swap(ch_a, i_from_a, i_to_a, ch_b, i_from_b, i_to_b):
-        _apply_move(ch_a, i_from_a, i_to_a)
-        _apply_move(ch_b, i_from_b, i_to_b)
-
-    def _counts(eligible_days):
-        counts = {i: 0 for i in eligible_days}
-        by_day = {i: [] for i in eligible_days}
-        for ch in chapas_grupo:
-            df = hist_by_chapa[ch]
-            for i in eligible_days:
-                if str(df.loc[i, "Status"]) == "Folga":
-                    counts[i] += 1
-                    by_day[i].append(ch)
-        return counts, by_day
-
-    def _capacity(eligible_days):
-        cap = {i: 0 for i in eligible_days}
-        for i in eligible_days:
-            for ch in chapas_grupo:
-                if _can_receive_folga(ch, i) or str(hist_by_chapa[ch].loc[i, "Status"]) == "Folga":
-                    cap[i] += 1
-        return cap
-
-    def _build_targets(eligible_days, counts):
-        total = sum(counts.values())
-        if not eligible_days:
-            return {}
-        base = total // len(eligible_days)
-        rem = total % len(eligible_days)
-        cap = _capacity(eligible_days)
-        # prioriza dias com maior capacidade e menor contagem atual para receber o excedente
-        targets = {i: min(base, cap[i]) for i in eligible_days}
-        left = total - sum(targets.values())
-        order = sorted(eligible_days, key=lambda i: (targets[i] - counts[i], cap[i] - targets[i], -i), reverse=True)
-        while left > 0:
-            moved = False
-            for i in order:
-                if targets[i] < cap[i]:
-                    targets[i] += 1
-                    left -= 1
-                    moved = True
-                    if left <= 0:
-                        break
-            if not moved:
-                break
-        return targets
-
-    def _score(counts, targets):
-        if not counts:
-            return 0.0
-        vals = list(counts.values())
-        spread = max(vals) - min(vals)
-        gap = sum((counts[i] - targets.get(i, counts[i])) ** 2 for i in counts)
-        zeros = sum(1 for i in counts if counts[i] == 0 and targets.get(i, 0) > 0)
-        overload = sum(max(0, counts[i] - targets.get(i, counts[i])) for i in counts)
-        return gap * 20.0 + spread * 10.0 + zeros * 50.0 + overload * 8.0
-
+    it = 0
     for week in weeks:
-        eligible_days = _eligible_days_week(week)
+        eligible_days = _eligible_days_for_group()
         if len(eligible_days) <= 1:
             continue
 
-        it = 0
         while it < max_iters:
             it += 1
-            counts, by_day = _counts(eligible_days)
-            targets = _build_targets(eligible_days, counts)
-            cur_score = _score(counts, targets)
-            if cur_score <= 0:
+
+            counts = {i: 0 for i in eligible_days}
+            for ch in chapas_grupo:
+                df = hist_by_chapa[ch]
+                for i in eligible_days:
+                    if str(df.loc[i, "Status"]) == "Folga":
+                        counts[i] += 1
+
+            current_penalty = _day_penalty(counts, eligible_days)
+            spread = max(counts.values()) - min(counts.values())
+            if spread <= 1:
                 break
-            # já está bem equilibrado para o alvo
-            if max(counts.values()) - min(counts.values()) <= 1 and all(abs(counts[i] - targets.get(i, counts[i])) <= 1 for i in counts):
-                break
 
-            heavy_days = sorted(eligible_days, key=lambda i: (counts[i] - targets.get(i, 0), counts[i], i), reverse=True)
-            light_days = sorted(eligible_days, key=lambda i: (targets.get(i, 0) - counts[i], -counts[i], i), reverse=True)
+            heavy_days = sorted(eligible_days, key=lambda i: (counts[i], i), reverse=True)
+            light_days = sorted(eligible_days, key=lambda i: (counts[i], i))
 
-            best = None
-            best_score = cur_score
+            best_move = None
+            best_penalty = current_penalty
 
-            # 1) tenta movimento simples (mesmo colaborador)
             for i_from in heavy_days:
-                if counts[i_from] <= targets.get(i_from, counts[i_from]):
-                    continue
                 for i_to in light_days:
                     if i_from == i_to:
                         continue
-                    if counts[i_to] >= targets.get(i_to, counts[i_to]):
+                    if counts[i_from] - counts[i_to] <= 1:
                         continue
-                    for ch in list(by_day[i_from]):
-                        if not _move_valid(ch, i_from, i_to):
-                            continue
-                        sim = dict(counts)
-                        sim[i_from] -= 1
-                        sim[i_to] += 1
-                        sc = _score(sim, targets)
-                        if sc + 1e-9 < best_score:
-                            best_score = sc
-                            best = ("move", ch, i_from, i_to)
 
-            # 2) se não achou, tenta swap 2x2 entre dias extremos
-            if best is None:
-                for i_from in heavy_days:
-                    for i_to in light_days:
-                        if i_from == i_to:
-                            continue
-                        cands_a = [ch for ch in by_day[i_from] if _move_valid(ch, i_from, i_to)]
-                        cands_b = [ch for ch in by_day.get(i_to, []) if _move_valid(ch, i_to, i_from)]
-                        for ch_a in cands_a:
-                            for ch_b in cands_b:
-                                if ch_a == ch_b:
-                                    continue
-                                sim = dict(counts)
-                                # swap puro não altera counts; então só vale se liberar movimento combinado em iteração seguinte
-                                # aqui usamos dois moves cruzados para destravar padrões individuais
-                                sc = cur_score - 0.01
-                                if sc < best_score and _swap_valid(ch_a, i_from, i_to, ch_b, i_to, i_from):
-                                    best_score = sc
-                                    best = ("swap", ch_a, i_from, i_to, ch_b, i_to, i_from)
+                    candidates = [
+                        ch for ch in chapas_grupo
+                        if str(hist_by_chapa[ch].loc[i_from, "Status"]) == "Folga"
+                        and str(hist_by_chapa[ch].loc[i_to, "Status"]) == "Trabalho"
+                    ]
 
-            if best is None:
+                    for ch in candidates:
+                        if not can_swap(ch, i_from, i_to):
+                            continue
+
+                        sim_counts = dict(counts)
+                        sim_counts[i_from] -= 1
+                        sim_counts[i_to] += 1
+                        sim_penalty = _day_penalty(sim_counts, eligible_days)
+
+                        if sim_penalty + 1e-9 < best_penalty:
+                            best_penalty = sim_penalty
+                            best_move = (ch, i_from, i_to)
+
+            if not best_move:
                 break
 
-            if best[0] == "move":
-                _, ch, i_from, i_to = best
-                _apply_move(ch, i_from, i_to)
-            else:
-                _, ch_a, i_from_a, i_to_a, ch_b, i_from_b, i_to_b = best
-                _apply_swap(ch_a, i_from_a, i_to_a, ch_b, i_from_b, i_to_b)
+            do_swap(*best_move)
 # =========================================================
 # GERAR ESCALA — POR SUBGRUPO
 # =========================================================
