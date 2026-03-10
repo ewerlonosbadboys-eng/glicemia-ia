@@ -15,4 +15,6 @@ pdf2image
 Pillow
 PyPDF2
 pdfplumber
+supabase
+postgrest
 
