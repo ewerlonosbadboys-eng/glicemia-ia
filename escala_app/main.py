@@ -1,3 +1,8 @@
+# V84 BASE — DISTRIBUIÇÃO INTELIGENTE POR SEMANA DO SUBGRUPO
+# Arquivo preparado como continuação de testes sobre a V83.
+# Objetivo desta base: evoluir o motor para distribuir folgas pela semana real
+# do subgrupo antes do rebalance fino por troca, mantendo as regras da 5x2.
+
 # V82
 # Base enviada para evolucao do balanceamento pesado por pontuacao semanal + multiplas rodadas de swap.
 # Arquivo derivado da V81 para teste no seu ambiente.
