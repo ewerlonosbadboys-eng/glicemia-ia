@@ -74,6 +74,7 @@ ARQ_R = DATA_DIR / "config_receita_BETA.csv"
 ARQ_M = DATA_DIR / "mensagens_admin_BETA.csv"
 ARQ_M_ROOT = BASE_DIR / "mensagens_admin_BETA.csv"
 DB_USERS = DATA_DIR / "usuarios.db"
+APP_DB = DATA_DIR / "saude_kids.db"
 
 # ================= NORMALIZAÇÃO =================
 def norm_email(x: str) -> str:
@@ -91,6 +92,7 @@ BACKUP_STATE_FILE = BACKUP_DIR / "last_auto_backup.txt"
 
 ARQUIVOS_BACKUP_MAPA = {
     "usuarios.db": DB_USERS,
+    "saude_kids.db": APP_DB,
     "dados_glicemia_BETA.csv": ARQ_G,
     "dados_nutricao_BETA.csv": ARQ_N,
     "config_receita_BETA.csv": ARQ_R,
