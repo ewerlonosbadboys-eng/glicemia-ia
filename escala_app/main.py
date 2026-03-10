@@ -1215,6 +1215,28 @@ def auto_backup_if_due():
         return
 
 
+def _clear_runtime_caches_after_db_change():
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+    try:
+        st.cache_resource.clear()
+    except Exception:
+        pass
+    try:
+        for k in [
+            "adm_bk_sel",
+            "adm_bk_up",
+            "gerar_escala_cache",
+            "df_colabs_cache",
+        ]:
+            if k in st.session_state:
+                del st.session_state[k]
+    except Exception:
+        pass
+
+
 def restore_backup_from_bytes(data: bytes) -> None:
     _ensure_runtime_storage_ready()
     tmp = Path(BACKUP_DIR) / "_upload_restore_tmp.db"
@@ -1245,10 +1267,13 @@ def restore_backup_from_bytes(data: bytes) -> None:
         conn = sqlite3.connect(str(current), check_same_thread=False)
         try:
             conn.execute("PRAGMA wal_checkpoint(FULL)")
+            row = conn.execute("PRAGMA integrity_check").fetchone()
+            if not row or str(row[0]).lower() != "ok":
+                raise ValueError("Banco restaurado ficou inválido após a cópia.")
         finally:
             conn.close()
     except Exception:
-        pass
+        raise
 
     latest = Path(BACKUP_DIR) / "latest_stable.db"
     try:
@@ -1257,6 +1282,7 @@ def restore_backup_from_bytes(data: bytes) -> None:
         shutil.copy2(current, latest)
 
     tmp.unlink(missing_ok=True)
+    _clear_runtime_caches_after_db_change()
 
 def listar_setores_db() -> list:
     conn = sqlite3.connect(DB_PATH)
