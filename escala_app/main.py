@@ -1284,7 +1284,6 @@ def restore_backup_from_bytes(data: bytes) -> None:
     tmp.unlink(missing_ok=True)
     _clear_runtime_caches_after_db_change()
 
-@st.cache_data(show_spinner=False)
 def listar_setores_db() -> list:
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
@@ -2317,16 +2316,6 @@ def db_init():
     )
     """)
 
-    # Índices para acelerar login, colaboradores, férias, overrides e escala mensal
-    _safe_exec(cur, "CREATE INDEX IF NOT EXISTS idx_colab_setor_nome ON colaboradores(setor, nome)")
-    _safe_exec(cur, "CREATE INDEX IF NOT EXISTS idx_colab_setor_chapa ON colaboradores(setor, chapa)")
-    _safe_exec(cur, "CREATE INDEX IF NOT EXISTS idx_escala_mes_ref ON escala_mes(setor, ano, mes, chapa, dia)")
-    _safe_exec(cur, "CREATE INDEX IF NOT EXISTS idx_escala_mes_setor_comp ON escala_mes(setor, ano, mes)")
-    _safe_exec(cur, "CREATE INDEX IF NOT EXISTS idx_overrides_ref ON overrides(setor, ano, mes, chapa, dia)")
-    _safe_exec(cur, "CREATE INDEX IF NOT EXISTS idx_ferias_ref ON ferias(setor, chapa, inicio, fim)")
-    _safe_exec(cur, "CREATE INDEX IF NOT EXISTS idx_login_recent_ref ON login_recent(setor, chapa, ts)")
-    _safe_exec(cur, "CREATE INDEX IF NOT EXISTS idx_user_setor_chapa ON usuarios_sistema(setor, chapa)")
-
     con.commit()
     _safe_exec(cur, "INSERT OR IGNORE INTO setores(nome) VALUES (?)", ("GERAL",))
     _safe_exec(cur, "INSERT OR IGNORE INTO setores(nome) VALUES (?)", ("ADMIN",))
@@ -2925,7 +2914,6 @@ def save_estado_mes(setor: str, ano: int, mes: int, estado: dict):
     except Exception:
         pass
 
-@st.cache_data(show_spinner=False)
 def load_estado_prev(setor: str, ano: int, mes: int):
     """
     Carrega estado do mês anterior (consecutivos, última saída e status do último domingo)
@@ -3268,30 +3256,6 @@ def _apply_overrides_to_df_inplace(df: pd.DataFrame, setor: str, chapa: str, ovm
     return df
 
 
-@st.cache_data(show_spinner=False)
-def get_kpis_competencia(setor: str, ano: int, mes: int):
-    colaboradores_k = load_colaboradores_setor(setor)
-    total_colab = len(colaboradores_k)
-
-    hist_db_kpi = load_escala_mes_db(setor, int(ano), int(mes))
-    if hist_db_kpi:
-        hist_db_kpi = apply_overrides_to_hist(setor, int(ano), int(mes), hist_db_kpi)
-
-    folgas_mes = ferias_mes = trabalhos_mes = 0
-    if hist_db_kpi:
-        for _, dfk in hist_db_kpi.items():
-            folgas_mes += int((dfk["Status"] == "Folga").sum())
-            ferias_mes += int((dfk["Status"] == "Férias").sum())
-            trabalhos_mes += int(dfk["Status"].isin(WORK_STATUSES).sum())
-
-    return {
-        "total_colab": int(total_colab),
-        "folgas_mes": int(folgas_mes),
-        "ferias_mes": int(ferias_mes),
-        "trabalhos_mes": int(trabalhos_mes),
-    }
-
-
 def save_escala_mes_db(setor: str, ano: int, mes: int, historico_df_por_chapa: dict[str, pd.DataFrame]):
     """Grava escala no banco de forma robusta.
     - Limpa a competência (setor/ano/mes) antes de gravar para evitar IntegrityError em DB antigo/corrompido.
@@ -3366,7 +3330,6 @@ def save_escala_mes_db(setor: str, ano: int, mes: int, historico_df_por_chapa: d
     except Exception:
         pass
 
-@st.cache_data(show_spinner=False)
 def load_escala_mes_db(setor: str, ano: int, mes: int):
     con = db_conn()
     cur = con.cursor()
@@ -5973,11 +5936,19 @@ def page_app():
     ano_k = int(st.session_state["cfg_ano"])
     mes_k = int(st.session_state["cfg_mes"])
 
-    kpis = get_kpis_competencia(setor, ano_k, mes_k)
-    total_colab = int(kpis.get("total_colab", 0))
-    folgas_mes = int(kpis.get("folgas_mes", 0))
-    ferias_mes = int(kpis.get("ferias_mes", 0))
-    trabalhos_mes = int(kpis.get("trabalhos_mes", 0))
+    colaboradores_k = load_colaboradores_setor(setor)
+    total_colab = len(colaboradores_k)
+
+    hist_db_kpi = load_escala_mes_db(setor, ano_k, mes_k)
+    if hist_db_kpi:
+        hist_db_kpi = apply_overrides_to_hist(setor, ano_k, mes_k, hist_db_kpi)
+
+    folgas_mes = ferias_mes = trabalhos_mes = 0
+    if hist_db_kpi:
+        for _, dfk in hist_db_kpi.items():
+            folgas_mes += int((dfk["Status"] == "Folga").sum())
+            ferias_mes += int((dfk["Status"] == "Férias").sum())
+            trabalhos_mes += int(dfk["Status"].isin(WORK_STATUSES).sum())
 
     k1, k2, k3, k4 = st.columns(4)
     k1.markdown(
@@ -6011,12 +5982,26 @@ def page_app():
     if is_admin_area:
         tabs.append("🔒 Admin")
 
-    abas = st.tabs(tabs)
+    # OTIMIZAÇÃO: usar seletor em vez de st.tabs para evitar renderizar todas as abas de uma vez.
+    default_tab = st.session_state.get("ui_tab_ativa", tabs[0])
+    if default_tab not in tabs:
+        default_tab = tabs[0]
+    try:
+        default_index = tabs.index(default_tab)
+    except Exception:
+        default_index = 0
+    selected_tab = st.radio(
+        "Navegação",
+        options=tabs,
+        index=default_index,
+        horizontal=True,
+        key="ui_tab_ativa"
+    )
 
     # ------------------------------------------------------
     # ABA 1: Colaboradores
     # ------------------------------------------------------
-    with abas[0]:
+    if selected_tab == "👥 Colaboradores":
         tabs_col = st.tabs(["👥 Colaboradores", "➕ Cadastrar colaborador", "🗑️ Excluir colaborador", "✏️ Editar perfil"])
         with tabs_col[0]:
             st.markdown("### 👥 Colaboradores")
@@ -6176,7 +6161,7 @@ def page_app():
                 # ------------------------------------------------------
     
 
-    with abas[1]:
+    if selected_tab == "🚀 Gerar Escala":
         st.subheader("🚀 Gerar escala")
         st.caption(f"Competência ativa: **{int(st.session_state['cfg_mes']):02d}/{int(st.session_state['cfg_ano'])}**")
 
@@ -6257,7 +6242,7 @@ def page_app():
     # ------------------------------------------------------
     # ABA 3: Ajustes
     # ------------------------------------------------------
-    with abas[2]:
+    if selected_tab == "⚙️ Ajustes":
         st.subheader("⚙️ Ajustes (travas) — sempre entram na geração")
 
         with st.container(border=True):
@@ -6591,7 +6576,7 @@ def page_app():
     # ------------------------------------------------------
     # ABA 4: Férias
     # ------------------------------------------------------
-    with abas[3]:
+    if selected_tab == "🏖️ Férias":
         st.subheader("🏖️ Controle de Férias")
 
         st.markdown("---")
@@ -6755,7 +6740,7 @@ def page_app():
                         st.success("Férias removidas e escala readequada!")
                         st.rerun()
 
-    with abas[4]:
+    if selected_tab == "🖨️ Impressão":
         sub_imp1, sub_imp2, sub_imp3, sub_imp4 = st.tabs(["📊 Excel modelo", "🗓️ Quem trabalha no dia", "📅 Escala", "🖨️ Imprimir escala parede"])
         with sub_imp1:
             st.subheader("📊 Excel modelo RH (separado por subgrupo)")
@@ -7121,7 +7106,7 @@ def page_app():
     # ABA 6: Admin (somente ADMIN)
     # ------------------------------------------------------
     if is_admin_area:
-        with abas[5]:
+        if selected_tab == "🔒 Admin":
             st.subheader("🔒 Admin do Sistema (somente ADMIN)")
             dfu = admin_list_users()
             st.dataframe(dfu, use_container_width=True, height=420)
