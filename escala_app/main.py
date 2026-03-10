@@ -71,6 +71,8 @@ import re
 import shutil
 from pathlib import Path
 import unicodedata
+import time
+from contextlib import suppress
 
 import hashlib
 import secrets
@@ -1056,15 +1058,110 @@ div[data-testid="stDataFrame"] { border-radius: 12px; overflow: hidden; }
 </style>
 """, unsafe_allow_html=True)
 
-DB_PATH = "escala.db"
+# =========================================================
+# Persistência forte do banco
+# - prioriza diretório persistente configurado por variável de ambiente
+# - tenta /mount/data e /mnt/data antes de cair para ./data
+# - mantém backups locais e restauração automática se o banco sumir/corromper
+# =========================================================
+
+def _pick_data_root() -> Path:
+    candidates = [
+        os.getenv("ESCALA_DATA_DIR", "").strip(),
+        "/mount/data/escala_app",
+        "/mnt/data/escala_app",
+        str((Path.cwd() / "data").resolve()),
+    ]
+    for raw in candidates:
+        if not raw:
+            continue
+        p = Path(raw)
+        with suppress(Exception):
+            p.mkdir(parents=True, exist_ok=True)
+            test = p / ".write_test"
+            test.write_text("ok", encoding="utf-8")
+            test.unlink(missing_ok=True)
+            return p
+    fallback = (Path.cwd() / "data").resolve()
+    fallback.mkdir(parents=True, exist_ok=True)
+    return fallback
+
+DATA_ROOT = _pick_data_root()
+BACKUP_DIR = str(DATA_ROOT / "backups")
+DB_PATH = str(DATA_ROOT / "escala.db")
+AUTO_BACKUP_HOUR = 3  # 03:00
+AUTO_BACKUP_INTERVAL_HOURS = 6  # roda quando o app abre
+DB_HEALTHCHECK_FILE = str(Path(BACKUP_DIR) / ".db_healthcheck")
+LATEST_BACKUP_FILE = str(Path(BACKUP_DIR) / "latest_stable.db")
 
 
 # =========================
 # ADMIN: Backup / Restore + Setores + Import
 # =========================
-BACKUP_DIR = "backups"
-AUTO_BACKUP_HOUR = 3  # 03:00
-AUTO_BACKUP_INTERVAL_HOURS = 6  # roda quando o app abre
+
+
+def _sqlite_integrity_ok(db_file: str) -> bool:
+    try:
+        p = Path(db_file)
+        if (not p.exists()) or p.stat().st_size <= 0:
+            return False
+        con = sqlite3.connect(str(p), timeout=30, check_same_thread=False)
+        try:
+            cur = con.cursor()
+            cur.execute("PRAGMA quick_check")
+            row = cur.fetchone()
+            return bool(row) and str(row[0]).lower() == "ok"
+        finally:
+            con.close()
+    except Exception:
+        return False
+
+
+def _list_candidate_backups() -> list[Path]:
+    out = []
+    for p in sorted(Path(BACKUP_DIR).glob("*.db"), key=lambda x: x.stat().st_mtime, reverse=True):
+        out.append(p)
+    latest = Path(LATEST_BACKUP_FILE)
+    if latest.exists() and latest not in out:
+        out.insert(0, latest)
+    return out
+
+
+def _restore_latest_backup_if_needed() -> bool:
+    dbp = Path(DB_PATH)
+    if _sqlite_integrity_ok(str(dbp)):
+        return False
+    for bk in _list_candidate_backups():
+        if _sqlite_integrity_ok(str(bk)):
+            dbp.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(bk, dbp)
+            return True
+    return False
+
+
+def _record_db_healthcheck(msg: str):
+    try:
+        Path(BACKUP_DIR).mkdir(parents=True, exist_ok=True)
+        Path(DB_HEALTHCHECK_FILE).write_text(f"{datetime.now().isoformat()} | {msg}", encoding="utf-8")
+    except Exception:
+        pass
+
+
+def ensure_db_ready():
+    Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+    Path(BACKUP_DIR).mkdir(parents=True, exist_ok=True)
+    restored = _restore_latest_backup_if_needed()
+    if restored:
+        _record_db_healthcheck("Banco restaurado automaticamente do último backup válido.")
+    dbp = Path(DB_PATH)
+    if not dbp.exists():
+        con = sqlite3.connect(str(dbp), timeout=30, check_same_thread=False)
+        try:
+            con.execute("PRAGMA journal_mode=WAL")
+            con.commit()
+        finally:
+            con.close()
+        _record_db_healthcheck("Banco criado automaticamente no diretório persistente.")
 
 
 def _ensure_backup_dir():
@@ -1073,12 +1170,29 @@ def _ensure_backup_dir():
 
 def create_backup_now(prefix="manual") -> str:
     _ensure_backup_dir()
+    ensure_db_ready()
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     src = Path(DB_PATH)
     if not src.exists():
         raise FileNotFoundError(f"Banco não encontrado: {DB_PATH}")
     dst = Path(BACKUP_DIR) / f"escala_{prefix}_{ts}.db"
-    shutil.copy2(src, dst)
+
+    live = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
+    try:
+        bk = sqlite3.connect(str(dst), timeout=30, check_same_thread=False)
+        try:
+            live.backup(bk)
+            bk.commit()
+        finally:
+            bk.close()
+    finally:
+        live.close()
+
+    latest = Path(LATEST_BACKUP_FILE)
+    try:
+        shutil.copy2(dst, latest)
+    except Exception:
+        pass
     return str(dst)
 
 
@@ -1130,19 +1244,26 @@ def auto_backup_if_due():
 
 def restore_backup_from_bytes(data: bytes) -> None:
     _ensure_backup_dir()
-    # safety backup
+    ensure_db_ready()
     try:
         create_backup_now(prefix="pre_restore")
     except Exception:
         pass
     tmp = Path(BACKUP_DIR) / "_upload_restore_tmp.db"
     tmp.write_bytes(data)
+    if not _sqlite_integrity_ok(str(tmp)):
+        tmp.unlink(missing_ok=True)
+        raise ValueError("O arquivo enviado não é um banco SQLite válido.")
     Path(DB_PATH).write_bytes(tmp.read_bytes())
     tmp.unlink(missing_ok=True)
+    try:
+        shutil.copy2(DB_PATH, LATEST_BACKUP_FILE)
+    except Exception:
+        pass
 
 
 def listar_setores_db() -> list:
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_conn()
     cur = conn.cursor()
     cur.execute("CREATE TABLE IF NOT EXISTS setores (nome TEXT PRIMARY KEY)")
     cur.execute("SELECT nome FROM setores ORDER BY nome")
@@ -1164,7 +1285,7 @@ def criar_setor_db(nome: str) -> None:
     nome = (nome or "").strip().upper()
     if not nome:
         raise ValueError("Setor vazio")
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_conn()
     cur = conn.cursor()
     cur.execute("CREATE TABLE IF NOT EXISTS setores (nome TEXT PRIMARY KEY)")
     cur.execute("INSERT OR IGNORE INTO setores(nome) VALUES(?)", (nome,))
@@ -1186,7 +1307,7 @@ def importar_colaboradores_df(setor: str, df: pd.DataFrame) -> tuple[int,int]:
     entrada_s = df[cols["entrada"]] if "entrada" in cols else pd.Series(["06:00"]*len(df))
     sab_s = df[cols["folga_sabado"]] if "folga_sabado" in cols else (df[cols["sabado"]] if "sabado" in cols else pd.Series([0]*len(df)))
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_conn()
     cur = conn.cursor()
     cur.execute("""CREATE TABLE IF NOT EXISTS colaboradores (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1966,7 +2087,18 @@ def enforce_no_consecutive_folga(df: pd.DataFrame, locked_status: set[int] | Non
 # DB
 # =========================================================
 def db_conn():
-    return sqlite3.connect(DB_PATH, check_same_thread=False)
+    ensure_db_ready()
+    con = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
+    cur = con.cursor()
+    with suppress(Exception):
+        cur.execute("PRAGMA journal_mode=WAL")
+    with suppress(Exception):
+        cur.execute("PRAGMA synchronous=NORMAL")
+    with suppress(Exception):
+        cur.execute("PRAGMA busy_timeout=30000")
+    with suppress(Exception):
+        cur.execute("PRAGMA foreign_keys=ON")
+    return con
 
 def _norm_setor(v: str) -> str:
     return str(v or "").strip().upper()
@@ -2179,6 +2311,12 @@ def db_init():
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, ("Administrador", "ADMIN", "admin", senha_hash, salt, 1, 1, datetime.now().isoformat()))
         con.commit()
+
+    try:
+        if not Path(LATEST_BACKUP_FILE).exists():
+            create_backup_now(prefix="bootstrap")
+    except Exception:
+        pass
 
     con.close()
 
