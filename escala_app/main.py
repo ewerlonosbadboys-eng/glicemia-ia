@@ -71,8 +71,6 @@ import re
 import shutil
 from pathlib import Path
 import unicodedata
-import time
-from supabase import create_client
 
 import hashlib
 import secrets
@@ -1070,224 +1068,6 @@ ROOT_LEGACY_DB_PATH = str(APP_DIR / "escala.db")
 AUTO_BACKUP_HOUR = 3  # 03:00
 AUTO_BACKUP_INTERVAL_HOURS = 6  # roda quando o app abre
 
-SUPABASE_ENABLED = False
-_SUPABASE_CLIENT = None
-_SUPABASE_BOOTSTRAPPED = False
-_SUPABASE_SYNC_IN_PROGRESS = False
-_SUPABASE_LAST_SYNC_TS = 0.0
-
-SUPABASE_TABLE_MAP = {
-    "setores": "setores",
-    "usuarios_sistema": "usuarios_sistema",
-    "colaboradores": "escala_colaboradores",
-    "subgrupos_setor": "subgrupos_setor",
-    "subgrupo_regras": "subgrupo_regras",
-    "ferias": "escala_ferias",
-    "estado_mes_anterior": "estado_mes_anterior",
-    "escala_mes": "escala_mes",
-    "login_recent": "login_recent",
-    "overrides": "escala_overrides",
-}
-
-def _supabase_secrets_available() -> bool:
-    try:
-        return bool(st.secrets.get("SUPABASE_URL")) and bool(st.secrets.get("SUPABASE_KEY"))
-    except Exception:
-        return False
-
-def _get_supabase_client():
-    global _SUPABASE_CLIENT, SUPABASE_ENABLED
-    if _SUPABASE_CLIENT is not None:
-        return _SUPABASE_CLIENT
-    if not _supabase_secrets_available():
-        SUPABASE_ENABLED = False
-        return None
-    try:
-        _SUPABASE_CLIENT = create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
-        SUPABASE_ENABLED = True
-        return _SUPABASE_CLIENT
-    except Exception:
-        SUPABASE_ENABLED = False
-        return None
-
-def _sqlite_raw_conn(path: str | None = None):
-    return sqlite3.connect(str(path or DB_PATH), check_same_thread=False)
-
-def _supabase_remote_name(local_table: str) -> str:
-    return SUPABASE_TABLE_MAP.get(local_table, local_table)
-
-def _table_exists_local(conn, table: str) -> bool:
-    row = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()
-    return row is not None
-
-def _local_table_count(table: str) -> int:
-    try:
-        conn = _sqlite_raw_conn()
-        try:
-            if not _table_exists_local(conn, table):
-                return 0
-            return int(conn.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0])
-        finally:
-            conn.close()
-    except Exception:
-        return 0
-
-def _remote_table_count(local_table: str) -> int:
-    sb = _get_supabase_client()
-    if not sb:
-        return 0
-    try:
-        remote = _supabase_remote_name(local_table)
-        res = sb.table(remote).select("id", count="exact").limit(1).execute()
-        return int(res.count or 0)
-    except Exception:
-        return 0
-
-def _fetch_all_remote_rows(local_table: str, page_size: int = 1000) -> list[dict]:
-    sb = _get_supabase_client()
-    if not sb:
-        return []
-    remote = _supabase_remote_name(local_table)
-    rows = []
-    start = 0
-    while True:
-        res = sb.table(remote).select("*").range(start, start + page_size - 1).execute()
-        batch = list(res.data or [])
-        if not batch:
-            break
-        rows.extend(batch)
-        if len(batch) < page_size:
-            break
-        start += page_size
-    return rows
-
-def _normalize_row_for_remote(local_table: str, row: dict) -> dict:
-    row = dict(row)
-    row.pop("id", None)
-    if local_table == "colaboradores":
-        row["folga_sabado"] = int(row.pop("folga_sab", 0) or 0)
-    elif local_table == "escala_mes":
-        row["data_ref"] = row.pop("data", None)
-        row["dia_semana"] = row.pop("dia_sem", None)
-    return row
-
-def _normalize_row_for_local(local_table: str, row: dict) -> dict:
-    row = dict(row)
-    row.pop("id", None)
-    if local_table == "colaboradores":
-        row["folga_sab"] = int(row.pop("folga_sabado", 0) or 0)
-    elif local_table == "escala_mes":
-        row["data"] = row.pop("data_ref", None)
-        row["dia_sem"] = row.pop("dia_semana", None)
-    return row
-
-def _local_rows_for_sync(table: str) -> list[dict]:
-    conn = _sqlite_raw_conn()
-    conn.row_factory = sqlite3.Row
-    try:
-        if not _table_exists_local(conn, table):
-            return []
-        rows = [dict(r) for r in conn.execute(f"SELECT * FROM {table}").fetchall()]
-        return [_normalize_row_for_remote(table, r) for r in rows]
-    finally:
-        conn.close()
-
-def _supabase_replace_table_from_local(local_table: str):
-    sb = _get_supabase_client()
-    if not sb:
-        return
-    remote = _supabase_remote_name(local_table)
-    rows = _local_rows_for_sync(local_table)
-    try:
-        sb.table(remote).delete().gte("id", 0).execute()
-    except Exception:
-        try:
-            sb.table(remote).delete().neq("id", -1).execute()
-        except Exception:
-            pass
-    if not rows:
-        return
-    chunk = 500
-    for i in range(0, len(rows), chunk):
-        sb.table(remote).insert(rows[i:i+chunk]).execute()
-
-def _local_replace_table_from_remote(local_table: str):
-    rows = _fetch_all_remote_rows(local_table)
-    rows = [_normalize_row_for_local(local_table, r) for r in rows]
-    conn = _sqlite_raw_conn()
-    try:
-        cur = conn.cursor()
-        if _table_exists_local(conn, local_table):
-            cur.execute(f"DELETE FROM {local_table}")
-        if rows:
-            cols = list(rows[0].keys())
-            ph = ",".join(["?"] * len(cols))
-            sql = f"INSERT INTO {local_table} ({','.join(cols)}) VALUES ({ph})"
-            cur.executemany(sql, [[r.get(c) for c in cols] for r in rows])
-        conn.commit()
-    finally:
-        conn.close()
-
-def sync_local_sqlite_to_supabase(force: bool = False):
-    global _SUPABASE_SYNC_IN_PROGRESS, _SUPABASE_LAST_SYNC_TS
-    sb = _get_supabase_client()
-    if not sb or _SUPABASE_SYNC_IN_PROGRESS:
-        return
-    now = time.time()
-    if not force and now - _SUPABASE_LAST_SYNC_TS < 1.5:
-        return
-    _SUPABASE_SYNC_IN_PROGRESS = True
-    try:
-        for table in ["setores", "usuarios_sistema", "colaboradores", "subgrupos_setor", "subgrupo_regras", "ferias", "estado_mes_anterior", "escala_mes", "login_recent", "overrides"]:
-            _supabase_replace_table_from_local(table)
-        _SUPABASE_LAST_SYNC_TS = time.time()
-    finally:
-        _SUPABASE_SYNC_IN_PROGRESS = False
-
-def hydrate_local_sqlite_from_supabase(force: bool = False):
-    global _SUPABASE_SYNC_IN_PROGRESS
-    sb = _get_supabase_client()
-    if not sb or _SUPABASE_SYNC_IN_PROGRESS:
-        return
-    _SUPABASE_SYNC_IN_PROGRESS = True
-    try:
-        for table in ["setores", "usuarios_sistema", "colaboradores", "subgrupos_setor", "subgrupo_regras", "ferias", "estado_mes_anterior", "escala_mes", "login_recent", "overrides"]:
-            _local_replace_table_from_remote(table)
-        try:
-            st.cache_data.clear()
-        except Exception:
-            pass
-    finally:
-        _SUPABASE_SYNC_IN_PROGRESS = False
-
-def bootstrap_supabase_sync():
-    global _SUPABASE_BOOTSTRAPPED
-    if _SUPABASE_BOOTSTRAPPED:
-        return
-    sb = _get_supabase_client()
-    if not sb:
-        _SUPABASE_BOOTSTRAPPED = True
-        return
-    try:
-        remote_has_data = any(_remote_table_count(t) > 0 for t in ["usuarios_sistema", "colaboradores", "escala_mes", "overrides", "ferias"])
-        local_has_data = any(_local_table_count(t) > 0 for t in ["usuarios_sistema", "colaboradores", "escala_mes", "overrides", "ferias"])
-        if remote_has_data:
-            hydrate_local_sqlite_from_supabase(force=True)
-        elif local_has_data:
-            sync_local_sqlite_to_supabase(force=True)
-    except Exception:
-        pass
-    _SUPABASE_BOOTSTRAPPED = True
-
-class SyncedSQLiteConnection(sqlite3.Connection):
-    def commit(self):
-        rv = super().commit()
-        try:
-            sync_local_sqlite_to_supabase(force=False)
-        except Exception:
-            pass
-        return rv
-
 
 def _ensure_data_dir():
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -1503,11 +1283,8 @@ def restore_backup_from_bytes(data: bytes) -> None:
 
     tmp.unlink(missing_ok=True)
     _clear_runtime_caches_after_db_change()
-    try:
-        sync_local_sqlite_to_supabase(force=True)
-    except Exception:
-        pass
 
+@st.cache_data(show_spinner=False)
 def listar_setores_db() -> list:
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
@@ -2334,7 +2111,7 @@ def enforce_no_consecutive_folga(df: pd.DataFrame, locked_status: set[int] | Non
 # =========================================================
 def db_conn():
     _ensure_runtime_storage_ready()
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False, factory=SyncedSQLiteConnection)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     try:
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute("PRAGMA journal_mode=WAL")
@@ -2540,6 +2317,16 @@ def db_init():
     )
     """)
 
+    # Índices para acelerar login, colaboradores, férias, overrides e escala mensal
+    _safe_exec(cur, "CREATE INDEX IF NOT EXISTS idx_colab_setor_nome ON colaboradores(setor, nome)")
+    _safe_exec(cur, "CREATE INDEX IF NOT EXISTS idx_colab_setor_chapa ON colaboradores(setor, chapa)")
+    _safe_exec(cur, "CREATE INDEX IF NOT EXISTS idx_escala_mes_ref ON escala_mes(setor, ano, mes, chapa, dia)")
+    _safe_exec(cur, "CREATE INDEX IF NOT EXISTS idx_escala_mes_setor_comp ON escala_mes(setor, ano, mes)")
+    _safe_exec(cur, "CREATE INDEX IF NOT EXISTS idx_overrides_ref ON overrides(setor, ano, mes, chapa, dia)")
+    _safe_exec(cur, "CREATE INDEX IF NOT EXISTS idx_ferias_ref ON ferias(setor, chapa, inicio, fim)")
+    _safe_exec(cur, "CREATE INDEX IF NOT EXISTS idx_login_recent_ref ON login_recent(setor, chapa, ts)")
+    _safe_exec(cur, "CREATE INDEX IF NOT EXISTS idx_user_setor_chapa ON usuarios_sistema(setor, chapa)")
+
     con.commit()
     _safe_exec(cur, "INSERT OR IGNORE INTO setores(nome) VALUES (?)", ("GERAL",))
     _safe_exec(cur, "INSERT OR IGNORE INTO setores(nome) VALUES (?)", ("ADMIN",))
@@ -2557,10 +2344,6 @@ def db_init():
         con.commit()
 
     con.close()
-    try:
-        bootstrap_supabase_sync()
-    except Exception:
-        pass
 
 
 def is_past_competencia(ano: int, mes: int) -> bool:
@@ -3142,6 +2925,7 @@ def save_estado_mes(setor: str, ano: int, mes: int, estado: dict):
     except Exception:
         pass
 
+@st.cache_data(show_spinner=False)
 def load_estado_prev(setor: str, ano: int, mes: int):
     """
     Carrega estado do mês anterior (consecutivos, última saída e status do último domingo)
@@ -3484,6 +3268,30 @@ def _apply_overrides_to_df_inplace(df: pd.DataFrame, setor: str, chapa: str, ovm
     return df
 
 
+@st.cache_data(show_spinner=False)
+def get_kpis_competencia(setor: str, ano: int, mes: int):
+    colaboradores_k = load_colaboradores_setor(setor)
+    total_colab = len(colaboradores_k)
+
+    hist_db_kpi = load_escala_mes_db(setor, int(ano), int(mes))
+    if hist_db_kpi:
+        hist_db_kpi = apply_overrides_to_hist(setor, int(ano), int(mes), hist_db_kpi)
+
+    folgas_mes = ferias_mes = trabalhos_mes = 0
+    if hist_db_kpi:
+        for _, dfk in hist_db_kpi.items():
+            folgas_mes += int((dfk["Status"] == "Folga").sum())
+            ferias_mes += int((dfk["Status"] == "Férias").sum())
+            trabalhos_mes += int(dfk["Status"].isin(WORK_STATUSES).sum())
+
+    return {
+        "total_colab": int(total_colab),
+        "folgas_mes": int(folgas_mes),
+        "ferias_mes": int(ferias_mes),
+        "trabalhos_mes": int(trabalhos_mes),
+    }
+
+
 def save_escala_mes_db(setor: str, ano: int, mes: int, historico_df_por_chapa: dict[str, pd.DataFrame]):
     """Grava escala no banco de forma robusta.
     - Limpa a competência (setor/ano/mes) antes de gravar para evitar IntegrityError em DB antigo/corrompido.
@@ -3558,6 +3366,7 @@ def save_escala_mes_db(setor: str, ano: int, mes: int, historico_df_por_chapa: d
     except Exception:
         pass
 
+@st.cache_data(show_spinner=False)
 def load_escala_mes_db(setor: str, ano: int, mes: int):
     con = db_conn()
     cur = con.cursor()
@@ -6164,19 +5973,11 @@ def page_app():
     ano_k = int(st.session_state["cfg_ano"])
     mes_k = int(st.session_state["cfg_mes"])
 
-    colaboradores_k = load_colaboradores_setor(setor)
-    total_colab = len(colaboradores_k)
-
-    hist_db_kpi = load_escala_mes_db(setor, ano_k, mes_k)
-    if hist_db_kpi:
-        hist_db_kpi = apply_overrides_to_hist(setor, ano_k, mes_k, hist_db_kpi)
-
-    folgas_mes = ferias_mes = trabalhos_mes = 0
-    if hist_db_kpi:
-        for _, dfk in hist_db_kpi.items():
-            folgas_mes += int((dfk["Status"] == "Folga").sum())
-            ferias_mes += int((dfk["Status"] == "Férias").sum())
-            trabalhos_mes += int(dfk["Status"].isin(WORK_STATUSES).sum())
+    kpis = get_kpis_competencia(setor, ano_k, mes_k)
+    total_colab = int(kpis.get("total_colab", 0))
+    folgas_mes = int(kpis.get("folgas_mes", 0))
+    ferias_mes = int(kpis.get("ferias_mes", 0))
+    trabalhos_mes = int(kpis.get("trabalhos_mes", 0))
 
     k1, k2, k3, k4 = st.columns(4)
     k1.markdown(
