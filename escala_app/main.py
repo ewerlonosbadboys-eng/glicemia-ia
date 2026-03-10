@@ -71,7 +71,6 @@ import re
 import shutil
 from pathlib import Path
 import unicodedata
-from contextlib import suppress
 
 import hashlib
 import secrets
@@ -1057,110 +1056,121 @@ div[data-testid="stDataFrame"] { border-radius: 12px; overflow: hidden; }
 </style>
 """, unsafe_allow_html=True)
 
-APP_DIR = Path(__file__).resolve().parent
-DATA_DIR = APP_DIR / "data"
-DB_PATH = str(DATA_DIR / "escala.db")
-
 
 # =========================
 # ADMIN: Backup / Restore + Setores + Import
 # =========================
+APP_DIR = Path(__file__).resolve().parent
+DATA_DIR = APP_DIR / "data"
 BACKUP_DIR = str(DATA_DIR / "backups")
-LATEST_STABLE_BACKUP = str(Path(BACKUP_DIR) / "latest_stable.db")
+DB_PATH = str(DATA_DIR / "escala.db")
+ROOT_LEGACY_DB_PATH = str(APP_DIR / "escala.db")
 AUTO_BACKUP_HOUR = 3  # 03:00
 AUTO_BACKUP_INTERVAL_HOURS = 6  # roda quando o app abre
 
 
-def _ensure_backup_dir():
+def _ensure_data_dir():
     DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _ensure_backup_dir():
+    _ensure_data_dir()
     Path(BACKUP_DIR).mkdir(parents=True, exist_ok=True)
 
 
-def _sqlite_sidecar_paths(db_path: str) -> list[Path]:
-    p = Path(db_path)
-    return [Path(str(p) + "-wal"), Path(str(p) + "-shm")]
-
-
-def _remove_sqlite_sidecars(db_path: str) -> None:
-    for extra in _sqlite_sidecar_paths(db_path):
-        with suppress(Exception):
-            if extra.exists():
-                extra.unlink()
-
-
-def _validate_sqlite_file(db_path: str) -> None:
-    con = sqlite3.connect(str(db_path))
-    try:
-        cur = con.cursor()
-        cur.execute("PRAGMA integrity_check;")
-        row = cur.fetchone()
-        ok = str((row or [""])[0]).strip().lower() == "ok"
-        if not ok:
-            raise RuntimeError(f"Arquivo SQLite inválido: {db_path}")
-    finally:
-        con.close()
-
-
-def _checkpoint_sqlite_file(db_path: str) -> None:
-    con = sqlite3.connect(str(db_path))
-    try:
-        cur = con.cursor()
-        with suppress(Exception):
-            cur.execute("PRAGMA journal_mode=WAL;")
-        with suppress(Exception):
-            cur.execute("PRAGMA wal_checkpoint(TRUNCATE);")
-        con.commit()
-    finally:
-        con.close()
-
-
 def _sqlite_backup_copy(src_path: str, dst_path: str) -> None:
-    src = sqlite3.connect(str(src_path))
+    src_path = str(src_path)
+    dst_path = str(dst_path)
+    src_conn = sqlite3.connect(src_path, check_same_thread=False)
     try:
-        dst = sqlite3.connect(str(dst_path))
+        dst_conn = sqlite3.connect(dst_path, check_same_thread=False)
         try:
-            src.backup(dst)
-            dst.commit()
+            try:
+                src_conn.execute("PRAGMA wal_checkpoint(FULL)")
+            except Exception:
+                pass
+            src_conn.backup(dst_conn)
+            dst_conn.commit()
         finally:
-            dst.close()
+            dst_conn.close()
     finally:
-        src.close()
-    _validate_sqlite_file(dst_path)
+        src_conn.close()
 
 
-def _migrate_legacy_db_if_needed() -> None:
-    legacy = APP_DIR / "escala.db"
-    current = Path(DB_PATH)
+def _validate_sqlite_file(path: str) -> bool:
+    p = Path(path)
+    if not p.exists() or p.stat().st_size == 0:
+        return False
+    try:
+        conn = sqlite3.connect(str(p), check_same_thread=False)
+        try:
+            row = conn.execute("PRAGMA integrity_check").fetchone()
+            return bool(row) and str(row[0]).lower() == "ok"
+        finally:
+            conn.close()
+    except Exception:
+        return False
+
+
+def _migrate_legacy_db_if_needed():
     _ensure_backup_dir()
+    legacy = Path(ROOT_LEGACY_DB_PATH)
+    current = Path(DB_PATH)
     if current.exists():
         return
-    if legacy.exists():
+    if legacy.exists() and _validate_sqlite_file(str(legacy)):
         try:
             _sqlite_backup_copy(str(legacy), str(current))
-            return
         except Exception:
             shutil.copy2(legacy, current)
-            with suppress(Exception):
-                _validate_sqlite_file(current)
+
+
+def _restore_from_latest_stable_if_needed():
+    _ensure_backup_dir()
+    current = Path(DB_PATH)
+    latest = Path(BACKUP_DIR) / "latest_stable.db"
+    if current.exists() and _validate_sqlite_file(str(current)):
+        return
+    if latest.exists() and _validate_sqlite_file(str(latest)):
+        try:
+            if current.exists():
+                current.unlink(missing_ok=True)
+            _sqlite_backup_copy(str(latest), str(current))
+        except Exception:
+            shutil.copy2(latest, current)
+
+
+def _ensure_runtime_storage_ready():
+    _ensure_backup_dir()
+    _migrate_legacy_db_if_needed()
+    _restore_from_latest_stable_if_needed()
+
+
+def _remove_sqlite_sidecars(db_path: str):
+    for extra in ("-wal", "-shm"):
+        p = Path(str(db_path) + extra)
+        if p.exists():
+            p.unlink(missing_ok=True)
 
 
 def create_backup_now(prefix="manual") -> str:
-    _ensure_backup_dir()
-    _migrate_legacy_db_if_needed()
+    _ensure_runtime_storage_ready()
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     src = Path(DB_PATH)
     if not src.exists():
         raise FileNotFoundError(f"Banco não encontrado: {DB_PATH}")
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     dst = Path(BACKUP_DIR) / f"escala_{prefix}_{ts}.db"
-    _checkpoint_sqlite_file(str(src))
     _sqlite_backup_copy(str(src), str(dst))
-    with suppress(Exception):
-        _sqlite_backup_copy(str(src), LATEST_STABLE_BACKUP)
+    latest = Path(BACKUP_DIR) / "latest_stable.db"
+    try:
+        _sqlite_backup_copy(str(src), str(latest))
+    except Exception:
+        shutil.copy2(src, latest)
     return str(dst)
 
 
 def list_backups() -> list:
-    _ensure_backup_dir()
+    _ensure_runtime_storage_ready()
     files = sorted(Path(BACKUP_DIR).glob("*.db"), key=lambda p: p.stat().st_mtime, reverse=True)
     return [p.name for p in files]
 
@@ -1177,8 +1187,7 @@ def auto_backup_if_due():
     Observação: Streamlit não executa em segundo plano; só roda ao abrir/recarregar o app.
     """
     try:
-        _ensure_backup_dir()
-        _migrate_legacy_db_if_needed()
+        _ensure_runtime_storage_ready()
         now = datetime.now()
         if now.hour < AUTO_BACKUP_HOUR:
             return
@@ -1207,32 +1216,47 @@ def auto_backup_if_due():
 
 
 def restore_backup_from_bytes(data: bytes) -> None:
-    _ensure_backup_dir()
-    _migrate_legacy_db_if_needed()
+    _ensure_runtime_storage_ready()
+    tmp = Path(BACKUP_DIR) / "_upload_restore_tmp.db"
+    tmp.write_bytes(data)
+    if not _validate_sqlite_file(str(tmp)):
+        tmp.unlink(missing_ok=True)
+        raise ValueError("Arquivo de backup inválido ou corrompido.")
+
+    current = Path(DB_PATH)
+    # safety backup do banco atual, se existir
     try:
-        if Path(DB_PATH).exists():
+        if current.exists() and _validate_sqlite_file(str(current)):
             create_backup_now(prefix="pre_restore")
     except Exception:
         pass
 
-    tmp = Path(BACKUP_DIR) / "_upload_restore_tmp.db"
-    tmp.write_bytes(data)
-    _validate_sqlite_file(tmp)
+    _remove_sqlite_sidecars(DB_PATH)
+    current.unlink(missing_ok=True)
 
-    live_db = Path(DB_PATH)
-    _remove_sqlite_sidecars(str(live_db))
-    with suppress(Exception):
-        if live_db.exists():
-            live_db.unlink()
+    try:
+        _sqlite_backup_copy(str(tmp), str(current))
+    except Exception:
+        shutil.copy2(tmp, current)
 
-    shutil.copy2(tmp, live_db)
+    _remove_sqlite_sidecars(DB_PATH)
+
+    try:
+        conn = sqlite3.connect(str(current), check_same_thread=False)
+        try:
+            conn.execute("PRAGMA wal_checkpoint(FULL)")
+        finally:
+            conn.close()
+    except Exception:
+        pass
+
+    latest = Path(BACKUP_DIR) / "latest_stable.db"
+    try:
+        _sqlite_backup_copy(str(current), str(latest))
+    except Exception:
+        shutil.copy2(current, latest)
+
     tmp.unlink(missing_ok=True)
-    _remove_sqlite_sidecars(str(live_db))
-    _checkpoint_sqlite_file(str(live_db))
-    _validate_sqlite_file(str(live_db))
-    with suppress(Exception):
-        shutil.copy2(live_db, LATEST_STABLE_BACKUP)
-
 
 def listar_setores_db() -> list:
     conn = sqlite3.connect(DB_PATH)
@@ -2059,19 +2083,16 @@ def enforce_no_consecutive_folga(df: pd.DataFrame, locked_status: set[int] | Non
 # DB
 # =========================================================
 def db_conn():
-    _ensure_backup_dir()
-    _migrate_legacy_db_if_needed()
-    con = sqlite3.connect(DB_PATH, check_same_thread=False)
-    cur = con.cursor()
-    with suppress(Exception):
-        cur.execute("PRAGMA journal_mode=WAL;")
-    with suppress(Exception):
-        cur.execute("PRAGMA synchronous=NORMAL;")
-    with suppress(Exception):
-        cur.execute("PRAGMA busy_timeout=10000;")
-    with suppress(Exception):
-        cur.execute("PRAGMA foreign_keys=ON;")
-    return con
+    _ensure_runtime_storage_ready()
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    try:
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=10000")
+        conn.execute("PRAGMA synchronous=NORMAL")
+    except Exception:
+        pass
+    return conn
 
 def _norm_setor(v: str) -> str:
     return str(v or "").strip().upper()
