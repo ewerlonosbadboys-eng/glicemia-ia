@@ -2740,6 +2740,29 @@ def load_colaboradores_setor(setor: str):
 # SUBGRUPOS + REGRAS
 # =========================================================
 @st.cache_data(show_spinner=False)
+def get_kpis_cached(setor: str, ano: int, mes: int):
+    colaboradores_k = load_colaboradores_setor(setor)
+    total_colab = len(colaboradores_k)
+
+    hist_db_kpi = load_escala_mes_db(setor, int(ano), int(mes))
+    if hist_db_kpi:
+        hist_db_kpi = apply_overrides_to_hist(setor, int(ano), int(mes), hist_db_kpi)
+
+    folgas_mes = ferias_mes = trabalhos_mes = 0
+    if hist_db_kpi:
+        for _, dfk in hist_db_kpi.items():
+            folgas_mes += int((dfk["Status"] == "Folga").sum())
+            ferias_mes += int((dfk["Status"] == "Férias").sum())
+            trabalhos_mes += int(dfk["Status"].isin(WORK_STATUSES).sum())
+
+    return {
+        "total_colab": int(total_colab),
+        "folgas_mes": int(folgas_mes),
+        "ferias_mes": int(ferias_mes),
+        "trabalhos_mes": int(trabalhos_mes),
+    }
+
+@st.cache_data(show_spinner=False)
 def list_subgrupos(setor: str):
     con = db_conn()
     cur = con.cursor()
@@ -5936,19 +5959,11 @@ def page_app():
     ano_k = int(st.session_state["cfg_ano"])
     mes_k = int(st.session_state["cfg_mes"])
 
-    colaboradores_k = load_colaboradores_setor(setor)
-    total_colab = len(colaboradores_k)
-
-    hist_db_kpi = load_escala_mes_db(setor, ano_k, mes_k)
-    if hist_db_kpi:
-        hist_db_kpi = apply_overrides_to_hist(setor, ano_k, mes_k, hist_db_kpi)
-
-    folgas_mes = ferias_mes = trabalhos_mes = 0
-    if hist_db_kpi:
-        for _, dfk in hist_db_kpi.items():
-            folgas_mes += int((dfk["Status"] == "Folga").sum())
-            ferias_mes += int((dfk["Status"] == "Férias").sum())
-            trabalhos_mes += int(dfk["Status"].isin(WORK_STATUSES).sum())
+    _kpi = get_kpis_cached(setor, ano_k, mes_k)
+    total_colab = int(_kpi.get("total_colab", 0))
+    folgas_mes = int(_kpi.get("folgas_mes", 0))
+    ferias_mes = int(_kpi.get("ferias_mes", 0))
+    trabalhos_mes = int(_kpi.get("trabalhos_mes", 0))
 
     k1, k2, k3, k4 = st.columns(4)
     k1.markdown(
@@ -5982,47 +5997,62 @@ def page_app():
     if is_admin_area:
         tabs.append("🔒 Admin")
 
-    # OTIMIZAÇÃO: usar seletor em vez de st.tabs para evitar renderizar todas as abas de uma vez.
-    default_tab = st.session_state.get("ui_tab_ativa", tabs[0])
-    if default_tab not in tabs:
-        default_tab = tabs[0]
-    try:
-        default_index = tabs.index(default_tab)
-    except Exception:
-        default_index = 0
-    selected_tab = st.radio(
-        "Navegação",
-        options=tabs,
-        index=default_index,
-        horizontal=True,
-        key="ui_tab_ativa"
-    )
+    abas = st.tabs(tabs)
 
     # ------------------------------------------------------
     # ABA 1: Colaboradores
     # ------------------------------------------------------
-    if selected_tab == "👥 Colaboradores":
-        tabs_col = st.tabs(["👥 Colaboradores", "➕ Cadastrar colaborador", "🗑️ Excluir colaborador", "✏️ Editar perfil"])
-        with tabs_col[0]:
-            st.markdown("### 👥 Colaboradores")
-            colaboradores = load_colaboradores_setor(setor)
+    with abas[0]:
+        colaboradores = load_colaboradores_setor(setor)
+        sec_col = st.radio(
+            "",
+            ["👥 Colaboradores", "➕ Cadastrar colaborador", "🗑️ Excluir colaborador", "✏️ Editar perfil"],
+            horizontal=True,
+            key="sec_col_radio_real_speed",
+            label_visibility="collapsed",
+        )
 
+        if sec_col == "👥 Colaboradores":
+            st.markdown("### 👥 Colaboradores")
             if colaboradores:
-                st.dataframe(pd.DataFrame([{
+                df_col = pd.DataFrame([{
                     "Nome": c["Nome"],
                     "Chapa": c["Chapa"],
                     "Subgrupo": c["Subgrupo"] or "SEM SUBGRUPO",
                     "Entrada": c["Entrada"],
                     "Folga Sábado": "Sim" if c["Folga_Sab"] else "Não",
-                } for c in colaboradores]), use_container_width=True, height=420)
+                } for c in colaboradores])
+
+                cbus1, cbus2, cbus3 = st.columns([2, 1, 1])
+                termo = cbus1.text_input("Buscar nome/chapa/subgrupo", key="col_busca_fast")
+                tam_pagina = cbus2.selectbox("Por página", [10, 15, 20, 30, 50], index=1, key="col_page_size_fast")
+
+                if termo:
+                    termo_n = str(termo).strip().lower()
+                    mask = (
+                        df_col["Nome"].astype(str).str.lower().str.contains(termo_n, na=False)
+                        | df_col["Chapa"].astype(str).str.lower().str.contains(termo_n, na=False)
+                        | df_col["Subgrupo"].astype(str).str.lower().str.contains(termo_n, na=False)
+                    )
+                    df_view = df_col.loc[mask].reset_index(drop=True)
+                else:
+                    df_view = df_col.reset_index(drop=True)
+
+                total_regs = len(df_view)
+                total_pag = max(1, (total_regs + int(tam_pagina) - 1) // int(tam_pagina))
+                pagina = cbus3.number_input("Página", min_value=1, max_value=total_pag, value=1, step=1, key="col_page_fast")
+                ini = (int(pagina) - 1) * int(tam_pagina)
+                fim = ini + int(tam_pagina)
+                st.caption(f"Mostrando {min(total_regs, 0 if total_regs == 0 else ini + 1)}–{min(total_regs, fim)} de {total_regs} registro(s).")
+                st.dataframe(df_view.iloc[ini:fim], use_container_width=True, height=420)
             else:
                 st.info("Sem colaboradores.")
 
             st.markdown("---")
-        with tabs_col[1]:
+
+        elif sec_col == "➕ Cadastrar colaborador":
             st.markdown("## ➕ Cadastrar colaborador (perfil completo + folgas do mês)")
 
-            # competência usada para salvar folgas já no cadastro
             ano_cfg = int(st.session_state.get("cfg_ano", datetime.now().year))
             mes_cfg = int(st.session_state.get("cfg_mes", datetime.now().month))
             ndias_cfg = calendar.monthrange(ano_cfg, mes_cfg)[1]
@@ -6056,17 +6086,15 @@ def page_app():
                     else:
                         ch_new = chapa_n.strip()
                         create_colaborador(nome_n.strip(), setor, ch_new, subgrupo=subgrupo_n, entrada=entrada_n, folga_sab=folga_sab_n)
-
-                        # salva folgas como overrides do mês/ano ativos
                         for d in dias_folga:
                             set_override(setor, ano_cfg, mes_cfg, ch_new, int(d), "status", "Folga")
 
                         st.success("Cadastrado! (perfil + folgas do mês salvos)")
                         st.rerun()
 
-
             st.markdown("---")
-        with tabs_col[2]:
+
+        elif sec_col == "🗑️ Excluir colaborador":
             st.markdown("## 🗑️ Excluir colaborador")
             if colaboradores:
                 opts = []
@@ -6088,7 +6116,8 @@ def page_app():
                         st.rerun()
 
             st.markdown("---")
-        with tabs_col[3]:
+
+        elif sec_col == "✏️ Editar perfil":
             st.markdown("## ✏️ Editar perfil do colaborador")
             if colaboradores:
                 chapas = [c["Chapa"] for c in colaboradores]
@@ -6101,7 +6130,6 @@ def page_app():
                 )
                 csel = next(x for x in colaboradores if x["Chapa"] == ch_sel)
 
-                # --- FIX v8.1: ao trocar de colaborador, atualizar widgets (entrada/subgrupo/sábado)
                 last = st.session_state.get("pf_last_chapa")
                 if last != ch_sel:
                     _ent_atual = (csel.get("Entrada") or BALANCO_DIA_ENTRADA).strip()
@@ -6123,18 +6151,13 @@ def page_app():
                 nome_edit = colp0.text_input("Nome:", key="pf_nome_edit")
                 chapa_edit = colp1.text_input("Chapa:", key="pf_chapa_edit")
 
-                # Entrada/Subgrupo: refletir exatamente o cadastro atual do colaborador selecionado.
                 ent_atual = (csel.get("Entrada") or BALANCO_DIA_ENTRADA).strip()
                 opcoes_ent = list(HORARIOS_ENTRADA_PRESET)
                 if ent_atual and ent_atual not in opcoes_ent:
                     opcoes_ent = opcoes_ent + [ent_atual]
 
                 colp2, colp3, colp4 = st.columns(3)
-                ent_sel = colp2.selectbox(
-                    "Entrada:",
-                    options=opcoes_ent,
-                    key="pf_ent_sel",
-                )
+                ent_sel = colp2.selectbox("Entrada:", options=opcoes_ent, key="pf_ent_sel")
 
                 sg_opts = [""] + list_subgrupos(setor)
                 sg_atual = (csel.get("Subgrupo") or "").strip()
@@ -6156,12 +6179,9 @@ def page_app():
                         except Exception as e:
                             st.error(str(e))
 
-                # ------------------------------------------------------
-                # ABA 2: Gerar Escala
-                # ------------------------------------------------------
-    
+                st.markdown("---")
 
-    if selected_tab == "🚀 Gerar Escala":
+    with abas[1]:
         st.subheader("🚀 Gerar escala")
         st.caption(f"Competência ativa: **{int(st.session_state['cfg_mes']):02d}/{int(st.session_state['cfg_ano'])}**")
 
@@ -6242,7 +6262,7 @@ def page_app():
     # ------------------------------------------------------
     # ABA 3: Ajustes
     # ------------------------------------------------------
-    if selected_tab == "⚙️ Ajustes":
+    with abas[2]:
         st.subheader("⚙️ Ajustes (travas) — sempre entram na geração")
 
         with st.container(border=True):
@@ -6576,7 +6596,7 @@ def page_app():
     # ------------------------------------------------------
     # ABA 4: Férias
     # ------------------------------------------------------
-    if selected_tab == "🏖️ Férias":
+    with abas[3]:
         st.subheader("🏖️ Controle de Férias")
 
         st.markdown("---")
@@ -6740,7 +6760,7 @@ def page_app():
                         st.success("Férias removidas e escala readequada!")
                         st.rerun()
 
-    if selected_tab == "🖨️ Impressão":
+    with abas[4]:
         sub_imp1, sub_imp2, sub_imp3, sub_imp4 = st.tabs(["📊 Excel modelo", "🗓️ Quem trabalha no dia", "📅 Escala", "🖨️ Imprimir escala parede"])
         with sub_imp1:
             st.subheader("📊 Excel modelo RH (separado por subgrupo)")
@@ -7106,7 +7126,7 @@ def page_app():
     # ABA 6: Admin (somente ADMIN)
     # ------------------------------------------------------
     if is_admin_area:
-        if selected_tab == "🔒 Admin":
+        with abas[5]:
             st.subheader("🔒 Admin do Sistema (somente ADMIN)")
             dfu = admin_list_users()
             st.dataframe(dfu, use_container_width=True, height=420)
