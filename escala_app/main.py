@@ -4119,6 +4119,14 @@ def rebalance_folgas_dia(
     """
     Rebalance do subgrupo por SEMANA REAL (seg->dom), com proteção anti-loop.
 
+    # 🔒 REGRA: se o usuário alterou "Folgas manuais em grade", NÃO rebalancear
+    try:
+        import streamlit as st
+        if st.session_state.get("manual_folga_lock", False):
+            return
+    except Exception:
+        pass
+
     Objetivo:
     - reduzir dias leves/zerados e dias muito carregados
     - domingo nunca entra no balanceamento
@@ -4165,18 +4173,28 @@ def rebalance_folgas_dia(
         if not counts:
             return 0.0
         vals = list(counts.values())
-        avg = sum(vals) / float(len(vals))
+        total = sum(vals)
+        n = max(1, len(vals))
+        avg = total / float(n)
+        low_target = math.floor(avg)
+        high_target = math.ceil(avg)
         spread = max(vals) - min(vals)
+
         zeros = sum(1 for v in vals if v == 0)
         ones = sum(1 for v in vals if v == 1)
-        heavies = sum(max(0, v - math.ceil(avg)) for v in vals)
-        # penalidade forte para zerado, depois dias muito leves, depois dispersão
+        very_heavy = sum(1 for v in vals if v >= high_target + 2)
+        above_target = sum(max(0, v - high_target) for v in vals)
+        below_target = sum(max(0, low_target - v) for v in vals)
+
+        # penaliza forte dias zerados e sobrecarga alta; prefere ficar perto da meta da semana
         return (
             sum((v - avg) ** 2 for v in vals)
-            + (spread ** 2) * 6.0
-            + zeros * 40.0
-            + ones * 8.0
-            + heavies * 6.0
+            + (spread ** 2) * 10.0
+            + zeros * 90.0
+            + ones * 10.0
+            + very_heavy * 80.0
+            + above_target * 40.0
+            + below_target * 30.0
         )
 
     def _candidate_order(counts: dict) -> tuple[list[int], list[int]]:
@@ -4276,7 +4294,8 @@ def rebalance_folgas_dia(
                 break
 
             spread = counts[heavy_days[0]] - counts[light_days[0]]
-            if spread <= 1:
+            # se ainda existir dia zerado ou dia bem mais carregado, continua tentando
+            if spread <= 1 and min(counts.values()) > 0:
                 break
 
             best_move = None
@@ -4289,7 +4308,7 @@ def rebalance_folgas_dia(
                         continue
                     if counts[i_from] <= counts[i_to]:
                         continue
-                    # não gasta tentativa em trocas irrelevantes
+                    # tenta priorizar trocas que aliviam de verdade a diferença do dia
                     if (counts[i_from] - counts[i_to]) < 1:
                         continue
 
