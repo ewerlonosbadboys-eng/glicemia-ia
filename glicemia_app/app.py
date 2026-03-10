@@ -448,7 +448,255 @@ if not st.session_state.logado:
             st.session_state.pending_email = ck
 
 # ================= ARQUIVOS (DADOS) =================
+TABLE_BY_FILE = {
+    str(ARQ_G): "glicemia",
+    str(ARQ_N): "nutricao",
+    str(ARQ_R): "receita",
+    str(ARQ_M): "sugestoes",
+    str(ARQ_M_ROOT): "sugestoes",
+}
+
+
+def _app_conn():
+    conn = sqlite3.connect(APP_DB)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _table_for_file(arq) -> str:
+    return TABLE_BY_FILE.get(str(arq), "")
+
+
+def _read_table_df(table: str, where: str = "", params=()):
+    cols_map = {
+        "glicemia": ["ID", "Usuario", "Data", "Hora", "Valor", "Momento", "Dose", "Dose_Rapida", "Dose_Longa"],
+        "nutricao": ["ID", "Usuario", "Data", "Momento", "Info", "C", "P", "G"],
+        "receita": [
+            "Usuario",
+            "manha_f1_min", "manha_f1_max", "manha_f1_dose",
+            "manha_f2_min", "manha_f2_max", "manha_f2_dose",
+            "manha_f3_min", "manha_f3_max", "manha_f3_dose",
+            "noite_f1_min", "noite_f1_max", "noite_f1_dose",
+            "noite_f2_min", "noite_f2_max", "noite_f2_dose",
+            "noite_f3_min", "noite_f3_max", "noite_f3_dose",
+            "glargina_cafe_ui", "glargina_janta_ui"
+        ],
+        "sugestoes": ["ID", "Usuario", "Data", "Sugestão"],
+    }
+    cols = cols_map.get(table, [])
+    if not cols:
+        return pd.DataFrame()
+    sql = f"SELECT {', '.join(cols)} FROM {table}" + (f" WHERE {where}" if where else "")
+    conn = _app_conn()
+    try:
+        return pd.read_sql_query(sql, conn, params=params)
+    except Exception:
+        return pd.DataFrame(columns=cols)
+    finally:
+        conn.close()
+
+
+def _append_df_table(table: str, df: pd.DataFrame):
+    if df is None or df.empty:
+        return
+    conn = _app_conn()
+    df.to_sql(table, conn, if_exists="append", index=False)
+    conn.close()
+
+
+def _replace_user_rows(table: str, user_email: str, df_new: pd.DataFrame):
+    conn = _app_conn()
+    cur = conn.cursor()
+    cur.execute(f"DELETE FROM {table} WHERE Usuario=?", (user_email,))
+    if df_new is not None and not df_new.empty:
+        df_new.to_sql(table, conn, if_exists="append", index=False)
+    conn.commit()
+    conn.close()
+
+
+def _delete_user_app_data(user_email: str):
+    conn = _app_conn()
+    cur = conn.cursor()
+    for table in ["glicemia", "nutricao", "receita", "sugestoes"]:
+        cur.execute(f"DELETE FROM {table} WHERE Usuario=?", (user_email,))
+    conn.commit()
+    conn.close()
+
+
+def init_app_db():
+    conn = _app_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS glicemia (
+            ID TEXT PRIMARY KEY,
+            Usuario TEXT,
+            Data TEXT,
+            Hora TEXT,
+            Valor INTEGER,
+            Momento TEXT,
+            Dose TEXT,
+            Dose_Rapida TEXT,
+            Dose_Longa TEXT
+        )
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS nutricao (
+            ID TEXT PRIMARY KEY,
+            Usuario TEXT,
+            Data TEXT,
+            Momento TEXT,
+            Info TEXT,
+            C INTEGER,
+            P INTEGER,
+            G INTEGER
+        )
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS receita (
+            Usuario TEXT PRIMARY KEY,
+            manha_f1_min REAL, manha_f1_max REAL, manha_f1_dose REAL,
+            manha_f2_min REAL, manha_f2_max REAL, manha_f2_dose REAL,
+            manha_f3_min REAL, manha_f3_max REAL, manha_f3_dose REAL,
+            noite_f1_min REAL, noite_f1_max REAL, noite_f1_dose REAL,
+            noite_f2_min REAL, noite_f2_max REAL, noite_f2_dose REAL,
+            noite_f3_min REAL, noite_f3_max REAL, noite_f3_dose REAL,
+            glargina_cafe_ui REAL,
+            glargina_janta_ui REAL
+        )
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS sugestoes (
+            ID TEXT PRIMARY KEY,
+            Usuario TEXT,
+            Data TEXT,
+            "Sugestão" TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+def migrar_csvs_para_sqlite():
+    init_app_db()
+
+    if ARQ_G.exists():
+        conn = _app_conn()
+        qtd = conn.execute("SELECT COUNT(*) FROM glicemia").fetchone()[0]
+        conn.close()
+        if qtd == 0:
+            try:
+                df = pd.read_csv(ARQ_G)
+                if not df.empty:
+                    if "Usuario" not in df.columns:
+                        df["Usuario"] = ""
+                    if "ID" not in df.columns:
+                        df["ID"] = [f"GL-{uuid.uuid4().hex[:12]}" for _ in range(len(df))]
+                    if "Dose" not in df.columns:
+                        df["Dose"] = ""
+                    if "Dose_Rapida" not in df.columns:
+                        def _parse_r(x):
+                            s = str(x or "")
+                            m = re.search(r"(?:Rápida|Rapida)\s*:?\s*([^|]+)", s, flags=re.IGNORECASE)
+                            if m:
+                                return str(m.group(1)).strip()
+                            if s.strip() and ("longa" not in s.lower()):
+                                return s.strip()
+                            return ""
+                        df["Dose_Rapida"] = df["Dose"].apply(_parse_r)
+                    if "Dose_Longa" not in df.columns:
+                        def _parse_l(x):
+                            s = str(x or "")
+                            m = re.search(r"Longa\s*:?\s*([^|]+)", s, flags=re.IGNORECASE)
+                            return str(m.group(1)).strip() if m else ""
+                        df["Dose_Longa"] = df["Dose"].apply(_parse_l)
+                    cols = ["ID", "Usuario", "Data", "Hora", "Valor", "Momento", "Dose", "Dose_Rapida", "Dose_Longa"]
+                    for c in cols:
+                        if c not in df.columns:
+                            df[c] = ""
+                    _append_df_table("glicemia", df[cols])
+            except Exception:
+                pass
+
+    if ARQ_N.exists():
+        conn = _app_conn()
+        qtd = conn.execute("SELECT COUNT(*) FROM nutricao").fetchone()[0]
+        conn.close()
+        if qtd == 0:
+            try:
+                df = pd.read_csv(ARQ_N)
+                if not df.empty:
+                    if "Usuario" not in df.columns:
+                        df["Usuario"] = ""
+                    if "ID" not in df.columns:
+                        df["ID"] = [f"NT-{uuid.uuid4().hex[:12]}" for _ in range(len(df))]
+                    cols = ["ID", "Usuario", "Data", "Momento", "Info", "C", "P", "G"]
+                    for c in cols:
+                        if c not in df.columns:
+                            df[c] = ""
+                    _append_df_table("nutricao", df[cols])
+            except Exception:
+                pass
+
+    if ARQ_R.exists():
+        conn = _app_conn()
+        qtd = conn.execute("SELECT COUNT(*) FROM receita").fetchone()[0]
+        conn.close()
+        if qtd == 0:
+            try:
+                df = pd.read_csv(ARQ_R)
+                if not df.empty:
+                    if "Usuario" not in df.columns:
+                        df["Usuario"] = ""
+                    df = df.drop_duplicates(subset=["Usuario"], keep="last")
+                    keep = [
+                        "Usuario",
+                        "manha_f1_min", "manha_f1_max", "manha_f1_dose",
+                        "manha_f2_min", "manha_f2_max", "manha_f2_dose",
+                        "manha_f3_min", "manha_f3_max", "manha_f3_dose",
+                        "noite_f1_min", "noite_f1_max", "noite_f1_dose",
+                        "noite_f2_min", "noite_f2_max", "noite_f2_dose",
+                        "noite_f3_min", "noite_f3_max", "noite_f3_dose",
+                        "glargina_cafe_ui", "glargina_janta_ui"
+                    ]
+                    for c in keep:
+                        if c not in df.columns:
+                            df[c] = ""
+                    conn = _app_conn()
+                    df[keep].to_sql("receita", conn, if_exists="append", index=False)
+                    conn.close()
+            except Exception:
+                pass
+
+    for sugest_path in [ARQ_M, ARQ_M_ROOT]:
+        if sugest_path.exists():
+            conn = _app_conn()
+            qtd = conn.execute("SELECT COUNT(*) FROM sugestoes").fetchone()[0]
+            conn.close()
+            if qtd == 0:
+                try:
+                    df = pd.read_csv(sugest_path)
+                    if not df.empty:
+                        if "Usuario" not in df.columns:
+                            df["Usuario"] = ""
+                        if "Data" not in df.columns:
+                            df["Data"] = ""
+                        if "Sugestão" not in df.columns:
+                            alt = [c for c in df.columns if c.lower().startswith("sugest")]
+                            df["Sugestão"] = df[alt[0]] if alt else ""
+                        if "ID" not in df.columns:
+                            df["ID"] = [f"SG-{uuid.uuid4().hex[:12]}" for _ in range(len(df))]
+                        _append_df_table("sugestoes", df[["ID", "Usuario", "Data", "Sugestão"]])
+                except Exception:
+                    pass
+            break
+
+
+migrar_csvs_para_sqlite()
+
 def carregar_dados_seguro(arq: str) -> pd.DataFrame:
+    table = _table_for_file(arq)
+    if table:
+        return _read_table_df(table, "Usuario=?", (st.session_state.user_email,))
     if not os.path.exists(arq):
         return pd.DataFrame()
     df = pd.read_csv(arq)
@@ -469,28 +717,23 @@ def _ensure_id_column(df: pd.DataFrame, col_name="ID", prefix="GL") -> pd.DataFr
     return df
 
 def carregar_glicemia_com_id() -> pd.DataFrame:
-    df_all = pd.read_csv(ARQ_G) if os.path.exists(ARQ_G) else pd.DataFrame()
+    df_all = _read_table_df("glicemia")
     if df_all.empty:
         return pd.DataFrame(columns=["ID", "Usuario", "Data", "Hora", "Valor", "Momento", "Dose", "Dose_Rapida", "Dose_Longa"])
 
     if "Usuario" not in df_all.columns:
         df_all["Usuario"] = ""
 
-    # garante ID
     df_all = _ensure_id_column(df_all, "ID", "GL")
-
-    # garante coluna Dose (legado)
     if "Dose" not in df_all.columns:
         df_all["Dose"] = ""
 
-    # migração: separa Dose_Rapida / Dose_Longa a partir do texto legado "Dose"
     if "Dose_Rapida" not in df_all.columns:
         def _parse_r(x: str) -> str:
             s = str(x or "")
             m = re.search(r"(?:Rápida|Rapida)\s*:?\s*([^|]+)", s, flags=re.IGNORECASE)
             if m:
                 return str(m.group(1)).strip()
-            # se não tiver tag, mas tiver algo tipo "2 UI"
             if s.strip() and ("longa" not in s.lower()):
                 return s.strip()
             return ""
@@ -503,7 +746,6 @@ def carregar_glicemia_com_id() -> pd.DataFrame:
             return str(m.group(1)).strip() if m else ""
         df_all["Dose_Longa"] = df_all["Dose"].apply(_parse_l)
 
-    # recomputa a coluna Dose (para exibição legada) a partir das colunas separadas
     def _mk_dose_display(r) -> str:
         dr = str(r.get("Dose_Rapida", "") or "").strip()
         dl = str(r.get("Dose_Longa", "") or "").strip()
@@ -515,22 +757,12 @@ def carregar_glicemia_com_id() -> pd.DataFrame:
         return out
 
     df_all["Dose"] = df_all.apply(_mk_dose_display, axis=1)
-
-    # tenta persistir migração
-    try:
-        df_all.to_csv(ARQ_G, index=False)
-    except Exception:
-        pass
-
     return df_all[df_all["Usuario"] == st.session_state.user_email].copy()
 
 def salvar_registro_glicemia(valor: int, momento: str, dose: str, dt: datetime, dose_rapida: str = "", dose_longa: str = ""):
-    # Mantém compatibilidade com versões antigas (coluna Dose texto),
-    # mas salva também em colunas separadas Dose_Rapida / Dose_Longa.
     dr = (dose_rapida or "").strip()
     dl = (dose_longa or "").strip()
 
-    # se vierem vazias, tenta extrair do texto legado "dose"
     if not dr and dose:
         m = re.search(r"(?:Rápida|Rapida)\s*:?\s*([^|]+)", str(dose), flags=re.IGNORECASE)
         if m:
@@ -559,41 +791,17 @@ def salvar_registro_glicemia(valor: int, momento: str, dose: str, dt: datetime, 
         "Dose_Rapida": dr,
         "Dose_Longa": dl,
     }])
+    _append_df_table("glicemia", novo)
 
-    base = pd.read_csv(ARQ_G) if os.path.exists(ARQ_G) else pd.DataFrame(columns=novo.columns)
-    if "Usuario" not in base.columns:
-        base["Usuario"] = ""
-    base = _ensure_id_column(base, "ID", "GL")
-
-    # garante colunas novas no base
-    for col in ["Dose", "Dose_Rapida", "Dose_Longa"]:
-        if col not in base.columns:
-            base[col] = ""
-
-    pd.concat([base, novo], ignore_index=True).to_csv(ARQ_G, index=False)
 
 def aplicar_edicoes_e_exclusoes_glicemia(df_editado: pd.DataFrame):
     if df_editado is None or df_editado.empty:
         return
 
-    base = pd.read_csv(ARQ_G) if os.path.exists(ARQ_G) else pd.DataFrame()
-    if base.empty:
-        return
-    if "Usuario" not in base.columns:
-        base["Usuario"] = ""
-    base = _ensure_id_column(base, "ID", "GL")
-
-    # garante colunas novas
-    for col in ["Dose", "Dose_Rapida", "Dose_Longa"]:
-        if col not in base.columns:
-            base[col] = ""
-
-
     df_editado = df_editado.copy()
     if "Excluir" not in df_editado.columns:
         df_editado["Excluir"] = False
 
-    # normalização
     df_editado["ID"] = df_editado["ID"].astype(str)
     df_editado["Data"] = df_editado["Data"].astype(str).str.strip()
     df_editado["Hora"] = df_editado["Hora"].astype(str).str.strip()
@@ -601,7 +809,6 @@ def aplicar_edicoes_e_exclusoes_glicemia(df_editado: pd.DataFrame):
     df_editado["Dose_Rapida"] = df_editado.get("Dose_Rapida", "").astype(str).str.strip()
     df_editado["Dose_Longa"] = df_editado.get("Dose_Longa", "").astype(str).str.strip()
 
-    # reconstrói "Dose" (legado) a partir das colunas separadas
     def _mk_dose_display(r) -> str:
         dr = str(r.get("Dose_Rapida", "") or "").strip()
         dl = str(r.get("Dose_Longa", "") or "").strip()
@@ -615,30 +822,24 @@ def aplicar_edicoes_e_exclusoes_glicemia(df_editado: pd.DataFrame):
     df_editado["Dose"] = df_editado.apply(_mk_dose_display, axis=1)
     df_editado["Valor"] = pd.to_numeric(df_editado["Valor"], errors="coerce").fillna(0).astype(int)
 
-    ids_user = set(base.loc[base["Usuario"] == st.session_state.user_email, "ID"].astype(str).tolist())
-    ids_excluir = set(df_editado.loc[df_editado["Excluir"] == True, "ID"].tolist()).intersection(ids_user)
+    conn = _app_conn()
+    cur = conn.cursor()
+    ids_excluir = df_editado.loc[df_editado["Excluir"] == True, "ID"].astype(str).tolist()
+    if ids_excluir:
+        cur.executemany("DELETE FROM glicemia WHERE Usuario=? AND ID=?", [(st.session_state.user_email, rid) for rid in ids_excluir])
 
-    # atualiza
     df_upd = df_editado.loc[df_editado["Excluir"] != True].copy()
     for _, r in df_upd.iterrows():
-        rid = str(r["ID"])
-        if rid not in ids_user:
-            continue
-        mask = (base["Usuario"] == st.session_state.user_email) & (base["ID"].astype(str) == rid)
-        if mask.any():
-            base.loc[mask, "Data"] = r["Data"]
-            base.loc[mask, "Hora"] = r["Hora"]
-            base.loc[mask, "Valor"] = int(r["Valor"])
-            base.loc[mask, "Momento"] = r["Momento"]
-            base.loc[mask, "Dose_Rapida"] = r.get("Dose_Rapida", "")
-            base.loc[mask, "Dose_Longa"] = r.get("Dose_Longa", "")
-            base.loc[mask, "Dose"] = r.get("Dose", "")
-
-    # exclui
-    if ids_excluir:
-        base = base[~((base["Usuario"] == st.session_state.user_email) & (base["ID"].astype(str).isin(ids_excluir)))].copy()
-
-    base.to_csv(ARQ_G, index=False)
+        cur.execute(
+            """
+            UPDATE glicemia
+               SET Data=?, Hora=?, Valor=?, Momento=?, Dose_Rapida=?, Dose_Longa=?, Dose=?
+             WHERE Usuario=? AND ID=?
+            """,
+            (r["Data"], r["Hora"], int(r["Valor"]), r["Momento"], r.get("Dose_Rapida", ""), r.get("Dose_Longa", ""), r.get("Dose", ""), st.session_state.user_email, str(r["ID"]))
+        )
+    conn.commit()
+    conn.close()
 
 # ================= RECEITA (RÁPIDA/LONGA) =================
 def _schema_receita_nova(rec: pd.Series, periodo: str) -> bool:
@@ -1126,17 +1327,7 @@ if st.session_state.user_email == "admin":
                 conn.commit()
                 conn.close()
 
-                def _filtrar_csv(arq):
-                    if os.path.exists(arq):
-                        df0 = pd.read_csv(arq)
-                        if "Usuario" in df0.columns:
-                            df0 = df0[df0["Usuario"] != del_email].copy()
-                            df0.to_csv(arq, index=False)
-
-                _filtrar_csv(ARQ_G)
-                _filtrar_csv(ARQ_N)
-                _filtrar_csv(ARQ_R)
-                _filtrar_csv(ARQ_M)
+                _delete_user_app_data(del_email)
 
                 st.success(f"Usuário {del_email} excluído.")
                 st.rerun()
@@ -1158,15 +1349,12 @@ if st.session_state.user_email == "admin":
         c1, c2 = st.columns(2)
         with c1:
             st.write("### Distribuição de Registros (Glicemia)")
-            if os.path.exists(ARQ_G):
-                df_uso = pd.read_csv(ARQ_G)
-                if "Usuario" in df_uso.columns and not df_uso.empty:
-                    uso_por_user = df_uso["Usuario"].value_counts().reset_index()
-                    uso_por_user.columns = ["Usuario", "Registros"]
-                    fig_pizza = px.pie(uso_por_user, values="Registros", names="Usuario", hole=.3)
-                    st.plotly_chart(fig_pizza, use_container_width=True)
-                else:
-                    st.info("Sem dados.")
+            df_uso = _read_table_df("glicemia")
+            if "Usuario" in df_uso.columns and not df_uso.empty:
+                uso_por_user = df_uso["Usuario"].value_counts().reset_index()
+                uso_por_user.columns = ["Usuario", "Registros"]
+                fig_pizza = px.pie(uso_por_user, values="Registros", names="Usuario", hole=.3)
+                st.plotly_chart(fig_pizza, use_container_width=True)
             else:
                 st.info("Sem dados.")
         with c2:
@@ -1179,8 +1367,9 @@ if st.session_state.user_email == "admin":
 
     with t_sugestoes:
         st.subheader("📩 Sugestões recebidas")
-        if os.path.exists(ARQ_M):
-            st.dataframe(pd.read_csv(ARQ_M), use_container_width=True)
+        df_sug = _read_table_df("sugestoes")
+        if not df_sug.empty:
+            st.dataframe(df_sug[["Usuario", "Data", "Sugestão"]], use_container_width=True)
         else:
             st.info("Sem sugestões.")
 
@@ -1443,14 +1632,9 @@ else:
             g_msg = 0
 
             try:
-                if os.path.exists(ARQ_N):
-                    dfn_msg = pd.read_csv(ARQ_N)
-                    if "Usuario" not in dfn_msg.columns:
-                        dfn_msg["Usuario"] = ""
+                dfn_msg = _read_table_df("nutricao", "Usuario=?", (st.session_state.user_email,))
 
-                    dfn_msg = dfn_msg[dfn_msg["Usuario"] == st.session_state.user_email].copy()
-
-                    if not dfn_msg.empty and "Momento" in dfn_msg.columns:
+                if not dfn_msg.empty and "Momento" in dfn_msg.columns:
                         dfn_momento = dfn_msg[dfn_msg["Momento"].astype(str) == str(m_gl)].copy()
 
                         if not dfn_momento.empty:
@@ -1620,17 +1804,7 @@ else:
 
                 novo["Dose"] = novo.apply(lambda r: f"{r['Dose_Rapida']} | Longa: {r['Dose_Longa']}" if str(r['Dose_Longa']).strip() else str(r['Dose_Rapida']), axis=1)
 
-                if os.path.exists(ARQ_G):
-                    base = pd.read_csv(ARQ_G)
-                else:
-                    base = pd.DataFrame(columns=["Usuario", "Data", "Hora", "Valor", "Momento", "Dose_Rapida", "Dose_Longa", "ID", "Dose"])
-
-                for col in novo.columns:
-                    if col not in base.columns:
-                        base[col] = ""
-
-                base = pd.concat([base, novo], ignore_index=True)
-                base.to_csv(ARQ_G, index=False)
+                _append_df_table("glicemia", novo[["ID", "Usuario", "Data", "Hora", "Valor", "Momento", "Dose", "Dose_Rapida", "Dose_Longa"]])
 
                 st.success("Medida manual salva com sucesso!")
                 st.rerun()
@@ -1802,10 +1976,8 @@ else:
                     [[st.session_state.user_email, dt.strftime("%d/%m/%Y"), m_nutri, ", ".join(sel), c_tot, p_tot, g_tot]],
                     columns=["Usuario", "Data", "Momento", "Info", "C", "P", "G"]
                 )
-                base = pd.read_csv(ARQ_N) if os.path.exists(ARQ_N) else pd.DataFrame(columns=novo_n.columns)
-                if "Usuario" not in base.columns:
-                    base["Usuario"] = ""
-                pd.concat([base, novo_n], ignore_index=True).to_csv(ARQ_N, index=False)
+                novo_n["ID"] = [f"NT-{uuid.uuid4().hex[:12]}"]
+                _append_df_table("nutricao", novo_n[["ID", "Usuario", "Data", "Momento", "Info", "C", "P", "G"]])
 
                 st.success("Refeição salva!")
                 st.session_state["_nutri_clear_pending"] = True
@@ -1845,8 +2017,10 @@ else:
             if dfn_user.empty:
                 st.info("Sem refeições registradas ainda.")
             else:
-                # Mantém referência ao índice original para exclusão segura
-                dfn_user["_row_id"] = dfn_user.index.astype(int)
+                # Mantém referência ao ID original para exclusão segura
+                if "ID" not in dfn_user.columns:
+                    dfn_user["ID"] = [f"NT-{uuid.uuid4().hex[:12]}" for _ in range(len(dfn_user))]
+                dfn_user["_row_id"] = dfn_user["ID"].astype(str)
                 view = dfn_user[["Data", "Momento", "Info", "C", "P", "G", "_row_id"]].tail(12).copy()
                 view.insert(0, "Excluir", False)
 
@@ -1856,7 +2030,7 @@ else:
                     hide_index=True,
                     column_config={
                         "Excluir": st.column_config.CheckboxColumn("Excluir"),
-                        "_row_id": st.column_config.NumberColumn("_row_id", disabled=True),
+                        "_row_id": st.column_config.TextColumn("_row_id", disabled=True),
                     },
                     disabled=["Data", "Momento", "Info", "C", "P", "G", "_row_id"],
                     key="nutri_last_editor",
@@ -1870,11 +2044,14 @@ else:
                             st.warning("Marque pelo menos 1 linha em 'Excluir'.")
                         else:
                             # Remove do arquivo completo (todas as pessoas), baseado no índice original
-                            base = pd.read_csv(ARQ_N) if os.path.exists(ARQ_N) else pd.DataFrame(columns=dfn_all.columns)
-                            # Garante que o base tenha o mesmo índice do arquivo (0..n-1)
-                            base = base.reset_index(drop=True)
-                            base = base.drop(index=[int(i) for i in to_del if int(i) in base.index])
-                            base.to_csv(ARQ_N, index=False)
+                            conn = _app_conn()
+                            cur = conn.cursor()
+                            cur.executemany(
+                                "DELETE FROM nutricao WHERE ID=? AND Usuario=?",
+                                [(str(i), st.session_state.user_email) for i in to_del]
+                            )
+                            conn.commit()
+                            conn.close()
                             st.success(f"Removido: {len(to_del)} registro(s).")
                             st.rerun()
                 with cdel2:
@@ -1886,7 +2063,7 @@ else:
     with tab3:
         st.markdown('<div class="card">', unsafe_allow_html=True)
 
-        df_r_all = pd.read_csv(ARQ_R) if os.path.exists(ARQ_R) else pd.DataFrame()
+        df_r_all = _read_table_df("receita")
         if not df_r_all.empty and "Usuario" in df_r_all.columns:
             r_u = df_r_all[df_r_all["Usuario"] == st.session_state.user_email]
         else:
@@ -1950,12 +2127,7 @@ else:
                 "glargina_janta_ui": glargina_janta_ui,
             }])
 
-            if not df_r_all.empty and "Usuario" in df_r_all.columns:
-                df_r_all2 = df_r_all[df_r_all["Usuario"] != st.session_state.user_email].copy()
-            else:
-                df_r_all2 = pd.DataFrame()
-
-            pd.concat([df_r_all2, nova_rec], ignore_index=True).to_csv(ARQ_R, index=False)
+            _replace_user_rows("receita", st.session_state.user_email, nova_rec)
             st.success("Receita salva com sucesso!")
 
         st.markdown("</div>", unsafe_allow_html=True)
@@ -1967,11 +2139,8 @@ else:
         if st.button("Enviar Sugestão", use_container_width=True):
             if txt.strip():
                 dt = agora_br().strftime("%d/%m/%Y %H:%M")
-                novo_m = pd.DataFrame([[st.session_state.user_email, dt, txt.strip()]], columns=["Usuario", "Data", "Sugestão"])
-                base_m = pd.read_csv(ARQ_M) if os.path.exists(ARQ_M) else pd.DataFrame(columns=novo_m.columns)
-                if "Usuario" not in base_m.columns:
-                    base_m["Usuario"] = ""
-                pd.concat([base_m, novo_m], ignore_index=True).to_csv(ARQ_M, index=False)
+                novo_m = pd.DataFrame([[f"SG-{uuid.uuid4().hex[:12]}", st.session_state.user_email, dt, txt.strip()]], columns=["ID", "Usuario", "Data", "Sugestão"])
+                _append_df_table("sugestoes", novo_m)
                 st.success("Enviado com sucesso!")
             else:
                 st.warning("Digite uma sugestão antes de enviar.")
