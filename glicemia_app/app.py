@@ -154,13 +154,16 @@ def _df_to_ui(table: str, df: pd.DataFrame) -> pd.DataFrame:
 def sb_select_df(table: str, filters: dict | None = None, order_by: str | None = None) -> pd.DataFrame:
     if not USE_SUPABASE:
         return pd.DataFrame(columns=TABLE_UI_COLS.get(table, []))
-    q = SB.table(table).select('*')
-    for k, v in (filters or {}).items():
-        q = q.eq(k, v)
-    if order_by:
-        q = q.order(order_by)
-    data = q.execute().data or []
-    return _df_to_ui(table, pd.DataFrame(data))
+    try:
+        q = SB.table(table).select('*')
+        for k, v in (filters or {}).items():
+            q = q.eq(k, v)
+        if order_by:
+            q = q.order(order_by)
+        data = q.execute().data or []
+        return _df_to_ui(table, pd.DataFrame(data))
+    except Exception:
+        return pd.DataFrame(columns=TABLE_UI_COLS.get(table, []))
 
 def sb_upsert_df(table: str, df: pd.DataFrame, on_conflict: str | None = None):
     if df is None or df.empty or not USE_SUPABASE:
@@ -168,25 +171,35 @@ def sb_upsert_df(table: str, df: pd.DataFrame, on_conflict: str | None = None):
     payload = _df_to_db(table, df).where(pd.notnull(_df_to_db(table, df)), None).to_dict(orient='records')
     if not payload:
         return
-    if on_conflict:
-        SB.table(table).upsert(payload, on_conflict=on_conflict).execute()
-    else:
-        SB.table(table).upsert(payload).execute()
+    try:
+        if on_conflict:
+            SB.table(table).upsert(payload, on_conflict=on_conflict).execute()
+        else:
+            SB.table(table).upsert(payload).execute()
+    except Exception:
+        return
 
 def sb_insert_df(table: str, df: pd.DataFrame):
     if df is None or df.empty or not USE_SUPABASE:
         return
     payload = _df_to_db(table, df).where(pd.notnull(_df_to_db(table, df)), None).to_dict(orient='records')
-    if payload:
+    if not payload:
+        return
+    try:
         SB.table(table).insert(payload).execute()
+    except Exception:
+        return
 
 def sb_delete_where(table: str, filters: dict):
     if not USE_SUPABASE:
         return
-    q = SB.table(table).delete()
-    for k, v in filters.items():
-        q = q.eq(k, v)
-    q.execute()
+    try:
+        q = SB.table(table).delete()
+        for k, v in filters.items():
+            q = q.eq(k, v)
+        q.execute()
+    except Exception:
+        return
 
 def sb_update_where(table: str, values: dict, filters: dict):
     if not USE_SUPABASE:
@@ -1359,7 +1372,7 @@ if st.session_state.user_email == "admin":
         if not df_sug.empty:
             st.dataframe(df_sug[["Usuario", "Data", "Sugestão"]], use_container_width=True)
         else:
-            st.info("Sem sugestões.")
+            st.info("Sem sugestões ou tabela sugestoes indisponível no Supabase.")
 
     
     with t_mensal:
