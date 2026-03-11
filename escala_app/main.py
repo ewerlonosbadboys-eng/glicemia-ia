@@ -7082,11 +7082,13 @@ def page_app():
                 if pdf_fer_busca.strip():
                     kw = pdf_fer_busca.strip().lower()
                     colabs_all = [c for c in colabs_all if kw in str(c.get("Nome","")).lower() or kw in str(c.get("Chapa","")).lower()]
-                pdf_bytes = gerar_pdf_ferias_mes(setor, int(ano), int(mes), load_colaboradores_setor(setor) or [], keyword=pdf_fer_busca)
+                ano_ref = int(st.session_state.get("cfg_ano", datetime.now().year))
+                mes_ref = int(st.session_state.get("cfg_mes", datetime.now().month))
+                pdf_bytes = gerar_pdf_ferias_mes(setor, ano_ref, mes_ref, colabs_all, keyword=pdf_fer_busca)
                 st.download_button(
                     "⬇️ Baixar PDF (Férias do mês)",
                     data=pdf_bytes,
-                    file_name=f"ferias_{setor}_{int(mes):02d}_{int(ano)}.pdf",
+                    file_name=f"ferias_{setor}_{mes_ref:02d}_{ano_ref}.pdf",
                     mime="application/pdf",
                     use_container_width=True,
                     key="pdf_fer_dl"
@@ -7108,9 +7110,11 @@ def page_app():
                 key="pdf_modo_impressao"
             )
 
+            ano_ref = int(st.session_state.get("cfg_ano", datetime.now().year))
+            mes_ref = int(st.session_state.get("cfg_mes", datetime.now().month))
             cols_dates = st.columns([1, 1, 2])
-            data_ini = cols_dates[0].date_input("Dia inicial:", value=date(int(ano), int(mes), 1), key="pdf_dt_ini")
-            data_fim = cols_dates[1].date_input("Dia final:", value=date(int(ano), int(mes), calendar.monthrange(int(ano), int(mes))[1]), key="pdf_dt_fim")
+            data_ini = cols_dates[0].date_input("Dia inicial:", value=date(ano_ref, mes_ref, 1), key="pdf_dt_ini")
+            data_fim = cols_dates[1].date_input("Dia final:", value=date(ano_ref, mes_ref, calendar.monthrange(ano_ref, mes_ref)[1]), key="pdf_dt_fim")
             if modo_pdf == "Panorâmico por período":
                 cols_dates[2].caption("Use qualquer período contínuo, inclusive dois meses juntos (ex.: 01/03/2026 até 30/04/2026).")
             else:
