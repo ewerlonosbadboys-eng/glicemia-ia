@@ -2716,6 +2716,7 @@ def update_colaborador_perfil(setor: str, chapa_antiga: str, chapa_nova: str, no
         pass
 
 @st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=30)
 def load_colaboradores_setor(setor: str):
     con = db_conn()
     cur = con.cursor()
@@ -2740,6 +2741,7 @@ def load_colaboradores_setor(setor: str):
 # SUBGRUPOS + REGRAS
 # =========================================================
 @st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=30)
 def get_kpis_cached(setor: str, ano: int, mes: int):
     colaboradores_k = load_colaboradores_setor(setor)
     total_colab = len(colaboradores_k)
@@ -2937,6 +2939,7 @@ def save_estado_mes(setor: str, ano: int, mes: int, estado: dict):
     except Exception:
         pass
 
+@st.cache_data(show_spinner=False, ttl=30)
 def load_estado_prev(setor: str, ano: int, mes: int):
     """
     Carrega estado do mês anterior (consecutivos, última saída e status do último domingo)
@@ -3353,6 +3356,7 @@ def save_escala_mes_db(setor: str, ano: int, mes: int, historico_df_por_chapa: d
     except Exception:
         pass
 
+@st.cache_data(show_spinner=False, ttl=30)
 def load_escala_mes_db(setor: str, ano: int, mes: int):
     con = db_conn()
     cur = con.cursor()
@@ -5460,9 +5464,9 @@ auto_backup_if_due()
 
 def page_login():
     st.title("🔐 Login por Setor (Usuário / Líder / Admin)")
-    tab_login, tab_cadastrar, tab_esqueci = st.tabs(["Entrar", "Cadastrar Usuário do Sistema", "Esqueci a senha"])
+    login_sec = st.radio("", ["Entrar", "Cadastrar Usuário do Sistema", "Esqueci a senha"], horizontal=True, key="login_nav_fast", label_visibility="collapsed")
 
-    with tab_login:
+    if login_sec == "Entrar":
         con = db_conn()
         setores_df = pd.concat([
             pd.read_sql_query("SELECT nome AS setor FROM setores", con),
@@ -5575,7 +5579,7 @@ def page_login():
 
         st.caption("Admin padrão: setor ADMIN | chapa admin | senha 123")
 
-    with tab_cadastrar:
+    elif login_sec == "Cadastrar Usuário do Sistema":
         st.subheader("Cadastrar usuário do sistema (com senha)")
         st.info("⚠️ Somente usuário do sistema tem senha. Colaborador é SEM senha.")
         nome = st.text_input("Nome:", key="cl_nome")
@@ -5598,7 +5602,7 @@ def page_login():
                 st.success("Criado! Faça login.")
                 st.rerun()
 
-    with tab_esqueci:
+    elif login_sec == "Esqueci a senha":
         st.subheader("Redefinir senha (com chapa do líder do setor)")
         con = db_conn()
         setores_df = pd.concat([
@@ -5997,13 +6001,12 @@ def page_app():
     if is_admin_area:
         tabs.append("🔒 Admin")
 
-    abas = st.tabs(tabs)
+    sec_main = st.radio("Navegação", tabs, horizontal=True, key="main_nav_radio_ultra_fast")
 
     # ------------------------------------------------------
     # ABA 1: Colaboradores
     # ------------------------------------------------------
-    with abas[0]:
-        colaboradores = load_colaboradores_setor(setor)
+    if sec_main == "👥 Colaboradores":
         sec_col = st.radio(
             "",
             ["👥 Colaboradores", "➕ Cadastrar colaborador", "🗑️ Excluir colaborador", "✏️ Editar perfil"],
@@ -6014,6 +6017,7 @@ def page_app():
 
         if sec_col == "👥 Colaboradores":
             st.markdown("### 👥 Colaboradores")
+            colaboradores = load_colaboradores_setor(setor)
             if colaboradores:
                 df_col = pd.DataFrame([{
                     "Nome": c["Nome"],
@@ -6051,6 +6055,7 @@ def page_app():
             st.markdown("---")
 
         elif sec_col == "➕ Cadastrar colaborador":
+            colaboradores = load_colaboradores_setor(setor)
             st.markdown("## ➕ Cadastrar colaborador (perfil completo + folgas do mês)")
 
             ano_cfg = int(st.session_state.get("cfg_ano", datetime.now().year))
@@ -6095,6 +6100,7 @@ def page_app():
             st.markdown("---")
 
         elif sec_col == "🗑️ Excluir colaborador":
+            colaboradores = load_colaboradores_setor(setor)
             st.markdown("## 🗑️ Excluir colaborador")
             if colaboradores:
                 opts = []
@@ -6118,6 +6124,7 @@ def page_app():
             st.markdown("---")
 
         elif sec_col == "✏️ Editar perfil":
+            colaboradores = load_colaboradores_setor(setor)
             st.markdown("## ✏️ Editar perfil do colaborador")
             if colaboradores:
                 chapas = [c["Chapa"] for c in colaboradores]
@@ -6181,7 +6188,7 @@ def page_app():
 
                 st.markdown("---")
 
-    with abas[1]:
+    elif sec_main == "🚀 Gerar Escala":
         st.subheader("🚀 Gerar escala")
         st.caption(f"Competência ativa: **{int(st.session_state['cfg_mes']):02d}/{int(st.session_state['cfg_ano'])}**")
 
@@ -6262,7 +6269,7 @@ def page_app():
     # ------------------------------------------------------
     # ABA 3: Ajustes
     # ------------------------------------------------------
-    with abas[2]:
+    elif sec_main == "⚙️ Ajustes":
         st.subheader("⚙️ Ajustes (travas) — sempre entram na geração")
 
         with st.container(border=True):
@@ -6283,14 +6290,9 @@ def page_app():
         else:
             hist_db = apply_overrides_to_hist(setor, ano, mes, hist_db)
 
-            tgrid, t2, t3, t4 = st.tabs([
-                "🧩 Folgas manuais em grade",
-                "🔁 Troca de horários",
-                "✅ Preferência por subgrupo",
-                "📌 Subgrupos (editável)"
-            ])
+            sec_aj = st.radio("", ["🧩 Folgas manuais em grade", "🔁 Troca de horários", "✅ Preferência por subgrupo", "📌 Subgrupos (editável)"], horizontal=True, key="ajustes_nav_fast", label_visibility="collapsed")
 
-            with tgrid:
+            if sec_aj == "🧩 Folgas manuais em grade":
                 st.markdown("### 🧩 Folgas manuais em grade (por colaborador)")
                 st.caption("Marque/desmarque as folgas do mês. Isso cria/remove travas (overrides) de Status=Folga. Domingo é editável aqui (manual é soberano).")
                 # --- filtro de colaboradores (para facilitar)
@@ -6390,7 +6392,7 @@ def page_app():
                     st.success(f"Salvo! Folgas travadas: {set_folga} | Trabalhos travados: {set_trab}.")
                     st.rerun()
 
-            with t2:
+            elif sec_aj == "🔁 Troca de horários":
                             st.markdown("### 🔁 Troca de horários em grade (por colaborador)")
                             st.caption("Escolha o horário e marque (quadradinhos) os dias em que ele deve valer. **Folga/Férias sempre prevalecem**: se o dia estiver como Folga/Férias/AFA, o sistema NÃO aplica horário nesse dia.")
 
@@ -6541,7 +6543,7 @@ def page_app():
                                 st.success(f"Salvo! Ação: {acao_th}. Aplicados: {applied}. Ignorados (por conflito com Folga/Férias): {skipped}.")
                                 st.rerun()
 
-            with t3:
+            elif sec_aj == "✅ Preferência por subgrupo":
                 st.markdown("### ✅ Preferência por subgrupo (Evitar folga se possível)")
                 subgrupos = list_subgrupos(setor)
                 if subgrupos:
@@ -6567,7 +6569,7 @@ def page_app():
                 else:
                     st.info("Crie pelo menos 1 subgrupo na aba 👥 Colaboradores.")
 
-            with t4:
+            elif sec_aj == "📌 Subgrupos (editável)":
                 st.markdown("## 📌 Subgrupos (editável)")
                 subgrupos = list_subgrupos(setor)
 
@@ -6596,7 +6598,7 @@ def page_app():
     # ------------------------------------------------------
     # ABA 4: Férias
     # ------------------------------------------------------
-    with abas[3]:
+    elif sec_main == "🏖️ Férias":
         st.subheader("🏖️ Controle de Férias")
 
         st.markdown("---")
@@ -6605,12 +6607,12 @@ def page_app():
         if not colaboradores:
             st.warning("Sem colaboradores cadastrados.")
         else:
-            tabs_fer = st.tabs(["🗺️ Mapa anual de férias", "➕ Lançar Férias", "📊 Controle (histórico)", "📋 Férias cadastradas", "❌ Remover férias"])
+            sec_fer = st.radio("", ["🗺️ Mapa anual de férias", "➕ Lançar Férias", "📊 Controle (histórico)", "📋 Férias cadastradas", "❌ Remover férias"], horizontal=True, key="ferias_nav_fast", label_visibility="collapsed")
 
             # ---------------------------
             # TAB 1 — MAPA ANUAL
             # ---------------------------
-            with tabs_fer[0]:
+            if sec_fer == "🗺️ Mapa anual de férias":
                 st.markdown("## 🗺️ Mapa anual de férias (visual)")
                 col_map1, col_map2 = st.columns([1, 3])
                 ano_mapa = col_map1.number_input("Ano do mapa", value=int(st.session_state.get("cfg_ano", datetime.now().year)), step=1, key="fer_mapa_ano")
@@ -6623,7 +6625,7 @@ def page_app():
             # ---------------------------
             # TAB 2 — LANÇAR
             # ---------------------------
-            with tabs_fer[1]:
+            elif sec_fer == "➕ Lançar Férias":
                 st.markdown("### ➕ Lançar Férias")
                 opts = []
                 for c in colaboradores:
@@ -6663,7 +6665,7 @@ def page_app():
             # ---------------------------
             # TAB 3 — CONTROLE / HISTÓRICO
             # ---------------------------
-            with tabs_fer[2]:
+            elif sec_fer == "📊 Controle (histórico)":
                 st.markdown("### 📊 Controle de Férias (histórico por mês)")
                 ano_ref = st.number_input(
                     "Ano para análise:",
@@ -6728,7 +6730,7 @@ def page_app():
             # ---------------------------
             # TAB 4 — CADASTRADAS
             # ---------------------------
-            with tabs_fer[3]:
+            elif sec_fer == "📋 Férias cadastradas":
                 st.markdown("### 📋 Férias cadastradas")
                 rows = list_ferias(setor)
                 if rows:
@@ -6742,7 +6744,7 @@ def page_app():
             # ---------------------------
             # TAB 5 — REMOVER
             # ---------------------------
-            with tabs_fer[4]:
+            elif sec_fer == "❌ Remover férias":
                 st.markdown("### ❌ Remover férias")
                 rows = list_ferias(setor)
                 if not rows:
@@ -6760,9 +6762,9 @@ def page_app():
                         st.success("Férias removidas e escala readequada!")
                         st.rerun()
 
-    with abas[4]:
-        sub_imp1, sub_imp2, sub_imp3, sub_imp4 = st.tabs(["📊 Excel modelo", "🗓️ Quem trabalha no dia", "📅 Escala", "🖨️ Imprimir escala parede"])
-        with sub_imp1:
+    elif sec_main == "🖨️ Impressão":
+        sec_imp = st.radio("", ["📊 Excel modelo", "🗓️ Quem trabalha no dia", "📅 Escala", "🖨️ Imprimir escala parede"], horizontal=True, key="impressao_nav_fast", label_visibility="collapsed")
+        if sec_imp == "📊 Excel modelo":
             st.subheader("📊 Excel modelo RH (separado por subgrupo)")
             ano = int(st.session_state["cfg_ano"])
             mes = int(st.session_state["cfg_mes"])
@@ -6950,7 +6952,7 @@ def page_app():
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         key="xls_down"
                     )
-        with sub_imp2:
+        elif sec_imp == "🗓️ Quem trabalha no dia":
             # --- Lista (e PDF) de quem TRABALHA no dia escolhido ---
             st.markdown("### 🗓️ Quem trabalha no dia (para impressão)")
             try:
@@ -7012,7 +7014,7 @@ def page_app():
 
 
 
-        with sub_imp3:
+        elif sec_imp == "📅 Escala":
             st.subheader("📅 Escala")
             st.markdown("---")
             st.markdown("### 🏖️ Férias do mês (PDF)")
@@ -7035,7 +7037,7 @@ def page_app():
                     use_container_width=True,
                     key="pdf_fer_dl"
                 )
-        with sub_imp4:
+        elif sec_imp == "🖨️ Imprimir escala parede":
             st.subheader("🖨️ Imprimir escala parede")
 
             all_subgrupos = sorted({((c.get("Subgrupo") or "").strip() or "SEM SUBGRUPO") for c in colaboradores})
@@ -7125,8 +7127,7 @@ def page_app():
     # ------------------------------------------------------
     # ABA 6: Admin (somente ADMIN)
     # ------------------------------------------------------
-    if is_admin_area:
-        with abas[5]:
+    elif is_admin_area and sec_main == "🔒 Admin":
             st.subheader("🔒 Admin do Sistema (somente ADMIN)")
             dfu = admin_list_users()
             st.dataframe(dfu, use_container_width=True, height=420)
