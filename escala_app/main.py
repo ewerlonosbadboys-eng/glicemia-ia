@@ -7164,7 +7164,7 @@ def page_app():
                                 key="pdf_down_pan"
                             )
                     else:
-                        hist_db_pdf = load_escala_mes_db(setor, ano, mes)
+                        hist_db_pdf = load_escala_mes_db(setor, ano_ref, mes_ref)
                         if not hist_db_pdf:
                             st.warning("Gere a escala antes na aba 🚀 Gerar Escala.")
                         else:
