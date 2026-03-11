@@ -15,6 +15,7 @@ import sqlite3
 import string
 import uuid
 import zipfile
+import tempfile
 from datetime import datetime, timedelta
 from io import BytesIO
 from pathlib import Path
@@ -76,6 +77,155 @@ ARQ_M_ROOT = BASE_DIR / "mensagens_admin_BETA.csv"
 DB_USERS = DATA_DIR / "usuarios.db"
 APP_DB = DATA_DIR / "saude_kids.db"
 
+# ================= SUPABASE =================
+try:
+    from supabase import create_client  # type: ignore
+except Exception:
+    create_client = None
+
+SUPABASE_URL = (st.secrets.get("SUPABASE_URL", "") or os.getenv("SUPABASE_URL", "")).strip()
+SUPABASE_KEY = (st.secrets.get("SUPABASE_KEY", "") or os.getenv("SUPABASE_KEY", "")).strip()
+USE_SUPABASE = bool(create_client and SUPABASE_URL and SUPABASE_KEY)
+SB = create_client(SUPABASE_URL, SUPABASE_KEY) if USE_SUPABASE else None
+
+TABLE_DB_COLS = {
+    "users": ["nome", "email", "senha"],
+    "plans": ["email", "created_at", "trial_end", "paid_until"],
+    "billing_msgs": ["id", "email", "data_hora", "mensagem", "status"],
+    "glicemia": ["id", "usuario", "data", "hora", "valor", "momento", "dose", "dose_rapida", "dose_longa"],
+    "nutricao": ["id", "usuario", "data", "momento", "info", "c", "p", "g"],
+    "receita": [
+        "usuario",
+        "manha_f1_min", "manha_f1_max", "manha_f1_dose",
+        "manha_f2_min", "manha_f2_max", "manha_f2_dose",
+        "manha_f3_min", "manha_f3_max", "manha_f3_dose",
+        "noite_f1_min", "noite_f1_max", "noite_f1_dose",
+        "noite_f2_min", "noite_f2_max", "noite_f2_dose",
+        "noite_f3_min", "noite_f3_max", "noite_f3_dose",
+        "glargina_cafe_ui", "glargina_janta_ui"
+    ],
+    "sugestoes": ["id", "usuario", "data", "sugestao"],
+}
+TABLE_UI_COLS = {
+    "users": ["nome", "email", "senha"],
+    "plans": ["email", "created_at", "trial_end", "paid_until"],
+    "billing_msgs": ["id", "email", "data_hora", "mensagem", "status"],
+    "glicemia": ["ID", "Usuario", "Data", "Hora", "Valor", "Momento", "Dose", "Dose_Rapida", "Dose_Longa"],
+    "nutricao": ["ID", "Usuario", "Data", "Momento", "Info", "C", "P", "G"],
+    "receita": [
+        "Usuario",
+        "manha_f1_min", "manha_f1_max", "manha_f1_dose",
+        "manha_f2_min", "manha_f2_max", "manha_f2_dose",
+        "manha_f3_min", "manha_f3_max", "manha_f3_dose",
+        "noite_f1_min", "noite_f1_max", "noite_f1_dose",
+        "noite_f2_min", "noite_f2_max", "noite_f2_dose",
+        "noite_f3_min", "noite_f3_max", "noite_f3_dose",
+        "glargina_cafe_ui", "glargina_janta_ui"
+    ],
+    "sugestoes": ["ID", "Usuario", "Data", "Sugestão"],
+}
+TABLE_RENAME_TO_DB = {t: dict(zip(TABLE_UI_COLS[t], TABLE_DB_COLS[t])) for t in TABLE_DB_COLS if t in TABLE_UI_COLS}
+TABLE_RENAME_TO_UI = {t: dict(zip(TABLE_DB_COLS[t], TABLE_UI_COLS[t])) for t in TABLE_DB_COLS if t in TABLE_UI_COLS}
+
+def _df_to_db(table: str, df: pd.DataFrame) -> pd.DataFrame:
+    if df is None:
+        return pd.DataFrame(columns=TABLE_DB_COLS.get(table, []))
+    out = df.copy()
+    rn = TABLE_RENAME_TO_DB.get(table, {})
+    out = out.rename(columns=rn)
+    cols = TABLE_DB_COLS.get(table, list(out.columns))
+    for c in cols:
+        if c not in out.columns:
+            out[c] = None
+    return out[cols]
+
+def _df_to_ui(table: str, df: pd.DataFrame) -> pd.DataFrame:
+    if df is None:
+        return pd.DataFrame(columns=TABLE_UI_COLS.get(table, []))
+    out = df.copy()
+    rn = TABLE_RENAME_TO_UI.get(table, {})
+    out = out.rename(columns=rn)
+    cols = TABLE_UI_COLS.get(table, list(out.columns))
+    for c in cols:
+        if c not in out.columns:
+            out[c] = None
+    return out[cols]
+
+def sb_select_df(table: str, filters: dict | None = None, order_by: str | None = None) -> pd.DataFrame:
+    if not USE_SUPABASE:
+        return pd.DataFrame(columns=TABLE_UI_COLS.get(table, []))
+    q = SB.table(table).select('*')
+    for k, v in (filters or {}).items():
+        q = q.eq(k, v)
+    if order_by:
+        q = q.order(order_by)
+    data = q.execute().data or []
+    return _df_to_ui(table, pd.DataFrame(data))
+
+def sb_upsert_df(table: str, df: pd.DataFrame, on_conflict: str | None = None):
+    if df is None or df.empty or not USE_SUPABASE:
+        return
+    payload = _df_to_db(table, df).where(pd.notnull(_df_to_db(table, df)), None).to_dict(orient='records')
+    if not payload:
+        return
+    if on_conflict:
+        SB.table(table).upsert(payload, on_conflict=on_conflict).execute()
+    else:
+        SB.table(table).upsert(payload).execute()
+
+def sb_insert_df(table: str, df: pd.DataFrame):
+    if df is None or df.empty or not USE_SUPABASE:
+        return
+    payload = _df_to_db(table, df).where(pd.notnull(_df_to_db(table, df)), None).to_dict(orient='records')
+    if payload:
+        SB.table(table).insert(payload).execute()
+
+def sb_delete_where(table: str, filters: dict):
+    if not USE_SUPABASE:
+        return
+    q = SB.table(table).delete()
+    for k, v in filters.items():
+        q = q.eq(k, v)
+    q.execute()
+
+def sb_update_where(table: str, values: dict, filters: dict):
+    if not USE_SUPABASE:
+        return
+    q = SB.table(table).update(values)
+    for k, v in filters.items():
+        q = q.eq(k, v)
+    q.execute()
+
+def _safe_table_df(table: str) -> pd.DataFrame:
+    try:
+        return sb_select_df(table)
+    except Exception:
+        return pd.DataFrame(columns=TABLE_UI_COLS.get(table, []))
+
+def _read_sqlite_df(db_path, query: str) -> pd.DataFrame:
+    if not Path(db_path).exists():
+        return pd.DataFrame()
+    conn = sqlite3.connect(db_path)
+    try:
+        return pd.read_sql_query(query, conn)
+    except Exception:
+        return pd.DataFrame()
+    finally:
+        conn.close()
+
+def _import_legacy_df_to_supabase(table: str, df: pd.DataFrame, clear_first: bool = False):
+    if df is None or df.empty or not USE_SUPABASE:
+        return
+    try:
+        if clear_first:
+            SB.table(table).delete().neq(TABLE_DB_COLS[table][0], '__never__').execute()
+    except Exception:
+        pass
+    conflict = {
+        'users':'email','plans':'email','billing_msgs':'id','glicemia':'id','nutricao':'id','receita':'usuario','sugestoes':'id'
+    }.get(table)
+    sb_upsert_df(table, df, on_conflict=conflict)
+
 # ================= NORMALIZAÇÃO =================
 def norm_email(x: str) -> str:
     return (x or "").strip().lower()
@@ -99,26 +249,49 @@ ARQUIVOS_BACKUP_MAPA = {
     "mensagens_admin_BETA.csv": ARQ_M,
 }
 
+def _export_supabase_tables_for_backup(tmp_dir: Path):
+    if not USE_SUPABASE:
+        return []
+    exported = []
+    mapping = {
+        'users':'users.csv', 'plans':'plans.csv', 'billing_msgs':'billing_msgs.csv',
+        'glicemia':'glicemia.csv', 'nutricao':'nutricao.csv', 'receita':'receita.csv', 'sugestoes':'sugestoes.csv'
+    }
+    for table, fname in mapping.items():
+        df = _safe_table_df(table)
+        if not df.empty:
+            df.to_csv(tmp_dir / fname, index=False)
+            exported.append(fname)
+    return exported
+
 def criar_backup_zip_em_bytes():
     ts = agora_br().strftime("%Y-%m-%d_%H-%M-%S")
     nome = f"backup_saude_kids_{ts}.zip"
     out = BytesIO()
 
-    with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as z:
-        for nome_zip, caminho_real in ARQUIVOS_BACKUP_MAPA.items():
-            caminho_real = Path(caminho_real)
-            if caminho_real.exists():
-                z.write(caminho_real, arcname=nome_zip)
+    with tempfile.TemporaryDirectory() as td:
+        tmp_dir = Path(td)
+        arquivos = []
+        if USE_SUPABASE:
+            arquivos.extend(_export_supabase_tables_for_backup(tmp_dir))
+        else:
+            for nome_zip, caminho_real in ARQUIVOS_BACKUP_MAPA.items():
+                caminho_real = Path(caminho_real)
+                if caminho_real.exists():
+                    shutil.copy2(caminho_real, tmp_dir / nome_zip)
+                    arquivos.append(nome_zip)
 
-        manifest = {
-            "criado_em": agora_br().strftime("%d/%m/%Y %H:%M:%S"),
-            "tipo": "backup_completo_global",
-            "inclui_todos_usuarios": True,
-            "arquivos": list(ARQUIVOS_BACKUP_MAPA.keys()),
-            "app": "Saúde Kids BETA",
-        }
-        z.writestr("manifest.json", pd.Series(manifest).to_json(force_ascii=False, indent=2))
-
+        with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as z:
+            for p in tmp_dir.glob('*'):
+                z.write(p, arcname=p.name)
+            manifest = {
+                "criado_em": agora_br().strftime("%d/%m/%Y %H:%M:%S"),
+                "tipo": "backup_completo_global",
+                "backend": "supabase" if USE_SUPABASE else "sqlite_local",
+                "arquivos": arquivos,
+                "app": "Saúde Kids BETA",
+            }
+            z.writestr("manifest.json", pd.Series(manifest).to_json(force_ascii=False, indent=2))
     out.seek(0)
     return out.getvalue(), nome
 
@@ -135,40 +308,76 @@ def restaurar_backup_zip_bytes(zip_bytes: bytes):
     if tmp_dir.exists():
         shutil.rmtree(tmp_dir)
     tmp_dir.mkdir(parents=True, exist_ok=True)
-
     with zipfile.ZipFile(BytesIO(zip_bytes), "r") as z:
         z.extractall(tmp_dir)
 
     restaurados = []
+    try:
+        if USE_SUPABASE:
+            # CSVs modernos
+            csv_map = {
+                'users.csv':'users', 'plans.csv':'plans', 'billing_msgs.csv':'billing_msgs',
+                'glicemia.csv':'glicemia', 'nutricao.csv':'nutricao', 'receita.csv':'receita', 'sugestoes.csv':'sugestoes'
+            }
+            for fname, table in csv_map.items():
+                p = tmp_dir / fname
+                if p.exists():
+                    df = pd.read_csv(p)
+                    _import_legacy_df_to_supabase(table, df)
+                    restaurados.append(fname)
 
-    for nome_zip, destino in ARQUIVOS_BACKUP_MAPA.items():
-        src = None
+            # bancos antigos
+            p_users = tmp_dir / 'usuarios.db'
+            if p_users.exists():
+                for table, query in {
+                    'users':'select nome, email, senha from users',
+                    'plans':'select email, created_at, trial_end, paid_until from plans',
+                    'billing_msgs':'select id, email, data_hora, mensagem, status from billing_msgs'
+                }.items():
+                    df = _read_sqlite_df(p_users, query)
+                    if not df.empty:
+                        _import_legacy_df_to_supabase(table, df)
+                restaurados.append('usuarios.db')
 
-        candidato = tmp_dir / nome_zip
-        if candidato.exists():
-            src = candidato
+            p_app = tmp_dir / 'saude_kids.db'
+            if p_app.exists():
+                for table, query in {
+                    'glicemia':'select * from glicemia', 'nutricao':'select * from nutricao',
+                    'receita':'select * from receita', 'sugestoes':'select * from sugestoes'
+                }.items():
+                    df = _read_sqlite_df(p_app, query)
+                    if not df.empty:
+                        _import_legacy_df_to_supabase(table, df)
+                restaurados.append('saude_kids.db')
+
+            # CSVs legados
+            legacy = {
+                'dados_glicemia_BETA.csv':'glicemia', 'dados_nutricao_BETA.csv':'nutricao',
+                'config_receita_BETA.csv':'receita', 'mensagens_admin_BETA.csv':'sugestoes'
+            }
+            for fname, table in legacy.items():
+                p = tmp_dir / fname
+                if p.exists():
+                    try:
+                        df = pd.read_csv(p)
+                        _import_legacy_df_to_supabase(table, df)
+                        restaurados.append(fname)
+                    except Exception:
+                        pass
         else:
-            encontrados = list(tmp_dir.rglob(nome_zip))
-            if encontrados:
-                src = encontrados[0]
-
-        if src and src.exists():
-            Path(destino).parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, destino)
-            restaurados.append(nome_zip)
-
-    manifest = tmp_dir / "manifest.json"
-    if manifest.exists():
-        restaurados.append("manifest.json")
-
-    shutil.rmtree(tmp_dir)
+            for nome_zip, destino in ARQUIVOS_BACKUP_MAPA.items():
+                src = tmp_dir / nome_zip
+                if src.exists():
+                    Path(destino).parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(src, destino)
+                    restaurados.append(nome_zip)
+        if (tmp_dir / 'manifest.json').exists():
+            restaurados.append('manifest.json')
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
     return restaurados
 
 def backup_automatico_diario_3h():
-    """
-    Streamlit não roda 24/7.
-    Regra: após 03:00, se ainda não fez backup HOJE => faz 1.
-    """
     agora = agora_br()
     hoje = agora.strftime("%Y-%m-%d")
     if agora.hour >= 3:
@@ -176,8 +385,11 @@ def backup_automatico_diario_3h():
         if BACKUP_STATE_FILE.exists():
             ultima = BACKUP_STATE_FILE.read_text(encoding="utf-8").strip()
         if ultima != hoje:
-            criar_backup_zip_em_disco()
-            BACKUP_STATE_FILE.write_text(hoje, encoding="utf-8")
+            try:
+                criar_backup_zip_em_disco()
+                BACKUP_STATE_FILE.write_text(hoje, encoding="utf-8")
+            except Exception:
+                pass
 
 def listar_backups() -> pd.DataFrame:
     backups = []
@@ -192,8 +404,7 @@ def listar_backups() -> pd.DataFrame:
         })
     if not backups:
         return pd.DataFrame(columns=["arquivo", "caminho", "data_hora", "tamanho_mb"])
-    df = pd.DataFrame(backups).sort_values("data_hora", ascending=False).reset_index(drop=True)
-    return df
+    return pd.DataFrame(backups).sort_values("data_hora", ascending=False).reset_index(drop=True)
 
 def apagar_backups_antigos(dias_manter=7) -> int:
     limite = agora_br() - timedelta(days=dias_manter)
@@ -258,149 +469,110 @@ def enviar_senha_nova(email_destino, senha_nova):
         return False
 
 # ================= DB USERS =================
-# ================= DB USERS + PLANOS =================
 TESTE_DIAS = 20
 MENSALIDADE_DIAS = 30
 
+def _users_df():
+    return _safe_table_df('users') if USE_SUPABASE else pd.DataFrame(columns=['nome','email','senha'])
+
+def _plans_df():
+    return _safe_table_df('plans') if USE_SUPABASE else pd.DataFrame(columns=['email','created_at','trial_end','paid_until'])
+
+def _billing_df():
+    df = _safe_table_df('billing_msgs') if USE_SUPABASE else pd.DataFrame(columns=['id','email','data_hora','mensagem','status'])
+    if not df.empty and 'id' in df.columns:
+        try:
+            df = df.sort_values('id', ascending=False)
+        except Exception:
+            pass
+    return df
+
+def _get_user_row(email: str):
+    email = norm_email(email)
+    df = sb_select_df('users', {'email': email}) if USE_SUPABASE else pd.DataFrame()
+    return df.iloc[0].to_dict() if not df.empty else None
+
+def _verify_user(email: str, senha: str) -> bool:
+    row = _get_user_row(email)
+    return bool(row and norm_senha(row.get('senha','')) == norm_senha(senha))
+
+def _create_user(nome: str, email: str, senha: str):
+    email = norm_email(email)
+    if _get_user_row(email):
+        raise ValueError('exists')
+    sb_insert_df('users', pd.DataFrame([{'nome': nome, 'email': email, 'senha': senha}]))
+
+def _set_user_password(email: str, senha: str):
+    sb_update_where('users', {'senha': senha}, {'email': norm_email(email)})
+
 def init_db():
-    conn = sqlite3.connect(DB_USERS)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            nome TEXT,
-            email TEXT PRIMARY KEY,
-            senha TEXT
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS plans (
-            email TEXT PRIMARY KEY,
-            created_at TEXT,
-            trial_end TEXT,
-            paid_until TEXT
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS billing_msgs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            email TEXT,
-            data_hora TEXT,
-            mensagem TEXT,
-            status TEXT DEFAULT 'novo'
-        )
-    """)
-
-    if not conn.execute("SELECT 1 FROM users WHERE email='admin'").fetchone():
-        conn.execute("INSERT INTO users VALUES ('Administrador', 'admin', '542820')")
-
-    # garante plano admin
-    if not conn.execute("SELECT 1 FROM plans WHERE email='admin'").fetchone():
-        now = agora_br()
-        conn.execute(
-            "INSERT INTO plans(email, created_at, trial_end, paid_until) VALUES (?,?,?,?)",
-            ('admin', now.isoformat(), now.isoformat(), '2099-12-31T23:59:59')
-        )
-
-    conn.commit()
-    conn.close()
-
-def _db_conn():
-    return sqlite3.connect(DB_USERS)
+    if USE_SUPABASE:
+        if _get_user_row('admin') is None:
+            sb_insert_df('users', pd.DataFrame([{'nome':'Administrador','email':'admin','senha':'542820'}]))
+        dfp = sb_select_df('plans', {'email':'admin'})
+        if dfp.empty:
+            now = agora_br().isoformat()
+            sb_insert_df('plans', pd.DataFrame([{'email':'admin','created_at':now,'trial_end':now,'paid_until':'2099-12-31T23:59:59'}]))
 
 def garantir_plano(email: str):
     email = norm_email(email)
-    if not email or email == "admin":
+    if not email or email == 'admin' or not USE_SUPABASE:
         return
-    conn = _db_conn()
-    cur = conn.cursor()
-    if not cur.execute("SELECT 1 FROM plans WHERE email=?", (email,)).fetchone():
+    df = sb_select_df('plans', {'email': email})
+    if df.empty:
         now = agora_br()
         trial_end = now + timedelta(days=TESTE_DIAS)
-        cur.execute(
-            "INSERT INTO plans(email, created_at, trial_end, paid_until) VALUES (?,?,?,?)",
-            (email, now.isoformat(), trial_end.isoformat(), "")
-        )
-        conn.commit()
-    conn.close()
+        sb_insert_df('plans', pd.DataFrame([{'email': email, 'created_at': now.isoformat(), 'trial_end': trial_end.isoformat(), 'paid_until': ''}]))
 
 def get_plano_status(email: str):
     email = norm_email(email)
-    if email == "admin":
-        return {"allowed": True, "motivo": "admin", "trial_end": None, "paid_until": None, "dias_restantes": None}
-
+    if email == 'admin':
+        return {'allowed': True, 'motivo': 'admin', 'trial_end': None, 'paid_until': None, 'dias_restantes': None}
     garantir_plano(email)
-
-    conn = _db_conn()
-    cur = conn.cursor()
-    r = cur.execute("SELECT trial_end, paid_until FROM plans WHERE email=?", (email,)).fetchone()
-    conn.close()
-
+    df = sb_select_df('plans', {'email': email}) if USE_SUPABASE else pd.DataFrame()
     now = agora_br()
     trial_end = None
     paid_until = None
-    if r:
+    if not df.empty:
+        r = df.iloc[0]
         try:
-            trial_end = datetime.fromisoformat(r[0]) if r[0] else None
+            trial_end = datetime.fromisoformat(str(r.get('trial_end') or '')) if str(r.get('trial_end') or '').strip() else None
         except Exception:
             trial_end = None
         try:
-            paid_until = datetime.fromisoformat(r[1]) if r[1] else None
+            paid_until = datetime.fromisoformat(str(r.get('paid_until') or '')) if str(r.get('paid_until') or '').strip() else None
         except Exception:
             paid_until = None
-
     if paid_until and now <= paid_until:
         dias = (paid_until.date() - now.date()).days
-        return {"allowed": True, "motivo": "pago", "trial_end": trial_end, "paid_until": paid_until, "dias_restantes": dias}
-
+        return {'allowed': True, 'motivo': 'pago', 'trial_end': trial_end, 'paid_until': paid_until, 'dias_restantes': dias}
     if trial_end and now <= trial_end:
         dias = (trial_end.date() - now.date()).days
-        return {"allowed": True, "motivo": "teste", "trial_end": trial_end, "paid_until": paid_until, "dias_restantes": dias}
-
-    return {"allowed": False, "motivo": "expirado", "trial_end": trial_end, "paid_until": paid_until, "dias_restantes": 0}
+        return {'allowed': True, 'motivo': 'teste', 'trial_end': trial_end, 'paid_until': paid_until, 'dias_restantes': dias}
+    return {'allowed': False, 'motivo': 'expirado', 'trial_end': trial_end, 'paid_until': paid_until, 'dias_restantes': 0}
 
 def registrar_mensagem_mensalidade(email: str, mensagem: str):
     email = norm_email(email)
     if not email:
         return
-    conn = _db_conn()
-    conn.execute(
-        "INSERT INTO billing_msgs(email, data_hora, mensagem, status) VALUES (?,?,?,?)",
-        (email, agora_br().strftime("%d/%m/%Y %H:%M"), (mensagem or "").strip(), "novo")
-    )
-    conn.commit()
-    conn.close()
+    sb_insert_df('billing_msgs', pd.DataFrame([{'email': email, 'data_hora': agora_br().strftime('%d/%m/%Y %H:%M'), 'mensagem': (mensagem or '').strip(), 'status': 'novo'}]))
 
 def listar_mensagens_mensalidade():
-    conn = _db_conn()
-    try:
-        df = pd.read_sql_query("SELECT id, email, data_hora, mensagem, status FROM billing_msgs ORDER BY id DESC", conn)
-    except Exception:
-        df = pd.DataFrame(columns=["id","email","data_hora","mensagem","status"])
-    conn.close()
-    return df
+    return _billing_df()
 
 def marcar_mensagem_status(msg_id: int, status: str):
-    conn = _db_conn()
-    conn.execute("UPDATE billing_msgs SET status=? WHERE id=?", (status, int(msg_id)))
-    conn.commit()
-    conn.close()
+    sb_update_where('billing_msgs', {'status': status}, {'id': int(msg_id)})
 
 def excluir_mensagem(msg_id: int):
-    conn = _db_conn()
-    conn.execute("DELETE FROM billing_msgs WHERE id=?", (int(msg_id),))
-    conn.commit()
-    conn.close()
+    sb_delete_where('billing_msgs', {'id': int(msg_id)})
 
 def ativar_mensalidade(email: str, dias: int = MENSALIDADE_DIAS):
     email = norm_email(email)
-    if not email or email == "admin":
+    if not email or email == 'admin':
         return
     garantir_plano(email)
-    now = agora_br()
-    paid_until = now + timedelta(days=int(dias))
-    conn = _db_conn()
-    conn.execute("UPDATE plans SET paid_until=? WHERE email=?", (paid_until.isoformat(), email))
-    conn.commit()
-    conn.close()
+    paid_until = (agora_br() + timedelta(days=int(dias))).isoformat()
+    sb_upsert_df('plans', pd.DataFrame([{'email': email, 'paid_until': paid_until}]), on_conflict='email')
 
 init_db()
 
@@ -451,247 +623,83 @@ if not st.session_state.logado:
 
 # ================= ARQUIVOS (DADOS) =================
 TABLE_BY_FILE = {
-    str(ARQ_G): "glicemia",
-    str(ARQ_N): "nutricao",
-    str(ARQ_R): "receita",
-    str(ARQ_M): "sugestoes",
-    str(ARQ_M_ROOT): "sugestoes",
+    str(ARQ_G): 'glicemia',
+    str(ARQ_N): 'nutricao',
+    str(ARQ_R): 'receita',
+    str(ARQ_M): 'sugestoes',
+    str(ARQ_M_ROOT): 'sugestoes',
 }
 
-
-def _app_conn():
-    conn = sqlite3.connect(APP_DB)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
 def _table_for_file(arq) -> str:
-    return TABLE_BY_FILE.get(str(arq), "")
+    return TABLE_BY_FILE.get(str(arq), '')
 
-
-def _read_table_df(table: str, where: str = "", params=()):
-    cols_map = {
-        "glicemia": ["ID", "Usuario", "Data", "Hora", "Valor", "Momento", "Dose", "Dose_Rapida", "Dose_Longa"],
-        "nutricao": ["ID", "Usuario", "Data", "Momento", "Info", "C", "P", "G"],
-        "receita": [
-            "Usuario",
-            "manha_f1_min", "manha_f1_max", "manha_f1_dose",
-            "manha_f2_min", "manha_f2_max", "manha_f2_dose",
-            "manha_f3_min", "manha_f3_max", "manha_f3_dose",
-            "noite_f1_min", "noite_f1_max", "noite_f1_dose",
-            "noite_f2_min", "noite_f2_max", "noite_f2_dose",
-            "noite_f3_min", "noite_f3_max", "noite_f3_dose",
-            "glargina_cafe_ui", "glargina_janta_ui"
-        ],
-        "sugestoes": ["ID", "Usuario", "Data", "Sugestão"],
-    }
-    cols = cols_map.get(table, [])
-    if not cols:
-        return pd.DataFrame()
-    sql = f"SELECT {', '.join(cols)} FROM {table}" + (f" WHERE {where}" if where else "")
-    conn = _app_conn()
-    try:
-        return pd.read_sql_query(sql, conn, params=params)
-    except Exception:
-        return pd.DataFrame(columns=cols)
-    finally:
-        conn.close()
-
+def _read_table_df(table: str, where: str = '', params=()):
+    filters = {}
+    if where == 'Usuario=?' and params:
+        filters = {'usuario': params[0]}
+    elif where == 'email=?' and params:
+        filters = {'email': params[0]}
+    return sb_select_df(table, filters=filters) if USE_SUPABASE else pd.DataFrame(columns=TABLE_UI_COLS.get(table, []))
 
 def _append_df_table(table: str, df: pd.DataFrame):
-    if df is None or df.empty:
-        return
-    conn = _app_conn()
-    df.to_sql(table, conn, if_exists="append", index=False)
-    conn.close()
-
+    sb_insert_df(table, df)
 
 def _replace_user_rows(table: str, user_email: str, df_new: pd.DataFrame):
-    conn = _app_conn()
-    cur = conn.cursor()
-    cur.execute(f"DELETE FROM {table} WHERE Usuario=?", (user_email,))
+    sb_delete_where(table, {'usuario': user_email})
     if df_new is not None and not df_new.empty:
-        df_new.to_sql(table, conn, if_exists="append", index=False)
-    conn.commit()
-    conn.close()
-
+        sb_insert_df(table, df_new)
 
 def _delete_user_app_data(user_email: str):
-    conn = _app_conn()
-    cur = conn.cursor()
-    for table in ["glicemia", "nutricao", "receita", "sugestoes"]:
-        cur.execute(f"DELETE FROM {table} WHERE Usuario=?", (user_email,))
-    conn.commit()
-    conn.close()
-
+    for table in ['glicemia', 'nutricao', 'receita', 'sugestoes']:
+        sb_delete_where(table, {'usuario': user_email})
 
 def init_app_db():
-    conn = _app_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS glicemia (
-            ID TEXT PRIMARY KEY,
-            Usuario TEXT,
-            Data TEXT,
-            Hora TEXT,
-            Valor INTEGER,
-            Momento TEXT,
-            Dose TEXT,
-            Dose_Rapida TEXT,
-            Dose_Longa TEXT
-        )
-    """)
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS nutricao (
-            ID TEXT PRIMARY KEY,
-            Usuario TEXT,
-            Data TEXT,
-            Momento TEXT,
-            Info TEXT,
-            C INTEGER,
-            P INTEGER,
-            G INTEGER
-        )
-    """)
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS receita (
-            Usuario TEXT PRIMARY KEY,
-            manha_f1_min REAL, manha_f1_max REAL, manha_f1_dose REAL,
-            manha_f2_min REAL, manha_f2_max REAL, manha_f2_dose REAL,
-            manha_f3_min REAL, manha_f3_max REAL, manha_f3_dose REAL,
-            noite_f1_min REAL, noite_f1_max REAL, noite_f1_dose REAL,
-            noite_f2_min REAL, noite_f2_max REAL, noite_f2_dose REAL,
-            noite_f3_min REAL, noite_f3_max REAL, noite_f3_dose REAL,
-            glargina_cafe_ui REAL,
-            glargina_janta_ui REAL
-        )
-    """)
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS sugestoes (
-            ID TEXT PRIMARY KEY,
-            Usuario TEXT,
-            Data TEXT,
-            "Sugestão" TEXT
-        )
-    """)
-    conn.commit()
-    conn.close()
-
+    return
 
 def migrar_csvs_para_sqlite():
-    init_app_db()
-
-    if ARQ_G.exists():
-        conn = _app_conn()
-        qtd = conn.execute("SELECT COUNT(*) FROM glicemia").fetchone()[0]
-        conn.close()
-        if qtd == 0:
+    if not USE_SUPABASE:
+        return
+    # importa legado se tabela estiver vazia
+    checks = {t: len(_safe_table_df(t)) for t in ['glicemia','nutricao','receita','sugestoes','users','plans']}
+    if checks.get('users',0) == 0 and Path(DB_USERS).exists():
+        _import_legacy_df_to_supabase('users', _read_sqlite_df(DB_USERS, 'select nome, email, senha from users'))
+        _import_legacy_df_to_supabase('plans', _read_sqlite_df(DB_USERS, 'select email, created_at, trial_end, paid_until from plans'))
+        _import_legacy_df_to_supabase('billing_msgs', _read_sqlite_df(DB_USERS, 'select id, email, data_hora, mensagem, status from billing_msgs'))
+    if checks.get('glicemia',0) == 0:
+        if Path(APP_DB).exists():
+            _import_legacy_df_to_supabase('glicemia', _read_sqlite_df(APP_DB, 'select * from glicemia'))
+        elif Path(ARQ_G).exists():
             try:
-                df = pd.read_csv(ARQ_G)
-                if not df.empty:
-                    if "Usuario" not in df.columns:
-                        df["Usuario"] = ""
-                    if "ID" not in df.columns:
-                        df["ID"] = [f"GL-{uuid.uuid4().hex[:12]}" for _ in range(len(df))]
-                    if "Dose" not in df.columns:
-                        df["Dose"] = ""
-                    if "Dose_Rapida" not in df.columns:
-                        def _parse_r(x):
-                            s = str(x or "")
-                            m = re.search(r"(?:Rápida|Rapida)\s*:?\s*([^|]+)", s, flags=re.IGNORECASE)
-                            if m:
-                                return str(m.group(1)).strip()
-                            if s.strip() and ("longa" not in s.lower()):
-                                return s.strip()
-                            return ""
-                        df["Dose_Rapida"] = df["Dose"].apply(_parse_r)
-                    if "Dose_Longa" not in df.columns:
-                        def _parse_l(x):
-                            s = str(x or "")
-                            m = re.search(r"Longa\s*:?\s*([^|]+)", s, flags=re.IGNORECASE)
-                            return str(m.group(1)).strip() if m else ""
-                        df["Dose_Longa"] = df["Dose"].apply(_parse_l)
-                    cols = ["ID", "Usuario", "Data", "Hora", "Valor", "Momento", "Dose", "Dose_Rapida", "Dose_Longa"]
-                    for c in cols:
-                        if c not in df.columns:
-                            df[c] = ""
-                    _append_df_table("glicemia", df[cols])
+                _import_legacy_df_to_supabase('glicemia', pd.read_csv(ARQ_G))
             except Exception:
                 pass
-
-    if ARQ_N.exists():
-        conn = _app_conn()
-        qtd = conn.execute("SELECT COUNT(*) FROM nutricao").fetchone()[0]
-        conn.close()
-        if qtd == 0:
+    if checks.get('nutricao',0) == 0:
+        if Path(APP_DB).exists():
+            _import_legacy_df_to_supabase('nutricao', _read_sqlite_df(APP_DB, 'select * from nutricao'))
+        elif Path(ARQ_N).exists():
             try:
-                df = pd.read_csv(ARQ_N)
-                if not df.empty:
-                    if "Usuario" not in df.columns:
-                        df["Usuario"] = ""
-                    if "ID" not in df.columns:
-                        df["ID"] = [f"NT-{uuid.uuid4().hex[:12]}" for _ in range(len(df))]
-                    cols = ["ID", "Usuario", "Data", "Momento", "Info", "C", "P", "G"]
-                    for c in cols:
-                        if c not in df.columns:
-                            df[c] = ""
-                    _append_df_table("nutricao", df[cols])
+                _import_legacy_df_to_supabase('nutricao', pd.read_csv(ARQ_N))
             except Exception:
                 pass
-
-    if ARQ_R.exists():
-        conn = _app_conn()
-        qtd = conn.execute("SELECT COUNT(*) FROM receita").fetchone()[0]
-        conn.close()
-        if qtd == 0:
+    if checks.get('receita',0) == 0:
+        if Path(APP_DB).exists():
+            _import_legacy_df_to_supabase('receita', _read_sqlite_df(APP_DB, 'select * from receita'))
+        elif Path(ARQ_R).exists():
             try:
-                df = pd.read_csv(ARQ_R)
-                if not df.empty:
-                    if "Usuario" not in df.columns:
-                        df["Usuario"] = ""
-                    df = df.drop_duplicates(subset=["Usuario"], keep="last")
-                    keep = [
-                        "Usuario",
-                        "manha_f1_min", "manha_f1_max", "manha_f1_dose",
-                        "manha_f2_min", "manha_f2_max", "manha_f2_dose",
-                        "manha_f3_min", "manha_f3_max", "manha_f3_dose",
-                        "noite_f1_min", "noite_f1_max", "noite_f1_dose",
-                        "noite_f2_min", "noite_f2_max", "noite_f2_dose",
-                        "noite_f3_min", "noite_f3_max", "noite_f3_dose",
-                        "glargina_cafe_ui", "glargina_janta_ui"
-                    ]
-                    for c in keep:
-                        if c not in df.columns:
-                            df[c] = ""
-                    conn = _app_conn()
-                    df[keep].to_sql("receita", conn, if_exists="append", index=False)
-                    conn.close()
+                _import_legacy_df_to_supabase('receita', pd.read_csv(ARQ_R))
             except Exception:
                 pass
-
-    for sugest_path in [ARQ_M, ARQ_M_ROOT]:
-        if sugest_path.exists():
-            conn = _app_conn()
-            qtd = conn.execute("SELECT COUNT(*) FROM sugestoes").fetchone()[0]
-            conn.close()
-            if qtd == 0:
-                try:
-                    df = pd.read_csv(sugest_path)
-                    if not df.empty:
-                        if "Usuario" not in df.columns:
-                            df["Usuario"] = ""
-                        if "Data" not in df.columns:
-                            df["Data"] = ""
-                        if "Sugestão" not in df.columns:
-                            alt = [c for c in df.columns if c.lower().startswith("sugest")]
-                            df["Sugestão"] = df[alt[0]] if alt else ""
-                        if "ID" not in df.columns:
-                            df["ID"] = [f"SG-{uuid.uuid4().hex[:12]}" for _ in range(len(df))]
-                        _append_df_table("sugestoes", df[["ID", "Usuario", "Data", "Sugestão"]])
-                except Exception:
-                    pass
-            break
-
+    if checks.get('sugestoes',0) == 0:
+        if Path(APP_DB).exists():
+            _import_legacy_df_to_supabase('sugestoes', _read_sqlite_df(APP_DB, 'select * from sugestoes'))
+        else:
+            for p in [ARQ_M, ARQ_M_ROOT]:
+                if Path(p).exists():
+                    try:
+                        _import_legacy_df_to_supabase('sugestoes', pd.read_csv(p))
+                        break
+                    except Exception:
+                        pass
 
 migrar_csvs_para_sqlite()
 
@@ -808,15 +816,17 @@ def aplicar_edicoes_e_exclusoes_glicemia(df_editado: pd.DataFrame):
     df_editado["Data"] = df_editado["Data"].astype(str).str.strip()
     df_editado["Hora"] = df_editado["Hora"].astype(str).str.strip()
     df_editado["Momento"] = df_editado["Momento"].astype(str).str.strip()
-    df_editado["Dose_Rapida"] = df_editado.get("Dose_Rapida", "").astype(str).str.strip()
-    df_editado["Dose_Longa"] = df_editado.get("Dose_Longa", "").astype(str).str.strip()
+    if "Dose_Rapida" not in df_editado.columns:
+        df_editado["Dose_Rapida"] = ""
+    if "Dose_Longa" not in df_editado.columns:
+        df_editado["Dose_Longa"] = ""
+    df_editado["Dose_Rapida"] = df_editado["Dose_Rapida"].astype(str).str.strip()
+    df_editado["Dose_Longa"] = df_editado["Dose_Longa"].astype(str).str.strip()
 
     def _mk_dose_display(r) -> str:
         dr = str(r.get("Dose_Rapida", "") or "").strip()
         dl = str(r.get("Dose_Longa", "") or "").strip()
-        out = ""
-        if dr:
-            out = dr
+        out = dr if dr else ""
         if dl:
             out = (out + " | " if out else "") + f"Longa: {dl}"
         return out
@@ -824,24 +834,21 @@ def aplicar_edicoes_e_exclusoes_glicemia(df_editado: pd.DataFrame):
     df_editado["Dose"] = df_editado.apply(_mk_dose_display, axis=1)
     df_editado["Valor"] = pd.to_numeric(df_editado["Valor"], errors="coerce").fillna(0).astype(int)
 
-    conn = _app_conn()
-    cur = conn.cursor()
     ids_excluir = df_editado.loc[df_editado["Excluir"] == True, "ID"].astype(str).tolist()
-    if ids_excluir:
-        cur.executemany("DELETE FROM glicemia WHERE Usuario=? AND ID=?", [(st.session_state.user_email, rid) for rid in ids_excluir])
+    for rid in ids_excluir:
+        sb_delete_where('glicemia', {'usuario': st.session_state.user_email, 'id': rid})
 
     df_upd = df_editado.loc[df_editado["Excluir"] != True].copy()
     for _, r in df_upd.iterrows():
-        cur.execute(
-            """
-            UPDATE glicemia
-               SET Data=?, Hora=?, Valor=?, Momento=?, Dose_Rapida=?, Dose_Longa=?, Dose=?
-             WHERE Usuario=? AND ID=?
-            """,
-            (r["Data"], r["Hora"], int(r["Valor"]), r["Momento"], r.get("Dose_Rapida", ""), r.get("Dose_Longa", ""), r.get("Dose", ""), st.session_state.user_email, str(r["ID"]))
-        )
-    conn.commit()
-    conn.close()
+        sb_update_where('glicemia', {
+            'data': r['Data'],
+            'hora': r['Hora'],
+            'valor': int(r['Valor']),
+            'momento': r['Momento'],
+            'dose_rapida': r.get('Dose_Rapida', ''),
+            'dose_longa': r.get('Dose_Longa', ''),
+            'dose': r.get('Dose', ''),
+        }, {'usuario': st.session_state.user_email, 'id': str(r['ID'])})
 
 # ================= RECEITA (RÁPIDA/LONGA) =================
 def _schema_receita_nova(rec: pd.Series, periodo: str) -> bool:
@@ -1174,6 +1181,8 @@ ALIMENTOS = _gerar_catalogo_alimentos_400plus()
 # =========================================================
 if not st.session_state.logado:
     st.title("🧪 Saúde Kids - Acesso")
+    if not USE_SUPABASE:
+        st.error("Supabase não configurado. Este app foi preparado para rodar 100% em nuvem.")
 
     if not HAS_COOKIES:
         st.caption("ℹ️ Login persistente desativado (extra-streamlit-components não instalado).")
@@ -1186,9 +1195,7 @@ if not st.session_state.logado:
         s = norm_senha(st.text_input("Senha", type="password", key="l_pass"))
 
         if st.button("Acessar Aplicativo", use_container_width=True):
-            conn = sqlite3.connect(DB_USERS)
-            ok = conn.execute("SELECT * FROM users WHERE email=? AND senha=?", (u, s)).fetchone()
-            conn.close()
+            ok = _verify_user(u, s)
             if ok:
                 stt = get_plano_status(u)
                 if stt.get('allowed'):
@@ -1215,10 +1222,7 @@ if not st.session_state.logado:
                 st.warning("Preencha nome, e-mail e senha.")
             else:
                 try:
-                    conn = sqlite3.connect(DB_USERS)
-                    conn.execute("INSERT INTO users VALUES (?,?,?)", (n_cad, e_cad, s_cad))
-                    conn.commit()
-                    conn.close()
+                    _create_user(n_cad, e_cad, s_cad)
                     garantir_plano(e_cad)
                     st.success("Conta criada com sucesso!")
                 except Exception:
@@ -1228,15 +1232,11 @@ if not st.session_state.logado:
     with abas_login[2]:
         email_alvo = norm_email(st.text_input("Digite seu e-mail cadastrado"))
         if st.button("Recuperar Acesso", use_container_width=True):
-            conn = sqlite3.connect(DB_USERS)
-            c = conn.cursor()
-            user = c.execute("SELECT email FROM users WHERE email=?", (email_alvo,)).fetchone()
+            user = _get_user_row(email_alvo)
 
             if user:
                 nova = gerar_senha_temporaria()
-                c.execute("UPDATE users SET senha=? WHERE email=?", (nova, email_alvo))
-                conn.commit()
-                conn.close()
+                _set_user_password(email_alvo, nova)
 
                 if enviar_senha_nova(email_alvo, nova):
                     st.success("Nova senha enviada para seu e-mail!")
@@ -1245,7 +1245,6 @@ if not st.session_state.logado:
                     st.info("Use a senha temporária abaixo para entrar e depois altere sua senha:")
                     st.code(nova)
             else:
-                conn.close()
                 st.error("E-mail não encontrado.")
 
     # -------- ALTERAR SENHA --------
@@ -1255,15 +1254,11 @@ if not st.session_state.logado:
         alt_n1 = norm_senha(st.text_input("Nova Senha", type="password", key="alt_n1"))
 
         if st.button("Confirmar Alteração", use_container_width=True):
-            conn = sqlite3.connect(DB_USERS)
-            ok = conn.execute("SELECT * FROM users WHERE email=? AND senha=?", (alt_em, alt_at)).fetchone()
+            ok = _verify_user(alt_em, alt_at)
             if ok:
-                conn.execute("UPDATE users SET senha=? WHERE email=?", (alt_n1, alt_em))
-                conn.commit()
-                conn.close()
+                _set_user_password(alt_em, alt_n1)
                 st.success("Senha alterada com sucesso!")
             else:
-                conn.close()
                 st.error("Dados atuais incorretos.")
 
 
@@ -1304,9 +1299,7 @@ if st.session_state.user_email == "admin":
         ["👥 Pessoas Cadastradas", "📈 Crescimento e App", "📩 Sugestões", "💳 Mensalidades", "💾 Backup & Restauração"]
     )
 
-    conn = sqlite3.connect(DB_USERS)
-    df_users = pd.read_sql_query("SELECT nome, email FROM users", conn)
-    conn.close()
+    df_users = _users_df()[["nome", "email"]] if not _users_df().empty else pd.DataFrame(columns=["nome","email"])
 
     with t_usuarios:
         st.subheader("Lista de Usuários")
@@ -1323,12 +1316,8 @@ if st.session_state.user_email == "admin":
             if del_email == "admin":
                 st.error("Não é permitido excluir o admin.")
             else:
-                conn = sqlite3.connect(DB_USERS)
-                conn.execute("DELETE FROM users WHERE email=?", (del_email,))
-                conn.execute("DELETE FROM plans WHERE email=?", (del_email,))
-                conn.commit()
-                conn.close()
-
+                sb_delete_where('users', {'email': del_email})
+                sb_delete_where('plans', {'email': del_email})
                 _delete_user_app_data(del_email)
 
                 st.success(f"Usuário {del_email} excluído.")
@@ -1339,10 +1328,7 @@ if st.session_state.user_email == "admin":
         nova_senha_admin = norm_senha(st.text_input("Nova senha para este usuário", type="password"))
         if st.button("Confirmar Alteração de Senha", use_container_width=True):
             if nova_senha_admin:
-                conn = sqlite3.connect(DB_USERS)
-                conn.execute("UPDATE users SET senha=? WHERE email=?", (nova_senha_admin, user_selecionado))
-                conn.commit()
-                conn.close()
+                _set_user_password(user_selecionado, nova_senha_admin)
                 st.success(f"Senha de {user_selecionado} alterada com sucesso!")
             else:
                 st.warning("Digite uma senha antes de confirmar.")
@@ -1380,12 +1366,7 @@ if st.session_state.user_email == "admin":
         st.subheader("💳 Mensalidades (Teste 20 dias + Plano 30 dias)")
 
         st.markdown("### Status de planos")
-        conn = sqlite3.connect(DB_USERS)
-        try:
-            df_pl = pd.read_sql_query("SELECT email, trial_end, paid_until FROM plans ORDER BY email", conn)
-        except Exception:
-            df_pl = pd.DataFrame(columns=["email","trial_end","paid_until"])
-        conn.close()
+        df_pl = _plans_df()[["email","trial_end","paid_until"]] if not _plans_df().empty else pd.DataFrame(columns=["email","trial_end","paid_until"])
 
         def _fmt_iso(x):
             try:
@@ -2046,14 +2027,8 @@ else:
                             st.warning("Marque pelo menos 1 linha em 'Excluir'.")
                         else:
                             # Remove do arquivo completo (todas as pessoas), baseado no índice original
-                            conn = _app_conn()
-                            cur = conn.cursor()
-                            cur.executemany(
-                                "DELETE FROM nutricao WHERE ID=? AND Usuario=?",
-                                [(str(i), st.session_state.user_email) for i in to_del]
-                            )
-                            conn.commit()
-                            conn.close()
+                            for i in to_del:
+                                sb_delete_where('nutricao', {'id': str(i), 'usuario': st.session_state.user_email})
                             st.success(f"Removido: {len(to_del)} registro(s).")
                             st.rerun()
                 with cdel2:
