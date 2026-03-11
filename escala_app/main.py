@@ -1069,6 +1069,10 @@ AUTO_BACKUP_HOUR = 3  # 03:00
 AUTO_BACKUP_INTERVAL_HOURS = 6  # roda quando o app abre
 
 
+# V87 — robustez de banco:
+# procura automaticamente o banco mais completo em caminhos comuns
+# e copia para o caminho canônico do app (escala_app/data/escala.db)
+
 def _ensure_data_dir():
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -1076,6 +1080,72 @@ def _ensure_data_dir():
 def _ensure_backup_dir():
     _ensure_data_dir()
     Path(BACKUP_DIR).mkdir(parents=True, exist_ok=True)
+
+
+def _db_candidate_paths() -> list[Path]:
+    app = APP_DIR
+    cands = [
+        Path(DB_PATH),
+        Path(ROOT_LEGACY_DB_PATH),
+        app / "backups" / "latest_stable.db",
+        app / "backups" / "escala.db",
+        app / "data" / "latest_stable.db",
+        app / "escala_app" / "data" / "escala.db",
+        app / "escala_app" / "backups" / "latest_stable.db",
+        app.parent / "escala_app" / "data" / "escala.db",
+        app.parent / "escala_app" / "backups" / "latest_stable.db",
+    ]
+    out = []
+    seen = set()
+    for p in cands:
+        try:
+            rp = p.resolve()
+        except Exception:
+            rp = p
+        if str(rp) not in seen:
+            seen.add(str(rp))
+            out.append(Path(rp))
+    return out
+
+
+def _sqlite_table_count(db_path: str, table: str) -> int:
+    try:
+        conn = sqlite3.connect(str(db_path), check_same_thread=False)
+        try:
+            row = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
+            return int(row[0]) if row else 0
+        finally:
+            conn.close()
+    except Exception:
+        return 0
+
+
+def _db_score(path: Path) -> tuple:
+    if not _validate_sqlite_file(str(path)):
+        return (-1, -1, -1, -1, -1, -1, -1)
+    size = 0
+    try:
+        size = path.stat().st_size
+    except Exception:
+        size = 0
+    usuarios = _sqlite_table_count(str(path), "usuarios_sistema")
+    colaboradores = _sqlite_table_count(str(path), "colaboradores")
+    escala = _sqlite_table_count(str(path), "escala_mes")
+    setores = _sqlite_table_count(str(path), "setores")
+    recents = _sqlite_table_count(str(path), "login_recent")
+    ferias = _sqlite_table_count(str(path), "ferias")
+    return (usuarios, colaboradores, escala, setores, recents, ferias, size)
+
+
+def _pick_best_db_candidate() -> Path | None:
+    best = None
+    best_score = (-1, -1, -1, -1, -1, -1, -1)
+    for p in _db_candidate_paths():
+        score = _db_score(p)
+        if score > best_score:
+            best_score = score
+            best = p
+    return best if best_score[0] >= 0 else None
 
 
 def _sqlite_backup_copy(src_path: str, dst_path: str) -> None:
@@ -1116,13 +1186,34 @@ def _migrate_legacy_db_if_needed():
     _ensure_backup_dir()
     legacy = Path(ROOT_LEGACY_DB_PATH)
     current = Path(DB_PATH)
-    if current.exists():
+    if current.exists() and _validate_sqlite_file(str(current)):
         return
     if legacy.exists() and _validate_sqlite_file(str(legacy)):
         try:
             _sqlite_backup_copy(str(legacy), str(current))
         except Exception:
             shutil.copy2(legacy, current)
+
+
+def _adopt_best_db_candidate_if_needed():
+    _ensure_backup_dir()
+    current = Path(DB_PATH)
+    best = _pick_best_db_candidate()
+    if best is None:
+        return
+    current_score = _db_score(current) if current.exists() else (-1, -1, -1, -1, -1, -1, -1)
+    best_score = _db_score(best)
+    if best_score > current_score and str(best) != str(current):
+        try:
+            current.parent.mkdir(parents=True, exist_ok=True)
+            _sqlite_backup_copy(str(best), str(current))
+        except Exception:
+            shutil.copy2(best, current)
+        latest = Path(BACKUP_DIR) / "latest_stable.db"
+        try:
+            _sqlite_backup_copy(str(current), str(latest))
+        except Exception:
+            shutil.copy2(current, latest)
 
 
 def _restore_from_latest_stable_if_needed():
@@ -1143,7 +1234,9 @@ def _restore_from_latest_stable_if_needed():
 def _ensure_runtime_storage_ready():
     _ensure_backup_dir()
     _migrate_legacy_db_if_needed()
+    _adopt_best_db_candidate_if_needed()
     _restore_from_latest_stable_if_needed()
+    _adopt_best_db_candidate_if_needed()
 
 
 def _remove_sqlite_sidecars(db_path: str):
@@ -1233,9 +1326,18 @@ def _clear_runtime_caches_after_db_change():
         ]:
             if k in st.session_state:
                 del st.session_state[k]
-        _clear_ss_perf_memos()
     except Exception:
         pass
+
+
+def _db_runtime_summary() -> dict:
+    current = Path(DB_PATH)
+    return {
+        "db_path": str(current),
+        "db_exists": current.exists(),
+        "db_score": _db_score(current),
+        "best_candidate": str(_pick_best_db_candidate() or ""),
+    }
 
 
 def restore_backup_from_bytes(data: bytes) -> None:
@@ -2765,46 +2867,6 @@ def get_kpis_cached(setor: str, ano: int, mes: int):
         "trabalhos_mes": int(trabalhos_mes),
     }
 
-
-
-def _ss_cache_get(bucket: str, key: str):
-    return (st.session_state.get(bucket) or {}).get(key)
-
-def _ss_cache_set(bucket: str, key: str, value):
-    if bucket not in st.session_state or not isinstance(st.session_state.get(bucket), dict):
-        st.session_state[bucket] = {}
-    st.session_state[bucket][key] = value
-    return value
-
-def _memo_colaboradores(setor: str):
-    k = f"{str(setor).strip().upper()}"
-    cached = _ss_cache_get('_memo_colab', k)
-    if cached is not None:
-        return cached
-    return _ss_cache_set('_memo_colab', k, load_colaboradores_setor(setor))
-
-def _memo_hist_mes(setor: str, ano: int, mes: int, with_overrides: bool = True):
-    k = f"{str(setor).strip().upper()}|{int(ano)}|{int(mes)}|{1 if with_overrides else 0}"
-    cached = _ss_cache_get('_memo_hist', k)
-    if cached is not None:
-        return cached
-    hist = load_escala_mes_db(setor, int(ano), int(mes))
-    if with_overrides and hist:
-        hist = apply_overrides_to_hist(setor, int(ano), int(mes), hist)
-    return _ss_cache_set('_memo_hist', k, hist)
-
-def _memo_kpis(setor: str, ano: int, mes: int):
-    k = f"{str(setor).strip().upper()}|{int(ano)}|{int(mes)}"
-    cached = _ss_cache_get('_memo_kpis', k)
-    if cached is not None:
-        return cached
-    return _ss_cache_set('_memo_kpis', k, get_kpis_cached(setor, int(ano), int(mes)))
-
-def _clear_ss_perf_memos():
-    for _k in ('_memo_colab', '_memo_hist', '_memo_kpis'):
-        if _k in st.session_state:
-            del st.session_state[_k]
-
 @st.cache_data(show_spinner=False)
 def list_subgrupos(setor: str):
     con = db_conn()
@@ -3469,7 +3531,7 @@ def apply_overrides_to_hist(setor: str, ano: int, mes: int, hist_db: dict[str, p
 
     # ✅ SANITIZA: força férias SOMENTE pela tabela ferias
     if hist_db:
-        colaboradores = _memo_colaboradores(setor)
+        colaboradores = load_colaboradores_setor(setor)
         colab_by = {c["Chapa"]: c for c in colaboradores}
 
         for ch, df in list(hist_db.items()):
@@ -6004,7 +6066,7 @@ def page_app():
     ano_k = int(st.session_state["cfg_ano"])
     mes_k = int(st.session_state["cfg_mes"])
 
-    _kpi = _memo_kpis(setor, ano_k, mes_k)
+    _kpi = get_kpis_cached(setor, ano_k, mes_k)
     total_colab = int(_kpi.get("total_colab", 0))
     folgas_mes = int(_kpi.get("folgas_mes", 0))
     ferias_mes = int(_kpi.get("ferias_mes", 0))
@@ -6058,7 +6120,7 @@ def page_app():
 
         if sec_col == "👥 Colaboradores":
             st.markdown("### 👥 Colaboradores")
-            colaboradores = _memo_colaboradores(setor)
+            colaboradores = load_colaboradores_setor(setor)
             if colaboradores:
                 df_col = pd.DataFrame([{
                     "Nome": c["Nome"],
@@ -6096,7 +6158,7 @@ def page_app():
             st.markdown("---")
 
         elif sec_col == "➕ Cadastrar colaborador":
-            colaboradores = _memo_colaboradores(setor)
+            colaboradores = load_colaboradores_setor(setor)
             st.markdown("## ➕ Cadastrar colaborador (perfil completo + folgas do mês)")
 
             ano_cfg = int(st.session_state.get("cfg_ano", datetime.now().year))
@@ -6141,7 +6203,7 @@ def page_app():
             st.markdown("---")
 
         elif sec_col == "🗑️ Excluir colaborador":
-            colaboradores = _memo_colaboradores(setor)
+            colaboradores = load_colaboradores_setor(setor)
             st.markdown("## 🗑️ Excluir colaborador")
             if colaboradores:
                 opts = []
@@ -6165,7 +6227,7 @@ def page_app():
             st.markdown("---")
 
         elif sec_col == "✏️ Editar perfil":
-            colaboradores = _memo_colaboradores(setor)
+            colaboradores = load_colaboradores_setor(setor)
             st.markdown("## ✏️ Editar perfil do colaborador")
             if colaboradores:
                 chapas = [c["Chapa"] for c in colaboradores]
@@ -6243,7 +6305,7 @@ def page_app():
             seed = c3.number_input("Semente", min_value=0, max_value=999999, value=int(st.session_state.get("last_seed", 0)), key="gen_seed")
 
 
-        colaboradores = _memo_colaboradores(setor)
+        colaboradores = load_colaboradores_setor(setor)
         if not colaboradores:
             st.warning("Cadastre colaboradores.")
         else:
@@ -6287,31 +6349,23 @@ def page_app():
                     st.rerun()
 
 
-            hist_db = _memo_hist_mes(setor, int(ano), int(mes), with_overrides=True)
+            hist_db = load_escala_mes_db(setor, int(ano), int(mes))
+            hist_db = apply_overrides_to_hist(setor, int(ano), int(mes), hist_db)
 
             if hist_db:
                 colab_by = {c["Chapa"]: c for c in colaboradores}
                 st.markdown("### 📅 Calendário RH (visual por colaborador)")
-                lazy_cols = st.columns([1,1,4])
-                if lazy_cols[0].button("📥 Carregar calendário", key="btn_load_cal"):
-                    st.session_state["show_cal_rh"] = True
-                if lazy_cols[1].button("🙈 Ocultar calendário", key="btn_hide_cal"):
-                    st.session_state["show_cal_rh"] = False
-                if st.session_state.get("show_cal_rh", False):
-                    cal = calendario_rh_df(hist_db, colab_by)
-                    show_color = st.checkbox("🎨 Mostrar cores no calendário (pode deixar lento)", value=False, key="cal_color")
-                    if show_color:
-                        st.dataframe(style_calendario(cal, int(mes), int(ano)), use_container_width=True)
-                    else:
-                        st.dataframe(cal, use_container_width=True)
+                cal = calendario_rh_df(hist_db, colab_by)
+                show_color = st.checkbox("🎨 Mostrar cores no calendário (pode deixar lento)", value=False, key="cal_color")
+                if show_color:
+                    st.dataframe(style_calendario(cal, int(mes), int(ano)), use_container_width=True)
                 else:
-                    st.info("Calendário RH fica oculto por padrão para abrir mais rápido. Clique em 📥 Carregar calendário.")
+                    st.dataframe(cal, use_container_width=True)
 
                 st.markdown("---")
                 st.markdown("### 👤 Visualizar colaborador (detalhado)")
                 ch_view = st.selectbox("Chapa:", list(hist_db.keys()), key="view_ch")
-                if st.checkbox("Mostrar detalhes do colaborador", value=False, key="show_det_colab"):
-                    st.dataframe(hist_db[ch_view], use_container_width=True, height=420)
+                st.dataframe(hist_db[ch_view], use_container_width=True, height=420)
             else:
                 st.info("Sem escala no mês. Clique em **Gerar agora**.")
 
@@ -6330,25 +6384,20 @@ def page_app():
             c2.caption("Alterar em 🗓️ Competência (sidebar)")
             c3.caption("Ajustes aplicam na competência ativa.")
 
-        colaboradores = _memo_colaboradores(setor)
+        hist_db = load_escala_mes_db(setor, ano, mes)
+        colaboradores = load_colaboradores_setor(setor)
         colab_by = {c["Chapa"]: c for c in colaboradores}
 
-        hist_db = _memo_hist_mes(setor, ano, mes, with_overrides=True)
         if not hist_db:
             st.info("Gere a escala primeiro na aba 🚀 Gerar Escala.")
         else:
+            hist_db = apply_overrides_to_hist(setor, ano, mes, hist_db)
 
             sec_aj = st.radio("", ["🧩 Folgas manuais em grade", "🔁 Troca de horários", "✅ Preferência por subgrupo", "📌 Subgrupos (editável)"], horizontal=True, key="ajustes_nav_fast", label_visibility="collapsed")
 
             if sec_aj == "🧩 Folgas manuais em grade":
                 st.markdown("### 🧩 Folgas manuais em grade (por colaborador)")
                 st.caption("Marque/desmarque as folgas do mês. Isso cria/remove travas (overrides) de Status=Folga. Domingo é editável aqui (manual é soberano).")
-                if not st.session_state.get("show_folga_grade", False):
-                    st.info("Grade manual fica recolhida por padrão para abrir mais rápido.")
-                    if st.button("📥 Carregar grade manual", key="btn_load_grade_manual"):
-                        st.session_state["show_folga_grade"] = True
-                        st.rerun()
-                    st.stop()
                 # --- filtro de colaboradores (para facilitar)
                 # Regra v8.4:
                 # - Se você selecionar 1+ colaboradores, a grade mostra SOMENTE os selecionados (mesmo se "Mostrar todos" estiver marcado).
@@ -6657,7 +6706,7 @@ def page_app():
 
         st.markdown("---")
         st.markdown("---")
-        colaboradores = _memo_colaboradores(setor)
+        colaboradores = load_colaboradores_setor(setor)
         if not colaboradores:
             st.warning("Sem colaboradores cadastrados.")
         else:
@@ -6823,7 +6872,7 @@ def page_app():
             ano = int(st.session_state["cfg_ano"])
             mes = int(st.session_state["cfg_mes"])
             hist_db = load_escala_mes_db(setor, ano, mes)
-            colaboradores = _memo_colaboradores(setor)
+            colaboradores = load_colaboradores_setor(setor)
             colab_by = {c["Chapa"]: c for c in colaboradores}
 
             if not hist_db:
@@ -7082,13 +7131,11 @@ def page_app():
                 if pdf_fer_busca.strip():
                     kw = pdf_fer_busca.strip().lower()
                     colabs_all = [c for c in colabs_all if kw in str(c.get("Nome","")).lower() or kw in str(c.get("Chapa","")).lower()]
-                ano_ref = int(st.session_state.get("cfg_ano", datetime.now().year))
-                mes_ref = int(st.session_state.get("cfg_mes", datetime.now().month))
-                pdf_bytes = gerar_pdf_ferias_mes(setor, ano_ref, mes_ref, colabs_all, keyword=pdf_fer_busca)
+                pdf_bytes = gerar_pdf_ferias_mes(setor, int(ano), int(mes), load_colaboradores_setor(setor) or [], keyword=pdf_fer_busca)
                 st.download_button(
                     "⬇️ Baixar PDF (Férias do mês)",
                     data=pdf_bytes,
-                    file_name=f"ferias_{setor}_{mes_ref:02d}_{ano_ref}.pdf",
+                    file_name=f"ferias_{setor}_{int(mes):02d}_{int(ano)}.pdf",
                     mime="application/pdf",
                     use_container_width=True,
                     key="pdf_fer_dl"
@@ -7096,7 +7143,6 @@ def page_app():
         elif sec_imp == "🖨️ Imprimir escala parede":
             st.subheader("🖨️ Imprimir escala parede")
 
-            colaboradores = load_colaboradores_setor(setor) or []
             all_subgrupos = sorted({((c.get("Subgrupo") or "").strip() or "SEM SUBGRUPO") for c in colaboradores})
             cfx1, cfx2, cfx3 = st.columns([1.2, 1.2, 1.6])
             loja_txt = cfx1.text_input("Loja:", value=str(setor), key="pdf_loja_txt")
@@ -7110,11 +7156,9 @@ def page_app():
                 key="pdf_modo_impressao"
             )
 
-            ano_ref = int(st.session_state.get("cfg_ano", datetime.now().year))
-            mes_ref = int(st.session_state.get("cfg_mes", datetime.now().month))
             cols_dates = st.columns([1, 1, 2])
-            data_ini = cols_dates[0].date_input("Dia inicial:", value=date(ano_ref, mes_ref, 1), key="pdf_dt_ini")
-            data_fim = cols_dates[1].date_input("Dia final:", value=date(ano_ref, mes_ref, calendar.monthrange(ano_ref, mes_ref)[1]), key="pdf_dt_fim")
+            data_ini = cols_dates[0].date_input("Dia inicial:", value=date(int(ano), int(mes), 1), key="pdf_dt_ini")
+            data_fim = cols_dates[1].date_input("Dia final:", value=date(int(ano), int(mes), calendar.monthrange(int(ano), int(mes))[1]), key="pdf_dt_fim")
             if modo_pdf == "Panorâmico por período":
                 cols_dates[2].caption("Use qualquer período contínuo, inclusive dois meses juntos (ex.: 01/03/2026 até 30/04/2026).")
             else:
@@ -7164,7 +7208,7 @@ def page_app():
                                 key="pdf_down_pan"
                             )
                     else:
-                        hist_db_pdf = load_escala_mes_db(setor, ano_ref, mes_ref)
+                        hist_db_pdf = load_escala_mes_db(setor, ano, mes)
                         if not hist_db_pdf:
                             st.warning("Gere a escala antes na aba 🚀 Gerar Escala.")
                         else:
