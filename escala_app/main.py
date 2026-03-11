@@ -1233,6 +1233,7 @@ def _clear_runtime_caches_after_db_change():
         ]:
             if k in st.session_state:
                 del st.session_state[k]
+        _clear_ss_perf_memos()
     except Exception:
         pass
 
@@ -2764,6 +2765,46 @@ def get_kpis_cached(setor: str, ano: int, mes: int):
         "trabalhos_mes": int(trabalhos_mes),
     }
 
+
+
+def _ss_cache_get(bucket: str, key: str):
+    return (st.session_state.get(bucket) or {}).get(key)
+
+def _ss_cache_set(bucket: str, key: str, value):
+    if bucket not in st.session_state or not isinstance(st.session_state.get(bucket), dict):
+        st.session_state[bucket] = {}
+    st.session_state[bucket][key] = value
+    return value
+
+def _memo_colaboradores(setor: str):
+    k = f"{str(setor).strip().upper()}"
+    cached = _ss_cache_get('_memo_colab', k)
+    if cached is not None:
+        return cached
+    return _ss_cache_set('_memo_colab', k, load_colaboradores_setor(setor))
+
+def _memo_hist_mes(setor: str, ano: int, mes: int, with_overrides: bool = True):
+    k = f"{str(setor).strip().upper()}|{int(ano)}|{int(mes)}|{1 if with_overrides else 0}"
+    cached = _ss_cache_get('_memo_hist', k)
+    if cached is not None:
+        return cached
+    hist = load_escala_mes_db(setor, int(ano), int(mes))
+    if with_overrides and hist:
+        hist = apply_overrides_to_hist(setor, int(ano), int(mes), hist)
+    return _ss_cache_set('_memo_hist', k, hist)
+
+def _memo_kpis(setor: str, ano: int, mes: int):
+    k = f"{str(setor).strip().upper()}|{int(ano)}|{int(mes)}"
+    cached = _ss_cache_get('_memo_kpis', k)
+    if cached is not None:
+        return cached
+    return _ss_cache_set('_memo_kpis', k, get_kpis_cached(setor, int(ano), int(mes)))
+
+def _clear_ss_perf_memos():
+    for _k in ('_memo_colab', '_memo_hist', '_memo_kpis'):
+        if _k in st.session_state:
+            del st.session_state[_k]
+
 @st.cache_data(show_spinner=False)
 def list_subgrupos(setor: str):
     con = db_conn()
@@ -3428,7 +3469,7 @@ def apply_overrides_to_hist(setor: str, ano: int, mes: int, hist_db: dict[str, p
 
     # ✅ SANITIZA: força férias SOMENTE pela tabela ferias
     if hist_db:
-        colaboradores = load_colaboradores_setor(setor)
+        colaboradores = _memo_colaboradores(setor)
         colab_by = {c["Chapa"]: c for c in colaboradores}
 
         for ch, df in list(hist_db.items()):
@@ -5963,7 +6004,7 @@ def page_app():
     ano_k = int(st.session_state["cfg_ano"])
     mes_k = int(st.session_state["cfg_mes"])
 
-    _kpi = get_kpis_cached(setor, ano_k, mes_k)
+    _kpi = _memo_kpis(setor, ano_k, mes_k)
     total_colab = int(_kpi.get("total_colab", 0))
     folgas_mes = int(_kpi.get("folgas_mes", 0))
     ferias_mes = int(_kpi.get("ferias_mes", 0))
@@ -6017,7 +6058,7 @@ def page_app():
 
         if sec_col == "👥 Colaboradores":
             st.markdown("### 👥 Colaboradores")
-            colaboradores = load_colaboradores_setor(setor)
+            colaboradores = _memo_colaboradores(setor)
             if colaboradores:
                 df_col = pd.DataFrame([{
                     "Nome": c["Nome"],
@@ -6055,7 +6096,7 @@ def page_app():
             st.markdown("---")
 
         elif sec_col == "➕ Cadastrar colaborador":
-            colaboradores = load_colaboradores_setor(setor)
+            colaboradores = _memo_colaboradores(setor)
             st.markdown("## ➕ Cadastrar colaborador (perfil completo + folgas do mês)")
 
             ano_cfg = int(st.session_state.get("cfg_ano", datetime.now().year))
@@ -6100,7 +6141,7 @@ def page_app():
             st.markdown("---")
 
         elif sec_col == "🗑️ Excluir colaborador":
-            colaboradores = load_colaboradores_setor(setor)
+            colaboradores = _memo_colaboradores(setor)
             st.markdown("## 🗑️ Excluir colaborador")
             if colaboradores:
                 opts = []
@@ -6124,7 +6165,7 @@ def page_app():
             st.markdown("---")
 
         elif sec_col == "✏️ Editar perfil":
-            colaboradores = load_colaboradores_setor(setor)
+            colaboradores = _memo_colaboradores(setor)
             st.markdown("## ✏️ Editar perfil do colaborador")
             if colaboradores:
                 chapas = [c["Chapa"] for c in colaboradores]
@@ -6202,7 +6243,7 @@ def page_app():
             seed = c3.number_input("Semente", min_value=0, max_value=999999, value=int(st.session_state.get("last_seed", 0)), key="gen_seed")
 
 
-        colaboradores = load_colaboradores_setor(setor)
+        colaboradores = _memo_colaboradores(setor)
         if not colaboradores:
             st.warning("Cadastre colaboradores.")
         else:
@@ -6246,23 +6287,31 @@ def page_app():
                     st.rerun()
 
 
-            hist_db = load_escala_mes_db(setor, int(ano), int(mes))
-            hist_db = apply_overrides_to_hist(setor, int(ano), int(mes), hist_db)
+            hist_db = _memo_hist_mes(setor, int(ano), int(mes), with_overrides=True)
 
             if hist_db:
                 colab_by = {c["Chapa"]: c for c in colaboradores}
                 st.markdown("### 📅 Calendário RH (visual por colaborador)")
-                cal = calendario_rh_df(hist_db, colab_by)
-                show_color = st.checkbox("🎨 Mostrar cores no calendário (pode deixar lento)", value=False, key="cal_color")
-                if show_color:
-                    st.dataframe(style_calendario(cal, int(mes), int(ano)), use_container_width=True)
+                lazy_cols = st.columns([1,1,4])
+                if lazy_cols[0].button("📥 Carregar calendário", key="btn_load_cal"):
+                    st.session_state["show_cal_rh"] = True
+                if lazy_cols[1].button("🙈 Ocultar calendário", key="btn_hide_cal"):
+                    st.session_state["show_cal_rh"] = False
+                if st.session_state.get("show_cal_rh", False):
+                    cal = calendario_rh_df(hist_db, colab_by)
+                    show_color = st.checkbox("🎨 Mostrar cores no calendário (pode deixar lento)", value=False, key="cal_color")
+                    if show_color:
+                        st.dataframe(style_calendario(cal, int(mes), int(ano)), use_container_width=True)
+                    else:
+                        st.dataframe(cal, use_container_width=True)
                 else:
-                    st.dataframe(cal, use_container_width=True)
+                    st.info("Calendário RH fica oculto por padrão para abrir mais rápido. Clique em 📥 Carregar calendário.")
 
                 st.markdown("---")
                 st.markdown("### 👤 Visualizar colaborador (detalhado)")
                 ch_view = st.selectbox("Chapa:", list(hist_db.keys()), key="view_ch")
-                st.dataframe(hist_db[ch_view], use_container_width=True, height=420)
+                if st.checkbox("Mostrar detalhes do colaborador", value=False, key="show_det_colab"):
+                    st.dataframe(hist_db[ch_view], use_container_width=True, height=420)
             else:
                 st.info("Sem escala no mês. Clique em **Gerar agora**.")
 
@@ -6281,20 +6330,25 @@ def page_app():
             c2.caption("Alterar em 🗓️ Competência (sidebar)")
             c3.caption("Ajustes aplicam na competência ativa.")
 
-        hist_db = load_escala_mes_db(setor, ano, mes)
-        colaboradores = load_colaboradores_setor(setor)
+        colaboradores = _memo_colaboradores(setor)
         colab_by = {c["Chapa"]: c for c in colaboradores}
 
+        hist_db = _memo_hist_mes(setor, ano, mes, with_overrides=True)
         if not hist_db:
             st.info("Gere a escala primeiro na aba 🚀 Gerar Escala.")
         else:
-            hist_db = apply_overrides_to_hist(setor, ano, mes, hist_db)
 
             sec_aj = st.radio("", ["🧩 Folgas manuais em grade", "🔁 Troca de horários", "✅ Preferência por subgrupo", "📌 Subgrupos (editável)"], horizontal=True, key="ajustes_nav_fast", label_visibility="collapsed")
 
             if sec_aj == "🧩 Folgas manuais em grade":
                 st.markdown("### 🧩 Folgas manuais em grade (por colaborador)")
                 st.caption("Marque/desmarque as folgas do mês. Isso cria/remove travas (overrides) de Status=Folga. Domingo é editável aqui (manual é soberano).")
+                if not st.session_state.get("show_folga_grade", False):
+                    st.info("Grade manual fica recolhida por padrão para abrir mais rápido.")
+                    if st.button("📥 Carregar grade manual", key="btn_load_grade_manual"):
+                        st.session_state["show_folga_grade"] = True
+                        st.rerun()
+                    st.stop()
                 # --- filtro de colaboradores (para facilitar)
                 # Regra v8.4:
                 # - Se você selecionar 1+ colaboradores, a grade mostra SOMENTE os selecionados (mesmo se "Mostrar todos" estiver marcado).
@@ -6603,7 +6657,7 @@ def page_app():
 
         st.markdown("---")
         st.markdown("---")
-        colaboradores = load_colaboradores_setor(setor)
+        colaboradores = _memo_colaboradores(setor)
         if not colaboradores:
             st.warning("Sem colaboradores cadastrados.")
         else:
@@ -6769,7 +6823,7 @@ def page_app():
             ano = int(st.session_state["cfg_ano"])
             mes = int(st.session_state["cfg_mes"])
             hist_db = load_escala_mes_db(setor, ano, mes)
-            colaboradores = load_colaboradores_setor(setor)
+            colaboradores = _memo_colaboradores(setor)
             colab_by = {c["Chapa"]: c for c in colaboradores}
 
             if not hist_db:
@@ -7040,6 +7094,7 @@ def page_app():
         elif sec_imp == "🖨️ Imprimir escala parede":
             st.subheader("🖨️ Imprimir escala parede")
 
+            colaboradores = load_colaboradores_setor(setor) or []
             all_subgrupos = sorted({((c.get("Subgrupo") or "").strip() or "SEM SUBGRUPO") for c in colaboradores})
             cfx1, cfx2, cfx3 = st.columns([1.2, 1.2, 1.6])
             loja_txt = cfx1.text_input("Loja:", value=str(setor), key="pdf_loja_txt")
