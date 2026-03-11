@@ -7082,13 +7082,11 @@ def page_app():
                 if pdf_fer_busca.strip():
                     kw = pdf_fer_busca.strip().lower()
                     colabs_all = [c for c in colabs_all if kw in str(c.get("Nome","")).lower() or kw in str(c.get("Chapa","")).lower()]
-                ano_ref = int(st.session_state.get("cfg_ano", datetime.now().year))
-                mes_ref = int(st.session_state.get("cfg_mes", datetime.now().month))
-                pdf_bytes = gerar_pdf_ferias_mes(setor, ano_ref, mes_ref, colabs_all, keyword=pdf_fer_busca)
+                pdf_bytes = gerar_pdf_ferias_mes(setor, int(ano), int(mes), load_colaboradores_setor(setor) or [], keyword=pdf_fer_busca)
                 st.download_button(
                     "⬇️ Baixar PDF (Férias do mês)",
                     data=pdf_bytes,
-                    file_name=f"ferias_{setor}_{mes_ref:02d}_{ano_ref}.pdf",
+                    file_name=f"ferias_{setor}_{int(mes):02d}_{int(ano)}.pdf",
                     mime="application/pdf",
                     use_container_width=True,
                     key="pdf_fer_dl"
