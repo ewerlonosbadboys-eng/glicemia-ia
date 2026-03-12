@@ -647,6 +647,7 @@ TABLE_BY_FILE = {
 def _table_for_file(arq) -> str:
     return TABLE_BY_FILE.get(str(arq), '')
 
+@st.cache_data(ttl=60)
 def _read_table_df(table: str, where: str = '', params=()):
     filters = {}
     if where == 'Usuario=?' and params:
@@ -740,6 +741,7 @@ def _ensure_id_column(df: pd.DataFrame, col_name="ID", prefix="GL") -> pd.DataFr
             df.loc[mask, col_name] = [f"{prefix}-{uuid.uuid4().hex[:12]}" for _ in range(int(mask.sum()))]
     return df
 
+@st.cache_data(ttl=30)
 def carregar_glicemia_com_id() -> pd.DataFrame:
     df_all = _read_table_df("glicemia")
     if df_all.empty:
@@ -784,6 +786,7 @@ def carregar_glicemia_com_id() -> pd.DataFrame:
     return df_all[df_all["Usuario"] == st.session_state.user_email].copy()
 
 
+@st.cache_data(ttl=30)
 def carregar_historico_ultima_medida() -> pd.DataFrame:
     try:
         df_hist = carregar_glicemia_com_id()
@@ -1051,13 +1054,14 @@ def _schema_receita_nova(rec: pd.Series, periodo: str) -> bool:
 
 def calc_insulina(v: int, momento: str):
 
-    df_r = carregar_dados_seguro(ARQ_R)
+    # leitura direta da tabela receita
+    df_r = _read_table_df("receita", "Usuario=?", (st.session_state.user_email,))
 
-    # fallback caso filtro do usuário não retorne
-    if df_r.empty:
+    # fallback caso não encontre pelo usuário
+    if df_r is None or df_r.empty:
         df_r = _read_table_df("receita")
 
-    if df_r.empty:
+    if df_r is None or df_r.empty:
         return "0 UI", "Receita não encontrada"
 
     rec = df_r.iloc[-1]
@@ -1102,27 +1106,21 @@ def calc_insulina_rapida(v: int, momento: str):
     return calc_insulina(v, momento)
 
 def calc_glargina(momento: str):
-
     df_r = carregar_dados_seguro(ARQ_R)
-
     if df_r.empty:
-        df_r = _read_table_df("receita")
+        return "0 UI", "Longa: Configurar"
 
-    if df_r.empty:
-        return "0 UI", "Configurar"
-
-    rec = df_r.iloc[-1]
-
-    cafe = float(rec.get("glargina_cafe_ui",0))
-    janta = float(rec.get("glargina_janta_ui",0))
-
-    if momento == "Antes Café":
-        return f"{int(cafe)} UI","Longa manhã"
-
-    if momento == "Antes Janta":
-        return f"{int(janta)} UI","Longa noite"
-
-    return "—","Não aplicável"
+    rec = df_r.iloc[0]
+    try:
+        cafe = float(rec.get("glargina_cafe_ui", 0) or 0)
+        janta = float(rec.get("glargina_janta_ui", 0) or 0)
+        if momento == "Antes Café":
+            return f"{int(cafe)} UI", "Longa (Antes Café)"
+        if momento == "Antes Janta":
+            return f"{int(janta)} UI", "Longa (Antes Janta)"
+        return "—", "Longa: não aplicável"
+    except Exception:
+        return "0 UI", "Longa: erro"
 
 # ================= PRÓXIMA MEDIDA (+2h) e WHATSAPP =================
 def proxima_medida_apos(momento: str, dt_base: datetime):
