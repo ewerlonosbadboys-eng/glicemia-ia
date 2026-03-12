@@ -1042,7 +1042,7 @@ def aplicar_edicoes_e_exclusoes_glicemia(df_editado: pd.DataFrame):
 
 # ================= RECEITA (RÁPIDA/LONGA) =================
 
-def _buscar_receita_robusta():
+def _buscar_receita_usuario_segura():
     try:
         df = sb_select_df("receita")
     except Exception:
@@ -1051,13 +1051,11 @@ def _buscar_receita_robusta():
     if df is None or df.empty:
         return None
 
-    # normaliza possíveis nomes de coluna
-    cols = {c.lower(): c for c in df.columns}
-
+    # detectar coluna de usuário
     usuario_col = None
-    for c in ["usuario","email","user","usuario_email"]:
-        if c in cols:
-            usuario_col = cols[c]
+    for c in df.columns:
+        if c.lower() in ["usuario","email","user"]:
+            usuario_col = c
             break
 
     if usuario_col:
@@ -1065,7 +1063,6 @@ def _buscar_receita_robusta():
         if not df_user.empty:
             return df_user.iloc[-1]
 
-    # fallback: última receita cadastrada
     return df.iloc[-1]
 
 def _schema_receita_nova(rec: pd.Series, periodo: str) -> bool:
@@ -1079,10 +1076,10 @@ def _schema_receita_nova(rec: pd.Series, periodo: str) -> bool:
 
 def calc_insulina(v: int, momento: str):
 
-    rec = _buscar_receita_robusta()
+    rec = _buscar_receita_usuario_segura()
 
     if rec is None:
-        return "0 UI","Receita não encontrada"
+        return "0 UI","Receita não cadastrada"
 
     periodo = "manha" if momento in [
         "Antes Café","Após Café","Antes Almoço","Após Almoço"
@@ -1101,6 +1098,10 @@ def calc_insulina(v: int, momento: str):
         f3_min = float(rec.get(f"{periodo}_f3_min",0))
         f3_max = float(rec.get(f"{periodo}_f3_max",0))
         f3_dose = float(rec.get(f"{periodo}_f3_dose",0))
+
+        # validação
+        if f1_max == 0 and f2_max == 0 and f3_max == 0:
+            return "0 UI","Receita não configurada"
 
         if v < 70:
             return "0 UI","Hipoglicemia"
@@ -1125,7 +1126,7 @@ def calc_insulina_rapida(v: int, momento: str):
 
 def calc_glargina(momento: str):
 
-    rec = _buscar_receita_robusta()
+    rec = _buscar_receita_usuario_segura()
 
     if rec is None:
         return "0 UI","Configurar receita"
