@@ -1085,6 +1085,10 @@ SUPABASE_KEY = (
 SUPABASE_SCHEMA = (os.getenv("SUPABASE_SCHEMA") or "public").strip() or "public"
 SUPABASE_SYNC_ENABLED = bool(SUPABASE_URL and SUPABASE_KEY)
 SUPABASE_SYNC_DEBOUNCE_SEC = int(os.getenv("SUPABASE_SYNC_DEBOUNCE_SEC", "12") or 12)
+SUPABASE_AUTO_PULL_ON_START = (os.getenv("SUPABASE_AUTO_PULL_ON_START", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
+SUPABASE_AUTO_PUSH_ON_COMMIT = (os.getenv("SUPABASE_AUTO_PUSH_ON_COMMIT", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
+SUPABASE_AUTO_PUSH_ON_CLOSE = (os.getenv("SUPABASE_AUTO_PUSH_ON_CLOSE", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
+SUPABASE_AUTO_BOOTSTRAP_AFTER_SCHEMA = (os.getenv("SUPABASE_AUTO_BOOTSTRAP_AFTER_SCHEMA", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
 _SUPABASE_LAST_PUSH_TS = 0.0
 _SUPABASE_LAST_PULL_TS = 0.0
 _SUPABASE_SYNC_IN_PROGRESS = False
@@ -1581,17 +1585,19 @@ def _supabase_compare_tables_snapshot() -> pd.DataFrame:
 class SQLiteSyncConnection(sqlite3.Connection):
     def commit(self):
         result = super().commit()
-        try:
-            _supabase_push_all_from_sqlite(force=False)
-        except Exception:
-            pass
+        if SUPABASE_AUTO_PUSH_ON_COMMIT:
+            try:
+                _supabase_push_all_from_sqlite(force=False)
+            except Exception:
+                pass
         return result
 
     def close(self):
-        try:
-            _supabase_push_all_from_sqlite(force=True)
-        except Exception:
-            pass
+        if SUPABASE_AUTO_PUSH_ON_CLOSE:
+            try:
+                _supabase_push_all_from_sqlite(force=True)
+            except Exception:
+                pass
         return super().close()
 
 _RUNTIME_READY = False
@@ -1778,11 +1784,12 @@ def _ensure_runtime_storage_ready(force: bool = False):
     _adopt_best_db_candidate_if_needed()
     _restore_from_latest_stable_if_needed()
     _adopt_best_db_candidate_if_needed()
-    try:
-        if SUPABASE_SYNC_ENABLED and not _sqlite_app_has_meaningful_data():
-            _supabase_pull_all_to_sqlite(force=True)
-    except Exception:
-        pass
+    if SUPABASE_AUTO_PULL_ON_START:
+        try:
+            if SUPABASE_SYNC_ENABLED and not _sqlite_app_has_meaningful_data():
+                _supabase_pull_all_to_sqlite(force=True)
+        except Exception:
+            pass
     _RUNTIME_READY = True
     _RUNTIME_READY_AT = now_ts
 
@@ -2982,11 +2989,12 @@ def db_init():
         """, ("Administrador", "ADMIN", "admin", senha_hash, salt, 1, 1, datetime.now().isoformat()))
         con.commit()
 
-    try:
-        _bootstrap_from_supabase_after_schema(force=False)
-    except Exception:
-        pass
-        con.commit()
+    if SUPABASE_AUTO_BOOTSTRAP_AFTER_SCHEMA:
+        try:
+            _bootstrap_from_supabase_after_schema(force=False)
+        except Exception:
+            pass
+    con.commit()
 
     con.close()
 
@@ -7927,6 +7935,10 @@ def page_app():
                 {"Campo": "URL", "Valor": SUPABASE_URL or "—"},
                 {"Campo": "Schema", "Valor": SUPABASE_SCHEMA or "public"},
                 {"Campo": "Key", "Valor": _mask_secret(SUPABASE_KEY)},
+                {"Campo": "Auto pull ao abrir", "Valor": "Sim" if SUPABASE_AUTO_PULL_ON_START else "Não"},
+                {"Campo": "Auto push no commit", "Valor": "Sim" if SUPABASE_AUTO_PUSH_ON_COMMIT else "Não"},
+                {"Campo": "Auto push ao fechar", "Valor": "Sim" if SUPABASE_AUTO_PUSH_ON_CLOSE else "Não"},
+                {"Campo": "Auto bootstrap pós-schema", "Valor": "Sim" if SUPABASE_AUTO_BOOTSTRAP_AFTER_SCHEMA else "Não"},
                 {"Campo": "Status atual", "Valor": msg_conn},
                 {"Campo": "Último erro", "Valor": (_SUPABASE_LAST_ERROR or st.session_state.get("sb_diag_last_error", "")) or "—"},
             ])
