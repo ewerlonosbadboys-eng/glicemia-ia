@@ -2154,6 +2154,22 @@ def ordenar_colunas_momentos(cols):
     return na_ordem + extras
 
 
+def separar_momentos_extras(cols):
+    ordem_base = [
+        "Antes Café",
+        "Após Café",
+        "Antes Almoço",
+        "Após Almoço",
+        "Antes Janta",
+        "Após Janta",
+        "Madrugada",
+    ]
+    cols = [str(c) for c in (cols or [])]
+    base = [c for c in ordem_base if c in cols]
+    extras = [c for c in cols if c not in ordem_base]
+    return base, extras
+
+
 
 def gerar_pdf_bytes(df_g: pd.DataFrame, df_n: pd.DataFrame) -> bytes:
     """
