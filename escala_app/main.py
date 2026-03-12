@@ -1096,6 +1096,10 @@ SUPABASE_AUTO_PUSH_ON_COMMIT = (os.getenv("SUPABASE_AUTO_PUSH_ON_COMMIT", "0") o
 SUPABASE_AUTO_PUSH_ON_CLOSE = (os.getenv("SUPABASE_AUTO_PUSH_ON_CLOSE", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
 SUPABASE_AUTO_BOOTSTRAP_AFTER_SCHEMA = (os.getenv("SUPABASE_AUTO_BOOTSTRAP_AFTER_SCHEMA", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
 SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY = (os.getenv("SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
+RESTORE_GUARD_ENABLED = (os.getenv("RESTORE_GUARD_ENABLED", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
+_RESTORE_GUARD_ACTIVE = False
+_RESTORE_GUARD_MESSAGE = ""
+
 _SUPABASE_LAST_PUSH_TS = 0.0
 _SUPABASE_LAST_PULL_TS = 0.0
 _SUPABASE_SYNC_IN_PROGRESS = False
@@ -1337,6 +1341,49 @@ def _set_supabase_error(msg: str = "") -> None:
         _SUPABASE_LAST_ERROR = str(msg or "").strip()
     except Exception:
         _SUPABASE_LAST_ERROR = ""
+
+
+def _set_restore_guard(active: bool, message: str = "") -> None:
+    global _RESTORE_GUARD_ACTIVE, _RESTORE_GUARD_MESSAGE
+    try:
+        _RESTORE_GUARD_ACTIVE = bool(active)
+        _RESTORE_GUARD_MESSAGE = str(message or "").strip()
+    except Exception:
+        _RESTORE_GUARD_ACTIVE = bool(active)
+        _RESTORE_GUARD_MESSAGE = ""
+
+
+def _restore_sources_summary() -> str:
+    fontes = []
+    try:
+        if SUPABASE_SYNC_ENABLED:
+            fontes.append("Supabase")
+    except Exception:
+        pass
+    try:
+        if any(_validate_sqlite_file(str(p)) for p in _bundled_latest_stable_paths()):
+            fontes.append("latest_stable.db do projeto")
+    except Exception:
+        pass
+    try:
+        latest = Path(BACKUP_DIR) / "latest_stable.db"
+        if _validate_sqlite_file(str(latest)) and "latest_stable.db do projeto" not in fontes:
+            fontes.append("latest_stable.db local")
+    except Exception:
+        pass
+    return ", ".join(fontes)
+
+
+def _should_block_silent_empty_seed() -> bool:
+    if not RESTORE_GUARD_ENABLED:
+        return False
+    try:
+        if _sqlite_app_has_meaningful_data():
+            return False
+    except Exception:
+        pass
+    fontes = _restore_sources_summary()
+    return bool(fontes)
 
 def _supabase_table_count_fast(table: str) -> int | None:
     if not SUPABASE_SYNC_ENABLED:
@@ -3170,9 +3217,10 @@ def db_init():
     except Exception:
         pass
 
+    restore_ok = False
     if SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY:
         try:
-            _restore_from_supabase_if_local_empty(force=True)
+            restore_ok = bool(_restore_from_supabase_if_local_empty(force=True))
         except Exception as e:
             _set_supabase_error(e)
 
@@ -3180,6 +3228,15 @@ def db_init():
     cur = con.cursor()
 
     con.commit()
+
+    if _should_block_silent_empty_seed():
+        fontes = _restore_sources_summary() or "fonte de restore configurada"
+        detalhe = _SUPABASE_LAST_ERROR or "sem detalhe adicional"
+        _set_restore_guard(True, f"Base local vazia após a inicialização. O app bloqueou a criação de uma base mínima para não apagar sua referência. Restaure os dados a partir de: {fontes}. Detalhe: {detalhe}")
+        con.close()
+        return
+
+    _set_restore_guard(False, "")
     _safe_exec(cur, "INSERT OR IGNORE INTO setores(nome) VALUES (?)", ("GERAL",))
     _safe_exec(cur, "INSERT OR IGNORE INTO setores(nome) VALUES (?)", ("ADMIN",))
     _safe_exec(cur, "INSERT OR IGNORE INTO setores(nome) VALUES (?)", ("GESTAO",))
@@ -6364,6 +6421,12 @@ def page_login():
             con.close()
 
     st.title("🔐 Login por Setor (Usuário / Líder / Admin)")
+
+    if _RESTORE_GUARD_ACTIVE:
+        st.error(_RESTORE_GUARD_MESSAGE or "Base não restaurada. Login bloqueado para evitar abrir um banco vazio.")
+        st.info("Publique o latest_stable.db junto do projeto ou confirme que o Supabase tem os dados completos antes de liberar o login.")
+        st.stop()
+
     login_sec = st.radio("", ["Entrar", "Cadastrar Usuário do Sistema", "Esqueci a senha"], horizontal=True, key="login_nav_fast", label_visibility="collapsed")
 
     if login_sec == "Entrar":
