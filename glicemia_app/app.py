@@ -152,7 +152,6 @@ def _df_to_ui(table: str, df: pd.DataFrame) -> pd.DataFrame:
             out[c] = None
     return out[cols]
 
-@st.cache_data(ttl=120)
 def sb_select_df(table: str, filters: dict | None = None, order_by: str | None = None) -> pd.DataFrame:
     if not USE_SUPABASE:
         return pd.DataFrame(columns=TABLE_UI_COLS.get(table, []))
@@ -1041,30 +1040,6 @@ def aplicar_edicoes_e_exclusoes_glicemia(df_editado: pd.DataFrame):
         }, {'usuario': st.session_state.user_email, 'id': str(r['ID'])})
 
 # ================= RECEITA (RÁPIDA/LONGA) =================
-
-def _buscar_receita_usuario_segura():
-    try:
-        df = sb_select_df("receita")
-    except Exception:
-        df = None
-
-    if df is None or df.empty:
-        return None
-
-    # detectar coluna de usuário
-    usuario_col = None
-    for c in df.columns:
-        if c.lower() in ["usuario","email","user"]:
-            usuario_col = c
-            break
-
-    if usuario_col:
-        df_user = df[df[usuario_col] == st.session_state.user_email]
-        if not df_user.empty:
-            return df_user.iloc[-1]
-
-    return df.iloc[-1]
-
 def _schema_receita_nova(rec: pd.Series, periodo: str) -> bool:
     need = [
         f"{periodo}_f1_min", f"{periodo}_f1_max", f"{periodo}_f1_dose",
@@ -1073,74 +1048,54 @@ def _schema_receita_nova(rec: pd.Series, periodo: str) -> bool:
     ]
     return all(k in rec.index for k in need)
 
-
 def calc_insulina(v: int, momento: str):
+    df_r = carregar_dados_seguro(ARQ_R)
+    if df_r.empty:
+        return "0 UI", "Configurar Receita"
 
-    rec = _buscar_receita_usuario_segura()
-
-    if rec is None:
-        return "0 UI","Receita não cadastrada"
-
-    periodo = "manha" if momento in [
-        "Antes Café","Após Café","Antes Almoço","Após Almoço"
-    ] else "noite"
+    rec = df_r.iloc[0]
+    periodo = "manha" if momento in ["Antes Café", "Após Café", "Antes Almoço", "Após Almoço", ] else "noite"
 
     try:
+        if not _schema_receita_nova(rec, periodo):
+            return "0 UI", "Receita inválida"
 
-        f1_min = float(rec.get(f"{periodo}_f1_min",0))
-        f1_max = float(rec.get(f"{periodo}_f1_max",0))
-        f1_dose = float(rec.get(f"{periodo}_f1_dose",0))
-
-        f2_min = float(rec.get(f"{periodo}_f2_min",0))
-        f2_max = float(rec.get(f"{periodo}_f2_max",0))
-        f2_dose = float(rec.get(f"{periodo}_f2_dose",0))
-
-        f3_min = float(rec.get(f"{periodo}_f3_min",0))
-        f3_max = float(rec.get(f"{periodo}_f3_max",0))
-        f3_dose = float(rec.get(f"{periodo}_f3_dose",0))
-
-        # validação
-        if f1_max == 0 and f2_max == 0 and f3_max == 0:
-            return "0 UI","Receita não configurada"
+        f1_min = float(rec[f"{periodo}_f1_min"]); f1_max = float(rec[f"{periodo}_f1_max"]); f1_dose = float(rec[f"{periodo}_f1_dose"])
+        f2_min = float(rec[f"{periodo}_f2_min"]); f2_max = float(rec[f"{periodo}_f2_max"]); f2_dose = float(rec[f"{periodo}_f2_dose"])
+        f3_min = float(rec[f"{periodo}_f3_min"]); f3_max = float(rec[f"{periodo}_f3_max"]); f3_dose = float(rec[f"{periodo}_f3_dose"])
 
         if v < 70:
-            return "0 UI","Hipoglicemia"
+            return "0 UI", "Hipoglicemia!"
 
         if f1_min <= v <= f1_max:
-            return f"{int(f1_dose)} UI","Faixa 1"
-
+            return f"{int(f1_dose)} UI", f"Faixa 1 ({int(f1_min)}-{int(f1_max)})"
         if f2_min <= v <= f2_max:
-            return f"{int(f2_dose)} UI","Faixa 2"
-
-        if v >= f3_min:
-            return f"{int(f3_dose)} UI","Faixa 3"
-
-        return "0 UI","Fora faixa"
-
-    except Exception as e:
-        return "0 UI",f"Erro receita {e}"
-
+            return f"{int(f2_dose)} UI", f"Faixa 2 ({int(f2_min)}-{int(f2_max)})"
+        if f3_min <= v <= f3_max:
+            return f"{int(f3_dose)} UI", f"Faixa 3 ({int(f3_min)}-{int(f3_max)})"
+        return "0 UI", "Fora das faixas"
+    except Exception:
+        return "0 UI", "Erro na Receita"
 
 def calc_insulina_rapida(v: int, momento: str):
     return calc_insulina(v, momento)
 
 def calc_glargina(momento: str):
+    df_r = carregar_dados_seguro(ARQ_R)
+    if df_r.empty:
+        return "0 UI", "Longa: Configurar"
 
-    rec = _buscar_receita_usuario_segura()
-
-    if rec is None:
-        return "0 UI","Configurar receita"
-
-    cafe = float(rec.get("glargina_cafe_ui",0))
-    janta = float(rec.get("glargina_janta_ui",0))
-
-    if momento == "Antes Café":
-        return f"{int(cafe)} UI","Glargina manhã"
-
-    if momento == "Antes Janta":
-        return f"{int(janta)} UI","Glargina noite"
-
-    return "—","Não aplicável"
+    rec = df_r.iloc[0]
+    try:
+        cafe = float(rec.get("glargina_cafe_ui", 0) or 0)
+        janta = float(rec.get("glargina_janta_ui", 0) or 0)
+        if momento == "Antes Café":
+            return f"{int(cafe)} UI", "Longa (Antes Café)"
+        if momento == "Antes Janta":
+            return f"{int(janta)} UI", "Longa (Antes Janta)"
+        return "—", "Longa: não aplicável"
+    except Exception:
+        return "0 UI", "Longa: erro"
 
 # ================= PRÓXIMA MEDIDA (+2h) e WHATSAPP =================
 def proxima_medida_apos(momento: str, dt_base: datetime):
@@ -1777,228 +1732,7 @@ else:
                 dose_r_final = dose_r_sug  # padrão = sugestão
 
                 st.markdown(
-                    f'<div class="metric-box"><small>Rápida (sugestão)</small><br>'
-                    f'<span class="dose-destaque">{dose_r_final}</span></div>',
-                    unsafe_allow_html=True
-                )
-
-                editar_r = st.checkbox("✍️ Editar dose Rápida antes de salvar", value=False, key="editar_rapida")
-                if editar_r:
-                    dose_r_edit = st.number_input(
-                        "Dose Rápida (UI)",
-                        min_value=0, max_value=50, value=int(sug_num),
-                        key="dose_rapida_edit"
-                    )
-                    dose_r_final = f"{int(dose_r_edit)} UI"
-
-                    # mantém o card igual ao valor final
-                    st.markdown(
-                        f'<div class="metric-box" style="margin-top:10px;"><small>Rápida (ajustada)</small><br>'
-                        f'<span class="dose-destaque">{dose_r_final}</span></div>',
-                        unsafe_allow_html=True
-                    )
-            else:
-                st.caption("Rápida: não aplicável neste momento.")
-                dose_r_final = ""
-
-            # ===== LONGA =====
-            dose_l_sug, msg_l = "—", "Longa não aplicável"
-            dose_l_final = ""
-
-            if m_gl in MOMENTOS_LONGA:
-                dose_l_sug, msg_l = calc_glargina(m_gl)  # ex: "8 UI"
-                try:
-                    sug_l = int(str(dose_l_sug).split()[0])
-                except Exception:
-                    sug_l = 0
-
-                st.markdown(
-                    f'<div class="metric-box" style="margin-top:10px;"><small>{msg_l} (sugestão)</small><br>'
-                    f'<span class="dose-destaque">{dose_l_sug}</span></div>',
-                    unsafe_allow_html=True
-                )
-
-                # --- LONGA: mostra sugestão primeiro; editar é opcional ---
-                dose_l_final = dose_l_sug  # padrão = sugestão
-
-                editar_l = st.checkbox("✍️ Editar dose Longa antes de salvar", value=False, key="editar_longa")
-                if editar_l:
-                    dose_l_edit = st.number_input(
-                        "Dose Longa (UI)",
-                        min_value=0, max_value=100, value=int(sug_l),
-                        key="dose_longa_edit"
-                    )
-                    dose_l_final = f"{int(dose_l_edit)} UI"
-
-                    st.markdown(
-                        f'<div class="metric-box" style="margin-top:10px;"><small>Longa (ajustada)</small><br>'
-                        f'<span class="dose-destaque">{dose_l_final}</span></div>',
-                        unsafe_allow_html=True
-                    )
-            else:
-                st.caption("Longa: não aplicável neste momento.")
-                dose_l_final = ""
-
-            # WhatsApp (usa as doses editadas + última nutrição do mesmo momento)
-            dose_r_msg = dose_r_final if dose_r_final else (dose_r_sug if dose_r_sug else "—")
-            dose_l_msg = dose_l_final if dose_l_final else (dose_l_sug if dose_l_sug else "—")
-
-            alimentos_msg = []
-            c_msg = 0
-            p_msg = 0
-            g_msg = 0
-
-            try:
-                dfn_msg = _read_table_df("nutricao", "Usuario=?", (st.session_state.user_email,))
-
-                if not dfn_msg.empty and "Momento" in dfn_msg.columns:
-                        dfn_momento = dfn_msg[dfn_msg["Momento"].astype(str) == str(m_gl)].copy()
-
-                        if not dfn_momento.empty:
-                            ult = dfn_momento.iloc[-1]
-                            alimentos_txt = str(ult.get("Info", "")).strip()
-                            alimentos_msg = [x.strip() for x in alimentos_txt.split(",") if x.strip()]
-                            c_msg = pd.to_numeric(ult.get("C", 0), errors="coerce")
-                            p_msg = pd.to_numeric(ult.get("P", 0), errors="coerce")
-                            g_msg = pd.to_numeric(ult.get("G", 0), errors="coerce")
-
-                            c_msg = 0 if pd.isna(c_msg) else int(c_msg)
-                            p_msg = 0 if pd.isna(p_msg) else int(p_msg)
-                            g_msg = 0 if pd.isna(g_msg) else int(g_msg)
-            except Exception:
-                alimentos_msg = []
-                c_msg = 0
-                p_msg = 0
-                g_msg = 0
-
-            link_wpp = link_whatsapp_lembrete(
-                momento=m_gl,
-                valor_glicemia=int(v_gl),
-                dose_rapida=dose_r_msg,
-                dose_longa=dose_l_msg,
-                alimentos=alimentos_msg,
-                c_tot=c_msg,
-                p_tot=p_msg,
-                g_tot=g_msg,
-            )
-            st.link_button("📲 Abrir WhatsApp com mensagem pronta", link_wpp, use_container_width=True)
-
-            if st.button("💾 Salvar Glicemia", use_container_width=True):
-                # salva doses separadas (Rápida / Longa) para o histórico e para o PDF
-                dose_r_save = ""
-                dose_l_save = ""
-
-                if m_gl in MOMENTOS_RAPIDA and "dose_r_final" in locals() and dose_r_final:
-                    dose_r_save = str(dose_r_final).strip()
-
-                if m_gl in MOMENTOS_LONGA and "dose_l_final" in locals() and dose_l_final:
-                    dose_l_save = str(dose_l_final).strip()
-
-                # mantém a coluna "Dose" (texto) para compatibilidade, mas salva também em colunas separadas
-                dose_texto = ""
-                if dose_r_save:
-                    dose_texto = dose_r_save
-                if dose_l_save:
-                    dose_texto = (dose_texto + " | " if dose_texto else "") + f"Longa: {dose_l_save}"
-
-                dt_now = agora_br()
-                salvar_registro_glicemia(int(v_gl), m_gl, dose_texto, dt_now, dose_rapida=dose_r_save, dose_longa=dose_l_save)
-
-                # sincroniza a aba "Última medição" com o registro recém-salvo
-                st.session_state["ult_med_dia"] = dt_now.strftime("%d/%m/%Y")
-                st.session_state["ult_med_momento"] = m_gl
-
-                st.rerun()
-
-        with c2:
-            if not dfg.empty:
-                st.write("### Tendência")
-
-                # Selecionar dia específico (inclui 'Geral (últimas 25)')
-                datas = sorted(dfg["Data"].astype(str).unique().tolist())
-                opcoes = ["Geral (últimas 25)"] + datas
-
-                hoje_str = agora_br().strftime("%d/%m/%Y")
-                ontem_str = (agora_br() - timedelta(days=1)).strftime("%d/%m/%Y")
-
-                if ontem_str in opcoes:
-                    idx_default = opcoes.index(ontem_str)
-                elif hoje_str in opcoes:
-                    idx_default = opcoes.index(hoje_str)
-                else:
-                    idx_default = len(opcoes) - 1
-
-                dia_sel = st.selectbox("📅 Ver tendência do dia:", opcoes, index=idx_default, key="trend_day_sel")
-
-                if dia_sel == "Geral (últimas 25)":
-                    df_plot = dfg.copy().tail(25)
-                    titulo = "Tendência (últimas 25)"
-                else:
-                    df_plot = dfg[dfg["Data"].astype(str) == dia_sel].copy()
-                    titulo = f"Tendência do dia {dia_sel}"
-
-                # Ordena por data/hora real e mostra eixo em HH:MM
-                try:
-                    df_plot["DT"] = pd.to_datetime(
-                        df_plot["Data"].astype(str) + " " + df_plot["Hora"].astype(str),
-                        dayfirst=True,
-                        errors="coerce"
-                    )
-                    df_plot = df_plot.dropna(subset=["DT"]).sort_values("DT")
-                    x_col = "DT"
-                except Exception:
-                    x_col = "Hora"
-
-                fig = px.line(df_plot, x=x_col, y="Valor", markers=True, title=titulo)
-                fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font_color="white")
-                if x_col == "DT":
-                    fig.update_xaxes(tickformat="%H:%M")
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.info("Sem dados para gráfico ainda.")
-
-        st.markdown("### ➕ Adicionar medida manual")
-
-        with st.expander("Adicionar medida manualmente", expanded=False):
-            colm1, colm2, colm3 = st.columns(3)
-
-            with colm1:
-                data_manual = st.date_input(
-                    "Data",
-                    value=agora_br().date(),
-                    key="g_data_manual"
-                )
-
-            with colm2:
-                hora_manual = st.text_input(
-                    "Hora (HH:MM)",
-                    value=agora_br().strftime("%H:%M"),
-                    key="g_hora_manual"
-                )
-
-            with colm3:
-                valor_manual = st.number_input(
-                    "Valor Glicemia",
-                    min_value=0,
-                    max_value=600,
-                    value=100,
-                    step=1,
-                    key="g_valor_manual"
-                )
-
-            colm4, colm5, colm6 = st.columns(3)
-
-            with colm4:
-                momento_manual = st.selectbox(
-                    "Momento",
-                    options=MOMENTOS_ORDEM + ["Outro"],
-                    key="g_momento_manual"
-                )
-
-            with colm5:
-                dose_rapida_manual = st.text_input(
-                    "Dose Rápida",
-                    value="0 UI",
+                    f'<div class="metric-box"><small>Rápida (sugestão) {dose_rapida}",
                     key="g_dose_rapida_manual"
                 )
 
