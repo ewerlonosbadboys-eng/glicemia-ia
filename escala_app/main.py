@@ -1345,6 +1345,77 @@ def _supabase_pull_all_to_sqlite(force: bool = False) -> bool:
     finally:
         _SUPABASE_SYNC_IN_PROGRESS = False
 
+
+
+def _mask_secret(value: str, keep_start: int = 8, keep_end: int = 4) -> str:
+    s = str(value or '').strip()
+    if not s:
+        return ''
+    if len(s) <= keep_start + keep_end:
+        return '*' * len(s)
+    return s[:keep_start] + '...' + s[-keep_end:]
+
+
+def _fmt_ts_br(ts) -> str:
+    try:
+        ts = float(ts or 0)
+        if ts <= 0:
+            return '—'
+        return datetime.fromtimestamp(ts).strftime('%d/%m/%Y %H:%M:%S')
+    except Exception:
+        return '—'
+
+
+def _supabase_test_connection_detail() -> tuple[bool, str]:
+    if not SUPABASE_SYNC_ENABLED:
+        return False, 'SUPABASE_URL ou SUPABASE_SERVICE_ROLE_KEY não configurados.'
+    try:
+        conn = _app_db_connect(DB_PATH)
+        try:
+            tables = [t for t in _sqlite_user_tables(conn) if t != 'sqlite_sequence']
+        finally:
+            conn.close()
+        if not tables:
+            r = requests.get(f"{SUPABASE_URL}/rest/v1/", headers=_supabase_headers(), timeout=15)
+            if r.status_code < 400:
+                return True, 'Conexão REST com Supabase OK.'
+            return False, f'Supabase respondeu {r.status_code}: {r.text[:200]}'
+        test_table = tables[0]
+        r = requests.get(_supabase_table_url(test_table), params={'select': '*', 'limit': 1}, headers=_supabase_headers(), timeout=15)
+        if r.status_code < 400:
+            return True, f'Conexão OK. Tabela de teste: {test_table}'
+        return False, f'Supabase respondeu {r.status_code} ao testar {test_table}: {r.text[:200]}'
+    except Exception as e:
+        return False, str(e)
+
+
+def _supabase_compare_tables_snapshot() -> pd.DataFrame:
+    rows = []
+    try:
+        conn = _app_db_connect(DB_PATH)
+        try:
+            tables = [t for t in _sqlite_user_tables(conn) if t != 'sqlite_sequence']
+            for tb in tables:
+                local_count = _sqlite_table_rowcount(conn, tb)
+                remote_exists = _table_exists_in_supabase(tb) if SUPABASE_SYNC_ENABLED else False
+                remote_count = None
+                if remote_exists and SUPABASE_SYNC_ENABLED:
+                    try:
+                        remote_count = len(_supabase_fetch_table_rows(tb, page_size=1000))
+                    except Exception:
+                        remote_count = None
+                rows.append({
+                    'Tabela': tb,
+                    'SQLite local': local_count,
+                    'Existe no Supabase': 'Sim' if remote_exists else 'Não',
+                    'Supabase': remote_count if remote_count is not None else '—',
+                })
+        finally:
+            conn.close()
+    except Exception as e:
+        rows.append({'Tabela': '(erro)', 'SQLite local': '—', 'Existe no Supabase': '—', 'Supabase': str(e)})
+    return pd.DataFrame(rows)
+
 class SQLiteSyncConnection(sqlite3.Connection):
     def commit(self):
         result = super().commit()
@@ -7658,6 +7729,70 @@ def page_app():
                         st.error(f"Falha ao restaurar: {e}")
 
             st.caption(f"Backup automático (1x/dia) após {AUTO_BACKUP_HOUR:02d}:00. Pasta: {BACKUP_DIR}/")
+
+            st.markdown("---")
+            st.subheader("🧪 Teste Supabase")
+
+            ok_conn, msg_conn = _supabase_test_connection_detail()
+            if "sb_diag_last_error" not in st.session_state:
+                st.session_state["sb_diag_last_error"] = ""
+            if "sb_diag_last_msg" not in st.session_state:
+                st.session_state["sb_diag_last_msg"] = msg_conn
+
+            d1, d2, d3, d4 = st.columns(4)
+            d1.metric("Sync habilitado", "Sim" if SUPABASE_SYNC_ENABLED else "Não")
+            d2.metric("Conexão", "OK" if ok_conn else "Falha")
+            d3.metric("Último push", _fmt_ts_br(_SUPABASE_LAST_PUSH_TS))
+            d4.metric("Último pull", _fmt_ts_br(_SUPABASE_LAST_PULL_TS))
+
+            info_df = pd.DataFrame([
+                {"Campo": "URL", "Valor": SUPABASE_URL or "—"},
+                {"Campo": "Schema", "Valor": SUPABASE_SCHEMA or "public"},
+                {"Campo": "Key", "Valor": _mask_secret(SUPABASE_KEY)},
+                {"Campo": "Status atual", "Valor": msg_conn},
+                {"Campo": "Último erro", "Valor": st.session_state.get("sb_diag_last_error", "") or "—"},
+            ])
+            st.dataframe(info_df, use_container_width=True, hide_index=True)
+
+            db_runtime = _db_runtime_summary()
+            st.caption(f"Banco local: {db_runtime.get('db_path','')} | Existe: {db_runtime.get('db_exists')} | Melhor candidato: {db_runtime.get('best_candidate','')}")
+
+            sb1, sb2, sb3 = st.columns(3)
+            if sb1.button("Testar conexão", key="sb_test_conn_admin"):
+                ok_now, msg_now = _supabase_test_connection_detail()
+                st.session_state["sb_diag_last_msg"] = msg_now
+                if ok_now:
+                    st.success(msg_now)
+                else:
+                    st.session_state["sb_diag_last_error"] = msg_now
+                    st.error(msg_now)
+
+            if sb2.button("Forçar push", key="sb_force_push_admin"):
+                try:
+                    ok_push = _supabase_push_all_from_sqlite(force=True)
+                    if ok_push:
+                        st.session_state["sb_diag_last_error"] = ""
+                        st.success("Push executado com sucesso.")
+                    else:
+                        st.warning("Push não executado. Verifique se o sync está habilitado e se há tabelas compatíveis.")
+                except Exception as e:
+                    st.session_state["sb_diag_last_error"] = str(e)
+                    st.error(f"Falha no push: {e}")
+
+            if sb3.button("Forçar pull", key="sb_force_pull_admin"):
+                try:
+                    ok_pull = _supabase_pull_all_to_sqlite(force=True)
+                    if ok_pull:
+                        st.session_state["sb_diag_last_error"] = ""
+                        st.success("Pull executado com sucesso.")
+                    else:
+                        st.warning("Pull não trouxe dados. Verifique se as tabelas remotas têm registros.")
+                except Exception as e:
+                    st.session_state["sb_diag_last_error"] = str(e)
+                    st.error(f"Falha no pull: {e}")
+
+            with st.expander("Comparar tabelas local x Supabase", expanded=False):
+                st.dataframe(_supabase_compare_tables_snapshot(), use_container_width=True, hide_index=True, height=360)
 
             st.markdown("---")
             st.subheader("🏷️ Setores (criar / listar)")
