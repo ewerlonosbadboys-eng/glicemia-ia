@@ -6885,12 +6885,17 @@ def page_app():
 
     elif sec_main == "🖨️ Impressão":
         sec_imp = st.radio("", ["📊 Excel modelo", "🗓️ Quem trabalha no dia", "📅 Escala", "🖨️ Imprimir escala parede"], horizontal=True, key="impressao_nav_fast", label_visibility="collapsed")
+
+        # V89.1 — correção de escopo:
+        # garante que ano/mes/hist_db/colaboradores existam em todas as subabas de impressão
+        # sem alterar regras, funções ou otimizações já feitas.
+        ano = int(st.session_state["cfg_ano"])
+        mes = int(st.session_state["cfg_mes"])
+        hist_db = load_escala_mes_db(setor, ano, mes) or {}
+        colaboradores = load_colaboradores_setor(setor)
+
         if sec_imp == "📊 Excel modelo":
             st.subheader("📊 Excel modelo RH (separado por subgrupo)")
-            ano = int(st.session_state["cfg_ano"])
-            mes = int(st.session_state["cfg_mes"])
-            hist_db = load_escala_mes_db(setor, ano, mes)
-            colaboradores = load_colaboradores_setor(setor)
             colab_by = {c["Chapa"]: c for c in colaboradores}
 
             if not hist_db:
