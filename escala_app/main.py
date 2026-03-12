@@ -1115,6 +1115,7 @@ try:
 except Exception:
     SUPABASE_TABLE_MAP = {}
 _SUPABASE_TABLE_CACHE = {}
+_SUPABASE_IGNORED_COLUMNS = {}
 
 def _supabase_headers(prefer: str | None = None, extra: dict | None = None) -> dict:
     h = {
@@ -1139,6 +1140,33 @@ def _supabase_extract_table_hint(message: str) -> str:
     s = str(message or "")
     m = re.search(r"table '\s*(?:[A-Za-z0-9_]+\.)?([A-Za-z0-9_]+)\s*'", s)
     return str(m.group(1) or "").strip() if m else ""
+
+
+def _supabase_extract_missing_column(message: str) -> str:
+    s = str(message or "")
+    m = re.search(r"Could not find the '([A-Za-z0-9_]+)' column", s)
+    return str(m.group(1) or "").strip() if m else ""
+
+
+def _supabase_register_ignored_column(table: str, column: str) -> None:
+    table = str(table or "").strip()
+    column = str(column or "").strip()
+    if not table or not column:
+        return
+    cols = set(_SUPABASE_IGNORED_COLUMNS.get(table, set()))
+    cols.add(column)
+    _SUPABASE_IGNORED_COLUMNS[table] = cols
+
+
+def _supabase_filtered_rows_and_conflicts(table: str, rows: list[dict], conflict_cols: list[str]):
+    ignored = set(_SUPABASE_IGNORED_COLUMNS.get(str(table or "").strip(), set()))
+    if not ignored:
+        return rows, list(conflict_cols or [])
+    filtered_rows = []
+    for row in rows or []:
+        filtered_rows.append({k: v for k, v in dict(row or {}).items() if k not in ignored})
+    filtered_conflicts = [c for c in (conflict_cols or []) if c not in ignored]
+    return filtered_rows, filtered_conflicts
 
 
 def _supabase_candidate_tables(local_table: str) -> list[str]:
@@ -1387,20 +1415,32 @@ def _supabase_fetch_table_rows(table: str, page_size: int = 1000) -> list[dict]:
 def _supabase_upsert_rows(table: str, rows: list[dict], conflict_cols: list[str]) -> None:
     if not SUPABASE_SYNC_ENABLED or not rows:
         return
-    params = {}
-    if conflict_cols:
-        params["on_conflict"] = ",".join(conflict_cols)
     batch_size = 500
     for i in range(0, len(rows), batch_size):
-        batch = rows[i:i+batch_size]
-        r = requests.post(
-            _supabase_table_url(_supabase_resolve_remote_table(table)),
-            params=params,
-            headers=_supabase_headers(prefer="resolution=merge-duplicates,return=minimal"),
-            data=json.dumps(batch, ensure_ascii=False),
-            timeout=60,
-        )
-        if r.status_code >= 400:
+        base_batch = rows[i:i+batch_size]
+        attempts = 0
+        while True:
+            batch, filtered_conflicts = _supabase_filtered_rows_and_conflicts(table, base_batch, conflict_cols)
+            batch = [b for b in batch if isinstance(b, dict) and b]
+            if not batch:
+                break
+            params = {}
+            if filtered_conflicts:
+                params["on_conflict"] = ",".join(filtered_conflicts)
+            r = requests.post(
+                _supabase_table_url(_supabase_resolve_remote_table(table)),
+                params=params,
+                headers=_supabase_headers(prefer="resolution=merge-duplicates,return=minimal"),
+                data=json.dumps(batch, ensure_ascii=False),
+                timeout=60,
+            )
+            if r.status_code < 400:
+                break
+            missing_col = _supabase_extract_missing_column(r.text)
+            if r.status_code == 400 and missing_col and attempts < 20:
+                _supabase_register_ignored_column(table, missing_col)
+                attempts += 1
+                continue
             raise RuntimeError(f"Supabase UPSERT {table}: {r.status_code} {r.text[:300]}")
 
 def _supabase_delete_all_rows(table: str) -> None:
