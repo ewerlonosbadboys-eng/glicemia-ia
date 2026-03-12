@@ -1048,54 +1048,81 @@ def _schema_receita_nova(rec: pd.Series, periodo: str) -> bool:
     ]
     return all(k in rec.index for k in need)
 
-def calc_insulina(v: int, momento: str):
-    df_r = carregar_dados_seguro(ARQ_R)
-    if df_r.empty:
-        return "0 UI", "Configurar Receita"
 
-    rec = df_r.iloc[0]
-    periodo = "manha" if momento in ["Antes Café", "Após Café", "Antes Almoço", "Após Almoço", ] else "noite"
+def calc_insulina(v: int, momento: str):
+
+    df_r = carregar_dados_seguro(ARQ_R)
+
+    # fallback caso filtro do usuário não retorne
+    if df_r.empty:
+        df_r = _read_table_df("receita")
+
+    if df_r.empty:
+        return "0 UI", "Receita não encontrada"
+
+    rec = df_r.iloc[-1]
+
+    periodo = "manha" if momento in [
+        "Antes Café","Após Café","Antes Almoço","Após Almoço"
+    ] else "noite"
 
     try:
-        if not _schema_receita_nova(rec, periodo):
-            return "0 UI", "Receita inválida"
 
-        f1_min = float(rec[f"{periodo}_f1_min"]); f1_max = float(rec[f"{periodo}_f1_max"]); f1_dose = float(rec[f"{periodo}_f1_dose"])
-        f2_min = float(rec[f"{periodo}_f2_min"]); f2_max = float(rec[f"{periodo}_f2_max"]); f2_dose = float(rec[f"{periodo}_f2_dose"])
-        f3_min = float(rec[f"{periodo}_f3_min"]); f3_max = float(rec[f"{periodo}_f3_max"]); f3_dose = float(rec[f"{periodo}_f3_dose"])
+        f1_min = float(rec.get(f"{periodo}_f1_min",0))
+        f1_max = float(rec.get(f"{periodo}_f1_max",0))
+        f1_dose = float(rec.get(f"{periodo}_f1_dose",0))
+
+        f2_min = float(rec.get(f"{periodo}_f2_min",0))
+        f2_max = float(rec.get(f"{periodo}_f2_max",0))
+        f2_dose = float(rec.get(f"{periodo}_f2_dose",0))
+
+        f3_min = float(rec.get(f"{periodo}_f3_min",0))
+        f3_max = float(rec.get(f"{periodo}_f3_max",0))
+        f3_dose = float(rec.get(f"{periodo}_f3_dose",0))
 
         if v < 70:
-            return "0 UI", "Hipoglicemia!"
+            return "0 UI", "Hipoglicemia"
 
         if f1_min <= v <= f1_max:
-            return f"{int(f1_dose)} UI", f"Faixa 1 ({int(f1_min)}-{int(f1_max)})"
+            return f"{int(f1_dose)} UI", "Faixa 1"
+
         if f2_min <= v <= f2_max:
-            return f"{int(f2_dose)} UI", f"Faixa 2 ({int(f2_min)}-{int(f2_max)})"
+            return f"{int(f2_dose)} UI", "Faixa 2"
+
         if f3_min <= v <= f3_max:
-            return f"{int(f3_dose)} UI", f"Faixa 3 ({int(f3_min)}-{int(f3_max)})"
-        return "0 UI", "Fora das faixas"
-    except Exception:
-        return "0 UI", "Erro na Receita"
+            return f"{int(f3_dose)} UI", "Faixa 3"
+
+        return "0 UI", "Fora da faixa"
+
+    except Exception as e:
+        return "0 UI", f"Erro receita {e}"
+
 
 def calc_insulina_rapida(v: int, momento: str):
     return calc_insulina(v, momento)
 
 def calc_glargina(momento: str):
-    df_r = carregar_dados_seguro(ARQ_R)
-    if df_r.empty:
-        return "0 UI", "Longa: Configurar"
 
-    rec = df_r.iloc[0]
-    try:
-        cafe = float(rec.get("glargina_cafe_ui", 0) or 0)
-        janta = float(rec.get("glargina_janta_ui", 0) or 0)
-        if momento == "Antes Café":
-            return f"{int(cafe)} UI", "Longa (Antes Café)"
-        if momento == "Antes Janta":
-            return f"{int(janta)} UI", "Longa (Antes Janta)"
-        return "—", "Longa: não aplicável"
-    except Exception:
-        return "0 UI", "Longa: erro"
+    df_r = carregar_dados_seguro(ARQ_R)
+
+    if df_r.empty:
+        df_r = _read_table_df("receita")
+
+    if df_r.empty:
+        return "0 UI", "Configurar"
+
+    rec = df_r.iloc[-1]
+
+    cafe = float(rec.get("glargina_cafe_ui",0))
+    janta = float(rec.get("glargina_janta_ui",0))
+
+    if momento == "Antes Café":
+        return f"{int(cafe)} UI","Longa manhã"
+
+    if momento == "Antes Janta":
+        return f"{int(janta)} UI","Longa noite"
+
+    return "—","Não aplicável"
 
 # ================= PRÓXIMA MEDIDA (+2h) e WHATSAPP =================
 def proxima_medida_apos(momento: str, dt_base: datetime):
