@@ -1042,28 +1042,31 @@ def aplicar_edicoes_e_exclusoes_glicemia(df_editado: pd.DataFrame):
 
 # ================= RECEITA (RÁPIDA/LONGA) =================
 
-def _obter_receita_usuario():
+def _buscar_receita_robusta():
     try:
-        # tenta pelo campo correto
-        df = sb_select_df("receita", {"usuario": st.session_state.user_email})
-        if df is not None and not df.empty:
-            return df.iloc[0]
-    except Exception:
-        pass
-
-    try:
-        # tenta coluna alternativa Usuario
         df = sb_select_df("receita")
-        if df is not None and not df.empty:
-            if "Usuario" in df.columns:
-                f = df[df["Usuario"] == st.session_state.user_email]
-                if not f.empty:
-                    return f.iloc[0]
-            return df.iloc[-1]
     except Exception:
-        pass
+        df = None
 
-    return None
+    if df is None or df.empty:
+        return None
+
+    # normaliza possíveis nomes de coluna
+    cols = {c.lower(): c for c in df.columns}
+
+    usuario_col = None
+    for c in ["usuario","email","user","usuario_email"]:
+        if c in cols:
+            usuario_col = cols[c]
+            break
+
+    if usuario_col:
+        df_user = df[df[usuario_col] == st.session_state.user_email]
+        if not df_user.empty:
+            return df_user.iloc[-1]
+
+    # fallback: última receita cadastrada
+    return df.iloc[-1]
 
 def _schema_receita_nova(rec: pd.Series, periodo: str) -> bool:
     need = [
@@ -1076,10 +1079,10 @@ def _schema_receita_nova(rec: pd.Series, periodo: str) -> bool:
 
 def calc_insulina(v: int, momento: str):
 
-    rec = _obter_receita_usuario()
+    rec = _buscar_receita_robusta()
 
     if rec is None:
-        return "0 UI", "Receita não encontrada"
+        return "0 UI","Receita não encontrada"
 
     periodo = "manha" if momento in [
         "Antes Café","Após Café","Antes Almoço","Após Almoço"
@@ -1100,21 +1103,21 @@ def calc_insulina(v: int, momento: str):
         f3_dose = float(rec.get(f"{periodo}_f3_dose",0))
 
         if v < 70:
-            return "0 UI", "Hipoglicemia"
+            return "0 UI","Hipoglicemia"
 
         if f1_min <= v <= f1_max:
-            return f"{int(f1_dose)} UI", "Faixa 1"
+            return f"{int(f1_dose)} UI","Faixa 1"
 
         if f2_min <= v <= f2_max:
-            return f"{int(f2_dose)} UI", "Faixa 2"
+            return f"{int(f2_dose)} UI","Faixa 2"
 
-        if f3_min <= v <= f3_max:
-            return f"{int(f3_dose)} UI", "Faixa 3"
+        if v >= f3_min:
+            return f"{int(f3_dose)} UI","Faixa 3"
 
-        return f"{int(f3_dose)} UI", "Acima da faixa"
+        return "0 UI","Fora faixa"
 
     except Exception as e:
-        return "0 UI", f"Erro receita {e}"
+        return "0 UI",f"Erro receita {e}"
 
 
 def calc_insulina_rapida(v: int, momento: str):
@@ -1122,10 +1125,10 @@ def calc_insulina_rapida(v: int, momento: str):
 
 def calc_glargina(momento: str):
 
-    rec = _obter_receita_usuario()
+    rec = _buscar_receita_robusta()
 
     if rec is None:
-        return "0 UI", "Configurar receita"
+        return "0 UI","Configurar receita"
 
     cafe = float(rec.get("glargina_cafe_ui",0))
     janta = float(rec.get("glargina_janta_ui",0))
