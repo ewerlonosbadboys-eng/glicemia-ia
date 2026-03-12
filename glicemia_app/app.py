@@ -31,6 +31,7 @@ except Exception:
 
 import pytz
 import streamlit as st
+import streamlit.components.v1 as components
 from email.mime.text import MIMEText
 from openpyxl.styles import Alignment, PatternFill
 try:
@@ -857,7 +858,7 @@ def render_card_ultima_medida():
     info = obter_ultima_medida_card()
 
     if not info:
-        st.markdown("""
+        html = """
         <div style="background:#111827;border:1px solid #2a2f3a;border-radius:18px;padding:20px;min-height:230px;">
             <div style="font-size:15px;color:#9ca3af;margin-bottom:12px;">Última medida</div>
             <div style="background:#1f2937;border-radius:16px;padding:24px;text-align:center;margin-bottom:14px;">
@@ -867,7 +868,8 @@ def render_card_ultima_medida():
             </div>
             <div style="font-size:14px;color:#cbd5e1;">Sem registros ainda.</div>
         </div>
-        """, unsafe_allow_html=True)
+        """
+        components.html(html, height=260, scrolling=False)
         return
 
     valor = info.get("valor", "-")
@@ -879,7 +881,7 @@ def render_card_ultima_medida():
     data = info.get("data", "-")
     refeicao = info.get("refeicao", "-")
 
-    st.markdown(f"""
+    html = f"""
     <div style="background:#111827;border:1px solid #2a2f3a;border-radius:18px;padding:20px;min-height:230px;">
         <div style="font-size:15px;color:#9ca3af;margin-bottom:12px;">Última medida</div>
 
@@ -921,7 +923,8 @@ def render_card_ultima_medida():
             <div style="font-size:14px;font-weight:700;color:white;word-break:break-word;">{refeicao}</div>
         </div>
     </div>
-    """, unsafe_allow_html=True)
+    """
+    components.html(html, height=430, scrolling=False)
 
 def salvar_registro_glicemia(valor: int, momento: str, dose: str, dt: datetime, dose_rapida: str = "", dose_longa: str = ""):
     dr = (dose_rapida or "").strip()
@@ -1650,7 +1653,7 @@ if st.session_state.user_email == "admin":
                     st.rerun()
 
 else:
-    tab1, tab2, tab3, tab4 = st.tabs(["📊 Glicemia", "🍽️ Nutrição", "⚙️ Receita", "📩 Sugerir Melhoria"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Glicemia", "🩺 Última medição", "🍽️ Nutrição", "⚙️ Receita", "📩 Sugerir Melhoria"])
 
     # ====== GLICEMIA ======
     with tab1:
@@ -1826,8 +1829,6 @@ else:
                 st.rerun()
 
         with c2:
-            render_card_ultima_medida()
-            st.markdown('<div style="height:12px;"></div>', unsafe_allow_html=True)
             if not dfg.empty:
                 st.write("### Tendência")
 
@@ -2007,8 +2008,16 @@ else:
 
         st.markdown("</div>", unsafe_allow_html=True)
 
-    # ====== NUTRIÇÃO ======
+    # ====== ÚLTIMA MEDIÇÃO ======
     with tab2:
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.subheader("🩺 Última medição")
+        st.caption("Resumo automático do último registro salvo de glicemia.")
+        render_card_ultima_medida()
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # ====== NUTRIÇÃO ======
+    with tab3:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         dfn = carregar_dados_seguro(ARQ_N)
 
@@ -2193,7 +2202,7 @@ else:
         st.markdown("</div>", unsafe_allow_html=True)
 
     # ====== RECEITA ======
-    with tab3:
+    with tab4:
         st.markdown('<div class="card">', unsafe_allow_html=True)
 
         df_r_all = _read_table_df("receita")
@@ -2266,7 +2275,7 @@ else:
         st.markdown("</div>", unsafe_allow_html=True)
 
     # ====== SUGESTÃO ======
-    with tab4:
+    with tab5:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         txt = st.text_area("Sugestão de Melhoria:")
         if st.button("Enviar Sugestão", use_container_width=True):
