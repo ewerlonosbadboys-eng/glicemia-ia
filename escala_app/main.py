@@ -1089,6 +1089,7 @@ SUPABASE_AUTO_PULL_ON_START = (os.getenv("SUPABASE_AUTO_PULL_ON_START", "0") or 
 SUPABASE_AUTO_PUSH_ON_COMMIT = (os.getenv("SUPABASE_AUTO_PUSH_ON_COMMIT", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
 SUPABASE_AUTO_PUSH_ON_CLOSE = (os.getenv("SUPABASE_AUTO_PUSH_ON_CLOSE", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
 SUPABASE_AUTO_BOOTSTRAP_AFTER_SCHEMA = (os.getenv("SUPABASE_AUTO_BOOTSTRAP_AFTER_SCHEMA", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
+SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY = (os.getenv("SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
 _SUPABASE_LAST_PUSH_TS = 0.0
 _SUPABASE_LAST_PULL_TS = 0.0
 _SUPABASE_SYNC_IN_PROGRESS = False
@@ -1290,8 +1291,18 @@ def _sqlite_app_has_meaningful_data() -> bool:
     try:
         conn = _app_db_connect(DB_PATH)
         try:
-            for tb in ("colaboradores", "escala_mes", "overrides", "ferias", "usuarios_sistema"):
-                if tb in _sqlite_user_tables(conn) and _sqlite_table_rowcount(conn, tb) > 0:
+            core_tables = ("colaboradores", "escala_mes", "overrides", "ferias", "estado_mes_anterior", "subgrupos_setor", "subgrupo_regras")
+            existing = set(_sqlite_user_tables(conn))
+            for tb in core_tables:
+                if tb in existing and _sqlite_table_rowcount(conn, tb) > 0:
+                    return True
+            if "usuarios_sistema" in existing:
+                row = conn.execute("""
+                    SELECT COUNT(*)
+                    FROM usuarios_sistema
+                    WHERE NOT (UPPER(TRIM(setor))='ADMIN' AND TRIM(chapa)='admin')
+                """).fetchone()
+                if row and int(row[0] or 0) > 0:
                     return True
         finally:
             conn.close()
@@ -1345,10 +1356,13 @@ def _supabase_table_count_fast(table: str) -> int | None:
 def _supabase_remote_has_meaningful_data() -> bool:
     if not SUPABASE_SYNC_ENABLED:
         return False
-    for tb in ("colaboradores", "escala_mes", "overrides", "ferias", "usuarios_sistema"):
+    for tb in ("colaboradores", "escala_mes", "overrides", "ferias", "estado_mes_anterior", "subgrupos_setor", "subgrupo_regras"):
         cnt = _supabase_table_count_fast(tb)
         if cnt is not None and cnt > 0:
             return True
+    users_cnt = _supabase_table_count_fast("usuarios_sistema")
+    if users_cnt is not None and users_cnt > 1:
+        return True
     return False
 
 def _save_latest_stable_snapshot_safely() -> None:
@@ -1387,6 +1401,22 @@ def _bootstrap_from_supabase_after_schema(force: bool = False) -> bool:
     except Exception as e:
         _set_supabase_error(e)
     return False
+
+def _restore_from_supabase_if_local_empty(force: bool = False) -> bool:
+    try:
+        if not SUPABASE_SYNC_ENABLED:
+            return False
+        if (not force) and _sqlite_app_has_meaningful_data():
+            return False
+        if not _supabase_remote_has_meaningful_data():
+            return False
+        ok = _supabase_pull_all_to_sqlite(force=True)
+        if ok:
+            _save_latest_stable_snapshot_safely()
+        return bool(ok)
+    except Exception as e:
+        _set_supabase_error(e)
+        return False
 
 def _table_exists_in_supabase(table: str) -> bool:
     if not SUPABASE_SYNC_ENABLED:
@@ -1879,7 +1909,12 @@ def _ensure_runtime_storage_ready(force: bool = False):
     _adopt_best_db_candidate_if_needed()
     _restore_from_latest_stable_if_needed()
     _adopt_best_db_candidate_if_needed()
-    if SUPABASE_AUTO_PULL_ON_START:
+    if SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY:
+        try:
+            _restore_from_supabase_if_local_empty(force=False)
+        except Exception:
+            pass
+    elif SUPABASE_AUTO_PULL_ON_START:
         try:
             if SUPABASE_SYNC_ENABLED and not _sqlite_app_has_meaningful_data():
                 _supabase_pull_all_to_sqlite(force=True)
@@ -3083,6 +3118,12 @@ def db_init():
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, ("Administrador", "ADMIN", "admin", senha_hash, salt, 1, 1, datetime.now().isoformat()))
         con.commit()
+
+    if SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY:
+        try:
+            _restore_from_supabase_if_local_empty(force=False)
+        except Exception:
+            pass
 
     if SUPABASE_AUTO_BOOTSTRAP_AFTER_SCHEMA:
         try:
@@ -8034,6 +8075,7 @@ def page_app():
                 {"Campo": "Auto push no commit", "Valor": "Sim" if SUPABASE_AUTO_PUSH_ON_COMMIT else "Não"},
                 {"Campo": "Auto push ao fechar", "Valor": "Sim" if SUPABASE_AUTO_PUSH_ON_CLOSE else "Não"},
                 {"Campo": "Auto bootstrap pós-schema", "Valor": "Sim" if SUPABASE_AUTO_BOOTSTRAP_AFTER_SCHEMA else "Não"},
+                {"Campo": "Auto restore se local vazio", "Valor": "Sim" if SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY else "Não"},
                 {"Campo": "Lock de sync (s)", "Valor": str(SUPABASE_SYNC_LOCK_TIMEOUT_SEC)},
                 {"Campo": "Status atual", "Valor": msg_conn},
                 {"Campo": "Último erro", "Valor": (_SUPABASE_LAST_ERROR or st.session_state.get("sb_diag_last_error", "")) or "—"},
