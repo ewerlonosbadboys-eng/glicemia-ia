@@ -782,6 +782,147 @@ def carregar_glicemia_com_id() -> pd.DataFrame:
     df_all["Dose"] = df_all.apply(_mk_dose_display, axis=1)
     return df_all[df_all["Usuario"] == st.session_state.user_email].copy()
 
+
+def obter_ultima_medida_card() -> dict | None:
+    try:
+        df_hist = carregar_glicemia_com_id()
+        if df_hist is None or df_hist.empty:
+            return None
+
+        df_hist = df_hist.copy()
+
+        if "Data" in df_hist.columns and "Hora" in df_hist.columns:
+            df_hist["_dt_ord"] = pd.to_datetime(
+                df_hist["Data"].astype(str).str.strip() + " " + df_hist["Hora"].astype(str).str.strip(),
+                errors="coerce",
+                dayfirst=True
+            )
+        elif "Data/Hora" in df_hist.columns:
+            df_hist["_dt_ord"] = pd.to_datetime(df_hist["Data/Hora"], errors="coerce", dayfirst=True)
+        else:
+            df_hist["_dt_ord"] = pd.NaT
+
+        if df_hist["_dt_ord"].notna().any():
+            df_hist = df_hist.sort_values("_dt_ord", ascending=False, na_position="last")
+
+        ult = df_hist.iloc[0]
+
+        valor = ult.get("Valor", ult.get("Glicemia", ult.get("Valor Glicemia", "-")))
+        momento = ult.get("Momento", "-")
+        dose = ult.get("Dose", "-")
+        dose_rapida = ult.get("Dose_Rapida", ult.get("Dose Rápida", ult.get("Dose Rapida", "-")))
+        dose_longa = ult.get("Dose_Longa", ult.get("Dose Longa", "-"))
+        hora = ult.get("Hora", "-")
+        data = ult.get("Data", "-")
+
+        refeicao = "-"
+        try:
+            dfn = _read_table_df("nutricao", "Usuario=?", (st.session_state.user_email,))
+            if dfn is not None and not dfn.empty and "Momento" in dfn.columns:
+                dfn = dfn.copy()
+                if "Data" in dfn.columns and "Hora" in dfn.columns:
+                    dfn["_dt_ord"] = pd.to_datetime(
+                        dfn["Data"].astype(str).str.strip() + " " + dfn["Hora"].astype(str).str.strip(),
+                        errors="coerce",
+                        dayfirst=True
+                    )
+                else:
+                    dfn["_dt_ord"] = pd.NaT
+
+                dfn_m = dfn[dfn["Momento"].astype(str) == str(momento)].copy()
+                if not dfn_m.empty:
+                    if dfn_m["_dt_ord"].notna().any():
+                        dfn_m = dfn_m.sort_values("_dt_ord", ascending=False, na_position="last")
+                    info_ref = str(dfn_m.iloc[0].get("Info", "")).strip()
+                    if info_ref:
+                        refeicao = info_ref
+        except Exception:
+            pass
+
+        return {
+            "valor": valor if str(valor).strip() else "-",
+            "momento": momento if str(momento).strip() else "-",
+            "dose": dose if str(dose).strip() else "-",
+            "dose_rapida": dose_rapida if str(dose_rapida).strip() else "-",
+            "dose_longa": dose_longa if str(dose_longa).strip() else "-",
+            "hora": hora if str(hora).strip() else "-",
+            "data": data if str(data).strip() else "-",
+            "refeicao": refeicao if str(refeicao).strip() else "-",
+        }
+    except Exception:
+        return None
+
+
+def render_card_ultima_medida():
+    info = obter_ultima_medida_card()
+
+    if not info:
+        st.markdown("""
+        <div style="background:#111827;border:1px solid #2a2f3a;border-radius:18px;padding:20px;min-height:230px;">
+            <div style="font-size:15px;color:#9ca3af;margin-bottom:12px;">Última medida</div>
+            <div style="background:#1f2937;border-radius:16px;padding:24px;text-align:center;margin-bottom:14px;">
+                <div style="font-size:14px;color:#9ca3af;">Valor</div>
+                <div style="font-size:42px;font-weight:800;line-height:1.1;color:white;">--</div>
+                <div style="font-size:13px;color:#9ca3af;">mg/dL</div>
+            </div>
+            <div style="font-size:14px;color:#cbd5e1;">Sem registros ainda.</div>
+        </div>
+        """, unsafe_allow_html=True)
+        return
+
+    valor = info.get("valor", "-")
+    momento = info.get("momento", "-")
+    dose = info.get("dose", "-")
+    dose_rapida = info.get("dose_rapida", "-")
+    dose_longa = info.get("dose_longa", "-")
+    hora = info.get("hora", "-")
+    data = info.get("data", "-")
+    refeicao = info.get("refeicao", "-")
+
+    st.markdown(f"""
+    <div style="background:#111827;border:1px solid #2a2f3a;border-radius:18px;padding:20px;min-height:230px;">
+        <div style="font-size:15px;color:#9ca3af;margin-bottom:12px;">Última medida</div>
+
+        <div style="background:#1f2937;border-radius:16px;padding:22px;text-align:center;margin-bottom:14px;">
+            <div style="font-size:14px;color:#9ca3af;">Valor</div>
+            <div style="font-size:48px;font-weight:800;line-height:1.1;color:white;">{valor}</div>
+            <div style="font-size:13px;color:#9ca3af;">mg/dL</div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+            <div style="background:#0f172a;border-radius:12px;padding:10px;">
+                <div style="font-size:11px;color:#9ca3af;">Momento</div>
+                <div style="font-size:14px;font-weight:700;color:white;">{momento}</div>
+            </div>
+            <div style="background:#0f172a;border-radius:12px;padding:10px;">
+                <div style="font-size:11px;color:#9ca3af;">Dose</div>
+                <div style="font-size:14px;font-weight:700;color:white;">{dose}</div>
+            </div>
+            <div style="background:#0f172a;border-radius:12px;padding:10px;">
+                <div style="font-size:11px;color:#9ca3af;">Dose rápida</div>
+                <div style="font-size:14px;font-weight:700;color:white;">{dose_rapida}</div>
+            </div>
+            <div style="background:#0f172a;border-radius:12px;padding:10px;">
+                <div style="font-size:11px;color:#9ca3af;">Dose longa</div>
+                <div style="font-size:14px;font-weight:700;color:white;">{dose_longa}</div>
+            </div>
+            <div style="background:#0f172a;border-radius:12px;padding:10px;">
+                <div style="font-size:11px;color:#9ca3af;">Hora</div>
+                <div style="font-size:14px;font-weight:700;color:white;">{hora}</div>
+            </div>
+            <div style="background:#0f172a;border-radius:12px;padding:10px;">
+                <div style="font-size:11px;color:#9ca3af;">Data</div>
+                <div style="font-size:14px;font-weight:700;color:white;">{data}</div>
+            </div>
+        </div>
+
+        <div style="background:#0f172a;border-radius:12px;padding:10px;margin-top:8px;">
+            <div style="font-size:11px;color:#9ca3af;">Refeição</div>
+            <div style="font-size:14px;font-weight:700;color:white;word-break:break-word;">{refeicao}</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
 def salvar_registro_glicemia(valor: int, momento: str, dose: str, dt: datetime, dose_rapida: str = "", dose_longa: str = ""):
     dr = (dose_rapida or "").strip()
     dl = (dose_longa or "").strip()
@@ -1517,7 +1658,7 @@ else:
 
         dfg = carregar_glicemia_com_id()
 
-        c1, c2 = st.columns([1, 2])
+        c1, c2 = st.columns([1.05, 1.25])
         with c1:
             v_gl = st.number_input("Valor Glicemia", 0, 600, 100, step=1, key="g_valor_glicemia")
 
@@ -1685,6 +1826,8 @@ else:
                 st.rerun()
 
         with c2:
+            render_card_ultima_medida()
+            st.markdown('<div style="height:12px;"></div>', unsafe_allow_html=True)
             if not dfg.empty:
                 st.write("### Tendência")
 
