@@ -1856,8 +1856,13 @@ else:
                 if dose_l_save:
                     dose_texto = (dose_texto + " | " if dose_texto else "") + f"Longa: {dose_l_save}"
 
-                salvar_registro_glicemia(int(v_gl), m_gl, dose_texto, agora_br(), dose_rapida=dose_r_save, dose_longa=dose_l_save)
-                st.rerun()
+                dt_now = agora_br()
+                salvar_registro_glicemia(int(v_gl), m_gl, dose_texto, dt_now, dose_rapida=dose_r_save, dose_longa=dose_l_save)
+
+                # sincroniza a aba "Última medição" com o registro recém-salvo
+                st.session_state["ult_med_dia"] = dt_now.strftime("%d/%m/%Y")
+                st.session_state["ult_med_momento"] = m_gl
+
                 st.rerun()
 
         with c2:
