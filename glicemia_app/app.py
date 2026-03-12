@@ -1041,6 +1041,30 @@ def aplicar_edicoes_e_exclusoes_glicemia(df_editado: pd.DataFrame):
         }, {'usuario': st.session_state.user_email, 'id': str(r['ID'])})
 
 # ================= RECEITA (RÁPIDA/LONGA) =================
+
+def _obter_receita_usuario():
+    try:
+        # tenta pelo campo correto
+        df = sb_select_df("receita", {"usuario": st.session_state.user_email})
+        if df is not None and not df.empty:
+            return df.iloc[0]
+    except Exception:
+        pass
+
+    try:
+        # tenta coluna alternativa Usuario
+        df = sb_select_df("receita")
+        if df is not None and not df.empty:
+            if "Usuario" in df.columns:
+                f = df[df["Usuario"] == st.session_state.user_email]
+                if not f.empty:
+                    return f.iloc[0]
+            return df.iloc[-1]
+    except Exception:
+        pass
+
+    return None
+
 def _schema_receita_nova(rec: pd.Series, periodo: str) -> bool:
     need = [
         f"{periodo}_f1_min", f"{periodo}_f1_max", f"{periodo}_f1_dose",
@@ -1052,16 +1076,10 @@ def _schema_receita_nova(rec: pd.Series, periodo: str) -> bool:
 
 def calc_insulina(v: int, momento: str):
 
-    # busca receita diretamente no Supabase
-    try:
-        df_r = sb_select_df("receita", {"usuario": st.session_state.user_email})
-    except Exception:
-        df_r = None
+    rec = _obter_receita_usuario()
 
-    if df_r is None or df_r.empty:
+    if rec is None:
         return "0 UI", "Receita não encontrada"
-
-    rec = df_r.iloc[0]
 
     periodo = "manha" if momento in [
         "Antes Café","Após Café","Antes Almoço","Após Almoço"
@@ -1093,7 +1111,7 @@ def calc_insulina(v: int, momento: str):
         if f3_min <= v <= f3_max:
             return f"{int(f3_dose)} UI", "Faixa 3"
 
-        return "0 UI", "Fora da faixa"
+        return f"{int(f3_dose)} UI", "Acima da faixa"
 
     except Exception as e:
         return "0 UI", f"Erro receita {e}"
@@ -1104,15 +1122,10 @@ def calc_insulina_rapida(v: int, momento: str):
 
 def calc_glargina(momento: str):
 
-    try:
-        df_r = sb_select_df("receita", {"usuario": st.session_state.user_email})
-    except Exception:
-        df_r = None
+    rec = _obter_receita_usuario()
 
-    if df_r is None or df_r.empty:
+    if rec is None:
         return "0 UI", "Configurar receita"
-
-    rec = df_r.iloc[0]
 
     cafe = float(rec.get("glargina_cafe_ui",0))
     janta = float(rec.get("glargina_janta_ui",0))
