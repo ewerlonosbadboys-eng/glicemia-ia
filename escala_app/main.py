@@ -1094,6 +1094,8 @@ _SUPABASE_LAST_PULL_TS = 0.0
 _SUPABASE_SYNC_IN_PROGRESS = False
 _SUPABASE_LAST_ERROR = ""
 _SUPABASE_BOOTSTRAP_DONE = False
+_SUPABASE_SYNC_STARTED_AT = 0.0
+SUPABASE_SYNC_LOCK_TIMEOUT_SEC = int((os.getenv("SUPABASE_SYNC_LOCK_TIMEOUT_SEC", "45") or "45").strip())
 SUPABASE_TABLE_MAP = {}
 try:
     _raw_table_map = (os.getenv("SUPABASE_TABLE_MAP") or "").strip()
@@ -1413,14 +1415,43 @@ def _supabase_delete_all_rows(table: str) -> None:
     if r.status_code >= 400 and r.status_code != 404:
         raise RuntimeError(f"Supabase DELETE {table}: {r.status_code} {r.text[:300]}")
 
+def _supabase_begin_sync() -> bool:
+    global _SUPABASE_SYNC_IN_PROGRESS, _SUPABASE_SYNC_STARTED_AT
+    try:
+        now = time.time()
+    except Exception:
+        now = 0.0
+    if _SUPABASE_SYNC_IN_PROGRESS:
+        try:
+            age = now - float(_SUPABASE_SYNC_STARTED_AT or 0.0)
+        except Exception:
+            age = 0.0
+        if age >= float(SUPABASE_SYNC_LOCK_TIMEOUT_SEC):
+            _SUPABASE_SYNC_IN_PROGRESS = False
+            _SUPABASE_SYNC_STARTED_AT = 0.0
+        else:
+            _set_supabase_error(f"Sincronização em andamento. Aguarde {max(1, int(SUPABASE_SYNC_LOCK_TIMEOUT_SEC - age))}s ou recarregue o app.")
+            return False
+    _SUPABASE_SYNC_IN_PROGRESS = True
+    _SUPABASE_SYNC_STARTED_AT = now
+    return True
+
+
+def _supabase_end_sync() -> None:
+    global _SUPABASE_SYNC_IN_PROGRESS, _SUPABASE_SYNC_STARTED_AT
+    _SUPABASE_SYNC_IN_PROGRESS = False
+    _SUPABASE_SYNC_STARTED_AT = 0.0
+
 def _supabase_push_all_from_sqlite(force: bool = False) -> bool:
-    global _SUPABASE_LAST_PUSH_TS, _SUPABASE_SYNC_IN_PROGRESS
-    if not SUPABASE_SYNC_ENABLED or _SUPABASE_SYNC_IN_PROGRESS:
+    global _SUPABASE_LAST_PUSH_TS
+    if not SUPABASE_SYNC_ENABLED:
+        _set_supabase_error("Sync Supabase desabilitado.")
         return False
     now = time.time()
     if (not force) and (now - float(_SUPABASE_LAST_PUSH_TS or 0.0) < float(SUPABASE_SYNC_DEBOUNCE_SEC)):
         return False
-    _SUPABASE_SYNC_IN_PROGRESS = True
+    if not _supabase_begin_sync():
+        return False
     try:
         conn = _app_db_connect(DB_PATH)
         try:
@@ -1456,16 +1487,18 @@ def _supabase_push_all_from_sqlite(force: bool = False) -> bool:
             pass
         return False
     finally:
-        _SUPABASE_SYNC_IN_PROGRESS = False
+        _supabase_end_sync()
 
 def _supabase_pull_all_to_sqlite(force: bool = False) -> bool:
-    global _SUPABASE_LAST_PULL_TS, _SUPABASE_SYNC_IN_PROGRESS
-    if not SUPABASE_SYNC_ENABLED or _SUPABASE_SYNC_IN_PROGRESS:
+    global _SUPABASE_LAST_PULL_TS
+    if not SUPABASE_SYNC_ENABLED:
+        _set_supabase_error("Sync Supabase desabilitado.")
         return False
     now = time.time()
     if (not force) and _sqlite_app_has_meaningful_data():
         return False
-    _SUPABASE_SYNC_IN_PROGRESS = True
+    if not _supabase_begin_sync():
+        return False
     try:
         conn = _app_db_connect(DB_PATH)
         try:
@@ -1501,7 +1534,7 @@ def _supabase_pull_all_to_sqlite(force: bool = False) -> bool:
             pass
         return False
     finally:
-        _SUPABASE_SYNC_IN_PROGRESS = False
+        _supabase_end_sync()
 
 
 
@@ -7939,6 +7972,7 @@ def page_app():
                 {"Campo": "Auto push no commit", "Valor": "Sim" if SUPABASE_AUTO_PUSH_ON_COMMIT else "Não"},
                 {"Campo": "Auto push ao fechar", "Valor": "Sim" if SUPABASE_AUTO_PUSH_ON_CLOSE else "Não"},
                 {"Campo": "Auto bootstrap pós-schema", "Valor": "Sim" if SUPABASE_AUTO_BOOTSTRAP_AFTER_SCHEMA else "Não"},
+                {"Campo": "Lock de sync (s)", "Valor": str(SUPABASE_SYNC_LOCK_TIMEOUT_SEC)},
                 {"Campo": "Status atual", "Valor": msg_conn},
                 {"Campo": "Último erro", "Valor": (_SUPABASE_LAST_ERROR or st.session_state.get("sb_diag_last_error", "")) or "—"},
             ])
@@ -7964,7 +7998,7 @@ def page_app():
                         st.session_state["sb_diag_last_error"] = ""
                         st.success("Push executado com sucesso.")
                     else:
-                        st.warning("Push não executado. Verifique se o sync está habilitado e se há tabelas compatíveis.")
+                        st.warning(_SUPABASE_LAST_ERROR or "Push não executado.")
                 except Exception as e:
                     st.session_state["sb_diag_last_error"] = str(e)
                     st.error(f"Falha no push: {e}")
@@ -7976,7 +8010,7 @@ def page_app():
                         st.session_state["sb_diag_last_error"] = ""
                         st.success("Pull executado com sucesso.")
                     else:
-                        st.warning("Pull não trouxe dados. Verifique se as tabelas remotas têm registros.")
+                        st.warning(_SUPABASE_LAST_ERROR or "Pull não trouxe dados.")
                 except Exception as e:
                     st.session_state["sb_diag_last_error"] = str(e)
                     st.error(f"Falha no pull: {e}")
