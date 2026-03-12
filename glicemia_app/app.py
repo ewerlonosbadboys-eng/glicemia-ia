@@ -784,14 +784,13 @@ def carregar_glicemia_com_id() -> pd.DataFrame:
     return df_all[df_all["Usuario"] == st.session_state.user_email].copy()
 
 
-def obter_ultima_medida_card() -> dict | None:
+def carregar_historico_ultima_medida() -> pd.DataFrame:
     try:
         df_hist = carregar_glicemia_com_id()
         if df_hist is None or df_hist.empty:
-            return None
+            return pd.DataFrame()
 
         df_hist = df_hist.copy()
-
         if "Data" in df_hist.columns and "Hora" in df_hist.columns:
             df_hist["_dt_ord"] = pd.to_datetime(
                 df_hist["Data"].astype(str).str.strip() + " " + df_hist["Hora"].astype(str).str.strip(),
@@ -803,10 +802,41 @@ def obter_ultima_medida_card() -> dict | None:
         else:
             df_hist["_dt_ord"] = pd.NaT
 
+        if "Data" in df_hist.columns:
+            df_hist["_data_fmt"] = df_hist["Data"].astype(str).str.strip()
+        else:
+            df_hist["_data_fmt"] = df_hist["_dt_ord"].dt.strftime("%d/%m/%Y").fillna("")
+
+        if "Momento" not in df_hist.columns:
+            df_hist["Momento"] = "-"
+
         if df_hist["_dt_ord"].notna().any():
             df_hist = df_hist.sort_values("_dt_ord", ascending=False, na_position="last")
 
-        ult = df_hist.iloc[0]
+        return df_hist
+    except Exception:
+        return pd.DataFrame()
+
+
+def obter_ultima_medida_card(data_sel: str | None = None, momento_sel: str | None = None) -> dict | None:
+    try:
+        df_hist = carregar_historico_ultima_medida()
+        if df_hist.empty:
+            return None
+
+        df_filtrado = df_hist.copy()
+        if data_sel:
+            df_filtrado = df_filtrado[df_filtrado["_data_fmt"].astype(str) == str(data_sel)].copy()
+        if momento_sel and momento_sel != "Todos":
+            df_filtrado = df_filtrado[df_filtrado["Momento"].astype(str) == str(momento_sel)].copy()
+
+        if df_filtrado.empty:
+            return None
+
+        if df_filtrado["_dt_ord"].notna().any():
+            df_filtrado = df_filtrado.sort_values("_dt_ord", ascending=False, na_position="last")
+
+        ult = df_filtrado.iloc[0]
 
         valor = ult.get("Valor", ult.get("Glicemia", ult.get("Valor Glicemia", "-")))
         momento = ult.get("Momento", "-")
@@ -814,7 +844,7 @@ def obter_ultima_medida_card() -> dict | None:
         dose_rapida = ult.get("Dose_Rapida", ult.get("Dose Rápida", ult.get("Dose Rapida", "-")))
         dose_longa = ult.get("Dose_Longa", ult.get("Dose Longa", "-"))
         hora = ult.get("Hora", "-")
-        data = ult.get("Data", "-")
+        data = ult.get("Data", ult.get("_data_fmt", "-"))
 
         refeicao = "-"
         try:
@@ -830,6 +860,8 @@ def obter_ultima_medida_card() -> dict | None:
                 else:
                     dfn["_dt_ord"] = pd.NaT
 
+                if "Data" in dfn.columns:
+                    dfn = dfn[dfn["Data"].astype(str).str.strip() == str(data)].copy()
                 dfn_m = dfn[dfn["Momento"].astype(str) == str(momento)].copy()
                 if not dfn_m.empty:
                     if dfn_m["_dt_ord"].notna().any():
@@ -854,8 +886,8 @@ def obter_ultima_medida_card() -> dict | None:
         return None
 
 
-def render_card_ultima_medida():
-    info = obter_ultima_medida_card()
+def render_card_ultima_medida(data_sel: str | None = None, momento_sel: str | None = None):
+    info = obter_ultima_medida_card(data_sel=data_sel, momento_sel=momento_sel)
 
     if not info:
         html = """
@@ -2012,8 +2044,24 @@ else:
     with tab2:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.subheader("🩺 Última medição")
-        st.caption("Resumo automático do último registro salvo de glicemia.")
-        render_card_ultima_medida()
+        st.caption("Selecione o dia e o momento para ver a medição desejada.")
+
+        df_um = carregar_historico_ultima_medida()
+        if df_um.empty:
+            render_card_ultima_medida()
+        else:
+            datas_disp = [d for d in df_um["_data_fmt"].astype(str).tolist() if str(d).strip()]
+            datas_unicas = list(dict.fromkeys(datas_disp))
+            data_padrao = datas_unicas[0] if datas_unicas else ""
+            data_sel = st.selectbox("Dia", datas_unicas, index=0 if datas_unicas else None, key="ult_med_dia")
+
+            df_dia = df_um[df_um["_data_fmt"].astype(str) == str(data_sel)].copy() if data_sel else df_um.copy()
+            momentos_disp = [m for m in df_dia["Momento"].astype(str).tolist() if str(m).strip()]
+            momentos_unicos = list(dict.fromkeys(momentos_disp))
+            op_momentos = ["Todos"] + momentos_unicos
+            momento_sel = st.selectbox("Momento", op_momentos, index=0, key="ult_med_momento")
+
+            render_card_ultima_medida(data_sel=data_sel, momento_sel=momento_sel)
         st.markdown('</div>', unsafe_allow_html=True)
 
     # ====== NUTRIÇÃO ======
