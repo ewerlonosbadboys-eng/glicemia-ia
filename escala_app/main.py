@@ -1068,6 +1068,12 @@ DATA_DIR = APP_DIR / "data"
 BACKUP_DIR = str(DATA_DIR / "backups")
 DB_PATH = str(DATA_DIR / "escala.db")
 ROOT_LEGACY_DB_PATH = str(APP_DIR / "escala.db")
+BUNDLED_LATEST_STABLE_CANDIDATES = [
+    APP_DIR / "latest_stable.db",
+    APP_DIR / "data" / "latest_stable.db",
+    APP_DIR / "backups" / "latest_stable.db",
+    APP_DIR.parent / "latest_stable.db",
+]
 AUTO_BACKUP_HOUR = 3  # 03:00
 AUTO_BACKUP_INTERVAL_HOURS = 6  # roda quando o app abre
 
@@ -1747,11 +1753,62 @@ def _ensure_backup_dir():
     Path(BACKUP_DIR).mkdir(parents=True, exist_ok=True)
 
 
+def _bundled_latest_stable_paths() -> list[Path]:
+    out = []
+    seen = set()
+    for p in (BUNDLED_LATEST_STABLE_CANDIDATES or []):
+        try:
+            rp = Path(p).resolve()
+        except Exception:
+            rp = Path(p)
+        if str(rp) not in seen:
+            seen.add(str(rp))
+            out.append(Path(rp))
+    return out
+
+
+def _adopt_bundled_latest_stable_if_needed(force: bool = False) -> bool:
+    """
+    V91.2
+    - Permite embarcar um latest_stable.db junto do projeto
+    - Se o banco atual estiver vazio/inválido, copia esse backup empacotado
+    - Também espelha para BACKUP_DIR/latest_stable.db
+    """
+    try:
+        _ensure_backup_dir()
+        current = Path(DB_PATH)
+        current_ok = current.exists() and _validate_sqlite_file(str(current)) and _db_score(current)[0] >= 1
+        if current_ok and not force:
+            return False
+
+        for src in _bundled_latest_stable_paths():
+            if not _validate_sqlite_file(str(src)):
+                continue
+            score = _db_score(src)
+            if score[0] < 1 and score[1] < 1 and score[2] < 1:
+                continue
+            try:
+                current.parent.mkdir(parents=True, exist_ok=True)
+                _sqlite_backup_copy(str(src), str(current))
+            except Exception:
+                shutil.copy2(src, current)
+            latest = Path(BACKUP_DIR) / "latest_stable.db"
+            try:
+                _sqlite_backup_copy(str(src), str(latest))
+            except Exception:
+                shutil.copy2(src, latest)
+            return True
+    except Exception:
+        return False
+    return False
+
+
 def _db_candidate_paths() -> list[Path]:
     app = APP_DIR
     cands = [
         Path(DB_PATH),
         Path(ROOT_LEGACY_DB_PATH),
+        * _bundled_latest_stable_paths(),
         app / "backups" / "latest_stable.db",
         app / "backups" / "escala.db",
         app / "data" / "latest_stable.db",
@@ -1905,6 +1962,7 @@ def _ensure_runtime_storage_ready(force: bool = False):
     if (not force) and _RUNTIME_READY and (now_ts - float(_RUNTIME_READY_AT or 0.0) < float(_RUNTIME_READY_TTL_SEC)):
         return
     _ensure_backup_dir()
+    _adopt_bundled_latest_stable_if_needed(force=False)
     _migrate_legacy_db_if_needed()
     _adopt_best_db_candidate_if_needed()
     _restore_from_latest_stable_if_needed()
@@ -3102,6 +3160,24 @@ def db_init():
         UNIQUE(setor, ano, mes, chapa, dia, campo)
     )
     """)
+
+    # V91.1 — restore do Supabase antes de semear dados mínimos de login.
+    # Isso evita o cenário em que o app recria apenas ADMIN/GERAL/GESTAO e
+    # sobe “vazio” após reboot antes de puxar o conteúdo real do remoto.
+    con.commit()
+    try:
+        con.close()
+    except Exception:
+        pass
+
+    if SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY:
+        try:
+            _restore_from_supabase_if_local_empty(force=True)
+        except Exception as e:
+            _set_supabase_error(e)
+
+    con = db_conn()
+    cur = con.cursor()
 
     con.commit()
     _safe_exec(cur, "INSERT OR IGNORE INTO setores(nome) VALUES (?)", ("GERAL",))
