@@ -1116,6 +1116,7 @@ except Exception:
     SUPABASE_TABLE_MAP = {}
 _SUPABASE_TABLE_CACHE = {}
 _SUPABASE_IGNORED_COLUMNS = {}
+_SUPABASE_ALWAYS_IGNORED_COLUMNS = {"id", "created_at", "updated_at", "criado_em", "alterado_em"}
 
 def _supabase_headers(prefer: str | None = None, extra: dict | None = None) -> dict:
     h = {
@@ -1148,6 +1149,21 @@ def _supabase_extract_missing_column(message: str) -> str:
     return str(m.group(1) or "").strip() if m else ""
 
 
+def _supabase_extract_identity_column(message: str) -> str:
+    s = str(message or "")
+    for pat in [
+        r'cannot insert a non-DEFAULT value into column "([A-Za-z0-9_]+)"',
+        r'Column "([A-Za-z0-9_]+)" is an identity column',
+        r'GENERATED ALWAYS',
+    ]:
+        m = re.search(pat, s)
+        if m and m.groups():
+            return str(m.group(1) or "").strip()
+    if 'GENERATED ALWAYS' in s and '"id"' in s:
+        return 'id'
+    return ""
+
+
 def _supabase_register_ignored_column(table: str, column: str) -> None:
     table = str(table or "").strip()
     column = str(column or "").strip()
@@ -1159,12 +1175,13 @@ def _supabase_register_ignored_column(table: str, column: str) -> None:
 
 
 def _supabase_filtered_rows_and_conflicts(table: str, rows: list[dict], conflict_cols: list[str]):
-    ignored = set(_SUPABASE_IGNORED_COLUMNS.get(str(table or "").strip(), set()))
+    ignored = set(_SUPABASE_ALWAYS_IGNORED_COLUMNS) | set(_SUPABASE_IGNORED_COLUMNS.get(str(table or "").strip(), set()))
     if not ignored:
         return rows, list(conflict_cols or [])
     filtered_rows = []
     for row in rows or []:
-        filtered_rows.append({k: v for k, v in dict(row or {}).items() if k not in ignored})
+        filtered = {k: v for k, v in dict(row or {}).items() if k not in ignored}
+        filtered_rows.append(filtered)
     filtered_conflicts = [c for c in (conflict_cols or []) if c not in ignored]
     return filtered_rows, filtered_conflicts
 
@@ -1437,8 +1454,13 @@ def _supabase_upsert_rows(table: str, rows: list[dict], conflict_cols: list[str]
             if r.status_code < 400:
                 break
             missing_col = _supabase_extract_missing_column(r.text)
+            identity_col = _supabase_extract_identity_column(r.text)
             if r.status_code == 400 and missing_col and attempts < 20:
                 _supabase_register_ignored_column(table, missing_col)
+                attempts += 1
+                continue
+            if r.status_code == 400 and identity_col and attempts < 20:
+                _supabase_register_ignored_column(table, identity_col)
                 attempts += 1
                 continue
             raise RuntimeError(f"Supabase UPSERT {table}: {r.status_code} {r.text[:300]}")
