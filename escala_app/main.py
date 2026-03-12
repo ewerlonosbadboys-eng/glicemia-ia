@@ -1067,6 +1067,10 @@ DB_PATH = str(DATA_DIR / "escala.db")
 ROOT_LEGACY_DB_PATH = str(APP_DIR / "escala.db")
 AUTO_BACKUP_HOUR = 3  # 03:00
 AUTO_BACKUP_INTERVAL_HOURS = 6  # roda quando o app abre
+_RUNTIME_READY = False
+_RUNTIME_READY_AT = 0.0
+_RUNTIME_READY_TTL_SEC = 120.0
+_AUTO_BACKUP_DONE_SESSION = False
 
 
 # V87 — robustez de banco:
@@ -1231,12 +1235,21 @@ def _restore_from_latest_stable_if_needed():
             shutil.copy2(latest, current)
 
 
-def _ensure_runtime_storage_ready():
+def _ensure_runtime_storage_ready(force: bool = False):
+    global _RUNTIME_READY, _RUNTIME_READY_AT
+    try:
+        now_ts = datetime.now().timestamp()
+    except Exception:
+        now_ts = 0.0
+    if (not force) and _RUNTIME_READY and (now_ts - float(_RUNTIME_READY_AT or 0.0) < float(_RUNTIME_READY_TTL_SEC)):
+        return
     _ensure_backup_dir()
     _migrate_legacy_db_if_needed()
     _adopt_best_db_candidate_if_needed()
     _restore_from_latest_stable_if_needed()
     _adopt_best_db_candidate_if_needed()
+    _RUNTIME_READY = True
+    _RUNTIME_READY_AT = now_ts
 
 
 def _remove_sqlite_sidecars(db_path: str):
@@ -1279,10 +1292,14 @@ def auto_backup_if_due():
     - no máximo 1 backup a cada AUTO_BACKUP_INTERVAL_HOURS
     Observação: Streamlit não executa em segundo plano; só roda ao abrir/recarregar o app.
     """
+    global _AUTO_BACKUP_DONE_SESSION
     try:
+        if _AUTO_BACKUP_DONE_SESSION:
+            return
         _ensure_runtime_storage_ready()
         now = datetime.now()
         if now.hour < AUTO_BACKUP_HOUR:
+            _AUTO_BACKUP_DONE_SESSION = True
             return
         marker = _auto_backup_marker_path()
         last_raw = marker.read_text(encoding="utf-8").strip() if marker.exists() else ""
@@ -1301,9 +1318,11 @@ def auto_backup_if_due():
         if last_dt is not None:
             hours_since = (now - last_dt).total_seconds() / 3600.0
             if hours_since < float(AUTO_BACKUP_INTERVAL_HOURS):
+                _AUTO_BACKUP_DONE_SESSION = True
                 return
         create_backup_now(prefix=f"auto_{now.strftime('%Y%m%d_%H%M%S')}")
         marker.write_text(now.isoformat(), encoding="utf-8")
+        _AUTO_BACKUP_DONE_SESSION = True
     except Exception:
         return
 
@@ -5562,41 +5581,40 @@ if "last_seed" not in st.session_state:
     st.session_state["last_seed"] = 0
 
 
-db_init()
-auto_backup_if_due()
-
 def page_login():
+    @st.cache_data(ttl=60, show_spinner=False)
+    def _cache_login_setores():
+        con = db_conn()
+        try:
+            setores_df = pd.concat([
+                pd.read_sql_query("SELECT nome AS setor FROM setores", con),
+                pd.read_sql_query("SELECT DISTINCT setor FROM usuarios_sistema", con),
+                pd.read_sql_query("SELECT DISTINCT setor FROM colaboradores", con),
+            ], ignore_index=True)
+            return sorted({_norm_setor(x) for x in setores_df["setor"].dropna().tolist() if str(x).strip()})
+        finally:
+            con.close()
+
+    @st.cache_data(ttl=30, show_spinner=False)
+    def _cache_login_recent():
+        con = db_conn()
+        try:
+            rec = pd.read_sql_query("SELECT setor, chapa, ts FROM login_recent ORDER BY ts DESC LIMIT 6", con)
+            try:
+                rec2 = rec.merge(pd.read_sql_query("SELECT setor, chapa, nome FROM usuarios_sistema", con), on=["setor","chapa"], how="left")
+            except Exception:
+                rec2 = rec.copy()
+                rec2["nome"] = ""
+            return rec2
+        finally:
+            con.close()
+
     st.title("🔐 Login por Setor (Usuário / Líder / Admin)")
     login_sec = st.radio("", ["Entrar", "Cadastrar Usuário do Sistema", "Esqueci a senha"], horizontal=True, key="login_nav_fast", label_visibility="collapsed")
 
     if login_sec == "Entrar":
-        con = db_conn()
-        setores_df = pd.concat([
-            pd.read_sql_query("SELECT nome AS setor FROM setores", con),
-            pd.read_sql_query("SELECT DISTINCT setor FROM usuarios_sistema", con),
-            pd.read_sql_query("SELECT DISTINCT setor FROM colaboradores", con),
-        ], ignore_index=True)
-        setores = sorted({_norm_setor(x) for x in setores_df["setor"].dropna().tolist() if str(x).strip()})
-        con.close()
-
-        # --- Login (melhorado): recentes + busca (case-insensitive) + salvar setor/chapa
-        con = db_conn()
-        # recentes (últimos 6)
-        rec = pd.read_sql_query(
-            "SELECT setor, chapa, ts FROM login_recent ORDER BY ts DESC LIMIT 6",
-            con
-        )
-        # junta com nome (se existir)
-        try:
-            rec2 = rec.merge(
-                pd.read_sql_query("SELECT setor, chapa, nome FROM usuarios_sistema", con),
-                on=["setor","chapa"],
-                how="left"
-            )
-        except Exception:
-            rec2 = rec.copy()
-            rec2["nome"] = ""
-        con.close()
+        setores = _cache_login_setores()
+        rec2 = _cache_login_recent()
 
         st.caption("🔎 Buscar (setor / chapa / nome) — pode digitar em minúsculo (ex.: flv).")
         kw = st.text_input("Buscar acesso:", value=st.session_state.get("lg_kw", ""), key="lg_kw").strip()
