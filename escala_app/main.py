@@ -71,6 +71,9 @@ import re
 import shutil
 from pathlib import Path
 import unicodedata
+import time
+import json
+import requests
 
 import hashlib
 import secrets
@@ -1067,6 +1070,290 @@ DB_PATH = str(DATA_DIR / "escala.db")
 ROOT_LEGACY_DB_PATH = str(APP_DIR / "escala.db")
 AUTO_BACKUP_HOUR = 3  # 03:00
 AUTO_BACKUP_INTERVAL_HOURS = 6  # roda quando o app abre
+
+# =========================================================
+# SUPABASE SYNC (mantém a lógica do app em SQLite local,
+# mas faz persistência remota para sobreviver a reboot)
+# =========================================================
+SUPABASE_URL = (os.getenv("SUPABASE_URL") or "").strip().rstrip("/")
+SUPABASE_KEY = (
+    os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    or os.getenv("SUPABASE_KEY")
+    or os.getenv("SUPABASE_ANON_KEY")
+    or ""
+).strip()
+SUPABASE_SCHEMA = (os.getenv("SUPABASE_SCHEMA") or "public").strip() or "public"
+SUPABASE_SYNC_ENABLED = bool(SUPABASE_URL and SUPABASE_KEY)
+SUPABASE_SYNC_DEBOUNCE_SEC = int(os.getenv("SUPABASE_SYNC_DEBOUNCE_SEC", "12") or 12)
+_SUPABASE_LAST_PUSH_TS = 0.0
+_SUPABASE_LAST_PULL_TS = 0.0
+_SUPABASE_SYNC_IN_PROGRESS = False
+
+def _supabase_headers(prefer: str | None = None, extra: dict | None = None) -> dict:
+    h = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Accept-Profile": SUPABASE_SCHEMA,
+        "Content-Profile": SUPABASE_SCHEMA,
+    }
+    if prefer:
+        h["Prefer"] = prefer
+    if extra:
+        h.update(extra)
+    return h
+
+def _supabase_table_url(table: str) -> str:
+    return f"{SUPABASE_URL}/rest/v1/{table}"
+
+def _app_db_connect(db_path: str | None = None):
+    target = str(db_path or DB_PATH)
+    factory = SQLiteSyncConnection if str(Path(target).resolve()) == str(Path(DB_PATH).resolve()) else sqlite3.Connection
+    conn = sqlite3.connect(target, check_same_thread=False, factory=factory)
+    try:
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=10000")
+        conn.execute("PRAGMA synchronous=NORMAL")
+    except Exception:
+        pass
+    return conn
+
+def _sqlite_user_tables(conn) -> list[str]:
+    try:
+        rows = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").fetchall()
+        return [str(r[0]) for r in rows if r and r[0]]
+    except Exception:
+        return []
+
+def _sqlite_table_columns(conn, table: str) -> list[str]:
+    try:
+        rows = conn.execute(f'PRAGMA table_info("{table}")').fetchall()
+        return [str(r[1]) for r in rows if len(r) > 1]
+    except Exception:
+        return []
+
+def _sqlite_conflict_cols(conn, table: str) -> list[str]:
+    try:
+        rows = conn.execute(f'PRAGMA table_info("{table}")').fetchall()
+        pk_cols = [str(r[1]) for r in rows if len(r) > 5 and int(r[5] or 0) > 0]
+        if pk_cols:
+            return pk_cols
+        idx_rows = conn.execute(f'PRAGMA index_list("{table}")').fetchall()
+        for idx in idx_rows:
+            is_unique = int(idx[2]) == 1 if len(idx) > 2 else False
+            idx_name = str(idx[1]) if len(idx) > 1 else ''
+            if not is_unique or not idx_name:
+                continue
+            info = conn.execute(f'PRAGMA index_info("{idx_name}")').fetchall()
+            cols = [str(r[2]) for r in info if len(r) > 2]
+            if cols:
+                return cols
+    except Exception:
+        pass
+    return []
+
+def _sqlite_table_rowcount(conn, table: str) -> int:
+    try:
+        row = conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()
+        return int(row[0]) if row else 0
+    except Exception:
+        return 0
+
+def _sqlite_app_has_meaningful_data() -> bool:
+    try:
+        conn = _app_db_connect(DB_PATH)
+        try:
+            for tb in ("colaboradores", "escala_mes", "overrides", "ferias", "usuarios_sistema"):
+                if tb in _sqlite_user_tables(conn) and _sqlite_table_rowcount(conn, tb) > 0:
+                    return True
+        finally:
+            conn.close()
+    except Exception:
+        pass
+    return False
+
+def _jsonable(v):
+    if isinstance(v, (datetime, date, pd.Timestamp)):
+        try:
+            return v.isoformat()
+        except Exception:
+            return str(v)
+    if pd.isna(v):
+        return None
+    if isinstance(v, bytes):
+        try:
+            return v.decode('utf-8')
+        except Exception:
+            return None
+    return v
+
+def _table_exists_in_supabase(table: str) -> bool:
+    if not SUPABASE_SYNC_ENABLED:
+        return False
+    try:
+        r = requests.get(
+            _supabase_table_url(table),
+            params={"select": "*", "limit": 1},
+            headers=_supabase_headers(),
+            timeout=15,
+        )
+        return r.status_code < 400
+    except Exception:
+        return False
+
+def _supabase_fetch_table_rows(table: str, page_size: int = 1000) -> list[dict]:
+    if not SUPABASE_SYNC_ENABLED:
+        return []
+    out = []
+    start = 0
+    while True:
+        headers = _supabase_headers(extra={"Range": f"{start}-{start + page_size - 1}"})
+        r = requests.get(
+            _supabase_table_url(table),
+            params={"select": "*", "order": "id.asc.nullslast"},
+            headers=headers,
+            timeout=30,
+        )
+        if r.status_code >= 400:
+            raise RuntimeError(f"Supabase GET {table}: {r.status_code} {r.text[:200]}")
+        data = r.json() or []
+        if not data:
+            break
+        if isinstance(data, list):
+            out.extend(data)
+            if len(data) < page_size:
+                break
+            start += page_size
+        else:
+            break
+    return out
+
+def _supabase_upsert_rows(table: str, rows: list[dict], conflict_cols: list[str]) -> None:
+    if not SUPABASE_SYNC_ENABLED or not rows:
+        return
+    params = {}
+    if conflict_cols:
+        params["on_conflict"] = ",".join(conflict_cols)
+    batch_size = 500
+    for i in range(0, len(rows), batch_size):
+        batch = rows[i:i+batch_size]
+        r = requests.post(
+            _supabase_table_url(table),
+            params=params,
+            headers=_supabase_headers(prefer="resolution=merge-duplicates,return=minimal"),
+            data=json.dumps(batch, ensure_ascii=False),
+            timeout=60,
+        )
+        if r.status_code >= 400:
+            raise RuntimeError(f"Supabase UPSERT {table}: {r.status_code} {r.text[:300]}")
+
+def _supabase_delete_all_rows(table: str) -> None:
+    if not SUPABASE_SYNC_ENABLED:
+        return
+    r = requests.delete(
+        _supabase_table_url(table),
+        params={"id": "gt.0"},
+        headers=_supabase_headers(prefer="return=minimal"),
+        timeout=60,
+    )
+    if r.status_code >= 400 and r.status_code != 404:
+        raise RuntimeError(f"Supabase DELETE {table}: {r.status_code} {r.text[:300]}")
+
+def _supabase_push_all_from_sqlite(force: bool = False) -> bool:
+    global _SUPABASE_LAST_PUSH_TS, _SUPABASE_SYNC_IN_PROGRESS
+    if not SUPABASE_SYNC_ENABLED or _SUPABASE_SYNC_IN_PROGRESS:
+        return False
+    now = time.time()
+    if (not force) and (now - float(_SUPABASE_LAST_PUSH_TS or 0.0) < float(SUPABASE_SYNC_DEBOUNCE_SEC)):
+        return False
+    _SUPABASE_SYNC_IN_PROGRESS = True
+    try:
+        conn = _app_db_connect(DB_PATH)
+        try:
+            tables = _sqlite_user_tables(conn)
+            for table in tables:
+                if table in {"sqlite_sequence"}:
+                    continue
+                cols = _sqlite_table_columns(conn, table)
+                if not cols or not _table_exists_in_supabase(table):
+                    continue
+                rows = conn.execute(f'SELECT * FROM "{table}"').fetchall()
+                payload = []
+                for row in rows:
+                    item = {}
+                    for c, v in zip(cols, row):
+                        item[c] = _jsonable(v)
+                    payload.append(item)
+                conflict = _sqlite_conflict_cols(conn, table)
+                # tabela vazia local: não apaga remoto automaticamente
+                if payload:
+                    _supabase_upsert_rows(table, payload, conflict)
+            _SUPABASE_LAST_PUSH_TS = now
+            return True
+        finally:
+            conn.close()
+    except Exception as e:
+        try:
+            print(f"[SUPABASE SYNC PUSH] {e}")
+        except Exception:
+            pass
+        return False
+    finally:
+        _SUPABASE_SYNC_IN_PROGRESS = False
+
+def _supabase_pull_all_to_sqlite(force: bool = False) -> bool:
+    global _SUPABASE_LAST_PULL_TS, _SUPABASE_SYNC_IN_PROGRESS
+    if not SUPABASE_SYNC_ENABLED or _SUPABASE_SYNC_IN_PROGRESS:
+        return False
+    now = time.time()
+    if (not force) and _sqlite_app_has_meaningful_data():
+        return False
+    _SUPABASE_SYNC_IN_PROGRESS = True
+    try:
+        conn = _app_db_connect(DB_PATH)
+        try:
+            tables = [t for t in _sqlite_user_tables(conn) if t != 'sqlite_sequence']
+            pulled_any = False
+            for table in tables:
+                cols = _sqlite_table_columns(conn, table)
+                if not cols or not _table_exists_in_supabase(table):
+                    continue
+                remote_rows = _supabase_fetch_table_rows(table)
+                if not remote_rows:
+                    continue
+                placeholders = ','.join(['?'] * len(cols))
+                col_sql = ','.join([f'"{c}"' for c in cols])
+                conn.execute(f'DELETE FROM "{table}"')
+                for item in remote_rows:
+                    vals = [item.get(c) for c in cols]
+                    conn.execute(f'INSERT OR REPLACE INTO "{table}" ({col_sql}) VALUES ({placeholders})', vals)
+                pulled_any = True
+            conn.commit()
+            if pulled_any:
+                _SUPABASE_LAST_PULL_TS = now
+            return pulled_any
+        finally:
+            conn.close()
+    except Exception as e:
+        try:
+            print(f"[SUPABASE SYNC PULL] {e}")
+        except Exception:
+            pass
+        return False
+    finally:
+        _SUPABASE_SYNC_IN_PROGRESS = False
+
+class SQLiteSyncConnection(sqlite3.Connection):
+    def commit(self):
+        result = super().commit()
+        try:
+            _supabase_push_all_from_sqlite(force=False)
+        except Exception:
+            pass
+        return result
+
 _RUNTIME_READY = False
 _RUNTIME_READY_AT = 0.0
 _RUNTIME_READY_TTL_SEC = 120.0
@@ -1248,6 +1535,11 @@ def _ensure_runtime_storage_ready(force: bool = False):
     _adopt_best_db_candidate_if_needed()
     _restore_from_latest_stable_if_needed()
     _adopt_best_db_candidate_if_needed()
+    try:
+        if SUPABASE_SYNC_ENABLED and not _sqlite_app_has_meaningful_data():
+            _supabase_pull_all_to_sqlite(force=True)
+    except Exception:
+        pass
     _RUNTIME_READY = True
     _RUNTIME_READY_AT = now_ts
 
@@ -1407,7 +1699,7 @@ def restore_backup_from_bytes(data: bytes) -> None:
     _clear_runtime_caches_after_db_change()
 
 def listar_setores_db() -> list:
-    conn = sqlite3.connect(DB_PATH)
+    conn = _app_db_connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("CREATE TABLE IF NOT EXISTS setores (nome TEXT PRIMARY KEY)")
     cur.execute("SELECT nome FROM setores ORDER BY nome")
@@ -1429,7 +1721,7 @@ def criar_setor_db(nome: str) -> None:
     nome = (nome or "").strip().upper()
     if not nome:
         raise ValueError("Setor vazio")
-    conn = sqlite3.connect(DB_PATH)
+    conn = _app_db_connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("CREATE TABLE IF NOT EXISTS setores (nome TEXT PRIMARY KEY)")
     cur.execute("INSERT OR IGNORE INTO setores(nome) VALUES(?)", (nome,))
@@ -1451,7 +1743,7 @@ def importar_colaboradores_df(setor: str, df: pd.DataFrame) -> tuple[int,int]:
     entrada_s = df[cols["entrada"]] if "entrada" in cols else pd.Series(["06:00"]*len(df))
     sab_s = df[cols["folga_sabado"]] if "folga_sabado" in cols else (df[cols["sabado"]] if "sabado" in cols else pd.Series([0]*len(df)))
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = _app_db_connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("""CREATE TABLE IF NOT EXISTS colaboradores (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2232,14 +2524,7 @@ def enforce_no_consecutive_folga(df: pd.DataFrame, locked_status: set[int] | Non
 # =========================================================
 def db_conn():
     _ensure_runtime_storage_ready()
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-    try:
-        conn.execute("PRAGMA foreign_keys=ON")
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA busy_timeout=10000")
-        conn.execute("PRAGMA synchronous=NORMAL")
-    except Exception:
-        pass
+    conn = _app_db_connect(DB_PATH)
     return conn
 
 def _norm_setor(v: str) -> str:
