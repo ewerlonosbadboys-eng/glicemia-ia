@@ -1090,6 +1090,25 @@ _SUPABASE_LAST_PULL_TS = 0.0
 _SUPABASE_SYNC_IN_PROGRESS = False
 _SUPABASE_LAST_ERROR = ""
 _SUPABASE_BOOTSTRAP_DONE = False
+SUPABASE_TABLE_MAP = {}
+try:
+    _raw_table_map = (os.getenv("SUPABASE_TABLE_MAP") or "").strip()
+    if _raw_table_map:
+        try:
+            _tmp_map = json.loads(_raw_table_map)
+            if isinstance(_tmp_map, dict):
+                SUPABASE_TABLE_MAP = {str(k).strip(): str(v).strip() for k, v in _tmp_map.items() if str(k).strip() and str(v).strip()}
+        except Exception:
+            for _part in _raw_table_map.split(","):
+                if "=" in _part:
+                    _k, _v = _part.split("=", 1)
+                    _k = str(_k).strip()
+                    _v = str(_v).strip()
+                    if _k and _v:
+                        SUPABASE_TABLE_MAP[_k] = _v
+except Exception:
+    SUPABASE_TABLE_MAP = {}
+_SUPABASE_TABLE_CACHE = {}
 
 def _supabase_headers(prefer: str | None = None, extra: dict | None = None) -> dict:
     h = {
@@ -1108,6 +1127,59 @@ def _supabase_headers(prefer: str | None = None, extra: dict | None = None) -> d
 
 def _supabase_table_url(table: str) -> str:
     return f"{SUPABASE_URL}/rest/v1/{table}"
+
+
+def _supabase_extract_table_hint(message: str) -> str:
+    s = str(message or "")
+    m = re.search(r"table '\s*(?:[A-Za-z0-9_]+\.)?([A-Za-z0-9_]+)\s*'", s)
+    return str(m.group(1) or "").strip() if m else ""
+
+
+def _supabase_candidate_tables(local_table: str) -> list[str]:
+    local_table = str(local_table or "").strip()
+    candidates = []
+    for item in [
+        str(SUPABASE_TABLE_MAP.get(local_table, "") or "").strip(),
+        local_table,
+        f"escala_{local_table}",
+        f"app_{local_table}",
+        f"tb_{local_table}",
+        f"tbl_{local_table}",
+    ]:
+        if item and item not in candidates:
+            candidates.append(item)
+    return candidates
+
+
+def _supabase_resolve_remote_table(local_table: str, refresh: bool = False) -> str:
+    local_table = str(local_table or "").strip()
+    if not local_table:
+        return local_table
+    if (not refresh) and local_table in _SUPABASE_TABLE_CACHE:
+        return _SUPABASE_TABLE_CACHE[local_table]
+    resolved = str(SUPABASE_TABLE_MAP.get(local_table, local_table) or local_table).strip()
+    if not SUPABASE_SYNC_ENABLED:
+        _SUPABASE_TABLE_CACHE[local_table] = resolved
+        return resolved
+    for candidate in _supabase_candidate_tables(local_table):
+        try:
+            r = requests.get(
+                _supabase_table_url(candidate),
+                params={"select": "*", "limit": 1},
+                headers=_supabase_headers(),
+                timeout=12,
+            )
+            if r.status_code < 400:
+                resolved = candidate
+                break
+            hint = _supabase_extract_table_hint(r.text)
+            if hint:
+                resolved = hint
+                break
+        except Exception:
+            continue
+    _SUPABASE_TABLE_CACHE[local_table] = resolved
+    return resolved
 
 def _app_db_connect(db_path: str | None = None):
     target = str(db_path or DB_PATH)
@@ -1203,7 +1275,7 @@ def _supabase_table_count_fast(table: str) -> int | None:
         return None
     try:
         r = requests.get(
-            _supabase_table_url(table),
+            _supabase_table_url(_supabase_resolve_remote_table(table)),
             params={"select": "id", "limit": 1},
             headers=_supabase_headers(extra={"Prefer": "count=exact", "Range": "0-0"}),
             timeout=20,
@@ -1270,7 +1342,7 @@ def _table_exists_in_supabase(table: str) -> bool:
         return False
     try:
         r = requests.get(
-            _supabase_table_url(table),
+            _supabase_table_url(_supabase_resolve_remote_table(table, refresh=True)),
             params={"select": "*", "limit": 1},
             headers=_supabase_headers(),
             timeout=15,
@@ -1287,7 +1359,7 @@ def _supabase_fetch_table_rows(table: str, page_size: int = 1000) -> list[dict]:
     while True:
         headers = _supabase_headers(extra={"Range": f"{start}-{start + page_size - 1}"})
         r = requests.get(
-            _supabase_table_url(table),
+            _supabase_table_url(_supabase_resolve_remote_table(table)),
             params={"select": "*", "order": "id.asc.nullslast"},
             headers=headers,
             timeout=30,
@@ -1316,7 +1388,7 @@ def _supabase_upsert_rows(table: str, rows: list[dict], conflict_cols: list[str]
     for i in range(0, len(rows), batch_size):
         batch = rows[i:i+batch_size]
         r = requests.post(
-            _supabase_table_url(table),
+            _supabase_table_url(_supabase_resolve_remote_table(table)),
             params=params,
             headers=_supabase_headers(prefer="resolution=merge-duplicates,return=minimal"),
             data=json.dumps(batch, ensure_ascii=False),
@@ -1329,7 +1401,7 @@ def _supabase_delete_all_rows(table: str) -> None:
     if not SUPABASE_SYNC_ENABLED:
         return
     r = requests.delete(
-        _supabase_table_url(table),
+        _supabase_table_url(_supabase_resolve_remote_table(table)),
         params={"id": "gt.0"},
         headers=_supabase_headers(prefer="return=minimal"),
         timeout=60,
@@ -1464,11 +1536,12 @@ def _supabase_test_connection_detail() -> tuple[bool, str]:
             test_table = tables[0]
         else:
             test_table = "colaboradores"
-        r = requests.get(_supabase_table_url(test_table), params={'select': '*', 'limit': 1}, headers=_supabase_headers(), timeout=15)
+        remote_table = _supabase_resolve_remote_table(test_table, refresh=True)
+        r = requests.get(_supabase_table_url(remote_table), params={'select': '*', 'limit': 1}, headers=_supabase_headers(), timeout=15)
         if r.status_code < 400:
             _set_supabase_error("")
-            return True, f'Conexão OK. Tabela de teste: {test_table}'
-        msg = f'Supabase respondeu {r.status_code} ao testar {test_table}: {r.text[:200]}'
+            return True, f'Conexão OK. Tabela de teste: {test_table} → {remote_table}'
+        msg = f'Supabase respondeu {r.status_code} ao testar {test_table} → {remote_table}: {r.text[:200]}'
         _set_supabase_error(msg)
         return False, msg
     except Exception as e:
