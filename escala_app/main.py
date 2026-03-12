@@ -1088,6 +1088,8 @@ SUPABASE_SYNC_DEBOUNCE_SEC = int(os.getenv("SUPABASE_SYNC_DEBOUNCE_SEC", "12") o
 _SUPABASE_LAST_PUSH_TS = 0.0
 _SUPABASE_LAST_PULL_TS = 0.0
 _SUPABASE_SYNC_IN_PROGRESS = False
+_SUPABASE_LAST_ERROR = ""
+_SUPABASE_BOOTSTRAP_DONE = False
 
 def _supabase_headers(prefer: str | None = None, extra: dict | None = None) -> dict:
     h = {
@@ -1188,6 +1190,80 @@ def _jsonable(v):
         except Exception:
             return None
     return v
+
+def _set_supabase_error(msg: str = "") -> None:
+    global _SUPABASE_LAST_ERROR
+    try:
+        _SUPABASE_LAST_ERROR = str(msg or "").strip()
+    except Exception:
+        _SUPABASE_LAST_ERROR = ""
+
+def _supabase_table_count_fast(table: str) -> int | None:
+    if not SUPABASE_SYNC_ENABLED:
+        return None
+    try:
+        r = requests.get(
+            _supabase_table_url(table),
+            params={"select": "id", "limit": 1},
+            headers=_supabase_headers(extra={"Prefer": "count=exact", "Range": "0-0"}),
+            timeout=20,
+        )
+        if r.status_code >= 400:
+            return None
+        content_range = str(r.headers.get("Content-Range") or "")
+        if "/" in content_range:
+            tail = content_range.rsplit("/", 1)[-1].strip()
+            if tail.isdigit():
+                return int(tail)
+    except Exception:
+        return None
+    return None
+
+def _supabase_remote_has_meaningful_data() -> bool:
+    if not SUPABASE_SYNC_ENABLED:
+        return False
+    for tb in ("colaboradores", "escala_mes", "overrides", "ferias", "usuarios_sistema"):
+        cnt = _supabase_table_count_fast(tb)
+        if cnt is not None and cnt > 0:
+            return True
+    return False
+
+def _save_latest_stable_snapshot_safely() -> None:
+    try:
+        current = Path(DB_PATH)
+        latest = Path(BACKUP_DIR) / "latest_stable.db"
+        if current.exists() and _validate_sqlite_file(str(current)):
+            latest.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                _sqlite_backup_copy(str(current), str(latest))
+            except Exception:
+                shutil.copy2(current, latest)
+    except Exception:
+        pass
+
+def _bootstrap_from_supabase_after_schema(force: bool = False) -> bool:
+    global _SUPABASE_BOOTSTRAP_DONE
+    if _SUPABASE_BOOTSTRAP_DONE and not force:
+        return False
+    _SUPABASE_BOOTSTRAP_DONE = True
+    try:
+        if not SUPABASE_SYNC_ENABLED:
+            return False
+        local_has = _sqlite_app_has_meaningful_data()
+        remote_has = _supabase_remote_has_meaningful_data()
+        if (not local_has) and remote_has:
+            ok = _supabase_pull_all_to_sqlite(force=True)
+            if ok:
+                _save_latest_stable_snapshot_safely()
+            return bool(ok)
+        if local_has and not remote_has:
+            ok = _supabase_push_all_from_sqlite(force=True)
+            if ok:
+                _save_latest_stable_snapshot_safely()
+            return bool(ok)
+    except Exception as e:
+        _set_supabase_error(e)
+    return False
 
 def _table_exists_in_supabase(table: str) -> bool:
     if not SUPABASE_SYNC_ENABLED:
@@ -1291,10 +1367,13 @@ def _supabase_push_all_from_sqlite(force: bool = False) -> bool:
                 if payload:
                     _supabase_upsert_rows(table, payload, conflict)
             _SUPABASE_LAST_PUSH_TS = now
+            _set_supabase_error("")
+            _save_latest_stable_snapshot_safely()
             return True
         finally:
             conn.close()
     except Exception as e:
+        _set_supabase_error(e)
         try:
             print(f"[SUPABASE SYNC PUSH] {e}")
         except Exception:
@@ -1333,10 +1412,13 @@ def _supabase_pull_all_to_sqlite(force: bool = False) -> bool:
             conn.commit()
             if pulled_any:
                 _SUPABASE_LAST_PULL_TS = now
+                _save_latest_stable_snapshot_safely()
+            _set_supabase_error("")
             return pulled_any
         finally:
             conn.close()
     except Exception as e:
+        _set_supabase_error(e)
         try:
             print(f"[SUPABASE SYNC PULL] {e}")
         except Exception:
@@ -1375,17 +1457,22 @@ def _supabase_test_connection_detail() -> tuple[bool, str]:
             tables = [t for t in _sqlite_user_tables(conn) if t != 'sqlite_sequence']
         finally:
             conn.close()
-        if not tables:
-            r = requests.get(f"{SUPABASE_URL}/rest/v1/", headers=_supabase_headers(), timeout=15)
-            if r.status_code < 400:
-                return True, 'Conexão REST com Supabase OK.'
-            return False, f'Supabase respondeu {r.status_code}: {r.text[:200]}'
-        test_table = tables[0]
+        pref = [t for t in ["colaboradores", "usuarios_sistema", "setores", "escala_mes"] if t in tables]
+        if pref:
+            test_table = pref[0]
+        elif tables:
+            test_table = tables[0]
+        else:
+            test_table = "colaboradores"
         r = requests.get(_supabase_table_url(test_table), params={'select': '*', 'limit': 1}, headers=_supabase_headers(), timeout=15)
         if r.status_code < 400:
+            _set_supabase_error("")
             return True, f'Conexão OK. Tabela de teste: {test_table}'
-        return False, f'Supabase respondeu {r.status_code} ao testar {test_table}: {r.text[:200]}'
+        msg = f'Supabase respondeu {r.status_code} ao testar {test_table}: {r.text[:200]}'
+        _set_supabase_error(msg)
+        return False, msg
     except Exception as e:
+        _set_supabase_error(e)
         return False, str(e)
 
 
@@ -1401,7 +1488,9 @@ def _supabase_compare_tables_snapshot() -> pd.DataFrame:
                 remote_count = None
                 if remote_exists and SUPABASE_SYNC_ENABLED:
                     try:
-                        remote_count = len(_supabase_fetch_table_rows(tb, page_size=1000))
+                        remote_count = _supabase_table_count_fast(tb)
+                        if remote_count is None:
+                            remote_count = len(_supabase_fetch_table_rows(tb, page_size=1000))
                     except Exception:
                         remote_count = None
                 rows.append({
@@ -1425,11 +1514,21 @@ class SQLiteSyncConnection(sqlite3.Connection):
             pass
         return result
 
+    def close(self):
+        try:
+            _supabase_push_all_from_sqlite(force=True)
+        except Exception:
+            pass
+        return super().close()
+
 _RUNTIME_READY = False
 _RUNTIME_READY_AT = 0.0
 _RUNTIME_READY_TTL_SEC = 120.0
 _AUTO_BACKUP_DONE_SESSION = False
 
+
+# V90 — robustez de banco + bootstrap Supabase + snapshot seguro:
+# preserva o motor da escala e fortalece restore/sync.
 
 # V87 — robustez de banco:
 # procura automaticamente o banco mais completo em caminhos comuns
@@ -2808,6 +2907,12 @@ def db_init():
             INSERT INTO usuarios_sistema(nome, setor, chapa, senha_hash, salt, is_admin, is_lider, criado_em)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, ("Administrador", "ADMIN", "admin", senha_hash, salt, 1, 1, datetime.now().isoformat()))
+        con.commit()
+
+    try:
+        _bootstrap_from_supabase_after_schema(force=False)
+    except Exception:
+        pass
         con.commit()
 
     con.close()
@@ -7750,7 +7855,7 @@ def page_app():
                 {"Campo": "Schema", "Valor": SUPABASE_SCHEMA or "public"},
                 {"Campo": "Key", "Valor": _mask_secret(SUPABASE_KEY)},
                 {"Campo": "Status atual", "Valor": msg_conn},
-                {"Campo": "Último erro", "Valor": st.session_state.get("sb_diag_last_error", "") or "—"},
+                {"Campo": "Último erro", "Valor": (_SUPABASE_LAST_ERROR or st.session_state.get("sb_diag_last_error", "")) or "—"},
             ])
             st.dataframe(info_df, use_container_width=True, hide_index=True)
 
