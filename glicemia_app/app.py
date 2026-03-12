@@ -2634,18 +2634,43 @@ if st.sidebar.button("📥 Gerar Excel Completo"):
 st.sidebar.markdown("---")
 st.sidebar.subheader("🧾 Relatório em PDF")
 
+if "pdf_bytes" not in st.session_state:
+    st.session_state.pdf_bytes = None
+
+if "pdf_nome" not in st.session_state:
+    st.session_state.pdf_nome = None
+
 if not HAS_REPORTLAB:
     st.sidebar.warning("Para gerar PDF, adicione **reportlab** no requirements.txt e faça deploy novamente.")
 else:
     if st.sidebar.button("🧾 Gerar PDF Relatório", use_container_width=True):
-        df_pdf_g = carregar_glicemia_com_id()
-        df_pdf_n = carregar_dados_seguro(ARQ_N)
-        pdf_bytes = gerar_pdf_bytes(df_pdf_g, df_pdf_n)
-        if not pdf_bytes:
-            st.sidebar.error("Não foi possível gerar o PDF.")
-        else:
-            nome_pdf = f"Relatorio_Saude_Kids_{agora_br().strftime('%Y-%m-%d_%H-%M')}.pdf"
-            st.sidebar.download_button("⬇️ Baixar PDF", pdf_bytes, file_name=nome_pdf, mime="application/pdf", use_container_width=True)
+        try:
+            df_pdf_g = carregar_glicemia_com_id()
+            df_pdf_n = carregar_dados_seguro(ARQ_N)
+            pdf_bytes = gerar_pdf_bytes(df_pdf_g, df_pdf_n)
+
+            if not pdf_bytes:
+                st.sidebar.error("Não foi possível gerar o PDF.")
+                st.session_state.pdf_bytes = None
+                st.session_state.pdf_nome = None
+            else:
+                st.session_state.pdf_bytes = pdf_bytes
+                st.session_state.pdf_nome = f"Relatorio_Saude_Kids_{agora_br().strftime('%Y-%m-%d_%H-%M')}.pdf"
+                st.sidebar.success("✅ PDF gerado com sucesso!")
+        except Exception as e:
+            st.sidebar.error(f"Erro ao gerar PDF: {e}")
+            st.session_state.pdf_bytes = None
+            st.session_state.pdf_nome = None
+
+if st.session_state.get("pdf_bytes"):
+    st.sidebar.download_button(
+        "⬇️ Baixar PDF",
+        st.session_state.pdf_bytes,
+        file_name=st.session_state.pdf_nome,
+        mime="application/pdf",
+        use_container_width=True,
+        key="download_pdf_sidebar"
+    )
 
 
 # ================= SAIR =================
