@@ -74,12 +74,107 @@ import unicodedata
 import time
 import json
 import requests
-import base64
 
 import hashlib
 import secrets
 from openpyxl.styles import PatternFill, Alignment, Border, Side, Font
 from openpyxl.utils import get_column_letter
+
+# =========================================================
+# GITHUB AUTOSAVE DO latest_stable.db (persistência no Streamlit)
+# =========================================================
+
+def _secret_or_env(key: str, default: str = "") -> str:
+    try:
+        if key in st.secrets:
+            val = st.secrets.get(key, default)
+            return str(val).strip() if val is not None else str(default)
+    except Exception:
+        pass
+    try:
+        val = os.getenv(key, default)
+        return str(val).strip() if val is not None else str(default)
+    except Exception:
+        return str(default)
+
+
+def _as_bool(v) -> bool:
+    return str(v or "").strip().lower() in ("1", "true", "yes", "y", "on", "sim")
+
+
+GITHUB_TOKEN = _secret_or_env("GITHUB_TOKEN", "")
+GITHUB_REPO = _secret_or_env("GITHUB_REPO", "ewerlonosbadboys-eng/glicemia-ia")
+GITHUB_BRANCH = _secret_or_env("GITHUB_BRANCH", "main")
+GITHUB_LATEST_STABLE_PATH = _secret_or_env("GITHUB_LATEST_STABLE_PATH", "escala_app/latest_stable.db")
+GITHUB_AUTO_PUSH_LATEST_STABLE = _as_bool(_secret_or_env("GITHUB_AUTO_PUSH_LATEST_STABLE", "1"))
+try:
+    GITHUB_PUSH_THROTTLE_SECONDS = max(5, int(_secret_or_env("GITHUB_PUSH_THROTTLE_SECONDS", "20")))
+except Exception:
+    GITHUB_PUSH_THROTTLE_SECONDS = 20
+
+_LAST_GITHUB_PUSH_TS = 0.0
+_LAST_GITHUB_PUSH_HASH = ""
+
+
+def _file_md5(path: Path) -> str:
+    h = hashlib.md5()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _push_latest_stable_to_github(force: bool = False) -> bool:
+    global _LAST_GITHUB_PUSH_TS, _LAST_GITHUB_PUSH_HASH
+    try:
+        if not GITHUB_AUTO_PUSH_LATEST_STABLE or not GITHUB_TOKEN:
+            return False
+
+        latest_path = Path(APP_DIR) / "latest_stable.db"
+        if not latest_path.exists() or latest_path.stat().st_size <= 0:
+            return False
+
+        now = time.time()
+        file_hash = _file_md5(latest_path)
+        if (not force) and file_hash == _LAST_GITHUB_PUSH_HASH and (now - _LAST_GITHUB_PUSH_TS) < GITHUB_PUSH_THROTTLE_SECONDS:
+            return False
+        if (not force) and (now - _LAST_GITHUB_PUSH_TS) < GITHUB_PUSH_THROTTLE_SECONDS:
+            return False
+
+        api_url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_LATEST_STABLE_PATH}"
+        headers = {
+            "Authorization": f"Bearer {GITHUB_TOKEN}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+
+        sha = None
+        r = requests.get(api_url, headers=headers, timeout=20)
+        if r.status_code == 200:
+            try:
+                sha = r.json().get("sha")
+            except Exception:
+                sha = None
+
+        with open(latest_path, "rb") as f:
+            encoded = base64.b64encode(f.read()).decode("ascii")
+
+        payload = {
+            "message": "auto backup latest_stable.db",
+            "content": encoded,
+            "branch": GITHUB_BRANCH,
+        }
+        if sha:
+            payload["sha"] = sha
+
+        w = requests.put(api_url, headers=headers, json=payload, timeout=60)
+        if w.status_code in (200, 201):
+            _LAST_GITHUB_PUSH_TS = now
+            _LAST_GITHUB_PUSH_HASH = file_hash
+            return True
+    except Exception:
+        pass
+    return False
 
 # =========================================================
 # PDF (Modelo Oficial) — ReportLab
@@ -1081,83 +1176,6 @@ ROTATING_BACKUP_KEEP = int((os.getenv("ROTATING_BACKUP_KEEP", "12") or "12").str
 ROTATING_BACKUP_PREFIX = "rolling"
 
 # =========================================================
-# GITHUB AUTOSAVE DO latest_stable.db
-# =========================================================
-GITHUB_REPO = (os.getenv("GITHUB_REPO") or "ewerlonosbadboys-eng/glicemia-ia").strip()
-GITHUB_BRANCH = (os.getenv("GITHUB_BRANCH") or "main").strip()
-GITHUB_LATEST_STABLE_PATH = (os.getenv("GITHUB_LATEST_STABLE_PATH") or "escala_app/latest_stable.db").strip()
-GITHUB_AUTO_PUSH_LATEST_STABLE = (os.getenv("GITHUB_AUTO_PUSH_LATEST_STABLE", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
-GITHUB_PUSH_DEBOUNCE_SEC = int((os.getenv("GITHUB_PUSH_DEBOUNCE_SEC", "20") or "20").strip() or 20)
-_GITHUB_LAST_PUSH_TS = 0.0
-_GITHUB_LAST_PUSH_HASH = ""
-
-def _read_runtime_secret(name: str, default: str = "") -> str:
-    try:
-        val = os.getenv(name)
-        if val not in (None, ""):
-            return str(val).strip()
-    except Exception:
-        pass
-    try:
-        if hasattr(st, "secrets") and name in st.secrets:
-            return str(st.secrets[name]).strip()
-    except Exception:
-        pass
-    return str(default or "").strip()
-
-def _github_token() -> str:
-    return _read_runtime_secret("GITHUB_TOKEN", "")
-
-def _push_latest_stable_to_github(force: bool = False) -> bool:
-    global _GITHUB_LAST_PUSH_TS, _GITHUB_LAST_PUSH_HASH
-    try:
-        if not GITHUB_AUTO_PUSH_LATEST_STABLE:
-            return False
-        token = _github_token()
-        if not token:
-            return False
-        latest = Path(APP_DIR) / "latest_stable.db"
-        if not latest.exists() or not _validate_sqlite_file(str(latest)):
-            return False
-        raw = latest.read_bytes()
-        content_hash = hashlib.md5(raw).hexdigest()
-        now_ts = time.time()
-        if (not force) and content_hash == _GITHUB_LAST_PUSH_HASH and (now_ts - _GITHUB_LAST_PUSH_TS) < GITHUB_PUSH_DEBOUNCE_SEC:
-            return False
-
-        url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_LATEST_STABLE_PATH}"
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-        }
-
-        sha = None
-        try:
-            r = requests.get(url, headers=headers, timeout=20)
-            if r.status_code == 200:
-                sha = (r.json() or {}).get("sha")
-        except Exception:
-            pass
-
-        payload = {
-            "message": f"auto backup latest_stable.db {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-            "content": base64.b64encode(raw).decode("utf-8"),
-            "branch": GITHUB_BRANCH,
-        }
-        if sha:
-            payload["sha"] = sha
-
-        r2 = requests.put(url, headers=headers, json=payload, timeout=40)
-        if r2.status_code in (200, 201):
-            _GITHUB_LAST_PUSH_TS = now_ts
-            _GITHUB_LAST_PUSH_HASH = content_hash
-            return True
-    except Exception:
-        pass
-    return False
-
-# =========================================================
 # SUPABASE SYNC (mantém a lógica do app em SQLite local,
 # mas faz persistência remota para sobreviver a reboot)
 # =========================================================
@@ -1551,7 +1569,7 @@ def _save_latest_stable_snapshot_safely(include_rolling: bool = False) -> None:
             _rotate_backup_files_safely()
 
         try:
-            _push_latest_stable_to_github(force=include_rolling)
+            _push_latest_stable_to_github(force=False)
         except Exception:
             pass
     except Exception:
