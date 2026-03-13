@@ -1100,7 +1100,7 @@ SUPABASE_AUTO_BOOTSTRAP_AFTER_SCHEMA = (os.getenv("SUPABASE_AUTO_BOOTSTRAP_AFTER
 SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY = (os.getenv("SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
 FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP = (os.getenv("FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
 FAST_BACKUP_DISABLE_ROLLING_ON_COMMIT = (os.getenv("FAST_BACKUP_DISABLE_ROLLING_ON_COMMIT", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
-FAST_SNAPSHOT_THROTTLE_SECONDS = int((os.getenv("FAST_SNAPSHOT_THROTTLE_SECONDS", "1800") or "1800").strip())
+FAST_SNAPSHOT_THROTTLE_SECONDS = int((os.getenv("FAST_SNAPSHOT_THROTTLE_SECONDS", "300") or "300").strip())
 FAST_SNAPSHOT_SKIP_ON_CLOSE = (os.getenv("FAST_SNAPSHOT_SKIP_ON_CLOSE", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
 _LAST_SNAPSHOT_TS = 0.0
 _LAST_SNAPSHOT_DB_MTIME = 0.0
@@ -2083,37 +2083,12 @@ def _ensure_runtime_storage_ready(force: bool = False):
         now_ts = 0.0
     if (not force) and _RUNTIME_READY and (now_ts - float(_RUNTIME_READY_AT or 0.0) < float(_RUNTIME_READY_TTL_SEC)):
         return
-
     _ensure_backup_dir()
-    current = Path(DB_PATH)
-
-    # BOOT MÍNIMO: se já existe banco local com tamanho > 0, não faz varredura pesada.
-    try:
-        if current.exists() and current.stat().st_size > 0 and not force:
-            _RUNTIME_READY = True
-            _RUNTIME_READY_AT = now_ts
-            return
-    except Exception:
-        pass
-
-    # Só tenta restauração leve a partir do latest_stable embutido/local.
-    try:
-        _adopt_bundled_latest_stable_if_needed(force=False)
-    except Exception:
-        pass
-    try:
-        _restore_from_latest_stable_if_needed()
-    except Exception:
-        pass
-
-    # Fallback leve para banco legado somente se ainda não houver DB local.
-    try:
-        if (not current.exists()) or current.stat().st_size == 0:
-            _migrate_legacy_db_if_needed()
-    except Exception:
-        pass
-
-    # Supabase no boot só se o usuário ligar explicitamente por variável de ambiente.
+    _adopt_bundled_latest_stable_if_needed(force=False)
+    _migrate_legacy_db_if_needed()
+    _adopt_best_db_candidate_if_needed()
+    _restore_from_latest_stable_if_needed()
+    _adopt_best_db_candidate_if_needed()
     if SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY:
         try:
             _restore_from_supabase_if_local_empty(force=False)
@@ -2125,7 +2100,6 @@ def _ensure_runtime_storage_ready(force: bool = False):
                 _supabase_pull_all_to_sqlite(force=True)
         except Exception:
             pass
-
     _RUNTIME_READY = True
     _RUNTIME_READY_AT = now_ts
 
@@ -8569,9 +8543,45 @@ def page_app():
 
 
 
+
+def _fast_restore_bundled_latest_before_start() -> None:
+    """
+    Restore mínimo e rápido antes de qualquer inicialização pesada:
+    - se data/escala.db não existir ou vier zerado
+    - e existir latest_stable.db ao lado do main.py
+    - copia diretamente para data/escala.db
+    """
+    try:
+        app_dir = Path(__file__).resolve().parent
+        data_dir = app_dir / "data"
+        db_path = data_dir / "escala.db"
+        backup_candidates = [
+            app_dir / "latest_stable.db",
+            app_dir / "backups" / "latest_stable.db",
+            app_dir / "data" / "latest_stable.db",
+        ]
+        data_dir.mkdir(parents=True, exist_ok=True)
+        db_ok = db_path.exists() and db_path.stat().st_size > 0
+        if db_ok:
+            return
+        for backup in backup_candidates:
+            if backup.exists() and backup.stat().st_size > 0:
+                shutil.copy2(backup, db_path)
+                try:
+                    latest_local = Path(BACKUP_DIR) / "latest_stable.db"
+                    latest_local.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(backup, latest_local)
+                except Exception:
+                    pass
+                break
+    except Exception:
+        pass
+
+
 # =========================================================
 # MAIN
 # =========================================================
+_fast_restore_bundled_latest_before_start()
 db_init()
 if not FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP:
     auto_backup_if_due()
