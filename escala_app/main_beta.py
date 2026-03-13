@@ -7216,12 +7216,23 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
         'Setor': setor,
     }
 
+    hoje = datetime.now()
+    ano_vigente = int(hoje.year)
+    mes_vigente = int(hoje.month)
+    prox_mes = mes_vigente + 1
+    prox_ano = ano_vigente
+    if prox_mes > 12:
+        prox_mes = 1
+        prox_ano += 1
+
     st.markdown("### 👤 Portal do Colaborador")
     i1, i2, i3, i4 = st.columns(4)
     i1.info(f"**Nome**\n\n{colab.get('Nome','-')}")
     i2.info(f"**Setor**\n\n{setor}")
     i3.info(f"**Subgrupo**\n\n{colab.get('Subgrupo','SEM SUBGRUPO')}")
     i4.info(f"**Chapa**\n\n{chapa}")
+
+    st.caption(f"Portal do colaborador fixado no mês vigente ({mes_vigente:02d}/{ano_vigente}) e na pré-escala do próximo mês ({prox_mes:02d}/{prox_ano}).")
 
     tab1, tab2, tab3, tab4 = st.tabs([
         '📋 Escala Oficial',
@@ -7231,9 +7242,9 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
     ])
 
     with tab1:
-        st.markdown(f"#### Escala oficial — {mes_cfg:02d}/{ano_cfg}")
-        df_oficial = get_escala_colaborador_mes(setor, chapa, int(ano_cfg), int(mes_cfg))
-        ass = get_assinatura_status(setor, chapa, int(ano_cfg), int(mes_cfg), 'oficial')
+        st.markdown(f"#### Escala oficial — {mes_vigente:02d}/{ano_vigente}")
+        df_oficial = get_escala_colaborador_mes(setor, chapa, ano_vigente, mes_vigente)
+        ass = get_assinatura_status(setor, chapa, ano_vigente, mes_vigente, 'oficial')
         c1, c2, c3 = st.columns(3)
         c1.metric('Versão atual', ass.get('versao', 1))
         c2.metric('Status da assinatura', ass.get('status', 'Pendente'))
@@ -7241,32 +7252,29 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
         if ass.get('assinado_em'):
             st.caption(f"Última assinatura: {ass.get('assinado_em')}")
         if df_oficial.empty:
-            st.info('Ainda não há escala carregada para esta competência.')
+            st.info('Ainda não há escala oficial carregada para o mês vigente.')
         else:
             st.dataframe(df_oficial, use_container_width=True, hide_index=True)
-            if st.button('✅ Assinar escala oficial', key=f'ass_oficial_{setor}_{chapa}_{ano_cfg}_{mes_cfg}'):
-                salvar_assinatura_portal(setor, chapa, int(ano_cfg), int(mes_cfg), 'oficial')
-                st.success('Escala oficial assinada com sucesso.')
-                st.rerun()
+            if ass.get('status') != 'Assinado':
+                if st.button('✅ Assinar escala oficial', key=f'ass_oficial_{setor}_{chapa}_{ano_vigente}_{mes_vigente}'):
+                    salvar_assinatura_portal(setor, chapa, ano_vigente, mes_vigente, 'oficial')
+                    st.success('Escala oficial assinada com sucesso.')
+                    st.rerun()
 
     with tab2:
-        prox_mes = int(mes_cfg) + 1
-        prox_ano = int(ano_cfg)
-        if prox_mes > 12:
-            prox_mes = 1
-            prox_ano += 1
         st.markdown(f"#### Pré-escala — {prox_mes:02d}/{prox_ano}")
-        st.warning('Prévia do próximo mês. Ainda não é oficial e pode ser alterada até a liberação do líder.')
+        st.warning('Prévia do próximo mês. Ainda não é oficial, não pode ser assinada e pode ser alterada até a liberação do líder.')
         df_pre = get_escala_colaborador_mes(setor, chapa, prox_ano, prox_mes)
         if df_pre.empty:
             st.info('Ainda não há pré-escala disponível para o próximo mês.')
         else:
             st.dataframe(df_pre, use_container_width=True, hide_index=True)
+            st.caption('Assinatura bloqueada até o início do mês vigente.')
 
     with tab3:
-        st.markdown(f"#### Histórico de mudanças — {mes_cfg:02d}/{ano_cfg}")
-        hist = get_overrides_colaborador_mes(setor, chapa, int(ano_cfg), int(mes_cfg))
-        ass_hist = get_assinatura_status(setor, chapa, int(ano_cfg), int(mes_cfg), 'historico')
+        st.markdown(f"#### Histórico de mudanças — {mes_vigente:02d}/{ano_vigente}")
+        hist = get_overrides_colaborador_mes(setor, chapa, ano_vigente, mes_vigente)
+        ass_hist = get_assinatura_status(setor, chapa, ano_vigente, mes_vigente, 'historico')
         h1, h2 = st.columns(2)
         h1.metric('Status do aceite das mudanças', ass_hist.get('status', 'Pendente'))
         h2.metric('Versão das mudanças', ass_hist.get('versao', 1))
@@ -7279,15 +7287,16 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
             hist['Assinatura'] = ass_hist.get('status', 'Pendente')
             hist = hist[[c for c in ['Dia','Campo','Novo valor','Assinatura'] if c in hist.columns]]
             st.dataframe(hist, use_container_width=True, hide_index=True)
-            if st.button('✍️ Assinar mudanças do mês vigente', key=f'ass_hist_{setor}_{chapa}_{ano_cfg}_{mes_cfg}'):
-                salvar_assinatura_portal(setor, chapa, int(ano_cfg), int(mes_cfg), 'historico')
-                st.success('Histórico de mudanças assinado com sucesso.')
-                st.rerun()
+            if ass_hist.get('status') != 'Assinado':
+                if st.button('✍️ Assinar mudanças do mês vigente', key=f'ass_hist_{setor}_{chapa}_{ano_vigente}_{mes_vigente}'):
+                    salvar_assinatura_portal(setor, chapa, ano_vigente, mes_vigente, 'historico')
+                    st.success('Histórico de mudanças assinado com sucesso.')
+                    st.rerun()
 
     with tab4:
         st.markdown('#### Solicitação de folga')
         c1, c2 = st.columns(2)
-        data_padrao = datetime(int(ano_cfg), int(mes_cfg), 1).date()
+        data_padrao = hoje.date()
         data_sol = c1.date_input('Data solicitada', value=data_padrao, key=f'data_folga_{setor}_{chapa}')
         tipo_sol = c2.selectbox('Tipo', ['Folga', 'Troca de plantão', 'Ajuste de horário'], key=f'tipo_folga_{setor}_{chapa}')
         motivo = st.text_input('Motivo', key=f'motivo_folga_{setor}_{chapa}')
@@ -7302,7 +7311,6 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
             st.info('Nenhuma solicitação enviada até agora.')
         else:
             st.dataframe(df_sol, use_container_width=True, hide_index=True)
-
 
 def page_app():
     auth = st.session_state.get("auth") or {}
@@ -7338,11 +7346,24 @@ def page_app():
         st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
 
         st.subheader("🗓️ Competência")
-        m1, m2 = st.columns(2)
-        mes_cfg = m1.selectbox("Mês", list(range(1, 13)), index=mes_cfg - 1, key="sb_mes")
-        ano_cfg = m2.number_input("Ano", value=ano_cfg, step=1, key="sb_ano")
-        st.session_state["cfg_mes"] = int(mes_cfg)
-        st.session_state["cfg_ano"] = int(ano_cfg)
+        if not auth.get('is_admin', False) and not auth.get('is_lider', False):
+            hoje = datetime.now()
+            st.session_state["cfg_mes"] = int(hoje.month)
+            st.session_state["cfg_ano"] = int(hoje.year)
+            st.write(f"**Mês vigente:** {hoje.month:02d}")
+            st.write(f"**Ano vigente:** {hoje.year}")
+            prox_mes = hoje.month + 1
+            prox_ano = hoje.year
+            if prox_mes > 12:
+                prox_mes = 1
+                prox_ano += 1
+            st.write(f"**Pré-escala:** {prox_mes:02d}/{prox_ano}")
+        else:
+            m1, m2 = st.columns(2)
+            mes_cfg = m1.selectbox("Mês", list(range(1, 13)), index=mes_cfg - 1, key="sb_mes")
+            ano_cfg = m2.number_input("Ano", value=ano_cfg, step=1, key="sb_ano")
+            st.session_state["cfg_mes"] = int(mes_cfg)
+            st.session_state["cfg_ano"] = int(ano_cfg)
 
         st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
 
