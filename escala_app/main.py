@@ -1,5 +1,5 @@
-# V95.2 RESTORE FIXED — login liberado com base mínima temporária quando o restore automático falhar
-# Derivado do arquivo enviado pelo usuário e ajustado para não bloquear a abertura do app.
+# V97 ENTERPRISE — boot resiliente, restore em camadas e login sempre liberado
+# Derivado da V95.2 com reforço no restore local/Supabase/latest_stable e sem bloqueio rígido de login.
 
 # V84 BASE — DISTRIBUIÇÃO INTELIGENTE POR SEMANA DO SUBGRUPO
 # Arquivo preparado como continuação de testes sobre a V83.
@@ -1107,7 +1107,7 @@ FAST_SNAPSHOT_THROTTLE_SECONDS = int((os.getenv("FAST_SNAPSHOT_THROTTLE_SECONDS"
 FAST_SNAPSHOT_SKIP_ON_CLOSE = (os.getenv("FAST_SNAPSHOT_SKIP_ON_CLOSE", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
 _LAST_SNAPSHOT_TS = 0.0
 _LAST_SNAPSHOT_DB_MTIME = 0.0
-RESTORE_GUARD_ENABLED = (os.getenv("RESTORE_GUARD_ENABLED", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
+RESTORE_GUARD_ENABLED = (os.getenv("RESTORE_GUARD_ENABLED", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
 _RESTORE_GUARD_ACTIVE = False
 _RESTORE_GUARD_MESSAGE = ""
 
@@ -2066,16 +2066,82 @@ def _adopt_best_db_candidate_if_needed():
 def _restore_from_latest_stable_if_needed():
     _ensure_backup_dir()
     current = Path(DB_PATH)
-    latest = Path(BACKUP_DIR) / "latest_stable.db"
+    candidates = [Path(BACKUP_DIR) / "latest_stable.db"] + list(_bundled_latest_stable_paths())
     if current.exists() and _validate_sqlite_file(str(current)):
         return
-    if latest.exists() and _validate_sqlite_file(str(latest)):
+    for latest in candidates:
         try:
-            if current.exists():
-                current.unlink(missing_ok=True)
-            _sqlite_backup_copy(str(latest), str(current))
+            if latest.exists() and _validate_sqlite_file(str(latest)):
+                try:
+                    if current.exists():
+                        current.unlink(missing_ok=True)
+                    _sqlite_backup_copy(str(latest), str(current))
+                except Exception:
+                    shutil.copy2(latest, current)
+                return
         except Exception:
-            shutil.copy2(latest, current)
+            continue
+
+
+
+
+def _ensure_local_db_bootstrap_enterprise() -> bool:
+    """
+    V97 ENTERPRISE
+    Boot em camadas:
+    1) mantém o banco atual se já for válido
+    2) tenta adotar latest_stable empacotado
+    3) tenta restore do latest_stable local/backups
+    4) tenta pull do Supabase
+    5) cria um SQLite mínimo se tudo falhar
+    Nunca bloqueia a abertura do app por base vazia.
+    """
+    try:
+        _ensure_backup_dir()
+    except Exception:
+        pass
+
+    current = Path(DB_PATH)
+    try:
+        if current.exists() and _validate_sqlite_file(str(current)):
+            return True
+    except Exception:
+        pass
+
+    try:
+        _adopt_bundled_latest_stable_if_needed(force=True)
+        if current.exists() and _validate_sqlite_file(str(current)):
+            return True
+    except Exception:
+        pass
+
+    try:
+        _restore_from_latest_stable_if_needed()
+        if current.exists() and _validate_sqlite_file(str(current)):
+            return True
+    except Exception:
+        pass
+
+    try:
+        if SUPABASE_SYNC_ENABLED:
+            _restore_from_supabase_if_local_empty(force=True)
+            if current.exists() and _validate_sqlite_file(str(current)):
+                return True
+    except Exception as e:
+        _set_supabase_error(e)
+
+    try:
+        current.parent.mkdir(parents=True, exist_ok=True)
+        con = sqlite3.connect(str(current))
+        try:
+            con.execute("PRAGMA journal_mode=WAL")
+            con.execute("PRAGMA foreign_keys=ON")
+            con.commit()
+        finally:
+            con.close()
+        return current.exists()
+    except Exception:
+        return False
 
 
 def _ensure_runtime_storage_ready(force: bool = False):
@@ -2087,6 +2153,7 @@ def _ensure_runtime_storage_ready(force: bool = False):
     if (not force) and _RUNTIME_READY and (now_ts - float(_RUNTIME_READY_AT or 0.0) < float(_RUNTIME_READY_TTL_SEC)):
         return
     _ensure_backup_dir()
+    _ensure_local_db_bootstrap_enterprise()
     _adopt_bundled_latest_stable_if_needed(force=False)
     _migrate_legacy_db_if_needed()
     _adopt_best_db_candidate_if_needed()
@@ -3357,7 +3424,7 @@ def db_init():
     if _should_block_silent_empty_seed():
         fontes = _restore_sources_summary() or "fonte de restore configurada"
         detalhe = _SUPABASE_LAST_ERROR or "sem detalhe adicional"
-        _set_restore_guard(True, f"Base local vazia após a inicialização. A restauração automática não encontrou dados utilizáveis. O app vai liberar uma base mínima temporária para permitir o login. Restaure os dados a partir de: {fontes}. Detalhe: {detalhe}")
+        _set_restore_guard(True, f"Base local vazia após a inicialização. A restauração automática não encontrou dados utilizáveis, mas o app liberou uma base mínima temporária para permitir o login sem bloqueio. Restaure os dados a partir de: {fontes}. Detalhe: {detalhe}")
     else:
         _set_restore_guard(False, "")
     _safe_exec(cur, "INSERT OR IGNORE INTO setores(nome) VALUES (?)", ("GERAL",))
