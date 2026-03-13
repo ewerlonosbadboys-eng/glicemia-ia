@@ -1076,6 +1076,8 @@ BUNDLED_LATEST_STABLE_CANDIDATES = [
 ]
 AUTO_BACKUP_HOUR = 3  # 03:00
 AUTO_BACKUP_INTERVAL_HOURS = 6  # roda quando o app abre
+ROTATING_BACKUP_KEEP = int((os.getenv("ROTATING_BACKUP_KEEP", "12") or "12").strip() or 12)
+ROTATING_BACKUP_PREFIX = "rolling"
 
 # =========================================================
 # SUPABASE SYNC (mantém a lógica do app em SQLite local,
@@ -1418,16 +1420,49 @@ def _supabase_remote_has_meaningful_data() -> bool:
         return True
     return False
 
+def _rotate_backup_files_safely() -> None:
+    try:
+        keep = max(1, int(ROTATING_BACKUP_KEEP or 12))
+    except Exception:
+        keep = 12
+    try:
+        folder = Path(BACKUP_DIR)
+        files = sorted(folder.glob(f"{ROTATING_BACKUP_PREFIX}_*.db"), key=lambda p: p.stat().st_mtime, reverse=True)
+        for p in files[keep:]:
+            try:
+                p.unlink(missing_ok=True)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
 def _save_latest_stable_snapshot_safely() -> None:
     try:
         current = Path(DB_PATH)
-        latest = Path(BACKUP_DIR) / "latest_stable.db"
-        if current.exists() and _validate_sqlite_file(str(current)):
-            latest.parent.mkdir(parents=True, exist_ok=True)
+        if not current.exists() or not _validate_sqlite_file(str(current)):
+            return
+
+        targets = [
+            Path(APP_DIR) / "latest_stable.db",
+            Path(BACKUP_DIR) / "latest_stable.db",
+        ]
+
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        rolling = Path(BACKUP_DIR) / f"{ROTATING_BACKUP_PREFIX}_{ts}.db"
+        targets.append(rolling)
+
+        for target in targets:
             try:
-                _sqlite_backup_copy(str(current), str(latest))
+                target.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    _sqlite_backup_copy(str(current), str(target))
+                except Exception:
+                    shutil.copy2(current, target)
             except Exception:
-                shutil.copy2(current, latest)
+                pass
+
+        _rotate_backup_files_safely()
     except Exception:
         pass
 
@@ -1763,6 +1798,10 @@ def _supabase_compare_tables_snapshot() -> pd.DataFrame:
 class SQLiteSyncConnection(sqlite3.Connection):
     def commit(self):
         result = super().commit()
+        try:
+            _save_latest_stable_snapshot_safely()
+        except Exception:
+            pass
         if SUPABASE_AUTO_PUSH_ON_COMMIT:
             try:
                 _supabase_push_all_from_sqlite(force=False)
@@ -1771,6 +1810,10 @@ class SQLiteSyncConnection(sqlite3.Connection):
         return result
 
     def close(self):
+        try:
+            _save_latest_stable_snapshot_safely()
+        except Exception:
+            pass
         if SUPABASE_AUTO_PUSH_ON_CLOSE:
             try:
                 _supabase_push_all_from_sqlite(force=True)
@@ -2049,6 +2092,15 @@ def create_backup_now(prefix="manual") -> str:
         _sqlite_backup_copy(str(src), str(latest))
     except Exception:
         shutil.copy2(src, latest)
+    try:
+        bundled = Path(APP_DIR) / "latest_stable.db"
+        _sqlite_backup_copy(str(src), str(bundled))
+    except Exception:
+        try:
+            shutil.copy2(src, Path(APP_DIR) / "latest_stable.db")
+        except Exception:
+            pass
+    _rotate_backup_files_safely()
     return str(dst)
 
 
@@ -2179,6 +2231,15 @@ def restore_backup_from_bytes(data: bytes) -> None:
         _sqlite_backup_copy(str(current), str(latest))
     except Exception:
         shutil.copy2(current, latest)
+    try:
+        bundled = Path(APP_DIR) / "latest_stable.db"
+        _sqlite_backup_copy(str(current), str(bundled))
+    except Exception:
+        try:
+            shutil.copy2(current, Path(APP_DIR) / "latest_stable.db")
+        except Exception:
+            pass
+    _rotate_backup_files_safely()
 
     tmp.unlink(missing_ok=True)
     _clear_runtime_caches_after_db_change()
