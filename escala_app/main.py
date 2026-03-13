@@ -7870,21 +7870,31 @@ def page_app():
         hist_db = {}
         colaboradores = []
 
+        # V94.3 — estado/cache leve para exportação/impressão
+        imp_state = st.session_state.setdefault("imp_state", {})
+        excel_cache = imp_state.setdefault("excel_cache", {})
+        dia_cache = imp_state.setdefault("dia_cache", {})
+        parede_cache = imp_state.setdefault("parede_cache", {})
+
         if sec_imp == "📊 Excel modelo":
             st.subheader("📊 Excel modelo RH (separado por subgrupo)")
             st.caption("Geração pesada ficou sob demanda para deixar a aba Impressão rápida.")
+            excel_key = f"{setor}|{ano}|{mes}"
             if st.button("📊 Gerar Excel", key="xls_btn"):
-                colaboradores = load_colaboradores_setor(setor)
-                hist_db = load_escala_mes_db(setor, ano, mes) or {}
-                colab_by = {c["Chapa"]: c for c in colaboradores}
-                if not hist_db:
-                    st.info("Gere a escala.")
+                if excel_key in excel_cache:
+                    st.session_state["xls_cached_bytes"] = excel_cache[excel_key]
                 else:
-                    hist_db = apply_overrides_to_hist(setor, ano, mes, hist_db)
-                    output = io.BytesIO()
-                    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-                        wb = writer.book
-                        ws = wb.create_sheet("Escala Mensal", index=0)
+                    colaboradores = load_colaboradores_setor(setor)
+                    hist_db = load_escala_mes_db(setor, ano, mes) or {}
+                    colab_by = {c["Chapa"]: c for c in colaboradores}
+                    if not hist_db:
+                        st.info("Gere a escala.")
+                    else:
+                        hist_db = apply_overrides_to_hist(setor, ano, mes, hist_db)
+                        output = io.BytesIO()
+                        with pd.ExcelWriter(output, engine="openpyxl") as writer:
+                            wb = writer.book
+                            ws = wb.create_sheet("Escala Mensal", index=0)
 
                         fill_header = PatternFill(start_color="1F4E78", end_color="1F4E78", patternType="solid")
                         fill_dom = PatternFill(start_color="C00000", end_color="C00000", patternType="solid")
@@ -8048,13 +8058,17 @@ def page_app():
                         if "Sheet" in wb.sheetnames and len(wb.sheetnames) > 1:
                             wb.remove(wb["Sheet"])
 
-                    st.download_button(
-                        "📥 Baixar Excel",
-                        data=output.getvalue(),
-                        file_name=f"escala_{setor}_{mes:02d}_{ano}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        key="xls_down"
-                    )
+                        excel_bytes = output.getvalue()
+                        excel_cache[excel_key] = excel_bytes
+                        st.session_state["xls_cached_bytes"] = excel_bytes
+            if st.session_state.get("xls_cached_bytes"):
+                st.download_button(
+                    "📥 Baixar Excel",
+                    data=st.session_state["xls_cached_bytes"],
+                    file_name=f"escala_{setor}_{mes:02d}_{ano}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="xls_down"
+                )
         elif sec_imp == "🗓️ Quem trabalha no dia":
             # --- Lista (e PDF) de quem TRABALHA no dia escolhido ---
             st.markdown("### 🗓️ Quem trabalha no dia (para impressão)")
@@ -8064,69 +8078,63 @@ def page_app():
             except Exception:
                 dias_mes = 31
             dia_sel = st.number_input("Dia do mês", min_value=1, max_value=int(dias_mes), value=1, step=1)
+            dia_key = f"{setor}|{ano}|{mes}|{int(dia_sel)}"
             carregar_dia = st.button("🔎 Carregar lista do dia", key="dia_trabalho_load_btn")
 
-            if carregar_dia:
+            if carregar_dia and dia_key not in dia_cache:
                 colaboradores = load_colaboradores_setor(setor)
                 hist_db = load_escala_mes_db(setor, ano, mes) or {}
                 if hist_db:
                     hist_db = apply_overrides_to_hist(setor, ano, mes, hist_db)
-            else:
-                hist_db = {}
-                colaboradores = []
+                linhas = []
+                for _chapa, _df in (hist_db or {}).items():
+                    if _df is None or _df.empty:
+                        continue
+                    try:
+                        _linha = _df.loc[_df["Data"].dt.day == int(dia_sel)].head(1)
+                    except Exception:
+                        _linha = _df.loc[pd.to_datetime(_df["Data"], errors="coerce").dt.day == int(dia_sel)].head(1)
+                    if _linha.empty:
+                        continue
+                    _r = _linha.iloc[0].to_dict()
+                    _stt = str(_r.get("Status", "")).strip()
+                    if _stt not in WORK_STATUSES:
+                        continue
+                    _ent = str(_r.get("H_Entrada", "") or "").strip()
+                    _sai = str(_r.get("H_Saida", "") or "").strip()
+                    _nome = ""
+                    _subg = ""
+                    for c in colaboradores:
+                        if str(c.get("Chapa", "")).strip() == str(_chapa).strip():
+                            _nome = str(c.get("Nome", "")).strip()
+                            _subg = str(c.get("Subgrupo", "")).strip()
+                            break
+                    linhas.append({"Chapa": str(_chapa).strip(), "Nome": _nome, "Subgrupo": _subg, "Entrada": _ent, "Saída": _sai})
+                df_dia = pd.DataFrame(linhas).sort_values(["Subgrupo", "Nome"]) if linhas else pd.DataFrame(columns=["Chapa","Nome","Subgrupo","Entrada","Saída"])
+                dia_cache[dia_key] = {"df": df_dia, "hist": hist_db, "colaboradores": colaboradores}
 
-            # Monta tabela para visualização
-            linhas = []
-            for _chapa, _df in (hist_db or {}).items():
-                if _df is None or _df.empty:
-                    continue
-                try:
-                    _linha = _df.loc[_df["Data"].dt.day == int(dia_sel)].head(1)
-                except Exception:
-                    _linha = _df.loc[pd.to_datetime(_df["Data"], errors="coerce").dt.day == int(dia_sel)].head(1)
-                if _linha.empty:
-                    continue
-                _r = _linha.iloc[0].to_dict()
-                _stt = str(_r.get("Status", "")).strip()
-                if _stt not in WORK_STATUSES:
-                    continue
-                _ent = str(_r.get("H_Entrada", "") or "").strip()
-                _sai = str(_r.get("H_Saida", "") or "").strip()
-                # metadados do colaborador
-                _nome = ""
-                _subg = ""
-                for c in colaboradores:
-                    if str(c.get("Chapa", "")).strip() == str(_chapa).strip():
-                        _nome = str(c.get("Nome", "")).strip()
-                        _subg = str(c.get("Subgrupo", "")).strip()
-                        break
-                linhas.append({"Chapa": str(_chapa).strip(), "Nome": _nome, "Subgrupo": _subg, "Entrada": _ent, "Saída": _sai})
-
-            df_dia = pd.DataFrame(linhas).sort_values(["Subgrupo", "Nome"]) if linhas else pd.DataFrame(columns=["Chapa","Nome","Subgrupo","Entrada","Saída"])
+            payload_dia = dia_cache.get(dia_key, {"df": pd.DataFrame(columns=["Chapa","Nome","Subgrupo","Entrada","Saída"]), "hist": {}, "colaboradores": []})
+            df_dia = payload_dia.get("df") if isinstance(payload_dia.get("df"), pd.DataFrame) else pd.DataFrame(columns=["Chapa","Nome","Subgrupo","Entrada","Saída"])
             st.dataframe(df_dia, use_container_width=True, hide_index=True)
 
             colp1, colp2 = st.columns([1, 2])
+            pdf_day_key = f"pdf::{dia_key}"
             with colp1:
                 if st.button("📄 Gerar PDF (quem trabalha no dia)"):
                     if df_dia.empty:
                         st.warning("Não há colaboradores trabalhando nesse dia (ou ainda não foi gerado para este mês).")
                     else:
-                        pdf_bytes_dia = gerar_pdf_trabalhando_no_dia(setor, int(ano), int(mes), int(dia_sel), hist_db, colaboradores)
-                        st.session_state["pdf_dia_trabalho_bytes"] = pdf_bytes_dia
+                        pdf_bytes_dia = gerar_pdf_trabalhando_no_dia(setor, int(ano), int(mes), int(dia_sel), payload_dia.get("hist", {}), payload_dia.get("colaboradores", []))
+                        st.session_state[pdf_day_key] = pdf_bytes_dia
                         st.success("PDF pronto.")
             with colp2:
-                if st.session_state.get("pdf_dia_trabalho_bytes"):
+                if st.session_state.get(pdf_day_key):
                     st.download_button(
                         "⬇️ Baixar PDF (quem trabalha no dia)",
-                        data=st.session_state["pdf_dia_trabalho_bytes"],
+                        data=st.session_state[pdf_day_key],
                         file_name=f"escala_trabalhando_dia_{int(dia_sel):02d}_{int(mes):02d}_{int(ano)}.pdf",
                         mime="application/pdf",
                     )
-
-
-
-
-
 
         elif sec_imp == "📅 Escala":
             st.subheader("📅 Escala")
@@ -8196,6 +8204,7 @@ def page_app():
             gerar = cbtn1.button("🖨️ Imprimir (gerar PDF)", key="pdf_print_btn", use_container_width=True)
             cbtn2.caption("Dica: selecione uma seção, depois marque os colaboradores. Se não marcar nenhum, imprime todos os filtrados.")
 
+            pdf_parede_key = f"{setor}|{ano}|{mes}|{loja_txt.strip()}|{modo_pdf}|{data_ini}|{data_fim}|{','.join(sorted(chapas_sel)) if 'chapas_sel' in locals() else ''}|{','.join(sorted(secoes_sel))}|{busca_txt.strip()}"
             if gerar:
                 if data_fim < data_ini:
                     st.warning("O dia final precisa ser maior ou igual ao dia inicial.")
@@ -8204,17 +8213,21 @@ def page_app():
                         chapas_sel = [str(mapa_idx[x].get("Chapa")) for x in sel if x in mapa_idx]
                     else:
                         chapas_sel = [str(c.get("Chapa")) for c in colabs_filtrados]
-
-                    if modo_pdf == "Panorâmico por período":
+                    pdf_parede_key = f"{setor}|{ano}|{mes}|{loja_txt.strip()}|{modo_pdf}|{data_ini}|{data_fim}|{','.join(sorted(chapas_sel))}|{','.join(sorted(secoes_sel))}|{busca_txt.strip()}"
+                    if pdf_parede_key in parede_cache:
+                        st.session_state["pdf_parede_bytes"] = parede_cache[pdf_parede_key]
+                    elif modo_pdf == "Panorâmico por período":
                         hist_db_pdf = _load_hist_periodo(setor, data_ini, data_fim)
                         hist_db_pdf = {ch: df for ch, df in hist_db_pdf.items() if ch in set(chapas_sel)}
                         if not hist_db_pdf:
                             st.warning("Nenhum colaborador com escala salva no período informado.")
                         else:
                             pdf_bytes = gerar_pdf_periodo_panoramico(loja_txt.strip() or str(setor), data_ini, data_fim, hist_db_pdf, colaboradores)
+                            parede_cache[pdf_parede_key] = pdf_bytes
+                            st.session_state["pdf_parede_bytes"] = pdf_bytes
                             st.download_button(
                                 "⬇️ Baixar PDF panorâmico",
-                                data=pdf_bytes,
+                                data=st.session_state["pdf_parede_bytes"],
                                 file_name=f"escala_panoramica_{(loja_txt.strip() or str(setor))}_{data_ini.strftime('%Y%m%d')}_{data_fim.strftime('%Y%m%d')}.pdf",
                                 mime="application/pdf",
                                 key="pdf_down_pan"
