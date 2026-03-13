@@ -3421,12 +3421,8 @@ def db_init():
 
     con.commit()
 
-    if _should_block_silent_empty_seed():
-        fontes = _restore_sources_summary() or "fonte de restore configurada"
-        detalhe = _SUPABASE_LAST_ERROR or "sem detalhe adicional"
-        _set_restore_guard(True, f"Base local vazia após a inicialização. A restauração automática não encontrou dados utilizáveis, mas o app liberou uma base mínima temporária para permitir o login sem bloqueio. Restaure os dados a partir de: {fontes}. Detalhe: {detalhe}")
-    else:
-        _set_restore_guard(False, "")
+    # v97 force: nunca bloquear nem exibir guarda de restore no login
+    _set_restore_guard(False, "")
     _safe_exec(cur, "INSERT OR IGNORE INTO setores(nome) VALUES (?)", ("GERAL",))
     _safe_exec(cur, "INSERT OR IGNORE INTO setores(nome) VALUES (?)", ("ADMIN",))
     _safe_exec(cur, "INSERT OR IGNORE INTO setores(nome) VALUES (?)", ("GESTAO",))
