@@ -6952,6 +6952,36 @@ def page_gestao_dashboard(ano: int, mes: int):
     st.info("Dica: para o gerente, esta tela é a única exibida — as outras abas ficam ocultas para reduzir poluição visual.")
 
 
+
+
+def _preview_cache_keys(setor: str, ano: int, mes: int):
+    base = f"preview_cache::{setor}::{ano}::{mes}"
+    return {
+        "hist": base + "::hist",
+        "cal": base + "::cal",
+        "loaded": base + "::loaded",
+    }
+
+def _clear_preview_cache(setor: str, ano: int, mes: int):
+    try:
+        keys = _preview_cache_keys(setor, ano, mes)
+        for k in keys.values():
+            st.session_state.pop(k, None)
+    except Exception:
+        pass
+
+def _ensure_preview_cache(setor: str, ano: int, mes: int, colaboradores: list):
+    keys = _preview_cache_keys(setor, ano, mes)
+    if keys["hist"] in st.session_state and keys["cal"] in st.session_state:
+        return st.session_state[keys["hist"]], st.session_state[keys["cal"]]
+    hist_db = get_hist_mes_com_overrides_cached(setor, int(ano), int(mes))
+    colab_by = {c["Chapa"]: c for c in (colaboradores or [])}
+    cal = calendario_rh_df(hist_db, colab_by) if hist_db else pd.DataFrame()
+    st.session_state[keys["hist"]] = hist_db
+    st.session_state[keys["cal"]] = cal
+    st.session_state[keys["loaded"]] = True
+    return hist_db, cal
+
 def page_app():
     auth = st.session_state.get("auth") or {}
     setor = auth.get("setor", "GERAL")
@@ -7254,6 +7284,7 @@ def page_app():
         else:
             b1, b2, b3, _ = st.columns([1, 1, 1, 5])
             if b1.button("🚀 Gerar agora (respeita ajustes)", use_container_width=True, key="gen_btn"):
+                _clear_preview_cache(setor, int(ano), int(mes))
                 st.session_state["last_seed"] = int(seed)
                 ok = _regenerar_mes_inteiro(setor, int(ano), int(mes), seed=int(seed), respeitar_ajustes=True)
                 if ok:
@@ -7263,6 +7294,7 @@ def page_app():
                 st.rerun()
 
             if b2.button("🔄 Recarregar do banco", use_container_width=True, key="gen_reload_btn"):
+                _clear_preview_cache(setor, int(ano), int(mes))
                 st.rerun()
 
             # 🧹 Gerar do zero: ignora travas/ajustes (recalcula o mês totalmente)
@@ -7278,6 +7310,7 @@ def page_app():
                     # Importante: se existirem overrides antigos no mês, eles podem "forçar" Folga/Trabalho e aparentar que o motor não funcionou.
                     # Ao gerar do zero, limpamos overrides do mês selecionado (não mexe em meses anteriores).
                     delete_overrides_mes(setor, int(ano), int(mes))
+                    _clear_preview_cache(setor, int(ano), int(mes))
                     st.session_state["last_seed"] = int(seed)
                     ok = _regenerar_mes_inteiro(setor, int(ano), int(mes), seed=int(seed), respeitar_ajustes=False)
                     if ok:
@@ -7306,12 +7339,10 @@ def page_app():
 
             if st.session_state.get(preview_key, False):
                 with st.spinner("Carregando calendário do mês..."):
-                    hist_db = get_hist_mes_com_overrides_cached(setor, int(ano), int(mes))
+                    hist_db, cal = _ensure_preview_cache(setor, int(ano), int(mes), colaboradores)
 
                 if hist_db:
-                    colab_by = {c["Chapa"]: c for c in colaboradores}
                     st.markdown("### 📅 Calendário RH (visual por colaborador)")
-                    cal = calendario_rh_df(hist_db, colab_by)
                     show_color = st.checkbox("🎨 Mostrar cores no calendário (pode deixar lento)", value=False, key="cal_color")
                     if show_color:
                         st.dataframe(style_calendario(cal, int(mes), int(ano)), use_container_width=True)
@@ -7832,24 +7863,24 @@ def page_app():
     elif sec_main == "🖨️ Impressão":
         sec_imp = st.radio("", ["📊 Excel modelo", "🗓️ Quem trabalha no dia", "📅 Escala", "🖨️ Imprimir escala parede"], horizontal=True, key="impressao_nav_fast", label_visibility="collapsed")
 
-        # V89.1 — correção de escopo:
-        # garante que ano/mes/hist_db/colaboradores existam em todas as subabas de impressão
-        # sem alterar regras, funções ou otimizações já feitas.
+        # V94.2 — lazy load da impressão:
+        # evita carregar escala + colaboradores + overrides logo ao abrir a aba.
         ano = int(st.session_state["cfg_ano"])
         mes = int(st.session_state["cfg_mes"])
-        hist_db = load_escala_mes_db(setor, ano, mes) or {}
-        colaboradores = load_colaboradores_setor(setor)
+        hist_db = {}
+        colaboradores = []
 
         if sec_imp == "📊 Excel modelo":
             st.subheader("📊 Excel modelo RH (separado por subgrupo)")
-            colab_by = {c["Chapa"]: c for c in colaboradores}
-
-            if not hist_db:
-                st.info("Gere a escala.")
-            else:
-                hist_db = apply_overrides_to_hist(setor, ano, mes, hist_db)
-
-                if st.button("📊 Gerar Excel", key="xls_btn"):
+            st.caption("Geração pesada ficou sob demanda para deixar a aba Impressão rápida.")
+            if st.button("📊 Gerar Excel", key="xls_btn"):
+                colaboradores = load_colaboradores_setor(setor)
+                hist_db = load_escala_mes_db(setor, ano, mes) or {}
+                colab_by = {c["Chapa"]: c for c in colaboradores}
+                if not hist_db:
+                    st.info("Gere a escala.")
+                else:
+                    hist_db = apply_overrides_to_hist(setor, ano, mes, hist_db)
                     output = io.BytesIO()
                     with pd.ExcelWriter(output, engine="openpyxl") as writer:
                         wb = writer.book
@@ -8027,11 +8058,22 @@ def page_app():
         elif sec_imp == "🗓️ Quem trabalha no dia":
             # --- Lista (e PDF) de quem TRABALHA no dia escolhido ---
             st.markdown("### 🗓️ Quem trabalha no dia (para impressão)")
+            st.caption("Carregamento sob demanda para deixar a aba Impressão rápida.")
             try:
                 dias_mes = calendar.monthrange(int(ano), int(mes))[1]
             except Exception:
                 dias_mes = 31
             dia_sel = st.number_input("Dia do mês", min_value=1, max_value=int(dias_mes), value=1, step=1)
+            carregar_dia = st.button("🔎 Carregar lista do dia", key="dia_trabalho_load_btn")
+
+            if carregar_dia:
+                colaboradores = load_colaboradores_setor(setor)
+                hist_db = load_escala_mes_db(setor, ano, mes) or {}
+                if hist_db:
+                    hist_db = apply_overrides_to_hist(setor, ano, mes, hist_db)
+            else:
+                hist_db = {}
+                colaboradores = []
 
             # Monta tabela para visualização
             linhas = []
@@ -8112,6 +8154,7 @@ def page_app():
         elif sec_imp == "🖨️ Imprimir escala parede":
             st.subheader("🖨️ Imprimir escala parede")
 
+            colaboradores = load_colaboradores_setor(setor)
             all_subgrupos = sorted({((c.get("Subgrupo") or "").strip() or "SEM SUBGRUPO") for c in colaboradores})
             cfx1, cfx2, cfx3 = st.columns([1.2, 1.2, 1.6])
             loja_txt = cfx1.text_input("Loja:", value=str(setor), key="pdf_loja_txt")
