@@ -3288,6 +3288,35 @@ def db_init():
     """)
 
     _safe_exec(cur, """
+    CREATE TABLE IF NOT EXISTS portal_assinaturas (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        setor TEXT NOT NULL,
+        chapa TEXT NOT NULL,
+        ano INTEGER NOT NULL,
+        mes INTEGER NOT NULL,
+        tipo TEXT NOT NULL,
+        versao_ref INTEGER NOT NULL DEFAULT 1,
+        assinado_em TEXT NOT NULL,
+        UNIQUE(setor, chapa, ano, mes, tipo)
+    )
+    """)
+
+    _safe_exec(cur, """
+    CREATE TABLE IF NOT EXISTS portal_solicitacoes_folga (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        setor TEXT NOT NULL,
+        chapa TEXT NOT NULL,
+        data_solicitada TEXT NOT NULL,
+        tipo TEXT NOT NULL,
+        motivo TEXT,
+        observacao TEXT,
+        status TEXT NOT NULL DEFAULT 'Em análise',
+        criado_em TEXT NOT NULL,
+        atualizado_em TEXT NOT NULL
+    )
+    """)
+
+    _safe_exec(cur, """
     CREATE TABLE IF NOT EXISTS overrides (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         setor TEXT NOT NULL,
@@ -7006,6 +7035,275 @@ def _ensure_preview_cache(setor: str, ano: int, mes: int, colaboradores: list):
     st.session_state[keys["loaded"]] = True
     return hist_db, cal
 
+def get_colaborador_record(setor: str, chapa: str):
+    setor = _norm_setor(setor)
+    chapa = _norm_chapa(chapa)
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute(
+        """
+        SELECT nome, chapa, subgrupo, entrada, folga_sab
+        FROM colaboradores
+        WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?
+        LIMIT 1
+        """,
+        (setor, chapa),
+    )
+    row = cur.fetchone()
+    con.close()
+    if not row:
+        return None
+    return {
+        "Nome": row[0],
+        "Chapa": row[1],
+        "Subgrupo": (row[2] or "").strip() or "SEM SUBGRUPO",
+        "Entrada": (row[3] or "").strip() or "06:00",
+        "Folga_Sab": bool(row[4]),
+        "Setor": setor,
+    }
+
+
+def get_escala_colaborador_mes(setor: str, chapa: str, ano: int, mes: int) -> pd.DataFrame:
+    setor = _norm_setor(setor)
+    chapa = _norm_chapa(chapa)
+    con = db_conn()
+    try:
+        df = pd.read_sql_query(
+            """
+            SELECT dia AS 'Dia', data AS 'Data', dia_sem AS 'Dia da semana', status AS 'Status',
+                   COALESCE(h_entrada,'') AS 'Entrada', COALESCE(h_saida,'') AS 'Saída'
+            FROM escala_mes
+            WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=? AND ano=? AND mes=?
+            ORDER BY dia ASC
+            """,
+            con,
+            params=(setor, chapa, int(ano), int(mes)),
+        )
+    finally:
+        con.close()
+    return df
+
+
+def get_overrides_colaborador_mes(setor: str, chapa: str, ano: int, mes: int) -> pd.DataFrame:
+    setor = _norm_setor(setor)
+    chapa = _norm_chapa(chapa)
+    con = db_conn()
+    try:
+        df = pd.read_sql_query(
+            """
+            SELECT dia AS 'Dia', campo AS 'Campo', valor AS 'Novo valor', id AS '_ord'
+            FROM overrides
+            WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=? AND ano=? AND mes=?
+            ORDER BY dia DESC, id DESC
+            """,
+            con,
+            params=(setor, chapa, int(ano), int(mes)),
+        )
+    finally:
+        con.close()
+    return df
+
+
+def get_portal_version(setor: str, chapa: str, ano: int, mes: int) -> int:
+    setor = _norm_setor(setor)
+    chapa = _norm_chapa(chapa)
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute(
+        "SELECT COUNT(*) FROM overrides WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=? AND ano=? AND mes=?",
+        (setor, chapa, int(ano), int(mes)),
+    )
+    qtd = int((cur.fetchone() or [0])[0] or 0)
+    con.close()
+    return int(qtd + 1)
+
+
+def get_assinatura_status(setor: str, chapa: str, ano: int, mes: int, tipo: str):
+    setor = _norm_setor(setor)
+    chapa = _norm_chapa(chapa)
+    tipo = str(tipo or 'oficial').strip().lower()
+    versao_atual = get_portal_version(setor, chapa, ano, mes)
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute(
+        """
+        SELECT versao_ref, assinado_em
+        FROM portal_assinaturas
+        WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=? AND ano=? AND mes=? AND tipo=?
+        LIMIT 1
+        """,
+        (setor, chapa, int(ano), int(mes), tipo),
+    )
+    row = cur.fetchone()
+    con.close()
+    if not row:
+        return {"status": "Pendente", "versao": versao_atual, "assinado_em": None}
+    versao_ref, assinado_em = int(row[0] or 0), row[1]
+    status = "Assinado" if versao_ref == versao_atual else "Reassinatura pendente"
+    return {"status": status, "versao": versao_atual, "assinado_em": assinado_em, "versao_assinada": versao_ref}
+
+
+def salvar_assinatura_portal(setor: str, chapa: str, ano: int, mes: int, tipo: str):
+    setor = _norm_setor(setor)
+    chapa = _norm_chapa(chapa)
+    tipo = str(tipo or 'oficial').strip().lower()
+    versao_ref = get_portal_version(setor, chapa, ano, mes)
+    agora = datetime.now().isoformat()
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute(
+        """
+        INSERT INTO portal_assinaturas(setor, chapa, ano, mes, tipo, versao_ref, assinado_em)
+        VALUES(?,?,?,?,?,?,?)
+        ON CONFLICT(setor, chapa, ano, mes, tipo)
+        DO UPDATE SET versao_ref=excluded.versao_ref, assinado_em=excluded.assinado_em
+        """,
+        (setor, chapa, int(ano), int(mes), tipo, int(versao_ref), agora),
+    )
+    con.commit()
+    con.close()
+
+
+def list_solicitacoes_colaborador(setor: str, chapa: str) -> pd.DataFrame:
+    setor = _norm_setor(setor)
+    chapa = _norm_chapa(chapa)
+    con = db_conn()
+    try:
+        df = pd.read_sql_query(
+            """
+            SELECT id AS 'ID', data_solicitada AS 'Data solicitada', tipo AS 'Tipo',
+                   COALESCE(motivo,'') AS 'Motivo', COALESCE(observacao,'') AS 'Observação',
+                   status AS 'Status', criado_em AS 'Criado em', atualizado_em AS 'Atualizado em'
+            FROM portal_solicitacoes_folga
+            WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?
+            ORDER BY datetime(criado_em) DESC, id DESC
+            """,
+            con,
+            params=(setor, chapa),
+        )
+    finally:
+        con.close()
+    return df
+
+
+def criar_solicitacao_folga(setor: str, chapa: str, data_solicitada: str, tipo: str, motivo: str, observacao: str):
+    setor = _norm_setor(setor)
+    chapa = _norm_chapa(chapa)
+    agora = datetime.now().isoformat()
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute(
+        """
+        INSERT INTO portal_solicitacoes_folga(setor, chapa, data_solicitada, tipo, motivo, observacao, status, criado_em, atualizado_em)
+        VALUES(?,?,?,?,?,?,?,?,?)
+        """,
+        (setor, chapa, str(data_solicitada), str(tipo), str(motivo or '').strip(), str(observacao or '').strip(), 'Em análise', agora, agora),
+    )
+    con.commit()
+    con.close()
+
+
+def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
+    setor = _norm_setor(auth.get('setor', ''))
+    chapa = _norm_chapa(auth.get('chapa', ''))
+    nome = auth.get('nome', '-')
+    colab = get_colaborador_record(setor, chapa) or {
+        'Nome': nome,
+        'Chapa': chapa,
+        'Subgrupo': 'SEM SUBGRUPO',
+        'Entrada': '06:00',
+        'Folga_Sab': False,
+        'Setor': setor,
+    }
+
+    st.markdown("### 👤 Portal do Colaborador")
+    i1, i2, i3, i4 = st.columns(4)
+    i1.info(f"**Nome**\n\n{colab.get('Nome','-')}")
+    i2.info(f"**Setor**\n\n{setor}")
+    i3.info(f"**Subgrupo**\n\n{colab.get('Subgrupo','SEM SUBGRUPO')}")
+    i4.info(f"**Chapa**\n\n{chapa}")
+
+    tab1, tab2, tab3, tab4 = st.tabs([
+        '📋 Escala Oficial',
+        '🕒 Pré-Escala',
+        '📝 Histórico de Mudanças',
+        '🌴 Solicitação de Folga',
+    ])
+
+    with tab1:
+        st.markdown(f"#### Escala oficial — {mes_cfg:02d}/{ano_cfg}")
+        df_oficial = get_escala_colaborador_mes(setor, chapa, int(ano_cfg), int(mes_cfg))
+        ass = get_assinatura_status(setor, chapa, int(ano_cfg), int(mes_cfg), 'oficial')
+        c1, c2, c3 = st.columns(3)
+        c1.metric('Versão atual', ass.get('versao', 1))
+        c2.metric('Status da assinatura', ass.get('status', 'Pendente'))
+        c3.metric('Mudanças registradas', max(0, int(ass.get('versao', 1)) - 1))
+        if ass.get('assinado_em'):
+            st.caption(f"Última assinatura: {ass.get('assinado_em')}")
+        if df_oficial.empty:
+            st.info('Ainda não há escala carregada para esta competência.')
+        else:
+            st.dataframe(df_oficial, use_container_width=True, hide_index=True)
+            if st.button('✅ Assinar escala oficial', key=f'ass_oficial_{setor}_{chapa}_{ano_cfg}_{mes_cfg}'):
+                salvar_assinatura_portal(setor, chapa, int(ano_cfg), int(mes_cfg), 'oficial')
+                st.success('Escala oficial assinada com sucesso.')
+                st.rerun()
+
+    with tab2:
+        prox_mes = int(mes_cfg) + 1
+        prox_ano = int(ano_cfg)
+        if prox_mes > 12:
+            prox_mes = 1
+            prox_ano += 1
+        st.markdown(f"#### Pré-escala — {prox_mes:02d}/{prox_ano}")
+        st.warning('Prévia do próximo mês. Ainda não é oficial e pode ser alterada até a liberação do líder.')
+        df_pre = get_escala_colaborador_mes(setor, chapa, prox_ano, prox_mes)
+        if df_pre.empty:
+            st.info('Ainda não há pré-escala disponível para o próximo mês.')
+        else:
+            st.dataframe(df_pre, use_container_width=True, hide_index=True)
+
+    with tab3:
+        st.markdown(f"#### Histórico de mudanças — {mes_cfg:02d}/{ano_cfg}")
+        hist = get_overrides_colaborador_mes(setor, chapa, int(ano_cfg), int(mes_cfg))
+        ass_hist = get_assinatura_status(setor, chapa, int(ano_cfg), int(mes_cfg), 'historico')
+        h1, h2 = st.columns(2)
+        h1.metric('Status do aceite das mudanças', ass_hist.get('status', 'Pendente'))
+        h2.metric('Versão das mudanças', ass_hist.get('versao', 1))
+        if ass_hist.get('assinado_em'):
+            st.caption(f"Último aceite das mudanças: {ass_hist.get('assinado_em')}")
+        if hist.empty:
+            st.info('Nenhuma mudança registrada no mês vigente para esta chapa.')
+        else:
+            hist = hist.copy()
+            hist['Assinatura'] = ass_hist.get('status', 'Pendente')
+            hist = hist[[c for c in ['Dia','Campo','Novo valor','Assinatura'] if c in hist.columns]]
+            st.dataframe(hist, use_container_width=True, hide_index=True)
+            if st.button('✍️ Assinar mudanças do mês vigente', key=f'ass_hist_{setor}_{chapa}_{ano_cfg}_{mes_cfg}'):
+                salvar_assinatura_portal(setor, chapa, int(ano_cfg), int(mes_cfg), 'historico')
+                st.success('Histórico de mudanças assinado com sucesso.')
+                st.rerun()
+
+    with tab4:
+        st.markdown('#### Solicitação de folga')
+        c1, c2 = st.columns(2)
+        data_padrao = datetime(int(ano_cfg), int(mes_cfg), 1).date()
+        data_sol = c1.date_input('Data solicitada', value=data_padrao, key=f'data_folga_{setor}_{chapa}')
+        tipo_sol = c2.selectbox('Tipo', ['Folga', 'Troca de plantão', 'Ajuste de horário'], key=f'tipo_folga_{setor}_{chapa}')
+        motivo = st.text_input('Motivo', key=f'motivo_folga_{setor}_{chapa}')
+        observacao = st.text_area('Observação', key=f'obs_folga_{setor}_{chapa}')
+        if st.button('📨 Enviar solicitação', key=f'env_folga_{setor}_{chapa}'):
+            criar_solicitacao_folga(setor, chapa, str(data_sol), tipo_sol, motivo, observacao)
+            st.success('Solicitação enviada para análise.')
+            st.rerun()
+        df_sol = list_solicitacoes_colaborador(setor, chapa)
+        st.markdown('##### Minhas solicitações')
+        if df_sol.empty:
+            st.info('Nenhuma solicitação enviada até agora.')
+        else:
+            st.dataframe(df_sol, use_container_width=True, hide_index=True)
+
+
 def page_app():
     auth = st.session_state.get("auth") or {}
     setor = auth.get("setor", "GERAL")
@@ -7027,11 +7325,15 @@ def page_app():
         st.caption("Acesso por setor (usuário / líder / admin)")
 
         cA, cB = st.columns([1, 1])
+        perfil_label = 'ADMIN' if auth.get('is_admin', False) else ('LÍDER' if auth.get('is_lider', False) else 'COLABORADOR')
         cA.write(f"**Nome:** {auth.get('nome','-')}")
-        cB.write(f"**Perfil:** {'ADMIN' if auth.get('is_admin', False) else ('LÍDER' if auth.get('is_lider', False) else 'USUÁRIO')}")
+        cB.write(f"**Perfil:** {perfil_label}")
 
         st.write(f"**Setor:** {setor}")
         st.write(f"**Chapa:** {auth.get('chapa','-')}")
+        if not auth.get('is_admin', False) and not auth.get('is_lider', False):
+            _colab_sb = get_colaborador_record(setor, auth.get('chapa',''))
+            st.write(f"**Subgrupo:** {(_colab_sb or {}).get('Subgrupo', 'SEM SUBGRUPO')}")
 
         st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
 
@@ -7055,7 +7357,9 @@ def page_app():
         page_gestao_dashboard(int(st.session_state["cfg_ano"]), int(st.session_state["cfg_mes"]))
         return
 
-        
+    if not auth.get("is_admin", False) and not auth.get("is_lider", False):
+        page_portal_colaborador(auth, int(st.session_state["cfg_ano"]), int(st.session_state["cfg_mes"]))
+        return
 
     # =========================
     # KPIs
@@ -8685,7 +8989,7 @@ def _fast_restore_bundled_latest_before_start() -> None:
                 shutil.copy2(backup, db_path)
                 try:
                     latest_local = Path(BACKUP_DIR) / "latest_stable.db"
-                    latest_local.parent.mkdir(parents=True, exist_ok=True) 
+                    latest_local.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(backup, latest_local)
                 except Exception:
                     pass
