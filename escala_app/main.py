@@ -1097,10 +1097,10 @@ SUPABASE_AUTO_PULL_ON_START = (os.getenv("SUPABASE_AUTO_PULL_ON_START", "0") or 
 SUPABASE_AUTO_PUSH_ON_COMMIT = (os.getenv("SUPABASE_AUTO_PUSH_ON_COMMIT", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
 SUPABASE_AUTO_PUSH_ON_CLOSE = (os.getenv("SUPABASE_AUTO_PUSH_ON_CLOSE", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
 SUPABASE_AUTO_BOOTSTRAP_AFTER_SCHEMA = (os.getenv("SUPABASE_AUTO_BOOTSTRAP_AFTER_SCHEMA", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
-SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY = (os.getenv("SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
+SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY = (os.getenv("SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
 FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP = (os.getenv("FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
 FAST_BACKUP_DISABLE_ROLLING_ON_COMMIT = (os.getenv("FAST_BACKUP_DISABLE_ROLLING_ON_COMMIT", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
-FAST_SNAPSHOT_THROTTLE_SECONDS = int((os.getenv("FAST_SNAPSHOT_THROTTLE_SECONDS", "300") or "300").strip())
+FAST_SNAPSHOT_THROTTLE_SECONDS = int((os.getenv("FAST_SNAPSHOT_THROTTLE_SECONDS", "1800") or "1800").strip())
 FAST_SNAPSHOT_SKIP_ON_CLOSE = (os.getenv("FAST_SNAPSHOT_SKIP_ON_CLOSE", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
 _LAST_SNAPSHOT_TS = 0.0
 _LAST_SNAPSHOT_DB_MTIME = 0.0
@@ -2083,12 +2083,37 @@ def _ensure_runtime_storage_ready(force: bool = False):
         now_ts = 0.0
     if (not force) and _RUNTIME_READY and (now_ts - float(_RUNTIME_READY_AT or 0.0) < float(_RUNTIME_READY_TTL_SEC)):
         return
+
     _ensure_backup_dir()
-    _adopt_bundled_latest_stable_if_needed(force=False)
-    _migrate_legacy_db_if_needed()
-    _adopt_best_db_candidate_if_needed()
-    _restore_from_latest_stable_if_needed()
-    _adopt_best_db_candidate_if_needed()
+    current = Path(DB_PATH)
+
+    # BOOT MÍNIMO: se já existe banco local com tamanho > 0, não faz varredura pesada.
+    try:
+        if current.exists() and current.stat().st_size > 0 and not force:
+            _RUNTIME_READY = True
+            _RUNTIME_READY_AT = now_ts
+            return
+    except Exception:
+        pass
+
+    # Só tenta restauração leve a partir do latest_stable embutido/local.
+    try:
+        _adopt_bundled_latest_stable_if_needed(force=False)
+    except Exception:
+        pass
+    try:
+        _restore_from_latest_stable_if_needed()
+    except Exception:
+        pass
+
+    # Fallback leve para banco legado somente se ainda não houver DB local.
+    try:
+        if (not current.exists()) or current.stat().st_size == 0:
+            _migrate_legacy_db_if_needed()
+    except Exception:
+        pass
+
+    # Supabase no boot só se o usuário ligar explicitamente por variável de ambiente.
     if SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY:
         try:
             _restore_from_supabase_if_local_empty(force=False)
@@ -2100,6 +2125,7 @@ def _ensure_runtime_storage_ready(force: bool = False):
                 _supabase_pull_all_to_sqlite(force=True)
         except Exception:
             pass
+
     _RUNTIME_READY = True
     _RUNTIME_READY_AT = now_ts
 
