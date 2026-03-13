@@ -4414,6 +4414,12 @@ def load_escala_mes_db(setor: str, ano: int, mes: int):
         })
     return {ch: pd.DataFrame(items) for ch, items in hist.items()}
 
+
+@st.cache_data(show_spinner=False, ttl=120)
+def get_hist_mes_com_overrides_cached(setor: str, ano: int, mes: int):
+    hist_db = load_escala_mes_db(setor, ano, mes)
+    return apply_overrides_to_hist(setor, ano, mes, hist_db)
+
 def apply_overrides_to_hist(setor: str, ano: int, mes: int, hist_db: dict[str, pd.DataFrame]):
     """
     Aplica overrides no histórico carregado do banco.
@@ -7300,8 +7306,7 @@ def page_app():
 
             if st.session_state.get(preview_key, False):
                 with st.spinner("Carregando calendário do mês..."):
-                    hist_db = load_escala_mes_db(setor, int(ano), int(mes))
-                    hist_db = apply_overrides_to_hist(setor, int(ano), int(mes), hist_db)
+                    hist_db = get_hist_mes_com_overrides_cached(setor, int(ano), int(mes))
 
                 if hist_db:
                     colab_by = {c["Chapa"]: c for c in colaboradores}
@@ -7337,16 +7342,22 @@ def page_app():
             c2.caption("Alterar em 🗓️ Competência (sidebar)")
             c3.caption("Ajustes aplicam na competência ativa.")
 
-        hist_db = load_escala_mes_db(setor, ano, mes)
-        colaboradores = load_colaboradores_setor(setor)
-        colab_by = {c["Chapa"]: c for c in colaboradores}
+        sec_aj = st.radio("", ["🧩 Folgas manuais em grade", "🔁 Troca de horários", "✅ Preferência por subgrupo", "📌 Subgrupos (editável)"], horizontal=True, key="ajustes_nav_fast", label_visibility="collapsed")
 
-        if not hist_db:
-            st.info("Gere a escala primeiro na aba 🚀 Gerar Escala.")
-        else:
-            hist_db = apply_overrides_to_hist(setor, ano, mes, hist_db)
+        _ajustes_precisam_escala = sec_aj in ("🧩 Folgas manuais em grade", "🔁 Troca de horários")
+        hist_db = {}
+        colaboradores = []
+        colab_by = {}
 
-            sec_aj = st.radio("", ["🧩 Folgas manuais em grade", "🔁 Troca de horários", "✅ Preferência por subgrupo", "📌 Subgrupos (editável)"], horizontal=True, key="ajustes_nav_fast", label_visibility="collapsed")
+        if _ajustes_precisam_escala:
+            with st.spinner("Carregando dados dos ajustes..."):
+                hist_db = get_hist_mes_com_overrides_cached(setor, ano, mes)
+                colaboradores = load_colaboradores_setor(setor)
+                colab_by = {c["Chapa"]: c for c in colaboradores}
+
+            if not hist_db:
+                st.info("Gere a escala primeiro na aba 🚀 Gerar Escala.")
+                return
 
             if sec_aj == "🧩 Folgas manuais em grade":
                 st.markdown("### 🧩 Folgas manuais em grade (por colaborador)")
