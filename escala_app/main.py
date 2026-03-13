@@ -3741,8 +3741,7 @@ def update_colaborador_perfil(setor: str, chapa_antiga: str, chapa_nova: str, no
     except Exception:
         pass
 
-@st.cache_data(show_spinner=False)
-@st.cache_data(show_spinner=False, ttl=30)
+@st.cache_data(show_spinner=False, ttl=120)
 def load_colaboradores_setor(setor: str):
     con = db_conn()
     cur = con.cursor()
@@ -3766,22 +3765,32 @@ def load_colaboradores_setor(setor: str):
 # =========================================================
 # SUBGRUPOS + REGRAS
 # =========================================================
-@st.cache_data(show_spinner=False)
-@st.cache_data(show_spinner=False, ttl=30)
+@st.cache_data(show_spinner=False, ttl=120)
 def get_kpis_cached(setor: str, ano: int, mes: int):
-    colaboradores_k = load_colaboradores_setor(setor)
-    total_colab = len(colaboradores_k)
+    """KPI leve: usa agregações SQL diretas para evitar montar todo hist_db no topo da tela."""
+    con = db_conn()
+    cur = con.cursor()
+    try:
+        cur.execute("SELECT COUNT(*) FROM colaboradores WHERE setor=?", (setor,))
+        total_colab = int((cur.fetchone() or [0])[0] or 0)
 
-    hist_db_kpi = load_escala_mes_db(setor, int(ano), int(mes))
-    if hist_db_kpi:
-        hist_db_kpi = apply_overrides_to_hist(setor, int(ano), int(mes), hist_db_kpi)
-
-    folgas_mes = ferias_mes = trabalhos_mes = 0
-    if hist_db_kpi:
-        for _, dfk in hist_db_kpi.items():
-            folgas_mes += int((dfk["Status"] == "Folga").sum())
-            ferias_mes += int((dfk["Status"] == "Férias").sum())
-            trabalhos_mes += int(dfk["Status"].isin(WORK_STATUSES).sum())
+        cur.execute(
+            """
+            SELECT
+                COALESCE(SUM(CASE WHEN status='Folga' THEN 1 ELSE 0 END),0) AS folgas,
+                COALESCE(SUM(CASE WHEN status='Férias' THEN 1 ELSE 0 END),0) AS ferias,
+                COALESCE(SUM(CASE WHEN status IN ('Trabalho','Balanço') THEN 1 ELSE 0 END),0) AS trabalhos
+            FROM escala_mes
+            WHERE setor=? AND ano=? AND mes=?
+            """,
+            (setor, int(ano), int(mes)),
+        )
+        row = cur.fetchone() or (0, 0, 0)
+        folgas_mes = int(row[0] or 0)
+        ferias_mes = int(row[1] or 0)
+        trabalhos_mes = int(row[2] or 0)
+    finally:
+        con.close()
 
     return {
         "total_colab": int(total_colab),
@@ -3790,7 +3799,7 @@ def get_kpis_cached(setor: str, ano: int, mes: int):
         "trabalhos_mes": int(trabalhos_mes),
     }
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=300)
 def list_subgrupos(setor: str):
     con = db_conn()
     cur = con.cursor()
@@ -3897,7 +3906,7 @@ def delete_ferias_row(setor: str, chapa: str, inicio: str, fim: str):
     except Exception:
         pass
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=120)
 def list_ferias(setor: str):
     con = db_conn()
     cur = con.cursor()
@@ -4211,7 +4220,7 @@ def delete_overrides_mes(setor: str, ano: int, mes: int, keep_campos: set[str] |
     except Exception:
         pass
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=120)
 def load_overrides(setor: str, ano: int, mes: int):
     con = db_conn()
     df = pd.read_sql_query("""
@@ -4382,7 +4391,7 @@ def save_escala_mes_db(setor: str, ano: int, mes: int, historico_df_por_chapa: d
     except Exception:
         pass
 
-@st.cache_data(show_spinner=False, ttl=30)
+@st.cache_data(show_spinner=False, ttl=120)
 def load_escala_mes_db(setor: str, ano: int, mes: int):
     con = db_conn()
     cur = con.cursor()
@@ -7277,25 +7286,41 @@ def page_app():
                     st.rerun()
 
 
-            hist_db = load_escala_mes_db(setor, int(ano), int(mes))
-            hist_db = apply_overrides_to_hist(setor, int(ano), int(mes), hist_db)
+            preview_key = f"gerar_preview_loaded_{setor}_{ano}_{mes}"
+            if preview_key not in st.session_state:
+                st.session_state[preview_key] = False
 
-            if hist_db:
-                colab_by = {c["Chapa"]: c for c in colaboradores}
-                st.markdown("### 📅 Calendário RH (visual por colaborador)")
-                cal = calendario_rh_df(hist_db, colab_by)
-                show_color = st.checkbox("🎨 Mostrar cores no calendário (pode deixar lento)", value=False, key="cal_color")
-                if show_color:
-                    st.dataframe(style_calendario(cal, int(mes), int(ano)), use_container_width=True)
+            cprev1, cprev2 = st.columns([1, 5])
+            if cprev1.button("📅 Carregar calendário", use_container_width=True, key=f"btn_load_preview_{setor}_{ano}_{mes}"):
+                st.session_state[preview_key] = True
+                st.rerun()
+            if cprev2.button("🧹 Ocultar visualização", use_container_width=True, key=f"btn_hide_preview_{setor}_{ano}_{mes}"):
+                st.session_state[preview_key] = False
+                st.rerun()
+
+            if st.session_state.get(preview_key, False):
+                with st.spinner("Carregando calendário do mês..."):
+                    hist_db = load_escala_mes_db(setor, int(ano), int(mes))
+                    hist_db = apply_overrides_to_hist(setor, int(ano), int(mes), hist_db)
+
+                if hist_db:
+                    colab_by = {c["Chapa"]: c for c in colaboradores}
+                    st.markdown("### 📅 Calendário RH (visual por colaborador)")
+                    cal = calendario_rh_df(hist_db, colab_by)
+                    show_color = st.checkbox("🎨 Mostrar cores no calendário (pode deixar lento)", value=False, key="cal_color")
+                    if show_color:
+                        st.dataframe(style_calendario(cal, int(mes), int(ano)), use_container_width=True)
+                    else:
+                        st.dataframe(cal, use_container_width=True)
+
+                    st.markdown("---")
+                    st.markdown("### 👤 Visualizar colaborador (detalhado)")
+                    ch_view = st.selectbox("Chapa:", list(hist_db.keys()), key="view_ch")
+                    st.dataframe(hist_db[ch_view], use_container_width=True, height=420)
                 else:
-                    st.dataframe(cal, use_container_width=True)
-
-                st.markdown("---")
-                st.markdown("### 👤 Visualizar colaborador (detalhado)")
-                ch_view = st.selectbox("Chapa:", list(hist_db.keys()), key="view_ch")
-                st.dataframe(hist_db[ch_view], use_container_width=True, height=420)
+                    st.info("Sem escala no mês. Clique em **Gerar agora**.")
             else:
-                st.info("Sem escala no mês. Clique em **Gerar agora**.")
+                st.info("Visualização pesada ficou sob demanda para deixar a navegação mais rápida. Clique em **Carregar calendário** quando quiser ver a escala do mês.")
 
     # ------------------------------------------------------
     # ABA 3: Ajustes
