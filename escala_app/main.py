@@ -74,6 +74,7 @@ import unicodedata
 import time
 import json
 import requests
+import base64
 
 import hashlib
 import secrets
@@ -1080,6 +1081,83 @@ ROTATING_BACKUP_KEEP = int((os.getenv("ROTATING_BACKUP_KEEP", "12") or "12").str
 ROTATING_BACKUP_PREFIX = "rolling"
 
 # =========================================================
+# GITHUB AUTOSAVE DO latest_stable.db
+# =========================================================
+GITHUB_REPO = (os.getenv("GITHUB_REPO") or "ewerlonosbadboys-eng/glicemia-ia").strip()
+GITHUB_BRANCH = (os.getenv("GITHUB_BRANCH") or "main").strip()
+GITHUB_LATEST_STABLE_PATH = (os.getenv("GITHUB_LATEST_STABLE_PATH") or "escala_app/latest_stable.db").strip()
+GITHUB_AUTO_PUSH_LATEST_STABLE = (os.getenv("GITHUB_AUTO_PUSH_LATEST_STABLE", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
+GITHUB_PUSH_DEBOUNCE_SEC = int((os.getenv("GITHUB_PUSH_DEBOUNCE_SEC", "20") or "20").strip() or 20)
+_GITHUB_LAST_PUSH_TS = 0.0
+_GITHUB_LAST_PUSH_HASH = ""
+
+def _read_runtime_secret(name: str, default: str = "") -> str:
+    try:
+        val = os.getenv(name)
+        if val not in (None, ""):
+            return str(val).strip()
+    except Exception:
+        pass
+    try:
+        if hasattr(st, "secrets") and name in st.secrets:
+            return str(st.secrets[name]).strip()
+    except Exception:
+        pass
+    return str(default or "").strip()
+
+def _github_token() -> str:
+    return _read_runtime_secret("GITHUB_TOKEN", "")
+
+def _push_latest_stable_to_github(force: bool = False) -> bool:
+    global _GITHUB_LAST_PUSH_TS, _GITHUB_LAST_PUSH_HASH
+    try:
+        if not GITHUB_AUTO_PUSH_LATEST_STABLE:
+            return False
+        token = _github_token()
+        if not token:
+            return False
+        latest = Path(APP_DIR) / "latest_stable.db"
+        if not latest.exists() or not _validate_sqlite_file(str(latest)):
+            return False
+        raw = latest.read_bytes()
+        content_hash = hashlib.md5(raw).hexdigest()
+        now_ts = time.time()
+        if (not force) and content_hash == _GITHUB_LAST_PUSH_HASH and (now_ts - _GITHUB_LAST_PUSH_TS) < GITHUB_PUSH_DEBOUNCE_SEC:
+            return False
+
+        url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_LATEST_STABLE_PATH}"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+
+        sha = None
+        try:
+            r = requests.get(url, headers=headers, timeout=20)
+            if r.status_code == 200:
+                sha = (r.json() or {}).get("sha")
+        except Exception:
+            pass
+
+        payload = {
+            "message": f"auto backup latest_stable.db {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            "content": base64.b64encode(raw).decode("utf-8"),
+            "branch": GITHUB_BRANCH,
+        }
+        if sha:
+            payload["sha"] = sha
+
+        r2 = requests.put(url, headers=headers, json=payload, timeout=40)
+        if r2.status_code in (200, 201):
+            _GITHUB_LAST_PUSH_TS = now_ts
+            _GITHUB_LAST_PUSH_HASH = content_hash
+            return True
+    except Exception:
+        pass
+    return False
+
+# =========================================================
 # SUPABASE SYNC (mantém a lógica do app em SQLite local,
 # mas faz persistência remota para sobreviver a reboot)
 # =========================================================
@@ -1471,6 +1549,11 @@ def _save_latest_stable_snapshot_safely(include_rolling: bool = False) -> None:
 
         if include_rolling and not FAST_BACKUP_DISABLE_ROLLING_ON_COMMIT:
             _rotate_backup_files_safely()
+
+        try:
+            _push_latest_stable_to_github(force=include_rolling)
+        except Exception:
+            pass
     except Exception:
         pass
 
