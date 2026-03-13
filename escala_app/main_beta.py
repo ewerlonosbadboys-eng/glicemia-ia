@@ -6565,16 +6565,18 @@ def page_login():
         colA, colB = st.columns([1.4, 1.0])
         with colA:
             if recentes_opts_f:
+                recentes_labels = ["-- selecione --"] + [t[0] for t in recentes_opts_f]
                 pick = st.selectbox(
                     "Recentes (clique para preencher):",
-                    [t[0] for t in recentes_opts_f],
+                    recentes_labels,
                     index=0,
                     key="lg_recent_pick"
                 )
-                chosen = next((t for t in recentes_opts_f if t[0] == pick), None)
-                if chosen:
-                    st.session_state["lg_setor_txt"] = chosen[1]
-                    st.session_state["lg_chapa"] = chosen[2]
+                if pick != "-- selecione --":
+                    chosen = next((t for t in recentes_opts_f if t[0] == pick), None)
+                    if chosen:
+                        st.session_state["lg_setor_txt"] = chosen[1]
+                        st.session_state["lg_chapa"] = chosen[2]
 
         with colB:
             lembrar = st.checkbox("✅ Salvar setor/chapa neste dispositivo", value=True, key="lg_remember")
