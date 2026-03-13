@@ -1,4 +1,3 @@
-
 # V84 BASE — DISTRIBUIÇÃO INTELIGENTE POR SEMANA DO SUBGRUPO
 # Arquivo preparado como continuação de testes sobre a V83.
 # Objetivo desta base: evoluir o motor para distribuir folgas pela semana real
@@ -6529,20 +6528,20 @@ def page_login():
         finally:
             con.close()
 
-    st.title("🔐 Login por Setor (Usuário / Líder / Admin)")
+    st.title("🔐 Login por Setor (Colaborador / Líder / Admin)")
 
     if _RESTORE_GUARD_ACTIVE:
         st.error(_RESTORE_GUARD_MESSAGE or "Base não restaurada. Login bloqueado para evitar abrir um banco vazio.")
         st.info("Publique o latest_stable.db junto do projeto ou confirme que o Supabase tem os dados completos antes de liberar o login.")
         st.stop()
 
-    login_sec = st.radio("", ["Entrar", "Cadastrar Usuário do Sistema", "Esqueci a senha"], horizontal=True, key="login_nav_fast", label_visibility="collapsed")
+    login_sec = st.radio("", ["Entrar", "Cadastro do Colaborador", "Esqueci a senha"], horizontal=True, key="login_nav_fast", label_visibility="collapsed")
 
     if login_sec == "Entrar":
         setores = _cache_login_setores()
         rec2 = _cache_login_recent()
 
-        st.caption("🔎 Buscar (setor / chapa / nome) — pode digitar em minúsculo (ex.: flv).")
+        st.caption("🔎 Buscar acesso / escala por setor, chapa ou nome — pode digitar em minúsculo (ex.: flv).")
         kw = st.text_input("Buscar acesso:", value=st.session_state.get("lg_kw", ""), key="lg_kw").strip()
 
         # opções recentes
@@ -6624,33 +6623,50 @@ def page_login():
                 else:
                     st.error("Usuário ou senha inválidos.")
 
-        st.caption("Admin padrão: setor ADMIN | chapa admin | senha 123")
+        st.caption("Admin padrão: setor ADMIN | chapa admin | senha 123. Criação de setor/líder/admin permanece na aba Admin.")
 
-    elif login_sec == "Cadastrar Usuário do Sistema":
-        st.subheader("Cadastrar usuário do sistema (com senha)")
-        st.info("⚠️ Somente usuário do sistema tem senha. Colaborador é SEM senha.")
-        nome = st.text_input("Nome:", key="cl_nome")
-        setor = _norm_setor(st.text_input("Setor:", key="cl_setor"))
+    elif login_sec == "Cadastro do Colaborador":
+        st.subheader("Primeiro acesso do colaborador")
+        st.info("Use setor + chapa para localizar sua escala. Nome, criação de setor e perfis de líder/admin continuam na aba Admin.")
+        con = db_conn()
+        try:
+            setores_df = pd.concat([
+                pd.read_sql_query("SELECT nome AS setor FROM setores", con),
+                pd.read_sql_query("SELECT DISTINCT setor FROM colaboradores", con),
+                pd.read_sql_query("SELECT DISTINCT setor FROM usuarios_sistema", con),
+            ], ignore_index=True)
+            setores = sorted({_norm_setor(x) for x in setores_df["setor"].dropna().tolist() if str(x).strip()})
+        finally:
+            con.close()
+
+        setor = st.selectbox("Setor:", setores, key="cl_setor") if setores else st.text_input("Setor:", key="cl_setor_txt")
         chapa = st.text_input("Chapa:", key="cl_chapa")
-        senha = st.text_input("Senha:", type="password", key="cl_senha")
+        senha = st.text_input("Criar senha:", type="password", key="cl_senha")
         senha2 = st.text_input("Confirmar senha:", type="password", key="cl_senha2")
-        is_admin = st.checkbox("Admin?", key="cl_admin")
-        is_lider = st.checkbox("Líder?", value=False, key="cl_lider")
 
-        if st.button("Criar usuário", key="cl_btn"):
-            if not nome or not setor or not chapa or not senha:
-                st.error("Preencha tudo.")
+        if st.button("Criar acesso", key="cl_btn"):
+            setor_n = _norm_setor(setor)
+            chapa_n = _norm_chapa(chapa)
+            if not setor_n or not chapa_n or not senha:
+                st.error("Preencha setor, chapa e senha.")
             elif senha != senha2:
                 st.error("Senhas não conferem.")
-            elif system_user_exists(setor, chapa):
-                st.error("Já existe.")
             else:
-                create_system_user(nome.strip(), setor, _norm_chapa(chapa), senha, is_lider=1 if is_lider else 0, is_admin=1 if is_admin else 0)
-                st.success("Criado! Faça login.")
-                st.rerun()
+                row = colaborador_lookup(setor_n, chapa_n)
+                if not row:
+                    st.error("Colaborador não encontrado neste setor. Confira setor e chapa ou peça ajuste ao Admin.")
+                else:
+                    nome_db, setor_db, chapa_db = row
+                    if system_user_exists(setor_db, chapa_db):
+                        st.error("Este colaborador já possui acesso. Use Entrar ou Esqueci a senha.")
+                    else:
+                        create_system_user(nome_db or chapa_db, setor_db, chapa_db, senha, is_lider=0, is_admin=0)
+                        st.success("Acesso criado com sucesso. Agora faça login com setor + chapa + senha.")
+                        st.rerun()
 
     elif login_sec == "Esqueci a senha":
-        st.subheader("Redefinir senha (com chapa do líder do setor)")
+        st.subheader("Redefinir senha do colaborador")
+        st.caption("A recuperação usa setor + chapa, que também são a chave para buscar sua escala no portal.")
         con = db_conn()
         setores_df = pd.concat([
             pd.read_sql_query("SELECT nome AS setor FROM setores", con),
@@ -6660,25 +6676,30 @@ def page_login():
         setores = sorted({_norm_setor(x) for x in setores_df["setor"].dropna().tolist() if str(x).strip()})
         con.close()
 
-        setor = st.selectbox("Setor:", setores, key="fp_setor")
-        chapa = st.text_input("Sua chapa (usuário do sistema):", key="fp_chapa")
-        chapa_lider = st.text_input("Chapa do líder:", key="fp_lider")
+        setor = st.selectbox("Setor:", setores, key="fp_setor") if setores else st.text_input("Setor:", key="fp_setor_txt")
+        chapa = st.text_input("Chapa:", key="fp_chapa")
         nova = st.text_input("Nova senha:", type="password", key="fp_nova")
-        nova2 = st.text_input("Confirmar:", type="password", key="fp_nova2")
+        nova2 = st.text_input("Confirmar senha:", type="password", key="fp_nova2")
 
         if st.button("Redefinir", key="fp_btn"):
-            if not chapa or not chapa_lider or not nova:
-                st.error("Preencha.")
+            setor_n = _norm_setor(setor)
+            chapa_n = _norm_chapa(chapa)
+            if not setor_n or not chapa_n or not nova:
+                st.error("Preencha setor, chapa e nova senha.")
             elif nova != nova2:
                 st.error("Senhas não conferem.")
-            elif not system_user_exists(setor, chapa):
-                st.error("Usuário não encontrado.")
-            elif not is_lider_chapa(setor, chapa_lider):
-                st.error("Chapa do líder inválida.")
             else:
-                update_password(setor, chapa, nova)
-                st.success("Senha alterada.")
-                st.rerun()
+                row = colaborador_lookup(setor_n, chapa_n)
+                if not row:
+                    st.error("Colaborador não encontrado neste setor.")
+                else:
+                    nome_db, setor_db, chapa_db = row
+                    if system_user_exists(setor_db, chapa_db):
+                        update_password(setor_db, chapa_db, nova)
+                    else:
+                        create_system_user(nome_db or chapa_db, setor_db, chapa_db, nova, is_lider=0, is_admin=0)
+                    st.success("Senha redefinida com sucesso. Faça login com setor + chapa + senha.")
+                    st.rerun()
 
 def _regenerar_mes_inteiro(setor: str, ano: int, mes: int, seed: int = 0, respeitar_ajustes: bool = True):
     """
