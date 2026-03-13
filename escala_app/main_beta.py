@@ -8685,7 +8685,7 @@ def _fast_restore_bundled_latest_before_start() -> None:
                 shutil.copy2(backup, db_path)
                 try:
                     latest_local = Path(BACKUP_DIR) / "latest_stable.db"
-                    latest_local.parent.mkdir(parents=True, exist_ok=True)
+                    latest_local.parent.mkdir(parents=True, exist_ok=True) 
                     shutil.copy2(backup, latest_local)
                 except Exception:
                     pass
