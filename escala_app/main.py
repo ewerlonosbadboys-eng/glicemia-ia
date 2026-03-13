@@ -74,6 +74,7 @@ import unicodedata
 import time
 import json
 import requests
+import base64
 
 import hashlib
 import secrets
@@ -1200,7 +1201,7 @@ FAST_SNAPSHOT_THROTTLE_SECONDS = int((os.getenv("FAST_SNAPSHOT_THROTTLE_SECONDS"
 FAST_SNAPSHOT_SKIP_ON_CLOSE = (os.getenv("FAST_SNAPSHOT_SKIP_ON_CLOSE", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
 _LAST_SNAPSHOT_TS = 0.0
 _LAST_SNAPSHOT_DB_MTIME = 0.0
-RESTORE_GUARD_ENABLED = (os.getenv("RESTORE_GUARD_ENABLED", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
+RESTORE_GUARD_ENABLED = False
 _RESTORE_GUARD_ACTIVE = False
 _RESTORE_GUARD_MESSAGE = ""
 
@@ -8754,19 +8755,26 @@ def _fast_restore_bundled_latest_before_start() -> None:
             app_dir / "data" / "latest_stable.db",
         ]
         data_dir.mkdir(parents=True, exist_ok=True)
-        db_ok = db_path.exists() and db_path.stat().st_size > 0
+        db_ok = False
+        try:
+            db_ok = db_path.exists() and db_path.stat().st_size > 0 and _validate_sqlite_file(str(db_path))
+        except Exception:
+            db_ok = False
         if db_ok:
             return
         for backup in backup_candidates:
-            if backup.exists() and backup.stat().st_size > 0:
-                shutil.copy2(backup, db_path)
-                try:
-                    latest_local = Path(BACKUP_DIR) / "latest_stable.db"
-                    latest_local.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(backup, latest_local)
-                except Exception:
-                    pass
-                break
+            try:
+                if backup.exists() and backup.stat().st_size > 0 and _validate_sqlite_file(str(backup)):
+                    shutil.copy2(backup, db_path)
+                    try:
+                        latest_local = Path(BACKUP_DIR) / "latest_stable.db"
+                        latest_local.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(backup, latest_local)
+                    except Exception:
+                        pass
+                    break
+            except Exception:
+                continue
     except Exception:
         pass
 
