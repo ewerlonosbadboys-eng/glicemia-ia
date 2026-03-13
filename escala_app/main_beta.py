@@ -7203,6 +7203,69 @@ def criar_solicitacao_folga(setor: str, chapa: str, data_solicitada: str, tipo: 
     con.close()
 
 
+def _norm_subgrupo_label(v: str) -> str:
+    s = str(v or '').strip().upper()
+    s = unicodedata.normalize('NFKD', s)
+    s = ''.join(ch for ch in s if not unicodedata.combining(ch))
+    return s
+
+def colaborador_eh_lideranca(setor: str, chapa: str) -> bool:
+    rec = get_colaborador_record(setor, chapa)
+    sg = _norm_subgrupo_label((rec or {}).get('Subgrupo', ''))
+    return sg == 'LIDERANCA'
+
+def list_assinaturas_setor(setor: str, ano: int, mes: int) -> pd.DataFrame:
+    setor = _norm_setor(setor)
+    con = db_conn()
+    q = pd.read_sql_query(
+        """
+        SELECT p.setor AS Setor, p.chapa AS Chapa, COALESCE(c.nome, p.chapa) AS Nome,
+               COALESCE(c.subgrupo, 'SEM SUBGRUPO') AS Subgrupo,
+               p.ano AS Ano, p.mes AS Mes, p.tipo AS Tipo, p.versao_ref AS 'Versão', p.assinado_em AS Assinado_em
+        FROM portal_assinaturas p
+        LEFT JOIN colaboradores c
+          ON UPPER(TRIM(c.setor)) = UPPER(TRIM(p.setor))
+         AND TRIM(c.chapa) = TRIM(p.chapa)
+        WHERE UPPER(TRIM(p.setor)) = ? AND p.ano = ? AND p.mes = ?
+        ORDER BY p.tipo, COALESCE(c.nome, p.chapa)
+        """,
+        con, params=(setor, int(ano), int(mes))
+    )
+    con.close()
+    return q
+
+def list_solicitacoes_setor(setor: str) -> pd.DataFrame:
+    setor = _norm_setor(setor)
+    con = db_conn()
+    q = pd.read_sql_query(
+        """
+        SELECT s.id AS ID, s.setor AS Setor, s.chapa AS Chapa, COALESCE(c.nome, s.chapa) AS Nome,
+               COALESCE(c.subgrupo, 'SEM SUBGRUPO') AS Subgrupo,
+               s.data_solicitada AS Data, s.tipo AS Tipo, s.motivo AS Motivo, s.observacao AS 'Observação',
+               s.status AS Status, s.criado_em AS Criado_em, s.atualizado_em AS Atualizado_em
+        FROM portal_solicitacoes_folga s
+        LEFT JOIN colaboradores c
+          ON UPPER(TRIM(c.setor)) = UPPER(TRIM(s.setor))
+         AND TRIM(c.chapa) = TRIM(s.chapa)
+        WHERE UPPER(TRIM(s.setor)) = ?
+        ORDER BY s.criado_em DESC, s.id DESC
+        """,
+        con, params=(setor,)
+    )
+    con.close()
+    return q
+
+def atualizar_status_solicitacao(solicitacao_id: int, novo_status: str):
+    agora = datetime.now().isoformat()
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute(
+        'UPDATE portal_solicitacoes_folga SET status=?, atualizado_em=? WHERE id=?',
+        (str(novo_status), agora, int(solicitacao_id)),
+    )
+    con.commit()
+    con.close()
+
 def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
     setor = _norm_setor(auth.get('setor', ''))
     chapa = _norm_chapa(auth.get('chapa', ''))
@@ -7383,21 +7446,26 @@ def page_app():
         st.title("👤 Sessão")
         st.caption("Acesso por setor (usuário / líder / admin)")
 
+        _colab_sb = get_colaborador_record(setor, auth.get('chapa',''))
+        _subgrupo_auth = (_colab_sb or {}).get('Subgrupo', 'SEM SUBGRUPO')
+        _lideranca_ok = bool(auth.get('is_lider', False)) and colaborador_eh_lideranca(setor, auth.get('chapa',''))
+        _perfil_gestao = bool(auth.get('is_admin', False)) or _lideranca_ok
+
         cA, cB = st.columns([1, 1])
-        perfil_label = 'ADMIN' if auth.get('is_admin', False) else ('LÍDER' if auth.get('is_lider', False) else 'COLABORADOR')
+        perfil_label = 'ADMIN' if auth.get('is_admin', False) else ('LÍDER' if _lideranca_ok else 'COLABORADOR')
         cA.write(f"**Nome:** {auth.get('nome','-')}")
         cB.write(f"**Perfil:** {perfil_label}")
 
         st.write(f"**Setor:** {setor}")
         st.write(f"**Chapa:** {auth.get('chapa','-')}")
-        if not auth.get('is_admin', False) and not auth.get('is_lider', False):
-            _colab_sb = get_colaborador_record(setor, auth.get('chapa',''))
-            st.write(f"**Subgrupo:** {(_colab_sb or {}).get('Subgrupo', 'SEM SUBGRUPO')}")
+        st.write(f"**Subgrupo:** {_subgrupo_auth}")
+        if bool(auth.get('is_lider', False)) and not _lideranca_ok and not bool(auth.get('is_admin', False)):
+            st.warning('Perfil líder liberado somente para colaborador do subgrupo LIDERANÇA neste setor.')
 
         st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
 
         st.subheader("🗓️ Competência")
-        if not auth.get('is_admin', False) and not auth.get('is_lider', False):
+        if not _perfil_gestao:
             hoje = datetime.now()
             st.session_state["cfg_mes"] = int(hoje.month)
             st.session_state["cfg_ano"] = int(hoje.year)
@@ -7429,7 +7497,10 @@ def page_app():
         page_gestao_dashboard(int(st.session_state["cfg_ano"]), int(st.session_state["cfg_mes"]))
         return
 
-    if not auth.get("is_admin", False) and not auth.get("is_lider", False):
+    _lideranca_ok = bool(auth.get('is_lider', False)) and colaborador_eh_lideranca(setor, auth.get('chapa',''))
+    _perfil_gestao = bool(auth.get('is_admin', False)) or _lideranca_ok
+
+    if not _perfil_gestao:
         page_portal_colaborador(auth, int(st.session_state["cfg_ano"]), int(st.session_state["cfg_mes"]))
         return
 
@@ -7472,7 +7543,7 @@ def page_app():
     # =========================
     # ABAS
     # =========================
-    tabs = ["👥 Colaboradores", "🚀 Gerar Escala", "⚙️ Ajustes", "🏖️ Férias", "🖨️ Impressão"]
+    tabs = ["👥 Colaboradores", "🚀 Gerar Escala", "⚙️ Ajustes", "🏖️ Férias", "🖨️ Impressão", "✍️ Assinaturas", "📨 Minhas solicitações"]
     is_admin_area = bool(auth.get("is_admin", False)) and setor == "ADMIN"
     if is_admin_area:
         tabs.append("🔒 Admin")
@@ -9067,7 +9138,7 @@ def _fast_restore_bundled_latest_before_start() -> None:
                     pass
                 break
     except Exception:
-        pass 
+        pass
 
 
 # =========================================================
