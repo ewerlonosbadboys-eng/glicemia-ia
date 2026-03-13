@@ -1,3 +1,6 @@
+# V95.2 RESTORE FIXED — login liberado com base mínima temporária quando o restore automático falhar
+# Derivado do arquivo enviado pelo usuário e ajustado para não bloquear a abertura do app.
+
 # V84 BASE — DISTRIBUIÇÃO INTELIGENTE POR SEMANA DO SUBGRUPO
 # Arquivo preparado como continuação de testes sobre a V83.
 # Objetivo desta base: evoluir o motor para distribuir folgas pela semana real
@@ -1097,7 +1100,7 @@ SUPABASE_AUTO_PULL_ON_START = (os.getenv("SUPABASE_AUTO_PULL_ON_START", "0") or 
 SUPABASE_AUTO_PUSH_ON_COMMIT = (os.getenv("SUPABASE_AUTO_PUSH_ON_COMMIT", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
 SUPABASE_AUTO_PUSH_ON_CLOSE = (os.getenv("SUPABASE_AUTO_PUSH_ON_CLOSE", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
 SUPABASE_AUTO_BOOTSTRAP_AFTER_SCHEMA = (os.getenv("SUPABASE_AUTO_BOOTSTRAP_AFTER_SCHEMA", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
-SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY = (os.getenv("SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
+SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY = (os.getenv("SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
 FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP = (os.getenv("FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
 FAST_BACKUP_DISABLE_ROLLING_ON_COMMIT = (os.getenv("FAST_BACKUP_DISABLE_ROLLING_ON_COMMIT", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
 FAST_SNAPSHOT_THROTTLE_SECONDS = int((os.getenv("FAST_SNAPSHOT_THROTTLE_SECONDS", "300") or "300").strip())
@@ -3354,11 +3357,9 @@ def db_init():
     if _should_block_silent_empty_seed():
         fontes = _restore_sources_summary() or "fonte de restore configurada"
         detalhe = _SUPABASE_LAST_ERROR or "sem detalhe adicional"
-        _set_restore_guard(True, f"Base local vazia após a inicialização. O app bloqueou a criação de uma base mínima para não apagar sua referência. Restaure os dados a partir de: {fontes}. Detalhe: {detalhe}")
-        con.close()
-        return
-
-    _set_restore_guard(False, "")
+        _set_restore_guard(True, f"Base local vazia após a inicialização. A restauração automática não encontrou dados utilizáveis. O app vai liberar uma base mínima temporária para permitir o login. Restaure os dados a partir de: {fontes}. Detalhe: {detalhe}")
+    else:
+        _set_restore_guard(False, "")
     _safe_exec(cur, "INSERT OR IGNORE INTO setores(nome) VALUES (?)", ("GERAL",))
     _safe_exec(cur, "INSERT OR IGNORE INTO setores(nome) VALUES (?)", ("ADMIN",))
     _safe_exec(cur, "INSERT OR IGNORE INTO setores(nome) VALUES (?)", ("GESTAO",))
@@ -6560,9 +6561,8 @@ def page_login():
     st.title("🔐 Login por Setor (Colaborador / Líder / Admin)")
 
     if _RESTORE_GUARD_ACTIVE:
-        st.error(_RESTORE_GUARD_MESSAGE or "Base não restaurada. Login bloqueado para evitar abrir um banco vazio.")
-        st.info("Publique o latest_stable.db junto do projeto ou confirme que o Supabase tem os dados completos antes de liberar o login.")
-        st.stop()
+        st.warning(_RESTORE_GUARD_MESSAGE or "Base não restaurada automaticamente. O app liberou uma base mínima temporária para permitir o login.")
+        st.info("Publique o latest_stable.db junto do projeto ou confirme que o Supabase tem os dados completos para recuperar a base real.")
 
     login_sec = st.radio("", ["Entrar", "Cadastro do Colaborador", "Esqueci a senha"], horizontal=True, key="login_nav_fast", label_visibility="collapsed")
 
