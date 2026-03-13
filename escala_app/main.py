@@ -1098,6 +1098,8 @@ SUPABASE_AUTO_PUSH_ON_COMMIT = (os.getenv("SUPABASE_AUTO_PUSH_ON_COMMIT", "0") o
 SUPABASE_AUTO_PUSH_ON_CLOSE = (os.getenv("SUPABASE_AUTO_PUSH_ON_CLOSE", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
 SUPABASE_AUTO_BOOTSTRAP_AFTER_SCHEMA = (os.getenv("SUPABASE_AUTO_BOOTSTRAP_AFTER_SCHEMA", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
 SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY = (os.getenv("SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
+FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP = (os.getenv("FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
+FAST_BACKUP_DISABLE_ROLLING_ON_COMMIT = (os.getenv("FAST_BACKUP_DISABLE_ROLLING_ON_COMMIT", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
 RESTORE_GUARD_ENABLED = (os.getenv("RESTORE_GUARD_ENABLED", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
 _RESTORE_GUARD_ACTIVE = False
 _RESTORE_GUARD_MESSAGE = ""
@@ -1437,7 +1439,7 @@ def _rotate_backup_files_safely() -> None:
         pass
 
 
-def _save_latest_stable_snapshot_safely() -> None:
+def _save_latest_stable_snapshot_safely(include_rolling: bool = False) -> None:
     try:
         current = Path(DB_PATH)
         if not current.exists() or not _validate_sqlite_file(str(current)):
@@ -1448,9 +1450,10 @@ def _save_latest_stable_snapshot_safely() -> None:
             Path(BACKUP_DIR) / "latest_stable.db",
         ]
 
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        rolling = Path(BACKUP_DIR) / f"{ROTATING_BACKUP_PREFIX}_{ts}.db"
-        targets.append(rolling)
+        if include_rolling and not FAST_BACKUP_DISABLE_ROLLING_ON_COMMIT:
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            rolling = Path(BACKUP_DIR) / f"{ROTATING_BACKUP_PREFIX}_{ts}.db"
+            targets.append(rolling)
 
         for target in targets:
             try:
@@ -1462,7 +1465,8 @@ def _save_latest_stable_snapshot_safely() -> None:
             except Exception:
                 pass
 
-        _rotate_backup_files_safely()
+        if include_rolling and not FAST_BACKUP_DISABLE_ROLLING_ON_COMMIT:
+            _rotate_backup_files_safely()
     except Exception:
         pass
 
@@ -8515,7 +8519,8 @@ def page_app():
 # MAIN
 # =========================================================
 db_init()
-auto_backup_if_due()
+if not FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP:
+    auto_backup_if_due()
 
 if st.session_state["auth"] is None:
     page_login()
