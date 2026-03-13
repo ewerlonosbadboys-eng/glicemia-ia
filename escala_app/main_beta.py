@@ -7225,92 +7225,143 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
         prox_mes = 1
         prox_ano += 1
 
-    st.markdown("### 👤 Portal do Colaborador")
+    st.markdown("### 👤 Portal do Colaborador — v0.01 beta premium")
     i1, i2, i3, i4 = st.columns(4)
     i1.info(f"**Nome**\n\n{colab.get('Nome','-')}")
     i2.info(f"**Setor**\n\n{setor}")
     i3.info(f"**Subgrupo**\n\n{colab.get('Subgrupo','SEM SUBGRUPO')}")
     i4.info(f"**Chapa**\n\n{chapa}")
 
-    st.caption(f"Portal do colaborador fixado no mês vigente ({mes_vigente:02d}/{ano_vigente}) e na pré-escala do próximo mês ({prox_mes:02d}/{prox_ano}).")
+    st.caption(
+        f"Portal do colaborador travado no mês vigente ({mes_vigente:02d}/{ano_vigente}) e na pré-escala do próximo mês ({prox_mes:02d}/{prox_ano})."
+    )
 
-    tab1, tab2, tab3, tab4 = st.tabs([
+    df_oficial = get_escala_colaborador_mes(setor, chapa, ano_vigente, mes_vigente)
+    df_pre = get_escala_colaborador_mes(setor, chapa, prox_ano, prox_mes)
+    hist = get_overrides_colaborador_mes(setor, chapa, ano_vigente, mes_vigente)
+    ass_escala = get_assinatura_status(setor, chapa, ano_vigente, mes_vigente, 'oficial')
+    ass_mud = get_assinatura_status(setor, chapa, ano_vigente, mes_vigente, 'historico')
+
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         '📋 Escala Oficial',
         '🕒 Pré-Escala',
         '📝 Histórico de Mudanças',
-        '🌴 Solicitação de Folga',
+        '✍️ Assinaturas',
+        '⚙️ Ajustes',
     ])
 
     with tab1:
         st.markdown(f"#### Escala oficial — {mes_vigente:02d}/{ano_vigente}")
-        df_oficial = get_escala_colaborador_mes(setor, chapa, ano_vigente, mes_vigente)
-        ass = get_assinatura_status(setor, chapa, ano_vigente, mes_vigente, 'oficial')
         c1, c2, c3 = st.columns(3)
-        c1.metric('Versão atual', ass.get('versao', 1))
-        c2.metric('Status da assinatura', ass.get('status', 'Pendente'))
-        c3.metric('Mudanças registradas', max(0, int(ass.get('versao', 1)) - 1))
-        if ass.get('assinado_em'):
-            st.caption(f"Última assinatura: {ass.get('assinado_em')}")
+        c1.metric('Versão atual', ass_escala.get('versao', 1))
+        c2.metric('Status da assinatura', ass_escala.get('status', 'Pendente'))
+        c3.metric('Mudanças registradas', len(hist) if hasattr(hist, '__len__') else 0)
+        if ass_escala.get('assinado_em'):
+            st.caption(f"Última assinatura da escala: {ass_escala.get('assinado_em')}")
         if df_oficial.empty:
             st.info('Ainda não há escala oficial carregada para o mês vigente.')
         else:
             st.dataframe(df_oficial, use_container_width=True, hide_index=True)
-            if ass.get('status') != 'Assinado':
-                if st.button('✅ Assinar escala oficial', key=f'ass_oficial_{setor}_{chapa}_{ano_vigente}_{mes_vigente}'):
-                    salvar_assinatura_portal(setor, chapa, ano_vigente, mes_vigente, 'oficial')
-                    st.success('Escala oficial assinada com sucesso.')
-                    st.rerun()
+            if ass_escala.get('status') == 'Assinado':
+                st.success('Escala do mês vigente já assinada. Botão ocultado automaticamente.')
+            else:
+                st.info('A assinatura da escala do mês vigente fica na aba Assinaturas.')
 
     with tab2:
         st.markdown(f"#### Pré-escala — {prox_mes:02d}/{prox_ano}")
         st.warning('Prévia do próximo mês. Ainda não é oficial, não pode ser assinada e pode ser alterada até a liberação do líder.')
-        df_pre = get_escala_colaborador_mes(setor, chapa, prox_ano, prox_mes)
         if df_pre.empty:
             st.info('Ainda não há pré-escala disponível para o próximo mês.')
         else:
             st.dataframe(df_pre, use_container_width=True, hide_index=True)
-            st.caption('Assinatura bloqueada até o início do mês vigente.')
+            st.caption('Assinatura bloqueada até o início do mês vigente correspondente.')
 
     with tab3:
         st.markdown(f"#### Histórico de mudanças — {mes_vigente:02d}/{ano_vigente}")
-        hist = get_overrides_colaborador_mes(setor, chapa, ano_vigente, mes_vigente)
-        ass_hist = get_assinatura_status(setor, chapa, ano_vigente, mes_vigente, 'historico')
-        h1, h2 = st.columns(2)
-        h1.metric('Status do aceite das mudanças', ass_hist.get('status', 'Pendente'))
-        h2.metric('Versão das mudanças', ass_hist.get('versao', 1))
-        if ass_hist.get('assinado_em'):
-            st.caption(f"Último aceite das mudanças: {ass_hist.get('assinado_em')}")
+        m1, m2 = st.columns(2)
+        m1.metric('Mudanças registradas no mês vigente', len(hist) if hasattr(hist, '__len__') else 0)
+        m2.metric('Status do aceite das mudanças', ass_mud.get('status', 'Pendente'))
+        if ass_mud.get('assinado_em'):
+            st.caption(f"Último aceite das mudanças: {ass_mud.get('assinado_em')}")
         if hist.empty:
             st.info('Nenhuma mudança registrada no mês vigente para esta chapa.')
         else:
-            hist = hist.copy()
-            hist['Assinatura'] = ass_hist.get('status', 'Pendente')
-            hist = hist[[c for c in ['Dia','Campo','Novo valor','Assinatura'] if c in hist.columns]]
-            st.dataframe(hist, use_container_width=True, hide_index=True)
-            if ass_hist.get('status') != 'Assinado':
-                if st.button('✍️ Assinar mudanças do mês vigente', key=f'ass_hist_{setor}_{chapa}_{ano_vigente}_{mes_vigente}'):
-                    salvar_assinatura_portal(setor, chapa, ano_vigente, mes_vigente, 'historico')
-                    st.success('Histórico de mudanças assinado com sucesso.')
-                    st.rerun()
+            hist_view = hist.copy()
+            keep_cols = [c for c in ['Dia', 'Campo', 'Valor anterior', 'Novo valor', 'Motivo', 'Alterado em'] if c in hist_view.columns]
+            if not keep_cols:
+                keep_cols = list(hist_view.columns)
+            st.dataframe(hist_view[keep_cols], use_container_width=True, hide_index=True)
+            st.caption('A assinatura dessas mudanças fica concentrada na aba Assinaturas.')
 
     with tab4:
-        st.markdown('#### Solicitação de folga')
-        c1, c2 = st.columns(2)
-        data_padrao = hoje.date()
-        data_sol = c1.date_input('Data solicitada', value=data_padrao, key=f'data_folga_{setor}_{chapa}')
-        tipo_sol = c2.selectbox('Tipo', ['Folga', 'Troca de plantão', 'Ajuste de horário'], key=f'tipo_folga_{setor}_{chapa}')
-        motivo = st.text_input('Motivo', key=f'motivo_folga_{setor}_{chapa}')
-        observacao = st.text_area('Observação', key=f'obs_folga_{setor}_{chapa}')
-        if st.button('📨 Enviar solicitação', key=f'env_folga_{setor}_{chapa}'):
-            criar_solicitacao_folga(setor, chapa, str(data_sol), tipo_sol, motivo, observacao)
-            st.success('Solicitação enviada para análise.')
-            st.rerun()
-        df_sol = list_solicitacoes_colaborador(setor, chapa)
-        st.markdown('##### Minhas solicitações')
-        if df_sol.empty:
-            st.info('Nenhuma solicitação enviada até agora.')
-        else:
-            st.dataframe(df_sol, use_container_width=True, hide_index=True)
+        st.markdown(f"#### Assinaturas — {mes_vigente:02d}/{ano_vigente}")
+        sub1, sub2 = st.tabs(['🗓️ Assinatura da Escala do Mês', '🔁 Assinatura de Mudanças'])
+
+        with sub1:
+            a1, a2, a3 = st.columns(3)
+            a1.metric('Competência', f'{mes_vigente:02d}/{ano_vigente}')
+            a2.metric('Versão atual', ass_escala.get('versao', 1))
+            a3.metric('Status', ass_escala.get('status', 'Pendente'))
+            if ass_escala.get('assinado_em'):
+                st.caption(f"Assinada em: {ass_escala.get('assinado_em')}")
+            if df_oficial.empty:
+                st.info('Sem escala oficial carregada para o mês vigente.')
+            elif ass_escala.get('status') == 'Assinado':
+                st.success('Escala do mês vigente já assinada. Botão ocultado.')
+            else:
+                st.warning('Assine aqui somente a escala do mês vigente.')
+                if st.button('✅ Assinar escala do mês', key=f'ass_oficial_{setor}_{chapa}_{ano_vigente}_{mes_vigente}'):
+                    salvar_assinatura_portal(setor, chapa, ano_vigente, mes_vigente, 'oficial')
+                    st.success('Escala do mês assinada com sucesso.')
+                    st.rerun()
+
+        with sub2:
+            b1, b2, b3 = st.columns(3)
+            b1.metric('Mudanças registradas', len(hist) if hasattr(hist, '__len__') else 0)
+            b2.metric('Versão das mudanças', ass_mud.get('versao', 1))
+            b3.metric('Status', ass_mud.get('status', 'Pendente'))
+            if ass_mud.get('assinado_em'):
+                st.caption(f"Mudanças assinadas em: {ass_mud.get('assinado_em')}")
+            if hist.empty:
+                st.info('Não existem mudanças de horários, folgas ou ajustes no mês vigente.')
+            else:
+                hist_ass = hist.copy()
+                hist_ass['Status da assinatura'] = ass_mud.get('status', 'Pendente')
+                keep_cols = [c for c in ['Dia', 'Campo', 'Valor anterior', 'Novo valor', 'Motivo', 'Status da assinatura'] if c in hist_ass.columns]
+                if not keep_cols:
+                    keep_cols = list(hist_ass.columns)
+                st.dataframe(hist_ass[keep_cols], use_container_width=True, hide_index=True)
+                if ass_mud.get('status') == 'Assinado':
+                    st.success('Mudanças do mês vigente já assinadas. Botão ocultado.')
+                else:
+                    if st.button('✍️ Assinar mudanças de horários e folgas', key=f'ass_hist_{setor}_{chapa}_{ano_vigente}_{mes_vigente}'):
+                        salvar_assinatura_portal(setor, chapa, ano_vigente, mes_vigente, 'historico')
+                        st.success('Mudanças do mês vigente assinadas com sucesso.')
+                        st.rerun()
+
+    with tab5:
+        st.markdown('#### Ajustes')
+        suba, subb = st.tabs(['🌴 Sugestão de Folgas', '📨 Minhas solicitações'])
+
+        with suba:
+            st.caption('Envie sugestões de folgas e ajustes de forma organizada para o líder analisar.')
+            c1, c2 = st.columns(2)
+            data_padrao = hoje.date()
+            data_sol = c1.date_input('Data desejada', value=data_padrao, key=f'data_folga_{setor}_{chapa}')
+            tipo_sol = c2.selectbox('Tipo da sugestão', ['Folga', 'Troca de plantão', 'Ajuste de horário'], key=f'tipo_folga_{setor}_{chapa}')
+            motivo = st.text_input('Motivo', key=f'motivo_folga_{setor}_{chapa}')
+            observacao = st.text_area('Observação', key=f'obs_folga_{setor}_{chapa}')
+            if st.button('📨 Enviar sugestão', key=f'env_folga_{setor}_{chapa}'):
+                criar_solicitacao_folga(setor, chapa, str(data_sol), tipo_sol, motivo, observacao)
+                st.success('Sugestão enviada para análise.')
+                st.rerun()
+
+        with subb:
+            df_sol = list_solicitacoes_colaborador(setor, chapa)
+            if df_sol.empty:
+                st.info('Nenhuma sugestão enviada até agora.')
+            else:
+                st.dataframe(df_sol, use_container_width=True, hide_index=True)
 
 def page_app():
     auth = st.session_state.get("auth") or {}
@@ -9016,7 +9067,7 @@ def _fast_restore_bundled_latest_before_start() -> None:
                     pass
                 break
     except Exception:
-        pass
+        pass 
 
 
 # =========================================================
