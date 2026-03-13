@@ -1100,6 +1100,10 @@ SUPABASE_AUTO_BOOTSTRAP_AFTER_SCHEMA = (os.getenv("SUPABASE_AUTO_BOOTSTRAP_AFTER
 SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY = (os.getenv("SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
 FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP = (os.getenv("FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
 FAST_BACKUP_DISABLE_ROLLING_ON_COMMIT = (os.getenv("FAST_BACKUP_DISABLE_ROLLING_ON_COMMIT", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
+FAST_SNAPSHOT_THROTTLE_SECONDS = int((os.getenv("FAST_SNAPSHOT_THROTTLE_SECONDS", "300") or "300").strip())
+FAST_SNAPSHOT_SKIP_ON_CLOSE = (os.getenv("FAST_SNAPSHOT_SKIP_ON_CLOSE", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
+_LAST_SNAPSHOT_TS = 0.0
+_LAST_SNAPSHOT_DB_MTIME = 0.0
 RESTORE_GUARD_ENABLED = (os.getenv("RESTORE_GUARD_ENABLED", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
 _RESTORE_GUARD_ACTIVE = False
 _RESTORE_GUARD_MESSAGE = ""
@@ -1483,12 +1487,12 @@ def _bootstrap_from_supabase_after_schema(force: bool = False) -> bool:
         if (not local_has) and remote_has:
             ok = _supabase_pull_all_to_sqlite(force=True)
             if ok:
-                _save_latest_stable_snapshot_safely()
+                _maybe_save_latest_stable_snapshot_fast("commit")
             return bool(ok)
         if local_has and not remote_has:
             ok = _supabase_push_all_from_sqlite(force=True)
             if ok:
-                _save_latest_stable_snapshot_safely()
+                _maybe_save_latest_stable_snapshot_fast("close")
             return bool(ok)
     except Exception as e:
         _set_supabase_error(e)
@@ -1798,6 +1802,30 @@ def _supabase_compare_tables_snapshot() -> pd.DataFrame:
     except Exception as e:
         rows.append({'Tabela': '(erro)', 'SQLite local': '—', 'Existe no Supabase': '—', 'Supabase': str(e)})
     return pd.DataFrame(rows)
+
+def _maybe_save_latest_stable_snapshot_fast(reason: str = "commit") -> None:
+    """Snapshot leve: evita copiar o banco em todo commit/close."""
+    global _LAST_SNAPSHOT_TS, _LAST_SNAPSHOT_DB_MTIME
+    try:
+        if reason == "close" and FAST_SNAPSHOT_SKIP_ON_CLOSE:
+            return
+        db_mtime = 0.0
+        try:
+            if Path(DB_PATH).exists():
+                db_mtime = float(Path(DB_PATH).stat().st_mtime)
+        except Exception:
+            db_mtime = 0.0
+        now_ts = time.time()
+        if db_mtime > 0 and db_mtime == float(_LAST_SNAPSHOT_DB_MTIME or 0.0):
+            if now_ts - float(_LAST_SNAPSHOT_TS or 0.0) < max(5, FAST_SNAPSHOT_THROTTLE_SECONDS):
+                return
+        if now_ts - float(_LAST_SNAPSHOT_TS or 0.0) < max(5, FAST_SNAPSHOT_THROTTLE_SECONDS):
+            return
+        _save_latest_stable_snapshot_safely()
+        _LAST_SNAPSHOT_TS = now_ts
+        _LAST_SNAPSHOT_DB_MTIME = db_mtime
+    except Exception:
+        pass
 
 class SQLiteSyncConnection(sqlite3.Connection):
     def commit(self):
