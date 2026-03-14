@@ -1,6 +1,3 @@
-# V97 ENTERPRISE — boot resiliente, restore em camadas e login sempre liberado
-# Derivado da V95.2 com reforço no restore local/Supabase/latest_stable e sem bloqueio rígido de login.
-
 # V84 BASE — DISTRIBUIÇÃO INTELIGENTE POR SEMANA DO SUBGRUPO
 # Arquivo preparado como continuação de testes sobre a V83.
 # Objetivo desta base: evoluir o motor para distribuir folgas pela semana real
@@ -91,9 +88,6 @@ from reportlab.lib.pagesizes import landscape, A4
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib import colors
 st.set_page_config(page_title="Escala 5x2 Oficial", layout="wide")
-st.sidebar.info('ADMIN_FIX_VISIVEL_2026_03_14')
-VERSAO_ACESSO_LIDER = "ACESSO_LIDER_FIX_2026_03_14_v2"
-
 
 # =========================================================
 # PDF IMPORT (AUTOMÁTICO) — modelo ESCALA_PONTO_NEW (Savegnago)
@@ -1104,13 +1098,7 @@ SUPABASE_AUTO_PUSH_ON_COMMIT = (os.getenv("SUPABASE_AUTO_PUSH_ON_COMMIT", "0") o
 SUPABASE_AUTO_PUSH_ON_CLOSE = (os.getenv("SUPABASE_AUTO_PUSH_ON_CLOSE", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
 SUPABASE_AUTO_BOOTSTRAP_AFTER_SCHEMA = (os.getenv("SUPABASE_AUTO_BOOTSTRAP_AFTER_SCHEMA", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
 SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY = (os.getenv("SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
-FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP = (os.getenv("FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
-FAST_BACKUP_DISABLE_ROLLING_ON_COMMIT = (os.getenv("FAST_BACKUP_DISABLE_ROLLING_ON_COMMIT", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
-FAST_SNAPSHOT_THROTTLE_SECONDS = int((os.getenv("FAST_SNAPSHOT_THROTTLE_SECONDS", "300") or "300").strip())
-FAST_SNAPSHOT_SKIP_ON_CLOSE = (os.getenv("FAST_SNAPSHOT_SKIP_ON_CLOSE", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
-_LAST_SNAPSHOT_TS = 0.0
-_LAST_SNAPSHOT_DB_MTIME = 0.0
-RESTORE_GUARD_ENABLED = (os.getenv("RESTORE_GUARD_ENABLED", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
+RESTORE_GUARD_ENABLED = (os.getenv("RESTORE_GUARD_ENABLED", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
 _RESTORE_GUARD_ACTIVE = False
 _RESTORE_GUARD_MESSAGE = ""
 
@@ -1449,7 +1437,7 @@ def _rotate_backup_files_safely() -> None:
         pass
 
 
-def _save_latest_stable_snapshot_safely(include_rolling: bool = False) -> None:
+def _save_latest_stable_snapshot_safely() -> None:
     try:
         current = Path(DB_PATH)
         if not current.exists() or not _validate_sqlite_file(str(current)):
@@ -1460,10 +1448,9 @@ def _save_latest_stable_snapshot_safely(include_rolling: bool = False) -> None:
             Path(BACKUP_DIR) / "latest_stable.db",
         ]
 
-        if include_rolling and not FAST_BACKUP_DISABLE_ROLLING_ON_COMMIT:
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            rolling = Path(BACKUP_DIR) / f"{ROTATING_BACKUP_PREFIX}_{ts}.db"
-            targets.append(rolling)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        rolling = Path(BACKUP_DIR) / f"{ROTATING_BACKUP_PREFIX}_{ts}.db"
+        targets.append(rolling)
 
         for target in targets:
             try:
@@ -1475,8 +1462,7 @@ def _save_latest_stable_snapshot_safely(include_rolling: bool = False) -> None:
             except Exception:
                 pass
 
-        if include_rolling and not FAST_BACKUP_DISABLE_ROLLING_ON_COMMIT:
-            _rotate_backup_files_safely()
+        _rotate_backup_files_safely()
     except Exception:
         pass
 
@@ -1493,12 +1479,12 @@ def _bootstrap_from_supabase_after_schema(force: bool = False) -> bool:
         if (not local_has) and remote_has:
             ok = _supabase_pull_all_to_sqlite(force=True)
             if ok:
-                _maybe_save_latest_stable_snapshot_fast("commit")
+                _save_latest_stable_snapshot_safely()
             return bool(ok)
         if local_has and not remote_has:
             ok = _supabase_push_all_from_sqlite(force=True)
             if ok:
-                _maybe_save_latest_stable_snapshot_fast("close")
+                _save_latest_stable_snapshot_safely()
             return bool(ok)
     except Exception as e:
         _set_supabase_error(e)
@@ -1809,30 +1795,6 @@ def _supabase_compare_tables_snapshot() -> pd.DataFrame:
         rows.append({'Tabela': '(erro)', 'SQLite local': '—', 'Existe no Supabase': '—', 'Supabase': str(e)})
     return pd.DataFrame(rows)
 
-def _maybe_save_latest_stable_snapshot_fast(reason: str = "commit") -> None:
-    """Snapshot leve: evita copiar o banco em todo commit/close."""
-    global _LAST_SNAPSHOT_TS, _LAST_SNAPSHOT_DB_MTIME
-    try:
-        if reason == "close" and FAST_SNAPSHOT_SKIP_ON_CLOSE:
-            return
-        db_mtime = 0.0
-        try:
-            if Path(DB_PATH).exists():
-                db_mtime = float(Path(DB_PATH).stat().st_mtime)
-        except Exception:
-            db_mtime = 0.0
-        now_ts = time.time()
-        if db_mtime > 0 and db_mtime == float(_LAST_SNAPSHOT_DB_MTIME or 0.0):
-            if now_ts - float(_LAST_SNAPSHOT_TS or 0.0) < max(5, FAST_SNAPSHOT_THROTTLE_SECONDS):
-                return
-        if now_ts - float(_LAST_SNAPSHOT_TS or 0.0) < max(5, FAST_SNAPSHOT_THROTTLE_SECONDS):
-            return
-        _save_latest_stable_snapshot_safely()
-        _LAST_SNAPSHOT_TS = now_ts
-        _LAST_SNAPSHOT_DB_MTIME = db_mtime
-    except Exception:
-        pass
-
 class SQLiteSyncConnection(sqlite3.Connection):
     def commit(self):
         result = super().commit()
@@ -2069,82 +2031,16 @@ def _adopt_best_db_candidate_if_needed():
 def _restore_from_latest_stable_if_needed():
     _ensure_backup_dir()
     current = Path(DB_PATH)
-    candidates = [Path(BACKUP_DIR) / "latest_stable.db"] + list(_bundled_latest_stable_paths())
+    latest = Path(BACKUP_DIR) / "latest_stable.db"
     if current.exists() and _validate_sqlite_file(str(current)):
         return
-    for latest in candidates:
+    if latest.exists() and _validate_sqlite_file(str(latest)):
         try:
-            if latest.exists() and _validate_sqlite_file(str(latest)):
-                try:
-                    if current.exists():
-                        current.unlink(missing_ok=True)
-                    _sqlite_backup_copy(str(latest), str(current))
-                except Exception:
-                    shutil.copy2(latest, current)
-                return
+            if current.exists():
+                current.unlink(missing_ok=True)
+            _sqlite_backup_copy(str(latest), str(current))
         except Exception:
-            continue
-
-
-
-
-def _ensure_local_db_bootstrap_enterprise() -> bool:
-    """
-    V97 ENTERPRISE
-    Boot em camadas:
-    1) mantém o banco atual se já for válido
-    2) tenta adotar latest_stable empacotado
-    3) tenta restore do latest_stable local/backups
-    4) tenta pull do Supabase
-    5) cria um SQLite mínimo se tudo falhar
-    Nunca bloqueia a abertura do app por base vazia.
-    """
-    try:
-        _ensure_backup_dir()
-    except Exception:
-        pass
-
-    current = Path(DB_PATH)
-    try:
-        if current.exists() and _validate_sqlite_file(str(current)):
-            return True
-    except Exception:
-        pass
-
-    try:
-        _adopt_bundled_latest_stable_if_needed(force=True)
-        if current.exists() and _validate_sqlite_file(str(current)):
-            return True
-    except Exception:
-        pass
-
-    try:
-        _restore_from_latest_stable_if_needed()
-        if current.exists() and _validate_sqlite_file(str(current)):
-            return True
-    except Exception:
-        pass
-
-    try:
-        if SUPABASE_SYNC_ENABLED:
-            _restore_from_supabase_if_local_empty(force=True)
-            if current.exists() and _validate_sqlite_file(str(current)):
-                return True
-    except Exception as e:
-        _set_supabase_error(e)
-
-    try:
-        current.parent.mkdir(parents=True, exist_ok=True)
-        con = sqlite3.connect(str(current))
-        try:
-            con.execute("PRAGMA journal_mode=WAL")
-            con.execute("PRAGMA foreign_keys=ON")
-            con.commit()
-        finally:
-            con.close()
-        return current.exists()
-    except Exception:
-        return False
+            shutil.copy2(latest, current)
 
 
 def _ensure_runtime_storage_ready(force: bool = False):
@@ -2156,7 +2052,6 @@ def _ensure_runtime_storage_ready(force: bool = False):
     if (not force) and _RUNTIME_READY and (now_ts - float(_RUNTIME_READY_AT or 0.0) < float(_RUNTIME_READY_TTL_SEC)):
         return
     _ensure_backup_dir()
-    _ensure_local_db_bootstrap_enterprise()
     _adopt_bundled_latest_stable_if_needed(force=False)
     _migrate_legacy_db_if_needed()
     _adopt_best_db_candidate_if_needed()
@@ -3225,7 +3120,7 @@ def _safe_exec(cur, sql: str, params=None):
     except Exception:
         pass
 
-def db_init(startup_light: bool = False):
+def db_init():
     con = db_conn()
     cur = con.cursor()
 
@@ -3361,35 +3256,6 @@ def db_init(startup_light: bool = False):
     """)
 
     _safe_exec(cur, """
-    CREATE TABLE IF NOT EXISTS portal_assinaturas (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        setor TEXT NOT NULL,
-        chapa TEXT NOT NULL,
-        ano INTEGER NOT NULL,
-        mes INTEGER NOT NULL,
-        tipo TEXT NOT NULL,
-        versao_ref INTEGER NOT NULL DEFAULT 1,
-        assinado_em TEXT NOT NULL,
-        UNIQUE(setor, chapa, ano, mes, tipo)
-    )
-    """)
-
-    _safe_exec(cur, """
-    CREATE TABLE IF NOT EXISTS portal_solicitacoes_folga (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        setor TEXT NOT NULL,
-        chapa TEXT NOT NULL,
-        data_solicitada TEXT NOT NULL,
-        tipo TEXT NOT NULL,
-        motivo TEXT,
-        observacao TEXT,
-        status TEXT NOT NULL DEFAULT 'Em análise',
-        criado_em TEXT NOT NULL,
-        atualizado_em TEXT NOT NULL
-    )
-    """)
-
-    _safe_exec(cur, """
     CREATE TABLE IF NOT EXISTS overrides (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         setor TEXT NOT NULL,
@@ -3413,7 +3279,7 @@ def db_init(startup_light: bool = False):
         pass
 
     restore_ok = False
-    if (not startup_light) and SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY:
+    if SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY:
         try:
             restore_ok = bool(_restore_from_supabase_if_local_empty(force=True))
         except Exception as e:
@@ -3424,7 +3290,13 @@ def db_init(startup_light: bool = False):
 
     con.commit()
 
-    # v97 force: nunca bloquear nem exibir guarda de restore no login
+    if _should_block_silent_empty_seed():
+        fontes = _restore_sources_summary() or "fonte de restore configurada"
+        detalhe = _SUPABASE_LAST_ERROR or "sem detalhe adicional"
+        _set_restore_guard(True, f"Base local vazia após a inicialização. O app bloqueou a criação de uma base mínima para não apagar sua referência. Restaure os dados a partir de: {fontes}. Detalhe: {detalhe}")
+        con.close()
+        return
+
     _set_restore_guard(False, "")
     _safe_exec(cur, "INSERT OR IGNORE INTO setores(nome) VALUES (?)", ("GERAL",))
     _safe_exec(cur, "INSERT OR IGNORE INTO setores(nome) VALUES (?)", ("ADMIN",))
@@ -3441,13 +3313,13 @@ def db_init(startup_light: bool = False):
         """, ("Administrador", "ADMIN", "admin", senha_hash, salt, 1, 1, datetime.now().isoformat()))
         con.commit()
 
-    if (not startup_light) and SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY:
+    if SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY:
         try:
             _restore_from_supabase_if_local_empty(force=False)
         except Exception:
             pass
 
-    if (not startup_light) and SUPABASE_AUTO_BOOTSTRAP_AFTER_SCHEMA:
+    if SUPABASE_AUTO_BOOTSTRAP_AFTER_SCHEMA:
         try:
             _bootstrap_from_supabase_after_schema(force=False)
         except Exception:
@@ -3640,98 +3512,6 @@ def admin_reset_user_password(user_id: int, nova_senha: str):
     con.close()
     update_password(setor, chapa, nova_senha)
     return True
-
-
-def admin_update_funcionario(setor: str, chapa_atual: str, nome_novo: str, subgrupo_novo: str, perfil_novo: str, entrada_nova: str = '06:00', folga_sab: bool = False, criar_usuario_se_nao_existir: bool = True):
-    """
-    Atualiza cadastro do colaborador e sincroniza o usuário do sistema.
-    Perfil aceito: COLABORADOR, LIDER, ADMIN.
-    """
-    setor = _norm_setor(setor)
-    chapa_atual = _norm_chapa(chapa_atual)
-    nome_novo = str(nome_novo or '').strip()
-    subgrupo_novo = str(subgrupo_novo or '').strip()
-    perfil_novo = _norm_subgrupo_label(perfil_novo or 'COLABORADOR')
-    entrada_nova = str(entrada_nova or '06:00').strip() or '06:00'
-
-    if not setor or not chapa_atual:
-        raise ValueError('Setor e chapa são obrigatórios.')
-
-    rec = get_colaborador_record(setor, chapa_atual)
-    if not rec:
-        raise ValueError('Colaborador não encontrado para este setor/chapa.')
-
-    nome_final = nome_novo or str(rec.get('Nome') or chapa_atual).strip()
-    subgrupo_final = subgrupo_novo or str(rec.get('Subgrupo') or '').strip()
-    entrada_final = entrada_nova or str(rec.get('Entrada') or '06:00').strip() or '06:00'
-
-    if perfil_novo not in ['COLABORADOR', 'LIDER', 'ADMIN']:
-        perfil_novo = 'COLABORADOR'
-
-    if perfil_novo == 'LIDER' and not subgrupo_final:
-        subgrupo_final = 'LIDERANÇA'
-    if perfil_novo == 'ADMIN' and not subgrupo_final:
-        subgrupo_final = 'ADMIN'
-
-    update_colaborador_perfil(
-        setor=setor,
-        chapa_antiga=chapa_atual,
-        chapa_nova=chapa_atual,
-        nome_novo=nome_final,
-        subgrupo=subgrupo_final,
-        entrada=entrada_final,
-        folga_sab=bool(folga_sab),
-    )
-
-    is_admin = 1 if perfil_novo == 'ADMIN' else 0
-    is_lider = 1 if perfil_novo in ['LIDER', 'ADMIN'] else 0
-
-    con = db_conn()
-    cur = con.cursor()
-    cur.execute(
-        """
-        SELECT id FROM usuarios_sistema
-        WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?
-        LIMIT 1
-        """,
-        (setor, chapa_atual),
-    )
-    row = cur.fetchone()
-    con.close()
-
-    if row:
-        con = db_conn()
-        cur = con.cursor()
-        cur.execute(
-            """
-            UPDATE usuarios_sistema
-            SET nome=?, is_admin=?, is_lider=?
-            WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?
-            """,
-            (nome_final, int(is_admin), int(is_lider), setor, chapa_atual),
-        )
-        con.commit()
-        con.close()
-    elif criar_usuario_se_nao_existir:
-        senha_padrao = default_password_for_chapa(chapa_atual)
-        create_system_user(nome_final, setor, chapa_atual, senha_padrao, is_lider=int(is_lider), is_admin=int(is_admin))
-
-    try:
-        st.cache_data.clear()
-    except Exception:
-        pass
-
-    return {
-        'nome': nome_final,
-        'setor': setor,
-        'chapa': chapa_atual,
-        'subgrupo': subgrupo_final,
-        'perfil': perfil_novo,
-        'entrada': entrada_final,
-        'folga_sab': bool(folga_sab),
-        'is_admin': bool(is_admin),
-        'is_lider': bool(is_lider),
-    }
 
 # =========================================================
 # COLABORADORES
@@ -3929,7 +3709,8 @@ def update_colaborador_perfil(setor: str, chapa_antiga: str, chapa_nova: str, no
     except Exception:
         pass
 
-@st.cache_data(show_spinner=False, ttl=120)
+@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=30)
 def load_colaboradores_setor(setor: str):
     con = db_conn()
     cur = con.cursor()
@@ -3953,32 +3734,22 @@ def load_colaboradores_setor(setor: str):
 # =========================================================
 # SUBGRUPOS + REGRAS
 # =========================================================
-@st.cache_data(show_spinner=False, ttl=120)
+@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=30)
 def get_kpis_cached(setor: str, ano: int, mes: int):
-    """KPI leve: usa agregações SQL diretas para evitar montar todo hist_db no topo da tela."""
-    con = db_conn()
-    cur = con.cursor()
-    try:
-        cur.execute("SELECT COUNT(*) FROM colaboradores WHERE setor=?", (setor,))
-        total_colab = int((cur.fetchone() or [0])[0] or 0)
+    colaboradores_k = load_colaboradores_setor(setor)
+    total_colab = len(colaboradores_k)
 
-        cur.execute(
-            """
-            SELECT
-                COALESCE(SUM(CASE WHEN status='Folga' THEN 1 ELSE 0 END),0) AS folgas,
-                COALESCE(SUM(CASE WHEN status='Férias' THEN 1 ELSE 0 END),0) AS ferias,
-                COALESCE(SUM(CASE WHEN status IN ('Trabalho','Balanço') THEN 1 ELSE 0 END),0) AS trabalhos
-            FROM escala_mes
-            WHERE setor=? AND ano=? AND mes=?
-            """,
-            (setor, int(ano), int(mes)),
-        )
-        row = cur.fetchone() or (0, 0, 0)
-        folgas_mes = int(row[0] or 0)
-        ferias_mes = int(row[1] or 0)
-        trabalhos_mes = int(row[2] or 0)
-    finally:
-        con.close()
+    hist_db_kpi = load_escala_mes_db(setor, int(ano), int(mes))
+    if hist_db_kpi:
+        hist_db_kpi = apply_overrides_to_hist(setor, int(ano), int(mes), hist_db_kpi)
+
+    folgas_mes = ferias_mes = trabalhos_mes = 0
+    if hist_db_kpi:
+        for _, dfk in hist_db_kpi.items():
+            folgas_mes += int((dfk["Status"] == "Folga").sum())
+            ferias_mes += int((dfk["Status"] == "Férias").sum())
+            trabalhos_mes += int(dfk["Status"].isin(WORK_STATUSES).sum())
 
     return {
         "total_colab": int(total_colab),
@@ -3987,7 +3758,7 @@ def get_kpis_cached(setor: str, ano: int, mes: int):
         "trabalhos_mes": int(trabalhos_mes),
     }
 
-@st.cache_data(show_spinner=False, ttl=300)
+@st.cache_data(show_spinner=False)
 def list_subgrupos(setor: str):
     con = db_conn()
     cur = con.cursor()
@@ -4094,7 +3865,7 @@ def delete_ferias_row(setor: str, chapa: str, inicio: str, fim: str):
     except Exception:
         pass
 
-@st.cache_data(show_spinner=False, ttl=120)
+@st.cache_data(show_spinner=False)
 def list_ferias(setor: str):
     con = db_conn()
     cur = con.cursor()
@@ -4408,7 +4179,7 @@ def delete_overrides_mes(setor: str, ano: int, mes: int, keep_campos: set[str] |
     except Exception:
         pass
 
-@st.cache_data(show_spinner=False, ttl=120)
+@st.cache_data(show_spinner=False)
 def load_overrides(setor: str, ano: int, mes: int):
     con = db_conn()
     df = pd.read_sql_query("""
@@ -4579,7 +4350,7 @@ def save_escala_mes_db(setor: str, ano: int, mes: int, historico_df_por_chapa: d
     except Exception:
         pass
 
-@st.cache_data(show_spinner=False, ttl=120)
+@st.cache_data(show_spinner=False, ttl=30)
 def load_escala_mes_db(setor: str, ano: int, mes: int):
     con = db_conn()
     cur = con.cursor()
@@ -4601,12 +4372,6 @@ def load_escala_mes_db(setor: str, ano: int, mes: int):
             "H_Entrada": h_ent or "", "H_Saida": h_sai or ""
         })
     return {ch: pd.DataFrame(items) for ch, items in hist.items()}
-
-
-@st.cache_data(show_spinner=False, ttl=120)
-def get_hist_mes_com_overrides_cached(setor: str, ano: int, mes: int):
-    hist_db = load_escala_mes_db(setor, ano, mes)
-    return apply_overrides_to_hist(setor, ano, mes, hist_db)
 
 def apply_overrides_to_hist(setor: str, ano: int, mes: int, hist_db: dict[str, pd.DataFrame]):
     """
@@ -6716,19 +6481,20 @@ def page_login():
         finally:
             con.close()
 
-    st.title("🔐 Login por Setor (Colaborador / Líder / Admin)")
+    st.title("🔐 Login por Setor (Usuário / Líder / Admin)")
 
     if _RESTORE_GUARD_ACTIVE:
-        st.warning(_RESTORE_GUARD_MESSAGE or "Base não restaurada automaticamente. O app liberou uma base mínima temporária para permitir o login.")
-        st.info("Publique o latest_stable.db junto do projeto ou confirme que o Supabase tem os dados completos para recuperar a base real.")
+        st.error(_RESTORE_GUARD_MESSAGE or "Base não restaurada. Login bloqueado para evitar abrir um banco vazio.")
+        st.info("Publique o latest_stable.db junto do projeto ou confirme que o Supabase tem os dados completos antes de liberar o login.")
+        st.stop()
 
-    login_sec = st.radio("", ["Entrar", "Cadastro do Colaborador", "Esqueci a senha"], horizontal=True, key="login_nav_fast", label_visibility="collapsed")
+    login_sec = st.radio("", ["Entrar", "Cadastrar Usuário do Sistema", "Esqueci a senha"], horizontal=True, key="login_nav_fast", label_visibility="collapsed")
 
     if login_sec == "Entrar":
         setores = _cache_login_setores()
         rec2 = _cache_login_recent()
 
-        st.caption("🔎 Buscar acesso / escala por setor, chapa ou nome — pode digitar em minúsculo (ex.: flv).")
+        st.caption("🔎 Buscar (setor / chapa / nome) — pode digitar em minúsculo (ex.: flv).")
         kw = st.text_input("Buscar acesso:", value=st.session_state.get("lg_kw", ""), key="lg_kw").strip()
 
         # opções recentes
@@ -6752,18 +6518,16 @@ def page_login():
         colA, colB = st.columns([1.4, 1.0])
         with colA:
             if recentes_opts_f:
-                recentes_labels = ["-- selecione --"] + [t[0] for t in recentes_opts_f]
                 pick = st.selectbox(
                     "Recentes (clique para preencher):",
-                    recentes_labels,
+                    [t[0] for t in recentes_opts_f],
                     index=0,
                     key="lg_recent_pick"
                 )
-                if pick != "-- selecione --":
-                    chosen = next((t for t in recentes_opts_f if t[0] == pick), None)
-                    if chosen:
-                        st.session_state["lg_setor_txt"] = chosen[1]
-                        st.session_state["lg_chapa"] = chosen[2]
+                chosen = next((t for t in recentes_opts_f if t[0] == pick), None)
+                if chosen:
+                    st.session_state["lg_setor_txt"] = chosen[1]
+                    st.session_state["lg_chapa"] = chosen[2]
 
         with colB:
             lembrar = st.checkbox("✅ Salvar setor/chapa neste dispositivo", value=True, key="lg_remember")
@@ -6789,11 +6553,6 @@ def page_login():
         if st.button("Entrar", key="lg_btn"):
             u = verify_login(setor_norm, chapa.strip(), senha)
             if u:
-                try:
-                    u["is_lider"] = bool(u.get("is_lider", False)) or colaborador_eh_lideranca(setor_norm, chapa.strip())
-                except Exception:
-                    pass
-
                 st.session_state["auth"] = u
 
                 # salva recente
@@ -6817,50 +6576,33 @@ def page_login():
                 else:
                     st.error("Usuário ou senha inválidos.")
 
-        st.caption("Admin padrão: setor ADMIN | chapa admin | senha 123. Criação de setor/líder/admin permanece na aba Admin.")
+        st.caption("Admin padrão: setor ADMIN | chapa admin | senha 123")
 
-    elif login_sec == "Cadastro do Colaborador":
-        st.subheader("Primeiro acesso do colaborador")
-        st.info("Use setor + chapa para localizar sua escala. Nome, criação de setor e perfis de líder/admin continuam na aba Admin.")
-        con = db_conn()
-        try:
-            setores_df = pd.concat([
-                pd.read_sql_query("SELECT nome AS setor FROM setores", con),
-                pd.read_sql_query("SELECT DISTINCT setor FROM colaboradores", con),
-                pd.read_sql_query("SELECT DISTINCT setor FROM usuarios_sistema", con),
-            ], ignore_index=True)
-            setores = sorted({_norm_setor(x) for x in setores_df["setor"].dropna().tolist() if str(x).strip()})
-        finally:
-            con.close()
-
-        setor = st.selectbox("Setor:", setores, key="cl_setor") if setores else st.text_input("Setor:", key="cl_setor_txt")
+    elif login_sec == "Cadastrar Usuário do Sistema":
+        st.subheader("Cadastrar usuário do sistema (com senha)")
+        st.info("⚠️ Somente usuário do sistema tem senha. Colaborador é SEM senha.")
+        nome = st.text_input("Nome:", key="cl_nome")
+        setor = _norm_setor(st.text_input("Setor:", key="cl_setor"))
         chapa = st.text_input("Chapa:", key="cl_chapa")
-        senha = st.text_input("Criar senha:", type="password", key="cl_senha")
+        senha = st.text_input("Senha:", type="password", key="cl_senha")
         senha2 = st.text_input("Confirmar senha:", type="password", key="cl_senha2")
+        is_admin = st.checkbox("Admin?", key="cl_admin")
+        is_lider = st.checkbox("Líder?", value=False, key="cl_lider")
 
-        if st.button("Criar acesso", key="cl_btn"):
-            setor_n = _norm_setor(setor)
-            chapa_n = _norm_chapa(chapa)
-            if not setor_n or not chapa_n or not senha:
-                st.error("Preencha setor, chapa e senha.")
+        if st.button("Criar usuário", key="cl_btn"):
+            if not nome or not setor or not chapa or not senha:
+                st.error("Preencha tudo.")
             elif senha != senha2:
                 st.error("Senhas não conferem.")
+            elif system_user_exists(setor, chapa):
+                st.error("Já existe.")
             else:
-                row = colaborador_lookup(setor_n, chapa_n)
-                if not row:
-                    st.error("Colaborador não encontrado neste setor. Confira setor e chapa ou peça ajuste ao Admin.")
-                else:
-                    nome_db, setor_db, chapa_db = row
-                    if system_user_exists(setor_db, chapa_db):
-                        st.error("Este colaborador já possui acesso. Use Entrar ou Esqueci a senha.")
-                    else:
-                        create_system_user(nome_db or chapa_db, setor_db, chapa_db, senha, is_lider=0, is_admin=0)
-                        st.success("Acesso criado com sucesso. Agora faça login com setor + chapa + senha.")
-                        st.rerun()
+                create_system_user(nome.strip(), setor, _norm_chapa(chapa), senha, is_lider=1 if is_lider else 0, is_admin=1 if is_admin else 0)
+                st.success("Criado! Faça login.")
+                st.rerun()
 
     elif login_sec == "Esqueci a senha":
-        st.subheader("Redefinir senha do colaborador")
-        st.caption("A recuperação usa setor + chapa, que também são a chave para buscar sua escala no portal.")
+        st.subheader("Redefinir senha (com chapa do líder do setor)")
         con = db_conn()
         setores_df = pd.concat([
             pd.read_sql_query("SELECT nome AS setor FROM setores", con),
@@ -6870,30 +6612,25 @@ def page_login():
         setores = sorted({_norm_setor(x) for x in setores_df["setor"].dropna().tolist() if str(x).strip()})
         con.close()
 
-        setor = st.selectbox("Setor:", setores, key="fp_setor") if setores else st.text_input("Setor:", key="fp_setor_txt")
-        chapa = st.text_input("Chapa:", key="fp_chapa")
+        setor = st.selectbox("Setor:", setores, key="fp_setor")
+        chapa = st.text_input("Sua chapa (usuário do sistema):", key="fp_chapa")
+        chapa_lider = st.text_input("Chapa do líder:", key="fp_lider")
         nova = st.text_input("Nova senha:", type="password", key="fp_nova")
-        nova2 = st.text_input("Confirmar senha:", type="password", key="fp_nova2")
+        nova2 = st.text_input("Confirmar:", type="password", key="fp_nova2")
 
         if st.button("Redefinir", key="fp_btn"):
-            setor_n = _norm_setor(setor)
-            chapa_n = _norm_chapa(chapa)
-            if not setor_n or not chapa_n or not nova:
-                st.error("Preencha setor, chapa e nova senha.")
+            if not chapa or not chapa_lider or not nova:
+                st.error("Preencha.")
             elif nova != nova2:
                 st.error("Senhas não conferem.")
+            elif not system_user_exists(setor, chapa):
+                st.error("Usuário não encontrado.")
+            elif not is_lider_chapa(setor, chapa_lider):
+                st.error("Chapa do líder inválida.")
             else:
-                row = colaborador_lookup(setor_n, chapa_n)
-                if not row:
-                    st.error("Colaborador não encontrado neste setor.")
-                else:
-                    nome_db, setor_db, chapa_db = row
-                    if system_user_exists(setor_db, chapa_db):
-                        update_password(setor_db, chapa_db, nova)
-                    else:
-                        create_system_user(nome_db or chapa_db, setor_db, chapa_db, nova, is_lider=0, is_admin=0)
-                    st.success("Senha redefinida com sucesso. Faça login com setor + chapa + senha.")
-                    st.rerun()
+                update_password(setor, chapa, nova)
+                st.success("Senha alterada.")
+                st.rerun()
 
 def _regenerar_mes_inteiro(setor: str, ano: int, mes: int, seed: int = 0, respeitar_ajustes: bool = True):
     """
@@ -7168,474 +6905,7 @@ def page_gestao_dashboard(ano: int, mes: int):
     st.info("Dica: para o gerente, esta tela é a única exibida — as outras abas ficam ocultas para reduzir poluição visual.")
 
 
-
-
-def _preview_cache_keys(setor: str, ano: int, mes: int):
-    base = f"preview_cache::{setor}::{ano}::{mes}"
-    return {
-        "hist": base + "::hist",
-        "cal": base + "::cal",
-        "loaded": base + "::loaded",
-    }
-
-def _clear_preview_cache(setor: str, ano: int, mes: int):
-    try:
-        keys = _preview_cache_keys(setor, ano, mes)
-        for k in keys.values():
-            st.session_state.pop(k, None)
-    except Exception:
-        pass
-
-def _ensure_preview_cache(setor: str, ano: int, mes: int, colaboradores: list):
-    keys = _preview_cache_keys(setor, ano, mes)
-    if keys["hist"] in st.session_state and keys["cal"] in st.session_state:
-        return st.session_state[keys["hist"]], st.session_state[keys["cal"]]
-    hist_db = get_hist_mes_com_overrides_cached(setor, int(ano), int(mes))
-    colab_by = {c["Chapa"]: c for c in (colaboradores or [])}
-    cal = calendario_rh_df(hist_db, colab_by) if hist_db else pd.DataFrame()
-    st.session_state[keys["hist"]] = hist_db
-    st.session_state[keys["cal"]] = cal
-    st.session_state[keys["loaded"]] = True
-    return hist_db, cal
-
-def get_colaborador_record(setor: str, chapa: str):
-    setor = _norm_setor(setor)
-    chapa = _norm_chapa(chapa)
-    con = db_conn()
-    cur = con.cursor()
-    cur.execute(
-        """
-        SELECT nome, chapa, subgrupo, entrada, folga_sab
-        FROM colaboradores
-        WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?
-        LIMIT 1
-        """,
-        (setor, chapa),
-    )
-    row = cur.fetchone()
-    con.close()
-    if not row:
-        return None
-    return {
-        "Nome": row[0],
-        "Chapa": row[1],
-        "Subgrupo": (row[2] or "").strip() or "SEM SUBGRUPO",
-        "Entrada": (row[3] or "").strip() or "06:00",
-        "Folga_Sab": bool(row[4]),
-        "Setor": setor,
-    }
-
-
-def get_escala_colaborador_mes(setor: str, chapa: str, ano: int, mes: int) -> pd.DataFrame:
-    setor = _norm_setor(setor)
-    chapa = _norm_chapa(chapa)
-    con = db_conn()
-    try:
-        df = pd.read_sql_query(
-            """
-            SELECT dia AS 'Dia', data AS 'Data', dia_sem AS 'Dia da semana', status AS 'Status',
-                   COALESCE(h_entrada,'') AS 'Entrada', COALESCE(h_saida,'') AS 'Saída'
-            FROM escala_mes
-            WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=? AND ano=? AND mes=?
-            ORDER BY dia ASC
-            """,
-            con,
-            params=(setor, chapa, int(ano), int(mes)),
-        )
-    finally:
-        con.close()
-    return df
-
-
-def get_overrides_colaborador_mes(setor: str, chapa: str, ano: int, mes: int) -> pd.DataFrame:
-    setor = _norm_setor(setor)
-    chapa = _norm_chapa(chapa)
-    con = db_conn()
-    try:
-        df = pd.read_sql_query(
-            """
-            SELECT dia AS 'Dia', campo AS 'Campo', valor AS 'Novo valor', id AS '_ord'
-            FROM overrides
-            WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=? AND ano=? AND mes=?
-            ORDER BY dia DESC, id DESC
-            """,
-            con,
-            params=(setor, chapa, int(ano), int(mes)),
-        )
-    finally:
-        con.close()
-    return df
-
-
-def get_portal_version(setor: str, chapa: str, ano: int, mes: int) -> int:
-    setor = _norm_setor(setor)
-    chapa = _norm_chapa(chapa)
-    con = db_conn()
-    cur = con.cursor()
-    cur.execute(
-        "SELECT COUNT(*) FROM overrides WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=? AND ano=? AND mes=?",
-        (setor, chapa, int(ano), int(mes)),
-    )
-    qtd = int((cur.fetchone() or [0])[0] or 0)
-    con.close()
-    return int(qtd + 1)
-
-
-def get_assinatura_status(setor: str, chapa: str, ano: int, mes: int, tipo: str):
-    setor = _norm_setor(setor)
-    chapa = _norm_chapa(chapa)
-    tipo = str(tipo or 'oficial').strip().lower()
-    versao_atual = get_portal_version(setor, chapa, ano, mes)
-    con = db_conn()
-    cur = con.cursor()
-    cur.execute(
-        """
-        SELECT versao_ref, assinado_em
-        FROM portal_assinaturas
-        WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=? AND ano=? AND mes=? AND tipo=?
-        LIMIT 1
-        """,
-        (setor, chapa, int(ano), int(mes), tipo),
-    )
-    row = cur.fetchone()
-    con.close()
-    if not row:
-        return {"status": "Pendente", "versao": versao_atual, "assinado_em": None}
-    versao_ref, assinado_em = int(row[0] or 0), row[1]
-    status = "Assinado" if versao_ref == versao_atual else "Reassinatura pendente"
-    return {"status": status, "versao": versao_atual, "assinado_em": assinado_em, "versao_assinada": versao_ref}
-
-
-def salvar_assinatura_portal(setor: str, chapa: str, ano: int, mes: int, tipo: str):
-    setor = _norm_setor(setor)
-    chapa = _norm_chapa(chapa)
-    tipo = str(tipo or 'oficial').strip().lower()
-    versao_ref = get_portal_version(setor, chapa, ano, mes)
-    agora = datetime.now().isoformat()
-    con = db_conn()
-    cur = con.cursor()
-    cur.execute(
-        """
-        INSERT INTO portal_assinaturas(setor, chapa, ano, mes, tipo, versao_ref, assinado_em)
-        VALUES(?,?,?,?,?,?,?)
-        ON CONFLICT(setor, chapa, ano, mes, tipo)
-        DO UPDATE SET versao_ref=excluded.versao_ref, assinado_em=excluded.assinado_em
-        """,
-        (setor, chapa, int(ano), int(mes), tipo, int(versao_ref), agora),
-    )
-    con.commit()
-    con.close()
-
-
-def list_solicitacoes_colaborador(setor: str, chapa: str) -> pd.DataFrame:
-    setor = _norm_setor(setor)
-    chapa = _norm_chapa(chapa)
-    con = db_conn()
-    try:
-        df = pd.read_sql_query(
-            """
-            SELECT id AS 'ID', data_solicitada AS 'Data solicitada', tipo AS 'Tipo',
-                   COALESCE(motivo,'') AS 'Motivo', COALESCE(observacao,'') AS 'Observação',
-                   status AS 'Status', criado_em AS 'Criado em', atualizado_em AS 'Atualizado em'
-            FROM portal_solicitacoes_folga
-            WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?
-            ORDER BY datetime(criado_em) DESC, id DESC
-            """,
-            con,
-            params=(setor, chapa),
-        )
-    finally:
-        con.close()
-    return df
-
-
-def criar_solicitacao_folga(setor: str, chapa: str, data_solicitada: str, tipo: str, motivo: str, observacao: str):
-    setor = _norm_setor(setor)
-    chapa = _norm_chapa(chapa)
-    agora = datetime.now().isoformat()
-    con = db_conn()
-    cur = con.cursor()
-    cur.execute(
-        """
-        INSERT INTO portal_solicitacoes_folga(setor, chapa, data_solicitada, tipo, motivo, observacao, status, criado_em, atualizado_em)
-        VALUES(?,?,?,?,?,?,?,?,?)
-        """,
-        (setor, chapa, str(data_solicitada), str(tipo), str(motivo or '').strip(), str(observacao or '').strip(), 'Em análise', agora, agora),
-    )
-    con.commit()
-    con.close()
-
-
-def _norm_subgrupo_label(v: str) -> str:
-    s = str(v or '').strip().upper()
-    s = unicodedata.normalize('NFKD', s)
-    s = ''.join(ch for ch in s if not unicodedata.combining(ch))
-    s = re.sub(r'\s+', ' ', s).strip()
-    return s
-
-def colaborador_eh_lideranca(setor: str, chapa: str) -> bool:
-    rec = get_colaborador_record(setor, chapa)
-    if not rec:
-        return False
-
-    sg = _norm_subgrupo_label((rec or {}).get('Subgrupo', ''))
-    perfil = _norm_subgrupo_label((rec or {}).get('Perfil', ''))
-    lider = _norm_subgrupo_label((rec or {}).get('Lider', ''))
-
-    if sg in ['LIDERANCA', 'LIDER', 'LIDERES', 'LIDERANCA FLV']:
-        return True
-
-    if perfil in ['LIDER', 'LIDERANCA', 'ENCARREGADO', 'RESPONSAVEL']:
-        return True
-
-    if lider in ['SIM', 'S', '1', 'TRUE']:
-        return True
-
-    return False
-
-def list_assinaturas_setor(setor: str, ano: int, mes: int) -> pd.DataFrame:
-    setor = _norm_setor(setor)
-    con = db_conn()
-    q = pd.read_sql_query(
-        """
-        SELECT p.setor AS Setor, p.chapa AS Chapa, COALESCE(c.nome, p.chapa) AS Nome,
-               COALESCE(c.subgrupo, 'SEM SUBGRUPO') AS Subgrupo,
-               p.ano AS Ano, p.mes AS Mes, p.tipo AS Tipo, p.versao_ref AS 'Versão', p.assinado_em AS Assinado_em
-        FROM portal_assinaturas p
-        LEFT JOIN colaboradores c
-          ON UPPER(TRIM(c.setor)) = UPPER(TRIM(p.setor))
-         AND TRIM(c.chapa) = TRIM(p.chapa)
-        WHERE UPPER(TRIM(p.setor)) = ? AND p.ano = ? AND p.mes = ?
-        ORDER BY p.tipo, COALESCE(c.nome, p.chapa)
-        """,
-        con, params=(setor, int(ano), int(mes))
-    )
-    con.close()
-    return q
-
-def list_solicitacoes_setor(setor: str) -> pd.DataFrame:
-    setor = _norm_setor(setor)
-    con = db_conn()
-    q = pd.read_sql_query(
-        """
-        SELECT s.id AS ID, s.setor AS Setor, s.chapa AS Chapa, COALESCE(c.nome, s.chapa) AS Nome,
-               COALESCE(c.subgrupo, 'SEM SUBGRUPO') AS Subgrupo,
-               s.data_solicitada AS Data, s.tipo AS Tipo, s.motivo AS Motivo, s.observacao AS 'Observação',
-               s.status AS Status, s.criado_em AS Criado_em, s.atualizado_em AS Atualizado_em
-        FROM portal_solicitacoes_folga s
-        LEFT JOIN colaboradores c
-          ON UPPER(TRIM(c.setor)) = UPPER(TRIM(s.setor))
-         AND TRIM(c.chapa) = TRIM(s.chapa)
-        WHERE UPPER(TRIM(s.setor)) = ?
-        ORDER BY s.criado_em DESC, s.id DESC
-        """,
-        con, params=(setor,)
-    )
-    con.close()
-    return q
-
-def atualizar_status_solicitacao(solicitacao_id: int, novo_status: str):
-    agora = datetime.now().isoformat()
-    con = db_conn()
-    cur = con.cursor()
-    cur.execute(
-        'UPDATE portal_solicitacoes_folga SET status=?, atualizado_em=? WHERE id=?',
-        (str(novo_status), agora, int(solicitacao_id)),
-    )
-    con.commit()
-    con.close()
-
-def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
-    setor = _norm_setor(auth.get('setor', ''))
-    chapa = _norm_chapa(auth.get('chapa', ''))
-    nome = auth.get('nome', '-')
-    colab = get_colaborador_record(setor, chapa) or {
-        'Nome': nome,
-        'Chapa': chapa,
-        'Subgrupo': 'SEM SUBGRUPO',
-        'Entrada': '06:00',
-        'Folga_Sab': False,
-        'Setor': setor,
-    }
-
-    hoje = datetime.now()
-    ano_vigente = int(hoje.year)
-    mes_vigente = int(hoje.month)
-    prox_mes = mes_vigente + 1
-    prox_ano = ano_vigente
-    if prox_mes > 12:
-        prox_mes = 1
-        prox_ano += 1
-
-    st.markdown("### 👤 Portal do Colaborador — v0.01 beta premium")
-    i1, i2, i3, i4 = st.columns(4)
-    i1.info(f"**Nome**\n\n{colab.get('Nome','-')}")
-    i2.info(f"**Setor**\n\n{setor}")
-    i3.info(f"**Subgrupo**\n\n{colab.get('Subgrupo','SEM SUBGRUPO')}")
-    i4.info(f"**Chapa**\n\n{chapa}")
-
-    st.caption(
-        f"Portal do colaborador travado no mês vigente ({mes_vigente:02d}/{ano_vigente}) e na pré-escala do próximo mês ({prox_mes:02d}/{prox_ano})."
-    )
-
-    df_oficial = get_escala_colaborador_mes(setor, chapa, ano_vigente, mes_vigente)
-    df_pre = get_escala_colaborador_mes(setor, chapa, prox_ano, prox_mes)
-    hist = get_overrides_colaborador_mes(setor, chapa, ano_vigente, mes_vigente)
-    ass_escala = get_assinatura_status(setor, chapa, ano_vigente, mes_vigente, 'oficial')
-    ass_mud = get_assinatura_status(setor, chapa, ano_vigente, mes_vigente, 'historico')
-
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        '📋 Escala Oficial',
-        '🕒 Pré-Escala',
-        '📝 Histórico de Mudanças',
-        '✍️ Assinaturas',
-        '⚙️ Ajustes',
-    ])
-
-    with tab1:
-        st.markdown(f"#### Escala oficial — {mes_vigente:02d}/{ano_vigente}")
-        c1, c2, c3 = st.columns(3)
-        c1.metric('Versão atual', ass_escala.get('versao', 1))
-        c2.metric('Status da assinatura', ass_escala.get('status', 'Pendente'))
-        c3.metric('Mudanças registradas', len(hist) if hasattr(hist, '__len__') else 0)
-        if ass_escala.get('assinado_em'):
-            st.caption(f"Última assinatura da escala: {ass_escala.get('assinado_em')}")
-        if df_oficial.empty:
-            st.info('Ainda não há escala oficial carregada para o mês vigente.')
-        else:
-            st.dataframe(df_oficial, use_container_width=True, hide_index=True)
-            if ass_escala.get('status') == 'Assinado':
-                st.success('Escala do mês vigente já assinada. Botão ocultado automaticamente.')
-            else:
-                st.info('A assinatura da escala do mês vigente fica na aba Assinaturas.')
-
-    with tab2:
-        st.markdown(f"#### Pré-escala — {prox_mes:02d}/{prox_ano}")
-        st.warning('Prévia do próximo mês. Ainda não é oficial, não pode ser assinada e pode ser alterada até a liberação do líder.')
-        if df_pre.empty:
-            st.info('Ainda não há pré-escala disponível para o próximo mês.')
-        else:
-            st.dataframe(df_pre, use_container_width=True, hide_index=True)
-            st.caption('Assinatura bloqueada até o início do mês vigente correspondente.')
-
-    with tab3:
-        st.markdown(f"#### Histórico de mudanças — {mes_vigente:02d}/{ano_vigente}")
-        m1, m2 = st.columns(2)
-        m1.metric('Mudanças registradas no mês vigente', len(hist) if hasattr(hist, '__len__') else 0)
-        m2.metric('Status do aceite das mudanças', ass_mud.get('status', 'Pendente'))
-        if ass_mud.get('assinado_em'):
-            st.caption(f"Último aceite das mudanças: {ass_mud.get('assinado_em')}")
-        if hist.empty:
-            st.info('Nenhuma mudança registrada no mês vigente para esta chapa.')
-        else:
-            hist_view = hist.copy()
-            keep_cols = [c for c in ['Dia', 'Campo', 'Valor anterior', 'Novo valor', 'Motivo', 'Alterado em'] if c in hist_view.columns]
-            if not keep_cols:
-                keep_cols = list(hist_view.columns)
-            st.dataframe(hist_view[keep_cols], use_container_width=True, hide_index=True)
-            st.caption('A assinatura dessas mudanças fica concentrada na aba Assinaturas.')
-
-    with tab4:
-        st.markdown(f"#### Assinaturas — {mes_vigente:02d}/{ano_vigente}")
-        sub1, sub2 = st.tabs(['🗓️ Assinatura da Escala do Mês', '🔁 Assinatura de Mudanças'])
-
-        with sub1:
-            a1, a2, a3 = st.columns(3)
-            a1.metric('Competência', f'{mes_vigente:02d}/{ano_vigente}')
-            a2.metric('Versão atual', ass_escala.get('versao', 1))
-            a3.metric('Status', ass_escala.get('status', 'Pendente'))
-            if ass_escala.get('assinado_em'):
-                st.caption(f"Assinada em: {ass_escala.get('assinado_em')}")
-            if df_oficial.empty:
-                st.info('Sem escala oficial carregada para o mês vigente.')
-            elif ass_escala.get('status') == 'Assinado':
-                st.success('Escala do mês vigente já assinada. Botão ocultado.')
-            else:
-                st.warning('Assine aqui somente a escala do mês vigente.')
-                if st.button('✅ Assinar escala do mês', key=f'ass_oficial_{setor}_{chapa}_{ano_vigente}_{mes_vigente}'):
-                    salvar_assinatura_portal(setor, chapa, ano_vigente, mes_vigente, 'oficial')
-                    st.success('Escala do mês assinada com sucesso.')
-                    st.rerun()
-
-        with sub2:
-            b1, b2, b3 = st.columns(3)
-            b1.metric('Mudanças registradas', len(hist) if hasattr(hist, '__len__') else 0)
-            b2.metric('Versão das mudanças', ass_mud.get('versao', 1))
-            b3.metric('Status', ass_mud.get('status', 'Pendente'))
-            if ass_mud.get('assinado_em'):
-                st.caption(f"Mudanças assinadas em: {ass_mud.get('assinado_em')}")
-            if hist.empty:
-                st.info('Não existem mudanças de horários, folgas ou ajustes no mês vigente.')
-            else:
-                hist_ass = hist.copy()
-                hist_ass['Status da assinatura'] = ass_mud.get('status', 'Pendente')
-                keep_cols = [c for c in ['Dia', 'Campo', 'Valor anterior', 'Novo valor', 'Motivo', 'Status da assinatura'] if c in hist_ass.columns]
-                if not keep_cols:
-                    keep_cols = list(hist_ass.columns)
-                st.dataframe(hist_ass[keep_cols], use_container_width=True, hide_index=True)
-                if ass_mud.get('status') == 'Assinado':
-                    st.success('Mudanças do mês vigente já assinadas. Botão ocultado.')
-                else:
-                    if st.button('✍️ Assinar mudanças de horários e folgas', key=f'ass_hist_{setor}_{chapa}_{ano_vigente}_{mes_vigente}'):
-                        salvar_assinatura_portal(setor, chapa, ano_vigente, mes_vigente, 'historico')
-                        st.success('Mudanças do mês vigente assinadas com sucesso.')
-                        st.rerun()
-
-    with tab5:
-        st.markdown('#### Ajustes')
-        suba, subb = st.tabs(['🌴 Sugestão de Folgas', '📨 Minhas solicitações'])
-
-        with suba:
-            st.caption('Envie sugestões de folgas e ajustes de forma organizada para o líder analisar.')
-            c1, c2 = st.columns(2)
-            data_padrao = hoje.date()
-            data_sol = c1.date_input('Data desejada', value=data_padrao, key=f'data_folga_{setor}_{chapa}')
-            tipo_sol = c2.selectbox('Tipo da sugestão', ['Folga', 'Troca de plantão', 'Ajuste de horário'], key=f'tipo_folga_{setor}_{chapa}')
-            motivo = st.text_input('Motivo', key=f'motivo_folga_{setor}_{chapa}')
-            observacao = st.text_area('Observação', key=f'obs_folga_{setor}_{chapa}')
-            if st.button('📨 Enviar sugestão', key=f'env_folga_{setor}_{chapa}'):
-                criar_solicitacao_folga(setor, chapa, str(data_sol), tipo_sol, motivo, observacao)
-                st.success('Sugestão enviada para análise.')
-                st.rerun()
-
-        with subb:
-            df_sol = list_solicitacoes_colaborador(setor, chapa)
-            if df_sol.empty:
-                st.info('Nenhuma sugestão enviada até agora.')
-            else:
-                st.dataframe(df_sol, use_container_width=True, hide_index=True)
-
-def _run_post_login_startup_once():
-    if st.session_state.get("_post_login_startup_done", False):
-        return
-
-    st.session_state["_post_login_startup_done"] = True
-
-    try:
-        with st.spinner("Preparando base após login..."):
-            if SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY:
-                try:
-                    _restore_from_supabase_if_local_empty(force=False)
-                except Exception as e:
-                    _set_supabase_error(e)
-
-            if SUPABASE_AUTO_BOOTSTRAP_AFTER_SCHEMA:
-                try:
-                    _bootstrap_from_supabase_after_schema(force=False)
-                except Exception as e:
-                    _set_supabase_error(e)
-
-            if not FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP:
-                try:
-                    auto_backup_if_due()
-                except Exception:
-                    pass
-    except Exception:
-        pass
-
-
 def page_app():
-    _run_post_login_startup_once()
     auth = st.session_state.get("auth") or {}
     setor = auth.get("setor", "GERAL")
 
@@ -7654,45 +6924,22 @@ def page_app():
     with st.sidebar:
         st.title("👤 Sessão")
         st.caption("Acesso por setor (usuário / líder / admin)")
-        st.caption(VERSAO_ACESSO_LIDER)
-
-        _colab_sb = get_colaborador_record(setor, auth.get('chapa',''))
-        _subgrupo_auth = (_colab_sb or {}).get('Subgrupo', 'SEM SUBGRUPO')
-        _lideranca_ok = bool(auth.get('is_lider', False)) or colaborador_eh_lideranca(setor, auth.get('chapa',''))
-        _perfil_gestao = bool(auth.get('is_admin', False)) or _lideranca_ok
 
         cA, cB = st.columns([1, 1])
-        perfil_label = 'ADMIN' if auth.get('is_admin', False) else ('LÍDER' if _lideranca_ok else 'COLABORADOR')
         cA.write(f"**Nome:** {auth.get('nome','-')}")
-        cB.write(f"**Perfil:** {perfil_label}")
+        cB.write(f"**Perfil:** {'ADMIN' if auth.get('is_admin', False) else ('LÍDER' if auth.get('is_lider', False) else 'USUÁRIO')}")
 
         st.write(f"**Setor:** {setor}")
         st.write(f"**Chapa:** {auth.get('chapa','-')}")
-        st.write(f"**Subgrupo:** {_subgrupo_auth}")
-        if bool(auth.get('is_lider', False)) and not _lideranca_ok and not bool(auth.get('is_admin', False)):
-            st.warning('Perfil líder liberado somente para colaborador do subgrupo LIDERANÇA neste setor.')
 
         st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
 
         st.subheader("🗓️ Competência")
-        if not _perfil_gestao:
-            hoje = datetime.now()
-            st.session_state["cfg_mes"] = int(hoje.month)
-            st.session_state["cfg_ano"] = int(hoje.year)
-            st.write(f"**Mês vigente:** {hoje.month:02d}")
-            st.write(f"**Ano vigente:** {hoje.year}")
-            prox_mes = hoje.month + 1
-            prox_ano = hoje.year
-            if prox_mes > 12:
-                prox_mes = 1
-                prox_ano += 1
-            st.write(f"**Pré-escala:** {prox_mes:02d}/{prox_ano}")
-        else:
-            m1, m2 = st.columns(2)
-            mes_cfg = m1.selectbox("Mês", list(range(1, 13)), index=mes_cfg - 1, key="sb_mes")
-            ano_cfg = m2.number_input("Ano", value=ano_cfg, step=1, key="sb_ano")
-            st.session_state["cfg_mes"] = int(mes_cfg)
-            st.session_state["cfg_ano"] = int(ano_cfg)
+        m1, m2 = st.columns(2)
+        mes_cfg = m1.selectbox("Mês", list(range(1, 13)), index=mes_cfg - 1, key="sb_mes")
+        ano_cfg = m2.number_input("Ano", value=ano_cfg, step=1, key="sb_ano")
+        st.session_state["cfg_mes"] = int(mes_cfg)
+        st.session_state["cfg_ano"] = int(ano_cfg)
 
         st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
 
@@ -7707,12 +6954,7 @@ def page_app():
         page_gestao_dashboard(int(st.session_state["cfg_ano"]), int(st.session_state["cfg_mes"]))
         return
 
-    _lideranca_ok = bool(auth.get('is_lider', False)) or colaborador_eh_lideranca(setor, auth.get('chapa',''))
-    _perfil_gestao = bool(auth.get('is_admin', False)) or _lideranca_ok
-
-    if not _perfil_gestao:
-        page_portal_colaborador(auth, int(st.session_state["cfg_ano"]), int(st.session_state["cfg_mes"]))
-        return
+        
 
     # =========================
     # KPIs
@@ -7753,7 +6995,7 @@ def page_app():
     # =========================
     # ABAS
     # =========================
-    tabs = ["👥 Colaboradores", "🚀 Gerar Escala", "⚙️ Ajustes", "🏖️ Férias", "🖨️ Impressão", "✍️ Assinaturas", "📨 Minhas solicitações"]
+    tabs = ["👥 Colaboradores", "🚀 Gerar Escala", "⚙️ Ajustes", "🏖️ Férias", "🖨️ Impressão"]
     is_admin_area = bool(auth.get("is_admin", False)) and setor == "ADMIN"
     if is_admin_area:
         tabs.append("🔒 Admin")
@@ -7965,7 +7207,6 @@ def page_app():
         else:
             b1, b2, b3, _ = st.columns([1, 1, 1, 5])
             if b1.button("🚀 Gerar agora (respeita ajustes)", use_container_width=True, key="gen_btn"):
-                _clear_preview_cache(setor, int(ano), int(mes))
                 st.session_state["last_seed"] = int(seed)
                 ok = _regenerar_mes_inteiro(setor, int(ano), int(mes), seed=int(seed), respeitar_ajustes=True)
                 if ok:
@@ -7975,7 +7216,6 @@ def page_app():
                 st.rerun()
 
             if b2.button("🔄 Recarregar do banco", use_container_width=True, key="gen_reload_btn"):
-                _clear_preview_cache(setor, int(ano), int(mes))
                 st.rerun()
 
             # 🧹 Gerar do zero: ignora travas/ajustes (recalcula o mês totalmente)
@@ -7991,7 +7231,6 @@ def page_app():
                     # Importante: se existirem overrides antigos no mês, eles podem "forçar" Folga/Trabalho e aparentar que o motor não funcionou.
                     # Ao gerar do zero, limpamos overrides do mês selecionado (não mexe em meses anteriores).
                     delete_overrides_mes(setor, int(ano), int(mes))
-                    _clear_preview_cache(setor, int(ano), int(mes))
                     st.session_state["last_seed"] = int(seed)
                     ok = _regenerar_mes_inteiro(setor, int(ano), int(mes), seed=int(seed), respeitar_ajustes=False)
                     if ok:
@@ -8006,38 +7245,25 @@ def page_app():
                     st.rerun()
 
 
-            preview_key = f"gerar_preview_loaded_{setor}_{ano}_{mes}"
-            if preview_key not in st.session_state:
-                st.session_state[preview_key] = False
+            hist_db = load_escala_mes_db(setor, int(ano), int(mes))
+            hist_db = apply_overrides_to_hist(setor, int(ano), int(mes), hist_db)
 
-            cprev1, cprev2 = st.columns([1, 5])
-            if cprev1.button("📅 Carregar calendário", use_container_width=True, key=f"btn_load_preview_{setor}_{ano}_{mes}"):
-                st.session_state[preview_key] = True
-                st.rerun()
-            if cprev2.button("🧹 Ocultar visualização", use_container_width=True, key=f"btn_hide_preview_{setor}_{ano}_{mes}"):
-                st.session_state[preview_key] = False
-                st.rerun()
-
-            if st.session_state.get(preview_key, False):
-                with st.spinner("Carregando calendário do mês..."):
-                    hist_db, cal = _ensure_preview_cache(setor, int(ano), int(mes), colaboradores)
-
-                if hist_db:
-                    st.markdown("### 📅 Calendário RH (visual por colaborador)")
-                    show_color = st.checkbox("🎨 Mostrar cores no calendário (pode deixar lento)", value=False, key="cal_color")
-                    if show_color:
-                        st.dataframe(style_calendario(cal, int(mes), int(ano)), use_container_width=True)
-                    else:
-                        st.dataframe(cal, use_container_width=True)
-
-                    st.markdown("---")
-                    st.markdown("### 👤 Visualizar colaborador (detalhado)")
-                    ch_view = st.selectbox("Chapa:", list(hist_db.keys()), key="view_ch")
-                    st.dataframe(hist_db[ch_view], use_container_width=True, height=420)
+            if hist_db:
+                colab_by = {c["Chapa"]: c for c in colaboradores}
+                st.markdown("### 📅 Calendário RH (visual por colaborador)")
+                cal = calendario_rh_df(hist_db, colab_by)
+                show_color = st.checkbox("🎨 Mostrar cores no calendário (pode deixar lento)", value=False, key="cal_color")
+                if show_color:
+                    st.dataframe(style_calendario(cal, int(mes), int(ano)), use_container_width=True)
                 else:
-                    st.info("Sem escala no mês. Clique em **Gerar agora**.")
+                    st.dataframe(cal, use_container_width=True)
+
+                st.markdown("---")
+                st.markdown("### 👤 Visualizar colaborador (detalhado)")
+                ch_view = st.selectbox("Chapa:", list(hist_db.keys()), key="view_ch")
+                st.dataframe(hist_db[ch_view], use_container_width=True, height=420)
             else:
-                st.info("Visualização pesada ficou sob demanda para deixar a navegação mais rápida. Clique em **Carregar calendário** quando quiser ver a escala do mês.")
+                st.info("Sem escala no mês. Clique em **Gerar agora**.")
 
     # ------------------------------------------------------
     # ABA 3: Ajustes
@@ -8054,22 +7280,16 @@ def page_app():
             c2.caption("Alterar em 🗓️ Competência (sidebar)")
             c3.caption("Ajustes aplicam na competência ativa.")
 
-        sec_aj = st.radio("", ["🧩 Folgas manuais em grade", "🔁 Troca de horários", "✅ Preferência por subgrupo", "📌 Subgrupos (editável)"], horizontal=True, key="ajustes_nav_fast", label_visibility="collapsed")
+        hist_db = load_escala_mes_db(setor, ano, mes)
+        colaboradores = load_colaboradores_setor(setor)
+        colab_by = {c["Chapa"]: c for c in colaboradores}
 
-        _ajustes_precisam_escala = sec_aj in ("🧩 Folgas manuais em grade", "🔁 Troca de horários")
-        hist_db = {}
-        colaboradores = []
-        colab_by = {}
+        if not hist_db:
+            st.info("Gere a escala primeiro na aba 🚀 Gerar Escala.")
+        else:
+            hist_db = apply_overrides_to_hist(setor, ano, mes, hist_db)
 
-        if _ajustes_precisam_escala:
-            with st.spinner("Carregando dados dos ajustes..."):
-                hist_db = get_hist_mes_com_overrides_cached(setor, ano, mes)
-                colaboradores = load_colaboradores_setor(setor)
-                colab_by = {c["Chapa"]: c for c in colaboradores}
-
-            if not hist_db:
-                st.info("Gere a escala primeiro na aba 🚀 Gerar Escala.")
-                return
+            sec_aj = st.radio("", ["🧩 Folgas manuais em grade", "🔁 Troca de horários", "✅ Preferência por subgrupo", "📌 Subgrupos (editável)"], horizontal=True, key="ajustes_nav_fast", label_visibility="collapsed")
 
             if sec_aj == "🧩 Folgas manuais em grade":
                 st.markdown("### 🧩 Folgas manuais em grade (por colaborador)")
@@ -8544,38 +7764,28 @@ def page_app():
     elif sec_main == "🖨️ Impressão":
         sec_imp = st.radio("", ["📊 Excel modelo", "🗓️ Quem trabalha no dia", "📅 Escala", "🖨️ Imprimir escala parede"], horizontal=True, key="impressao_nav_fast", label_visibility="collapsed")
 
-        # V94.2 — lazy load da impressão:
-        # evita carregar escala + colaboradores + overrides logo ao abrir a aba.
+        # V89.1 — correção de escopo:
+        # garante que ano/mes/hist_db/colaboradores existam em todas as subabas de impressão
+        # sem alterar regras, funções ou otimizações já feitas.
         ano = int(st.session_state["cfg_ano"])
         mes = int(st.session_state["cfg_mes"])
-        hist_db = {}
-        colaboradores = []
-
-        # V94.3 — estado/cache leve para exportação/impressão
-        imp_state = st.session_state.setdefault("imp_state", {})
-        excel_cache = imp_state.setdefault("excel_cache", {})
-        dia_cache = imp_state.setdefault("dia_cache", {})
-        parede_cache = imp_state.setdefault("parede_cache", {})
+        hist_db = load_escala_mes_db(setor, ano, mes) or {}
+        colaboradores = load_colaboradores_setor(setor)
 
         if sec_imp == "📊 Excel modelo":
             st.subheader("📊 Excel modelo RH (separado por subgrupo)")
-            st.caption("Geração pesada ficou sob demanda para deixar a aba Impressão rápida.")
-            excel_key = f"{setor}|{ano}|{mes}"
-            if st.button("📊 Gerar Excel", key="xls_btn"):
-                if excel_key in excel_cache:
-                    st.session_state["xls_cached_bytes"] = excel_cache[excel_key]
-                else:
-                    colaboradores = load_colaboradores_setor(setor)
-                    hist_db = load_escala_mes_db(setor, ano, mes) or {}
-                    colab_by = {c["Chapa"]: c for c in colaboradores}
-                    if not hist_db:
-                        st.info("Gere a escala.")
-                    else:
-                        hist_db = apply_overrides_to_hist(setor, ano, mes, hist_db)
-                        output = io.BytesIO()
-                        with pd.ExcelWriter(output, engine="openpyxl") as writer:
-                            wb = writer.book
-                            ws = wb.create_sheet("Escala Mensal", index=0)
+            colab_by = {c["Chapa"]: c for c in colaboradores}
+
+            if not hist_db:
+                st.info("Gere a escala.")
+            else:
+                hist_db = apply_overrides_to_hist(setor, ano, mes, hist_db)
+
+                if st.button("📊 Gerar Excel", key="xls_btn"):
+                    output = io.BytesIO()
+                    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+                        wb = writer.book
+                        ws = wb.create_sheet("Escala Mensal", index=0)
 
                         fill_header = PatternFill(start_color="1F4E78", end_color="1F4E78", patternType="solid")
                         fill_dom = PatternFill(start_color="C00000", end_color="C00000", patternType="solid")
@@ -8739,83 +7949,74 @@ def page_app():
                         if "Sheet" in wb.sheetnames and len(wb.sheetnames) > 1:
                             wb.remove(wb["Sheet"])
 
-                        excel_bytes = output.getvalue()
-                        excel_cache[excel_key] = excel_bytes
-                        st.session_state["xls_cached_bytes"] = excel_bytes
-            if st.session_state.get("xls_cached_bytes"):
-                st.download_button(
-                    "📥 Baixar Excel",
-                    data=st.session_state["xls_cached_bytes"],
-                    file_name=f"escala_{setor}_{mes:02d}_{ano}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    key="xls_down"
-                )
+                    st.download_button(
+                        "📥 Baixar Excel",
+                        data=output.getvalue(),
+                        file_name=f"escala_{setor}_{mes:02d}_{ano}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="xls_down"
+                    )
         elif sec_imp == "🗓️ Quem trabalha no dia":
             # --- Lista (e PDF) de quem TRABALHA no dia escolhido ---
             st.markdown("### 🗓️ Quem trabalha no dia (para impressão)")
-            st.caption("Carregamento sob demanda para deixar a aba Impressão rápida.")
             try:
                 dias_mes = calendar.monthrange(int(ano), int(mes))[1]
             except Exception:
                 dias_mes = 31
             dia_sel = st.number_input("Dia do mês", min_value=1, max_value=int(dias_mes), value=1, step=1)
-            dia_key = f"{setor}|{ano}|{mes}|{int(dia_sel)}"
-            carregar_dia = st.button("🔎 Carregar lista do dia", key="dia_trabalho_load_btn")
 
-            if carregar_dia and dia_key not in dia_cache:
-                colaboradores = load_colaboradores_setor(setor)
-                hist_db = load_escala_mes_db(setor, ano, mes) or {}
-                if hist_db:
-                    hist_db = apply_overrides_to_hist(setor, ano, mes, hist_db)
-                linhas = []
-                for _chapa, _df in (hist_db or {}).items():
-                    if _df is None or _df.empty:
-                        continue
-                    try:
-                        _linha = _df.loc[_df["Data"].dt.day == int(dia_sel)].head(1)
-                    except Exception:
-                        _linha = _df.loc[pd.to_datetime(_df["Data"], errors="coerce").dt.day == int(dia_sel)].head(1)
-                    if _linha.empty:
-                        continue
-                    _r = _linha.iloc[0].to_dict()
-                    _stt = str(_r.get("Status", "")).strip()
-                    if _stt not in WORK_STATUSES:
-                        continue
-                    _ent = str(_r.get("H_Entrada", "") or "").strip()
-                    _sai = str(_r.get("H_Saida", "") or "").strip()
-                    _nome = ""
-                    _subg = ""
-                    for c in colaboradores:
-                        if str(c.get("Chapa", "")).strip() == str(_chapa).strip():
-                            _nome = str(c.get("Nome", "")).strip()
-                            _subg = str(c.get("Subgrupo", "")).strip()
-                            break
-                    linhas.append({"Chapa": str(_chapa).strip(), "Nome": _nome, "Subgrupo": _subg, "Entrada": _ent, "Saída": _sai})
-                df_dia = pd.DataFrame(linhas).sort_values(["Subgrupo", "Nome"]) if linhas else pd.DataFrame(columns=["Chapa","Nome","Subgrupo","Entrada","Saída"])
-                dia_cache[dia_key] = {"df": df_dia, "hist": hist_db, "colaboradores": colaboradores}
+            # Monta tabela para visualização
+            linhas = []
+            for _chapa, _df in (hist_db or {}).items():
+                if _df is None or _df.empty:
+                    continue
+                try:
+                    _linha = _df.loc[_df["Data"].dt.day == int(dia_sel)].head(1)
+                except Exception:
+                    _linha = _df.loc[pd.to_datetime(_df["Data"], errors="coerce").dt.day == int(dia_sel)].head(1)
+                if _linha.empty:
+                    continue
+                _r = _linha.iloc[0].to_dict()
+                _stt = str(_r.get("Status", "")).strip()
+                if _stt not in WORK_STATUSES:
+                    continue
+                _ent = str(_r.get("H_Entrada", "") or "").strip()
+                _sai = str(_r.get("H_Saida", "") or "").strip()
+                # metadados do colaborador
+                _nome = ""
+                _subg = ""
+                for c in colaboradores:
+                    if str(c.get("Chapa", "")).strip() == str(_chapa).strip():
+                        _nome = str(c.get("Nome", "")).strip()
+                        _subg = str(c.get("Subgrupo", "")).strip()
+                        break
+                linhas.append({"Chapa": str(_chapa).strip(), "Nome": _nome, "Subgrupo": _subg, "Entrada": _ent, "Saída": _sai})
 
-            payload_dia = dia_cache.get(dia_key, {"df": pd.DataFrame(columns=["Chapa","Nome","Subgrupo","Entrada","Saída"]), "hist": {}, "colaboradores": []})
-            df_dia = payload_dia.get("df") if isinstance(payload_dia.get("df"), pd.DataFrame) else pd.DataFrame(columns=["Chapa","Nome","Subgrupo","Entrada","Saída"])
+            df_dia = pd.DataFrame(linhas).sort_values(["Subgrupo", "Nome"]) if linhas else pd.DataFrame(columns=["Chapa","Nome","Subgrupo","Entrada","Saída"])
             st.dataframe(df_dia, use_container_width=True, hide_index=True)
 
             colp1, colp2 = st.columns([1, 2])
-            pdf_day_key = f"pdf::{dia_key}"
             with colp1:
                 if st.button("📄 Gerar PDF (quem trabalha no dia)"):
                     if df_dia.empty:
                         st.warning("Não há colaboradores trabalhando nesse dia (ou ainda não foi gerado para este mês).")
                     else:
-                        pdf_bytes_dia = gerar_pdf_trabalhando_no_dia(setor, int(ano), int(mes), int(dia_sel), payload_dia.get("hist", {}), payload_dia.get("colaboradores", []))
-                        st.session_state[pdf_day_key] = pdf_bytes_dia
+                        pdf_bytes_dia = gerar_pdf_trabalhando_no_dia(setor, int(ano), int(mes), int(dia_sel), hist_db, colaboradores)
+                        st.session_state["pdf_dia_trabalho_bytes"] = pdf_bytes_dia
                         st.success("PDF pronto.")
             with colp2:
-                if st.session_state.get(pdf_day_key):
+                if st.session_state.get("pdf_dia_trabalho_bytes"):
                     st.download_button(
                         "⬇️ Baixar PDF (quem trabalha no dia)",
-                        data=st.session_state[pdf_day_key],
+                        data=st.session_state["pdf_dia_trabalho_bytes"],
                         file_name=f"escala_trabalhando_dia_{int(dia_sel):02d}_{int(mes):02d}_{int(ano)}.pdf",
                         mime="application/pdf",
                     )
+
+
+
+
+
 
         elif sec_imp == "📅 Escala":
             st.subheader("📅 Escala")
@@ -8843,7 +8044,6 @@ def page_app():
         elif sec_imp == "🖨️ Imprimir escala parede":
             st.subheader("🖨️ Imprimir escala parede")
 
-            colaboradores = load_colaboradores_setor(setor)
             all_subgrupos = sorted({((c.get("Subgrupo") or "").strip() or "SEM SUBGRUPO") for c in colaboradores})
             cfx1, cfx2, cfx3 = st.columns([1.2, 1.2, 1.6])
             loja_txt = cfx1.text_input("Loja:", value=str(setor), key="pdf_loja_txt")
@@ -8885,7 +8085,6 @@ def page_app():
             gerar = cbtn1.button("🖨️ Imprimir (gerar PDF)", key="pdf_print_btn", use_container_width=True)
             cbtn2.caption("Dica: selecione uma seção, depois marque os colaboradores. Se não marcar nenhum, imprime todos os filtrados.")
 
-            pdf_parede_key = f"{setor}|{ano}|{mes}|{loja_txt.strip()}|{modo_pdf}|{data_ini}|{data_fim}|{','.join(sorted(chapas_sel)) if 'chapas_sel' in locals() else ''}|{','.join(sorted(secoes_sel))}|{busca_txt.strip()}"
             if gerar:
                 if data_fim < data_ini:
                     st.warning("O dia final precisa ser maior ou igual ao dia inicial.")
@@ -8894,21 +8093,17 @@ def page_app():
                         chapas_sel = [str(mapa_idx[x].get("Chapa")) for x in sel if x in mapa_idx]
                     else:
                         chapas_sel = [str(c.get("Chapa")) for c in colabs_filtrados]
-                    pdf_parede_key = f"{setor}|{ano}|{mes}|{loja_txt.strip()}|{modo_pdf}|{data_ini}|{data_fim}|{','.join(sorted(chapas_sel))}|{','.join(sorted(secoes_sel))}|{busca_txt.strip()}"
-                    if pdf_parede_key in parede_cache:
-                        st.session_state["pdf_parede_bytes"] = parede_cache[pdf_parede_key]
-                    elif modo_pdf == "Panorâmico por período":
+
+                    if modo_pdf == "Panorâmico por período":
                         hist_db_pdf = _load_hist_periodo(setor, data_ini, data_fim)
                         hist_db_pdf = {ch: df for ch, df in hist_db_pdf.items() if ch in set(chapas_sel)}
                         if not hist_db_pdf:
                             st.warning("Nenhum colaborador com escala salva no período informado.")
                         else:
                             pdf_bytes = gerar_pdf_periodo_panoramico(loja_txt.strip() or str(setor), data_ini, data_fim, hist_db_pdf, colaboradores)
-                            parede_cache[pdf_parede_key] = pdf_bytes
-                            st.session_state["pdf_parede_bytes"] = pdf_bytes
                             st.download_button(
                                 "⬇️ Baixar PDF panorâmico",
-                                data=st.session_state["pdf_parede_bytes"],
+                                data=pdf_bytes,
                                 file_name=f"escala_panoramica_{(loja_txt.strip() or str(setor))}_{data_ini.strftime('%Y%m%d')}_{data_fim.strftime('%Y%m%d')}.pdf",
                                 mime="application/pdf",
                                 key="pdf_down_pan"
@@ -8938,90 +8133,6 @@ def page_app():
     # ------------------------------------------------------
     elif is_admin_area and sec_main == "🔒 Admin":
             st.subheader("🔒 Admin do Sistema (somente ADMIN)")
-
-            st.markdown("## 🛠️ ATUALIZAR FUNCIONÁRIO DE QUALQUER SETOR")
-            st.warning("NOVO BLOCO ADMIN ATIVO: aqui você altera subgrupo e perfil do sistema do funcionário.")
-            st.caption("Aqui o ADMIN pode alterar nome, subgrupo e perfil do colaborador em qualquer setor. O perfil sincroniza o login do sistema.")
-            try:
-                con = db_conn()
-                df_func_adm = pd.read_sql_query(
-                    """
-                    SELECT nome, setor, chapa, COALESCE(subgrupo,'') AS subgrupo, COALESCE(entrada,'06:00') AS entrada, COALESCE(folga_sab,0) AS folga_sab
-                    FROM colaboradores
-                    ORDER BY setor, nome
-                    """,
-                    con,
-                )
-                df_login_adm = pd.read_sql_query(
-                    """
-                    SELECT setor, chapa, COALESCE(is_admin,0) AS is_admin, COALESCE(is_lider,0) AS is_lider
-                    FROM usuarios_sistema
-                    """,
-                    con,
-                )
-                con.close()
-            except Exception:
-                df_func_adm = pd.DataFrame(columns=['nome','setor','chapa','subgrupo','entrada','folga_sab'])
-                df_login_adm = pd.DataFrame(columns=['setor','chapa','is_admin','is_lider'])
-
-            if df_func_adm.empty:
-                st.info("Nenhum colaborador cadastrado para atualizar.")
-            else:
-                setores_func = sorted({_norm_setor(x) for x in df_func_adm['setor'].dropna().tolist() if str(x).strip()})
-                admf1, admf2 = st.columns([1, 1.7])
-                with admf1:
-                    setor_func = st.selectbox("Setor do funcionário", setores_func, key="adm_func_setor")
-                df_func_setor = df_func_adm[df_func_adm['setor'].astype(str).str.strip().str.upper() == _norm_setor(setor_func)].copy()
-                opts_func = [f"{str(r['nome']).strip()} ({str(r['chapa']).strip()})" for _, r in df_func_setor.iterrows()]
-                with admf2:
-                    pick_func = st.selectbox("Funcionário", opts_func, key="adm_func_pick") if opts_func else None
-
-                rec_func = None
-                chapa_func = ""
-                if pick_func:
-                    chapa_func = pick_func.rsplit("(", 1)[-1].replace(")", "").strip()
-                    df_hit = df_func_setor[df_func_setor['chapa'].astype(str).str.strip() == chapa_func]
-                    if not df_hit.empty:
-                        rec_func = df_hit.iloc[0].to_dict()
-
-                if rec_func:
-                    login_hit = df_login_adm[(df_login_adm['setor'].astype(str).str.strip().str.upper() == _norm_setor(setor_func)) & (df_login_adm['chapa'].astype(str).str.strip() == chapa_func)]
-                    is_admin_cur = bool(int(login_hit.iloc[0]['is_admin'])) if not login_hit.empty else False
-                    is_lider_cur = bool(int(login_hit.iloc[0]['is_lider'])) if not login_hit.empty else False
-                    perfil_cur = 'ADMIN' if is_admin_cur else ('LIDER' if is_lider_cur or _norm_subgrupo_label(rec_func.get('subgrupo','')) == 'LIDERANCA' else 'COLABORADOR')
-
-                    st.write(f"Atualizando: **{str(rec_func.get('nome') or '').strip()}** — chapa **{chapa_func}**")
-                    af1, af2, af3, af4 = st.columns([1.4, 1.2, 1.2, 1])
-                    with af1:
-                        nome_func_novo = st.text_input("Nome", value=str(rec_func.get('nome') or '').strip(), key='adm_func_nome')
-                    with af2:
-                        subgrupo_func_novo = st.text_input("Subgrupo", value=str(rec_func.get('subgrupo') or '').strip(), key='adm_func_subgrupo')
-                    with af3:
-                        entrada_func_nova = st.text_input("Entrada padrão", value=str(rec_func.get('entrada') or '06:00').strip() or '06:00', key='adm_func_entrada')
-                    with af4:
-                        folga_sab_func = st.checkbox("Folga sábado", value=bool(int(rec_func.get('folga_sab', 0) or 0)), key='adm_func_folga_sab')
-
-                    perfil_func_novo = st.selectbox("Perfil do sistema", ['COLABORADOR', 'LIDER', 'ADMIN'], index=['COLABORADOR', 'LIDER', 'ADMIN'].index(perfil_cur), key='adm_func_perfil')
-                    criar_login_func = st.checkbox("Criar login do sistema se não existir", value=True, key='adm_func_criar_login')
-
-                    if st.button("Salvar atualização do funcionário", key='adm_func_salvar'):
-                        try:
-                            res = admin_update_funcionario(
-                                setor=setor_func,
-                                chapa_atual=chapa_func,
-                                nome_novo=nome_func_novo,
-                                subgrupo_novo=subgrupo_func_novo,
-                                perfil_novo=perfil_func_novo,
-                                entrada_nova=entrada_func_nova,
-                                folga_sab=bool(folga_sab_func),
-                                criar_usuario_se_nao_existir=bool(criar_login_func),
-                            )
-                            st.success(f"Funcionário atualizado com sucesso. Perfil final: {res['perfil']} | Subgrupo: {res['subgrupo'] or 'SEM SUBGRUPO'}")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Falha ao atualizar funcionário: {e}")
-
-            st.markdown("---")
             dfu = admin_list_users()
             st.dataframe(dfu, use_container_width=True, height=420)
 
@@ -9400,46 +8511,11 @@ def page_app():
 
 
 
-
-def _fast_restore_bundled_latest_before_start() -> None:
-    """
-    Restore mínimo e rápido antes de qualquer inicialização pesada:
-    - se data/escala.db não existir ou vier zerado
-    - e existir latest_stable.db ao lado do main.py
-    - copia diretamente para data/escala.db
-    """
-    try:
-        app_dir = Path(__file__).resolve().parent
-        data_dir = app_dir / "data"
-        db_path = data_dir / "escala.db"
-        backup_candidates = [
-            app_dir / "latest_stable.db",
-            app_dir / "backups" / "latest_stable.db",
-            app_dir / "data" / "latest_stable.db",
-        ]
-        data_dir.mkdir(parents=True, exist_ok=True)
-        db_ok = db_path.exists() and db_path.stat().st_size > 0
-        if db_ok:
-            return
-        for backup in backup_candidates:
-            if backup.exists() and backup.stat().st_size > 0:
-                shutil.copy2(backup, db_path)
-                try:
-                    latest_local = Path(BACKUP_DIR) / "latest_stable.db"
-                    latest_local.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(backup, latest_local)
-                except Exception:
-                    pass
-                break
-    except Exception:
-        pass
-
-
 # =========================================================
 # MAIN
 # =========================================================
-_fast_restore_bundled_latest_before_start()
-db_init(startup_light=True)
+db_init()
+auto_backup_if_due()
 
 if st.session_state["auth"] is None:
     page_login()
