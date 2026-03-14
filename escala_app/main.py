@@ -7154,70 +7154,12 @@ def page_login():
                     st.success("Senha redefinida com sucesso. Faça login com setor + chapa + senha.")
                     st.rerun()
 
-def _regenerar_mes_inteiro(setor: str, ano: int, mes: int, seed: int = 0, respeitar_ajustes: bool = True):
-    """
-    Regera a escala do mês inteiro para TODO o setor.
-
-    ✅ Garantias:
-    - Se respeitar_ajustes=True, TODAS as folgas/alterações manuais (overrides) são reaplicadas
-      no final e gravadas novamente no banco (escala_mes). Isso evita “sumir” folga manual ao gerar.
-    """
+def _simular_geracao_mes_inteiro(setor: str, ano: int, mes: int, seed: int = 0, respeitar_ajustes: bool = True):
     colaboradores = load_colaboradores_setor(setor)
     if not colaboradores:
-        return False
+        return None, None, []
 
     random.seed(int(seed))
-    # ===== CONTEXTO SEMANA CONTÍNUA (mês anterior) =====
-    df_ref = None
-    try:
-        ano_prev = int(ano)
-        mes_prev = int(mes) - 1
-        if mes_prev <= 0:
-            mes_prev = 12
-            ano_prev -= 1
-
-        prev_obj = load_escala_mes_db(setor, ano_prev, mes_prev) if "load_escala_mes_db" in globals() else None
-
-        # load_escala_mes_db retorna dict[chapa] -> DataFrame
-        if isinstance(prev_obj, dict) and prev_obj:
-            parts = []
-            for ch, dfp in prev_obj.items():
-                if dfp is None or getattr(dfp, "empty", True):
-                    continue
-                dfx = dfp.copy()
-                dfx["Chapa"] = str(ch)
-                # garante colunas
-                if "Data" not in dfx.columns and "data" in dfx.columns:
-                    dfx["Data"] = dfx["data"]
-                if "Status" not in dfx.columns and "status" in dfx.columns:
-                    dfx["Status"] = dfx["status"]
-                parts.append(dfx[["Data", "Chapa", "Status"]].copy())
-            if parts:
-                df_ref = pd.concat(parts, ignore_index=True)
-
-        # Caso antigo: se algum dia retornar DataFrame único
-        elif isinstance(prev_obj, pd.DataFrame) and (not prev_obj.empty):
-            prev = prev_obj.copy()
-            if "Data" not in prev.columns:
-                for c in ("data", "dia", "DataDia"):
-                    if c in prev.columns:
-                        prev["Data"] = prev[c]
-                        break
-            if "Chapa" not in prev.columns:
-                for c in ("chapa", "CHAPA"):
-                    if c in prev.columns:
-                        prev["Chapa"] = prev[c]
-                        break
-            if "Status" not in prev.columns:
-                for c in ("status", "STATUS"):
-                    if c in prev.columns:
-                        prev["Status"] = prev[c]
-                        break
-            df_ref = prev[["Data", "Chapa", "Status"]].copy()
-
-    except Exception:
-        df_ref = None
-    # ===== df_ref_prev (mês anterior) para semana contínua SEG->DOM =====
     df_ref_prev = None
     try:
         ano_prev = int(ano)
@@ -7225,17 +7167,13 @@ def _regenerar_mes_inteiro(setor: str, ano: int, mes: int, seed: int = 0, respei
         if mes_prev <= 0:
             mes_prev = 12
             ano_prev -= 1
-
         prev_obj = load_escala_mes_db(setor, ano_prev, mes_prev) if "load_escala_mes_db" in globals() else None
-
-        # load_escala_mes_db normalmente retorna dict[chapa] -> DataFrame
         if isinstance(prev_obj, dict) and prev_obj:
             parts = []
             for ch_prev, dfp in prev_obj.items():
                 if dfp is None or getattr(dfp, "empty", True):
                     continue
                 dfx = dfp.copy()
-                # garante colunas Data/Status
                 if "Data" not in dfx.columns:
                     for c in ("data","dia","DataDia"):
                         if c in dfx.columns:
@@ -7247,11 +7185,10 @@ def _regenerar_mes_inteiro(setor: str, ano: int, mes: int, seed: int = 0, respei
                             dfx["Status"] = dfx[c]
                             break
                 dfx["Chapa"] = str(ch_prev)
-                if "Data" in dfx.columns and "Status" in dfx.columns:
+                if {"Data","Chapa","Status"}.issubset(set(dfx.columns)):
                     parts.append(dfx[["Data","Chapa","Status"]].copy())
             if parts:
                 df_ref_prev = pd.concat(parts, ignore_index=True)
-
         elif isinstance(prev_obj, pd.DataFrame) and (not prev_obj.empty):
             dfx = prev_obj.copy()
             if "Data" not in dfx.columns:
@@ -7274,25 +7211,85 @@ def _regenerar_mes_inteiro(setor: str, ano: int, mes: int, seed: int = 0, respei
     except Exception:
         df_ref_prev = None
 
-
     hist, estado_out = gerar_escala_setor_por_subgrupo(
         setor, colaboradores, int(ano), int(mes),
         respeitar_ajustes=bool(respeitar_ajustes),
         df_ref_prev=df_ref_prev
     )
+    return hist, estado_out, colaboradores
 
-    # 1) grava a geração
+
+def _persistir_geracao_mes_inteiro(setor: str, ano: int, mes: int, hist: dict, estado_out: dict, respeitar_ajustes: bool = True):
     save_escala_mes_db(setor, int(ano), int(mes), hist)
     save_estado_mes(setor, int(ano), int(mes), estado_out)
-
-    # 2) “pós-fix”: reaplica overrides do banco e grava de novo
     if bool(respeitar_ajustes):
         hist_db = load_escala_mes_db(setor, int(ano), int(mes))
         hist_db = apply_overrides_to_hist(setor, int(ano), int(mes), hist_db)
         if hist_db:
             save_escala_mes_db(setor, int(ano), int(mes), hist_db)
-
     return True
+
+
+def _detectar_conflitos_folga_fixa(setor: str, ano: int, mes: int, hist: dict, colaboradores: list[dict]):
+    if not hist or not colaboradores:
+        return []
+    folgas_fixas_map = load_folgas_fixas_map(setor, [c.get("Chapa") for c in colaboradores])
+    if not folgas_fixas_map:
+        return []
+    ovmap = _ov_map(setor, int(ano), int(mes))
+    by_chapa = {str(c.get("Chapa")): c for c in colaboradores}
+    wd_key_map = {0: "seg", 1: "ter", 2: "qua", 3: "qui", 4: "sex", 5: "sab", 6: "dom"}
+    conflitos = []
+    for ch, df in (hist or {}).items():
+        chs = str(ch)
+        fixa_cfg = folgas_fixas_map.get(chs, {}) or {}
+        if not any(int(bool(v)) for v in fixa_cfg.values()):
+            continue
+        nome = ((by_chapa.get(chs) or {}).get("Nome") or chs)
+        if df is None or getattr(df, 'empty', True):
+            continue
+        dfx = df.copy()
+        if "Data" in dfx.columns:
+            dfx["Data"] = pd.to_datetime(dfx["Data"], errors="coerce")
+        for _, row in dfx.iterrows():
+            data_ts = pd.to_datetime(row.get("Data"), errors="coerce")
+            if pd.isna(data_ts):
+                continue
+            dia = int(data_ts.day)
+            wd = int(data_ts.weekday())
+            key = wd_key_map.get(wd, "")
+            if not int(bool(fixa_cfg.get(key, 0))):
+                continue
+            payload = (((ovmap or {}).get(chs, {}) or {}).get(dia, {}) or {})
+            if str(payload.get("status") or "").strip().lower() == "folga":
+                continue
+            status_final = str(row.get("Status") or "").strip().lower()
+            if status_final == "folga":
+                continue
+            conflitos.append({
+                "Nome": nome,
+                "Chapa": chs,
+                "Data": data_ts.strftime('%d/%m/%Y'),
+                "Dia": key.upper(),
+                "Motivo": f"Folga fixa de {key.upper()} não pôde ser aplicada por conflito com regras/escala."
+            })
+    return conflitos
+
+
+def _regenerar_mes_inteiro(setor: str, ano: int, mes: int, seed: int = 0, respeitar_ajustes: bool = True):
+    """
+    Regera a escala do mês inteiro para TODO o setor.
+
+    ✅ Garantias:
+    - Se respeitar_ajustes=True, TODAS as folgas/alterações manuais (overrides) são reaplicadas
+      no final e gravadas novamente no banco (escala_mes). Isso evita “sumir” folga manual ao gerar.
+    """
+    hist, estado_out, colaboradores = _simular_geracao_mes_inteiro(setor, ano, mes, seed=seed, respeitar_ajustes=respeitar_ajustes)
+    if not colaboradores:
+        return False
+    _persistir_geracao_mes_inteiro(setor, ano, mes, hist, estado_out, respeitar_ajustes=respeitar_ajustes)
+    return True
+
 
 
 
@@ -8250,17 +8247,49 @@ def page_app():
 
             b1, b2, b3, _ = st.columns([1, 1, 1, 5])
 
+            pending_conf_key = f"folga_fixa_conf_pending_{setor}_{ano}_{mes}"
             if b1.button("🚀 Gerar agora (respeita ajustes)", use_container_width=True, key="gen_btn"):
                 _clear_preview_cache(setor, int(ano), int(mes))
                 st.session_state[preview_key] = False
                 st.session_state["last_seed"] = int(seed)
-                ok = _regenerar_mes_inteiro(setor, int(ano), int(mes), seed=int(seed), respeitar_ajustes=True)
-                if ok:
-                    st.success("Escala gerada (ajustes/travas preservados)!")
-                    st.info("Calendário ficou oculto após gerar para deixar a tela mais leve. Clique em 📅 Carregar calendário só quando quiser visualizar.")
-                else:
+                hist_sim, estado_sim, colaboradores_sim = _simular_geracao_mes_inteiro(setor, int(ano), int(mes), seed=int(seed), respeitar_ajustes=True)
+                if not colaboradores_sim:
                     st.warning("Sem colaboradores.")
-                st.rerun()
+                else:
+                    conflitos_ff = _detectar_conflitos_folga_fixa(setor, int(ano), int(mes), hist_sim, colaboradores_sim)
+                    if conflitos_ff:
+                        st.session_state[pending_conf_key] = {
+                            "hist": hist_sim,
+                            "estado": estado_sim,
+                            "conflitos": conflitos_ff,
+                            "seed": int(seed),
+                        }
+                    else:
+                        _persistir_geracao_mes_inteiro(setor, int(ano), int(mes), hist_sim, estado_sim, respeitar_ajustes=True)
+                        st.success("Escala gerada (ajustes/travas preservados)!")
+                        st.info("Calendário ficou oculto após gerar para deixar a tela mais leve. Clique em 📅 Carregar calendário só quando quiser visualizar.")
+                        st.rerun()
+
+            pending_ff = st.session_state.get(pending_conf_key)
+            if pending_ff:
+                conflitos_ff = pending_ff.get("conflitos") or []
+                st.warning("Foram encontrados conflitos entre folgas fixas e as regras da escala. A geração foi bloqueada até você confirmar se está ciente dessa mudança.", icon="⚠️")
+                df_conf = pd.DataFrame(conflitos_ff)
+                if not df_conf.empty:
+                    st.dataframe(df_conf, use_container_width=True, hide_index=True)
+                st.caption("Se você clicar em SIM, a escala será gerada conforme os ajustes e regras atuais, mesmo com essas folgas fixas não atendidas nesses dias.")
+                cy_ff, cn_ff, _sp_ff = st.columns([1, 1, 4])
+                if cy_ff.button("✅ Sim, estou ciente", use_container_width=True, key=f"ff_conf_yes_{setor}_{ano}_{mes}"):
+                    payload = st.session_state.get(pending_conf_key) or {}
+                    _persistir_geracao_mes_inteiro(setor, int(ano), int(mes), payload.get("hist") or {}, payload.get("estado") or {}, respeitar_ajustes=True)
+                    st.session_state.pop(pending_conf_key, None)
+                    st.success("Escala gerada conforme os ajustes. Conflitos de folga fixa foram mantidos apenas como aviso.")
+                    st.info("Calendário ficou oculto após gerar para deixar a tela mais leve. Clique em 📅 Carregar calendário só quando quiser visualizar.")
+                    st.rerun()
+                if cn_ff.button("❌ Não", use_container_width=True, key=f"ff_conf_no_{setor}_{ano}_{mes}"):
+                    st.session_state.pop(pending_conf_key, None)
+                    st.info("Geração cancelada. Ajuste as folgas fixas ou os ajustes manuais e tente novamente.")
+                    st.rerun()
 
             if b2.button("🔄 Recarregar do banco", use_container_width=True, key="gen_reload_btn"):
                 _clear_preview_cache(setor, int(ano), int(mes))
