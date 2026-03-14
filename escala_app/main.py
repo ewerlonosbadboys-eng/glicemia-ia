@@ -91,6 +91,8 @@ from reportlab.lib.pagesizes import landscape, A4
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib import colors
 st.set_page_config(page_title="Escala 5x2 Oficial", layout="wide")
+VERSAO_ACESSO_LIDER = "ACESSO_LIDER_FIX_2026_03_14_v2"
+
 
 # =========================================================
 # PDF IMPORT (AUTOMÁTICO) — modelo ESCALA_PONTO_NEW (Savegnago)
@@ -7283,26 +7285,20 @@ def colaborador_eh_lideranca(setor: str, chapa: str) -> bool:
     if not rec:
         return False
 
-    sg = _norm_subgrupo_label((rec or {}).get('Subgrupo', (rec or {}).get('subgrupo', '')))
-    perfil = _norm_subgrupo_label((rec or {}).get('Perfil', (rec or {}).get('perfil', '')))
-    lider = _norm_subgrupo_label((rec or {}).get('Lider', (rec or {}).get('lider', '')))
+    sg = _norm_subgrupo_label((rec or {}).get('Subgrupo', ''))
+    perfil = _norm_subgrupo_label((rec or {}).get('Perfil', ''))
+    lider = _norm_subgrupo_label((rec or {}).get('Lider', ''))
 
     if sg in ['LIDERANCA', 'LIDER', 'LIDERES', 'LIDERANCA FLV']:
         return True
+
     if perfil in ['LIDER', 'LIDERANCA', 'ENCARREGADO', 'RESPONSAVEL']:
         return True
+
     if lider in ['SIM', 'S', '1', 'TRUE']:
         return True
 
     return False
-
-
-def usuario_tem_perfil_gestao(auth: dict, setor: str) -> bool:
-    if bool((auth or {}).get('is_admin', False)):
-        return True
-    if bool((auth or {}).get('is_lider', False)):
-        return True
-    return colaborador_eh_lideranca(setor, (auth or {}).get('chapa', ''))
 
 def list_assinaturas_setor(setor: str, ano: int, mes: int) -> pd.DataFrame:
     setor = _norm_setor(setor)
@@ -7535,18 +7531,12 @@ def page_app():
     with st.sidebar:
         st.title("👤 Sessão")
         st.caption("Acesso por setor (usuário / líder / admin)")
+        st.caption(VERSAO_ACESSO_LIDER)
 
         _colab_sb = get_colaborador_record(setor, auth.get('chapa',''))
-        _subgrupo_auth = (_colab_sb or {}).get('Subgrupo', (_colab_sb or {}).get('subgrupo', 'SEM SUBGRUPO'))
-        _sg_norm = _norm_subgrupo_label(_subgrupo_auth)
-        _lideranca_cadastro = _sg_norm in ['LIDERANCA', 'LIDER', 'LIDERES', 'LIDERANCA FLV']
-        _perfil_gestao = bool(auth.get('is_admin', False)) or bool(auth.get('is_lider', False)) or _lideranca_cadastro or usuario_tem_perfil_gestao(auth, setor)
-        _lideranca_ok = (not bool(auth.get('is_admin', False))) and (_lideranca_cadastro or bool(auth.get('is_lider', False)) or usuario_tem_perfil_gestao(auth, setor))
-        try:
-            auth['is_lider'] = bool(auth.get('is_lider', False)) or _lideranca_cadastro
-            st.session_state['auth'] = auth
-        except Exception:
-            pass
+        _subgrupo_auth = (_colab_sb or {}).get('Subgrupo', 'SEM SUBGRUPO')
+        _lideranca_ok = bool(auth.get('is_lider', False)) or colaborador_eh_lideranca(setor, auth.get('chapa',''))
+        _perfil_gestao = bool(auth.get('is_admin', False)) or _lideranca_ok
 
         cA, cB = st.columns([1, 1])
         perfil_label = 'ADMIN' if auth.get('is_admin', False) else ('LÍDER' if _lideranca_ok else 'COLABORADOR')
@@ -7594,12 +7584,8 @@ def page_app():
         page_gestao_dashboard(int(st.session_state["cfg_ano"]), int(st.session_state["cfg_mes"]))
         return
 
-    _colab_pg = get_colaborador_record(setor, auth.get('chapa',''))
-    _subgrupo_pg = (_colab_pg or {}).get('Subgrupo', (_colab_pg or {}).get('subgrupo', 'SEM SUBGRUPO'))
-    _sg_pg_norm = _norm_subgrupo_label(_subgrupo_pg)
-    _lideranca_pg = _sg_pg_norm in ['LIDERANCA', 'LIDER', 'LIDERES', 'LIDERANCA FLV']
-    _perfil_gestao = bool(auth.get('is_admin', False)) or bool(auth.get('is_lider', False)) or _lideranca_pg or usuario_tem_perfil_gestao(auth, setor)
-    _lideranca_ok = (not bool(auth.get('is_admin', False))) and (bool(auth.get('is_lider', False)) or _lideranca_pg or usuario_tem_perfil_gestao(auth, setor))
+    _lideranca_ok = bool(auth.get('is_lider', False)) or colaborador_eh_lideranca(setor, auth.get('chapa',''))
+    _perfil_gestao = bool(auth.get('is_admin', False)) or _lideranca_ok
 
     if not _perfil_gestao:
         page_portal_colaborador(auth, int(st.session_state["cfg_ano"]), int(st.session_state["cfg_mes"]))
