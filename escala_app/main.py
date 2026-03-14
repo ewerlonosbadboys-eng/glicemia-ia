@@ -4102,18 +4102,30 @@ def list_ferias(setor: str):
     con.close()
     return rows
 
+@st.cache_data(show_spinner=False, ttl=120)
+def ferias_ranges_map(setor: str):
+    rows = list_ferias(setor)
+    mp = {}
+    for chapa, inicio, fim in rows:
+        ch = str(chapa).strip()
+        try:
+            ini = pd.to_datetime(inicio).date()
+            fimd = pd.to_datetime(fim).date()
+        except Exception:
+            continue
+        mp.setdefault(ch, []).append((ini, fimd))
+    return mp
+
 def is_de_ferias(setor: str, chapa: str, data_obj: date) -> bool:
-    con = db_conn()
-    cur = con.cursor()
-    cur.execute("""
-        SELECT 1 FROM ferias
-        WHERE setor=? AND chapa=?
-          AND date(inicio) <= date(?) AND date(fim) >= date(?)
-        LIMIT 1
-    """, (setor, chapa, data_obj.strftime("%Y-%m-%d"), data_obj.strftime("%Y-%m-%d")))
-    ok = cur.fetchone() is not None
-    con.close()
-    return ok
+    ch = str(chapa).strip()
+    try:
+        dref = pd.to_datetime(data_obj).date()
+    except Exception:
+        return False
+    for ini, fim in ferias_ranges_map(setor).get(ch, []):
+        if ini <= dref <= fim:
+            return True
+    return False
 
 def is_first_week_after_return(setor: str, chapa: str, data_obj: date) -> bool:
     ontem = data_obj - timedelta(days=1)
@@ -4477,8 +4489,26 @@ def load_overrides(setor: str, ano: int, mes: int):
     con.close()
     return df
 
-def _ov_map(setor: str, ano: int, mes: int):
-    df = load_overrides(setor, ano, mes)
+@st.cache_data(show_spinner=False, ttl=120)
+def load_overrides_subset(setor: str, ano: int, mes: int, chapas_csv: str):
+    chapas = [str(x).strip() for x in str(chapas_csv or '').split('|') if str(x).strip()]
+    if not chapas:
+        return pd.DataFrame(columns=['chapa','dia','campo','valor'])
+    con = db_conn()
+    placeholders = ','.join(['?'] * len(chapas))
+    df = pd.read_sql_query(
+        f"""
+        SELECT chapa, dia, campo, valor
+        FROM overrides
+        WHERE setor=? AND ano=? AND mes=? AND chapa IN ({placeholders})
+        """,
+        con,
+        params=(setor, int(ano), int(mes), *chapas),
+    )
+    con.close()
+    return df
+
+def _build_ov_map(df: pd.DataFrame):
     ov = {}
     if df is None or df.empty:
         return ov
@@ -4489,6 +4519,12 @@ def _ov_map(setor: str, ano: int, mes: int):
         valor = str(r["valor"])
         ov.setdefault(ch, {}).setdefault(dia, {})[campo] = valor
     return ov
+
+def _ov_map(setor: str, ano: int, mes: int):
+    return _build_ov_map(load_overrides(setor, ano, mes))
+
+def _ov_map_subset(setor: str, ano: int, mes: int, chapas_csv: str):
+    return _build_ov_map(load_overrides_subset(setor, ano, mes, chapas_csv))
 
 def _is_status_locked(ovmap: dict, chapa: str, data_ts: pd.Timestamp) -> bool:
     dia = int(pd.to_datetime(data_ts).day)
@@ -8272,7 +8308,7 @@ def page_app():
 
                 qtd = calendar.monthrange(int(ano), int(mes))[1]
                 dias = list(range(1, qtd + 1))
-                ovdf = load_overrides(setor, ano, mes)
+                ovdf = load_overrides_subset(setor, ano, mes, chapas_sig)
                 ov_status = {}
                 if ovdf is not None and not ovdf.empty:
                     od = ovdf[ovdf["campo"] == "status"]
@@ -8356,7 +8392,7 @@ def page_app():
                 else:
                     st.info("Dias marcados serão salvos como **Afastamento (AFA)**.")
 
-                ovmap = _ov_map(setor, ano, mes)
+                ovmap = _ov_map_subset(setor, ano, mes, chapas_sig)
                 rows = []
                 for c in colaboradores:
                     ch = str(c["Chapa"])
