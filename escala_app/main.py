@@ -8187,7 +8187,6 @@ def page_app():
                 return
 
             pref = "grid" if sec_aj == "🧩 Folgas manuais em grade" else "th"
-            labels_opts = [f'{c["Nome"]} ({c["Chapa"]})' for c in colaboradores_all]
             inv_label = {f'{c["Nome"]} ({c["Chapa"]})': c for c in colaboradores_all}
             sg_opts = sorted({str((c.get("Subgrupo") or "SEM SUBGRUPO")).strip() or "SEM SUBGRUPO" for c in colaboradores_all})
 
@@ -8203,16 +8202,42 @@ def page_app():
                 key=f"{pref}_max_rows",
             )
 
+            s1, s2 = st.columns([3, 1])
+            busca_colab = (s1.text_input(
+                "Buscar por nome ou chapa antes de selecionar:",
+                value=st.session_state.get(f"{pref}_busca", ""),
+                key=f"{pref}_busca",
+                placeholder="Digite parte do nome ou da chapa",
+            ) or "").strip().lower()
+            max_opts = int(s2.number_input(
+                "Máx. opções",
+                min_value=10,
+                max_value=200,
+                value=int(st.session_state.get(f"{pref}_max_opts", 40) or 40),
+                step=10,
+                key=f"{pref}_max_opts",
+            ))
+
             base_filtrada = colaboradores_all
             if sg_sel != "(todos)":
                 base_filtrada = [c for c in base_filtrada if (str((c.get("Subgrupo") or "SEM SUBGRUPO")).strip() or "SEM SUBGRUPO") == sg_sel]
+            if busca_colab:
+                base_filtrada = [
+                    c for c in base_filtrada
+                    if busca_colab in str(c.get("Nome") or "").lower() or busca_colab in str(c.get("Chapa") or "").lower()
+                ]
 
-            labels_filtradas = [f'{c["Nome"]} ({c["Chapa"]})' for c in base_filtrada]
+            labels_filtradas_all = [f'{c["Nome"]} ({c["Chapa"]})' for c in base_filtrada]
+            labels_filtradas = labels_filtradas_all[:max_opts]
+            if len(labels_filtradas_all) > max_opts:
+                st.caption(f"Mostrando {max_opts} opção(ões) para seleção de um total de {len(labels_filtradas_all)}. Refine a busca para ficar mais rápido.")
+
             sel_labels = st.multiselect(
                 "Selecionar colaboradores para editar (se selecionar, a grade mostra somente eles):",
                 options=labels_filtradas,
                 default=[x for x in st.session_state.get(f"{pref}_sel_labels", []) if x in labels_filtradas],
                 key=f"{pref}_sel_labels",
+                help="Use a busca acima para reduzir as opções e acelerar a seleção.",
             )
 
             if sel_labels:
@@ -8223,7 +8248,7 @@ def page_app():
                 colaboradores = []
 
             if not colaboradores:
-                st.info("Selecione colaboradores específicos ou marque 'Mostrar todos'. A grade não abre tudo automaticamente.")
+                st.info("Use a busca por nome/chapa e selecione colaboradores específicos ou marque 'Mostrar todos'. A grade não abre tudo automaticamente.")
                 st.stop()
 
             total_filtrado = len(base_filtrada)
