@@ -8504,57 +8504,57 @@ def page_app():
                     _clear_preview_cache(setor, int(ano), int(mes))
                     st.success(f"Salvo! Ação: {acao_th}. Aplicados: {applied}. Ignorados: {skipped}.")
                     st.rerun()
-            elif sec_aj == "✅ Preferência por subgrupo":
-                st.markdown("### ✅ Preferência por subgrupo (Evitar folga se possível)")
-                subgrupos = list_subgrupos(setor)
+        elif sec_aj == "✅ Preferência por subgrupo":
+            st.markdown("### ✅ Preferência por subgrupo (Evitar folga se possível)")
+            subgrupos = list_subgrupos(setor)
+            if subgrupos:
+                sg_sel = st.selectbox("Escolha o subgrupo:", subgrupos, key="pref_sg_sel")
+                regras = get_subgrupo_regras(setor, sg_sel)
+
+                p1, p2, p3 = st.columns(3)
+                ev_seg = p1.checkbox("Evitar SEG", value=bool(regras["seg"]), key=f"ev_seg_{sg_sel}")
+                ev_ter = p1.checkbox("Evitar TER", value=bool(regras["ter"]), key=f"ev_ter_{sg_sel}")
+                ev_qua = p2.checkbox("Evitar QUA", value=bool(regras["qua"]), key=f"ev_qua_{sg_sel}")
+                ev_qui = p2.checkbox("Evitar QUI", value=bool(regras["qui"]), key=f"ev_qui_{sg_sel}")
+                ev_sex = p3.checkbox("Evitar SEX", value=bool(regras["sex"]), key=f"ev_sex_{sg_sel}")
+                ev_sab = p3.checkbox("Evitar SÁB", value=bool(regras["sáb"]), key=f"ev_sab_{sg_sel}")
+
+                if st.button("Salvar preferência do subgrupo (e readequar mês)", key="pref_save"):
+                    set_subgrupo_regras(setor, sg_sel, {
+                        "seg": int(ev_seg), "ter": int(ev_ter), "qua": int(ev_qua),
+                        "qui": int(ev_qui), "sex": int(ev_sex), "sáb": int(ev_sab)
+                    })
+                    _regenerar_mes_inteiro(setor, ano, mes, seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
+                    st.success("Preferência salva e escala readequada!")
+                    st.rerun()
+            else:
+                st.info("Crie pelo menos 1 subgrupo na subaba 📌 Subgrupos (editável) dentro de ⚙️ Ajustes.")
+
+        elif sec_aj == "📌 Subgrupos (editável)":
+            st.markdown("## 📌 Subgrupos (editável)")
+            subgrupos = list_subgrupos(setor)
+
+            cA, cB = st.columns([1, 1])
+            with cA:
+                novo_sub = st.text_input("Novo subgrupo:", key="sg_new")
+                if st.button("Adicionar subgrupo", key="sg_add"):
+                    if novo_sub.strip():
+                        add_subgrupo(setor, novo_sub.strip())
+                        st.success("Subgrupo adicionado!")
+                        st.rerun()
+                    else:
+                        st.error("Digite o nome do subgrupo.")
+
+            with cB:
                 if subgrupos:
-                    sg_sel = st.selectbox("Escolha o subgrupo:", subgrupos, key="pref_sg_sel")
-                    regras = get_subgrupo_regras(setor, sg_sel)
-
-                    p1, p2, p3 = st.columns(3)
-                    ev_seg = p1.checkbox("Evitar SEG", value=bool(regras["seg"]), key=f"ev_seg_{sg_sel}")
-                    ev_ter = p1.checkbox("Evitar TER", value=bool(regras["ter"]), key=f"ev_ter_{sg_sel}")
-                    ev_qua = p2.checkbox("Evitar QUA", value=bool(regras["qua"]), key=f"ev_qua_{sg_sel}")
-                    ev_qui = p2.checkbox("Evitar QUI", value=bool(regras["qui"]), key=f"ev_qui_{sg_sel}")
-                    ev_sex = p3.checkbox("Evitar SEX", value=bool(regras["sex"]), key=f"ev_sex_{sg_sel}")
-                    ev_sab = p3.checkbox("Evitar SÁB", value=bool(regras["sáb"]), key=f"ev_sab_{sg_sel}")
-
-                    if st.button("Salvar preferência do subgrupo (e readequar mês)", key="pref_save"):
-                        set_subgrupo_regras(setor, sg_sel, {
-                            "seg": int(ev_seg), "ter": int(ev_ter), "qua": int(ev_qua),
-                            "qui": int(ev_qui), "sex": int(ev_sex), "sáb": int(ev_sab)
-                        })
+                    del_sel = st.selectbox("Remover subgrupo:", ["(nenhum)"] + subgrupos, key="sg_del")
+                    if del_sel != "(nenhum)" and st.button("Remover", key="sg_del_btn"):
+                        delete_subgrupo(setor, del_sel)
                         _regenerar_mes_inteiro(setor, ano, mes, seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
-                        st.success("Preferência salva e escala readequada!")
+                        st.success("Subgrupo removido e escala readequada!")
                         st.rerun()
                 else:
-                    st.info("Crie pelo menos 1 subgrupo na subaba 📌 Subgrupos (editável) dentro de ⚙️ Ajustes.")
-
-            elif sec_aj == "📌 Subgrupos (editável)":
-                st.markdown("## 📌 Subgrupos (editável)")
-                subgrupos = list_subgrupos(setor)
-
-                cA, cB = st.columns([1, 1])
-                with cA:
-                    novo_sub = st.text_input("Novo subgrupo:", key="sg_new")
-                    if st.button("Adicionar subgrupo", key="sg_add"):
-                        if novo_sub.strip():
-                            add_subgrupo(setor, novo_sub.strip())
-                            st.success("Subgrupo adicionado!")
-                            st.rerun()
-                        else:
-                            st.error("Digite o nome do subgrupo.")
-
-                with cB:
-                    if subgrupos:
-                        del_sel = st.selectbox("Remover subgrupo:", ["(nenhum)"] + subgrupos, key="sg_del")
-                        if del_sel != "(nenhum)" and st.button("Remover", key="sg_del_btn"):
-                            delete_subgrupo(setor, del_sel)
-                            _regenerar_mes_inteiro(setor, ano, mes, seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
-                            st.success("Subgrupo removido e escala readequada!")
-                            st.rerun()
-                    else:
-                        st.caption("Nenhum subgrupo cadastrado.")
+                    st.caption("Nenhum subgrupo cadastrado.")
 
     # ------------------------------------------------------
     # ABA 4: Férias
