@@ -7423,6 +7423,15 @@ def _norm_subgrupo_label(v: str) -> str:
     s = ''.join(ch for ch in s if not unicodedata.combining(ch))
     return s
 
+def _flag_on(v) -> bool:
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return int(v) != 0
+    s = str(v or '').strip().lower()
+    return s in ('1', 'true', 'yes', 'on', 'sim')
+
+
 def colaborador_eh_lideranca(setor: str, chapa: str) -> bool:
     rec = get_colaborador_record(setor, chapa)
     sg = _norm_subgrupo_label((rec or {}).get('Subgrupo', ''))
@@ -7430,7 +7439,8 @@ def colaborador_eh_lideranca(setor: str, chapa: str) -> bool:
 
 
 def usuario_tem_acesso_lider(auth: dict, setor: str) -> bool:
-    return bool((auth or {}).get('is_admin', False) or (auth or {}).get('is_lider', False))
+    auth = auth or {}
+    return _flag_on(auth.get('is_admin', 0)) or _flag_on(auth.get('is_lider', 0))
 
 def list_assinaturas_setor(setor: str, ano: int, mes: int) -> pd.DataFrame:
     setor = _norm_setor(setor)
@@ -7666,11 +7676,12 @@ def page_app():
 
         _colab_sb = get_colaborador_record(setor, auth.get('chapa',''))
         _subgrupo_auth = (_colab_sb or {}).get('Subgrupo', 'SEM SUBGRUPO')
-        _lideranca_ok = bool(auth.get('is_lider', False))
+        _lideranca_ok = _flag_on(auth.get('is_lider', 0))
+        _admin_ok = _flag_on(auth.get('is_admin', 0))
         _perfil_gestao = usuario_tem_acesso_lider(auth, setor)
 
         cA, cB = st.columns([1, 1])
-        perfil_label = 'ADMIN' if auth.get('is_admin', False) else ('LÍDER' if _lideranca_ok else 'COLABORADOR')
+        perfil_label = 'ADMIN' if _admin_ok else ('LÍDER' if _lideranca_ok else 'COLABORADOR')
         cA.write(f"**Nome:** {auth.get('nome','-')}")
         cB.write(f"**Perfil:** {perfil_label}")
 
@@ -7713,7 +7724,8 @@ def page_app():
         page_gestao_dashboard(int(st.session_state["cfg_ano"]), int(st.session_state["cfg_mes"]))
         return
 
-    _lideranca_ok = bool(auth.get('is_lider', False))
+    _lideranca_ok = _flag_on(auth.get('is_lider', 0))
+    _admin_ok = _flag_on(auth.get('is_admin', 0))
     _perfil_gestao = usuario_tem_acesso_lider(auth, setor)
 
     if not _perfil_gestao:
@@ -7760,7 +7772,7 @@ def page_app():
     # ABAS
     # =========================
     tabs = ["👥 Colaboradores", "🚀 Gerar Escala", "⚙️ Ajustes", "🏖️ Férias", "🖨️ Impressão", "✍️ Assinaturas", "📨 Minhas solicitações"]
-    is_admin_area = bool(auth.get("is_admin", False)) and setor == "ADMIN"
+    is_admin_area = _admin_ok and setor == "ADMIN"
     if is_admin_area:
         tabs.append("🔒 Admin")
 
