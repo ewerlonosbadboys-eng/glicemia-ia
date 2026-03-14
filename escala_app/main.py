@@ -91,6 +91,7 @@ from reportlab.lib.pagesizes import landscape, A4
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib import colors
 st.set_page_config(page_title="Escala 5x2 Oficial", layout="wide")
+st.sidebar.info('ADMIN_FIX_VISIVEL_2026_03_14')
 VERSAO_ACESSO_LIDER = "ACESSO_LIDER_FIX_2026_03_14_v2"
 
 
@@ -3118,6 +3119,127 @@ def gerar_pdf_trabalhando_no_dia(setor: str, ano: int, mes: int, dia: int, hist_
     return buf.getvalue()
 
 
+
+
+def gerar_excel_modelo_rh(setor: str, ano: int, mes: int) -> bytes | None:
+    colaboradores = load_colaboradores_setor(setor)
+    hist_db = load_escala_mes_db(setor, ano, mes) or {}
+    colab_by = {c["Chapa"]: c for c in colaboradores}
+    if not hist_db:
+        return None
+
+    hist_db = apply_overrides_to_hist(setor, ano, mes, hist_db)
+    output = io.BytesIO()
+
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        wb = writer.book
+        ws = wb.create_sheet("Escala Mensal", index=0)
+
+        fill_header = PatternFill(start_color="1F4E78", end_color="1F4E78", patternType="solid")
+        fill_dom = PatternFill(start_color="C00000", end_color="C00000", patternType="solid")
+        fill_folga = PatternFill(start_color="FFF2CC", end_color="FFF2CC", patternType="solid")
+        fill_nome = PatternFill(start_color="D9E1F2", end_color="D9E1F2", patternType="solid")
+        fill_ferias = PatternFill(start_color="92D050", end_color="92D050", patternType="solid")
+        fill_group = PatternFill(start_color="BDD7EE", end_color="BDD7EE", patternType="solid")
+        font_header = Font(color="FFFFFF", bold=True)
+        font_dom = Font(color="FFFFFF", bold=True)
+        border = Border(left=Side(style="thin"), right=Side(style="thin"), top=Side(style="thin"), bottom=Side(style="thin"))
+        center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+        ch0 = list(hist_db.keys())[0]
+        df_ref_xls = hist_db[ch0]
+        total_dias = len(df_ref_xls)
+
+        ws.cell(1, 1, "COLABORADOR").fill = fill_header
+        ws.cell(1, 1).font = font_header
+        ws.cell(1, 1).alignment = center
+        ws.cell(1, 1).border = border
+        ws.cell(2, 1, "").fill = fill_header
+        ws.cell(2, 1).alignment = center
+        ws.cell(2, 1).border = border
+
+        for i in range(total_dias):
+            dia_num = df_ref_xls.iloc[i]["Data"].day
+            dia_sem = df_ref_xls.iloc[i]["Dia"]
+            cA = ws.cell(1, i + 2, dia_num)
+            cB = ws.cell(2, i + 2, dia_sem)
+            if dia_sem == "dom":
+                cA.fill = fill_dom
+                cB.fill = fill_dom
+                cA.font = font_dom
+                cB.font = font_dom
+            else:
+                cA.fill = fill_header
+                cB.fill = fill_header
+                cA.font = font_header
+                cB.font = font_header
+            cA.alignment = center
+            cB.alignment = center
+            cA.border = border
+            cB.border = border
+            ws.column_dimensions[get_column_letter(i + 2)].width = 7
+
+        ws.column_dimensions["A"].width = 36
+
+        subgrupo_map = {}
+        for chx in hist_db.keys():
+            sg = (colab_by.get(chx, {}).get("Subgrupo", "") or "").strip() or "SEM SUBGRUPO"
+            subgrupo_map.setdefault(sg, []).append(chx)
+
+        row_idx = 3
+        for sg in sorted(subgrupo_map.keys()):
+            ws.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx, end_column=total_dias + 1)
+            t = ws.cell(row_idx, 1, f"SUBGRUPO: {sg}")
+            t.fill = fill_group
+            t.font = Font(bold=True)
+            t.alignment = Alignment(horizontal="left", vertical="center")
+            t.border = border
+            row_idx += 1
+
+            chapas_sg = sorted(subgrupo_map[sg], key=lambda chx: colab_by.get(chx, {}).get("Nome", chx))
+            for chx in chapas_sg:
+                df_f = hist_db[chx]
+                nome = colab_by.get(chx, {}).get("Nome", chx)
+
+                c_nome = ws.cell(row_idx, 1, f"{nome}\nCHAPA: {chx}")
+                c_nome.fill = fill_nome
+                c_nome.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+                c_nome.border = border
+                ws.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx + 1, end_column=1)
+
+                for i, row in df_f.iterrows():
+                    dia_sem = row["Dia"]
+                    status = row["Status"]
+                    if status == "Férias":
+                        v1, v2 = "FÉRIAS", ""
+                    elif status == "Folga":
+                        v1, v2 = "F", ""
+                    else:
+                        v1, v2 = row["H_Entrada"], row["H_Saida"]
+
+                    cell1 = ws.cell(row_idx, i + 2, v1)
+                    cell2 = ws.cell(row_idx + 1, i + 2, v2)
+                    cell1.alignment = center
+                    cell2.alignment = center
+                    cell1.border = border
+                    cell2.border = border
+
+                    if status == "Férias":
+                        cell1.fill = fill_ferias
+                        cell2.fill = fill_ferias
+                    elif status == "Folga":
+                        if dia_sem == "dom":
+                            cell1.fill = fill_dom
+                            cell2.fill = fill_dom
+                        else:
+                            cell1.fill = fill_folga
+                            cell2.fill = fill_folga
+
+                row_idx += 2
+            row_idx += 1
+
+    output.seek(0)
+    return output.getvalue()
 
 def is_work_status(status: str) -> bool:
     return str(status) in WORK_STATUSES
@@ -7483,13 +7605,21 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
     ass_escala = get_assinatura_status(setor, chapa, ano_vigente, mes_vigente, 'oficial')
     ass_mud = get_assinatura_status(setor, chapa, ano_vigente, mes_vigente, 'historico')
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    is_lideranca_colab = str(colab.get('Subgrupo', '') or '').strip().upper() == 'LIDERANÇA'
+
+    portal_tabs = [
         '📋 Escala Oficial',
         '🕒 Pré-Escala',
         '📝 Histórico de Mudanças',
         '✍️ Assinaturas',
         '⚙️ Ajustes',
-    ])
+    ]
+    if is_lideranca_colab:
+        portal_tabs.append('📊 Excel modelo do setor')
+
+    _tabs = st.tabs(portal_tabs)
+    tab1, tab2, tab3, tab4, tab5 = _tabs[:5]
+    tab6 = _tabs[5] if is_lideranca_colab and len(_tabs) > 5 else None
 
     with tab1:
         st.markdown(f"#### Escala oficial — {mes_vigente:02d}/{ano_vigente}")
@@ -7603,6 +7733,30 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
                 st.info('Nenhuma sugestão enviada até agora.')
             else:
                 st.dataframe(df_sol, use_container_width=True, hide_index=True)
+
+    if tab6 is not None:
+        with tab6:
+            st.markdown('#### 📊 Excel modelo do setor')
+            st.caption('Disponível somente para colaborador cadastrado no subgrupo LIDERANÇA. Baixa o Excel modelo do setor relacionado ao seu cadastro.')
+            st.info(f'Setor liberado: {setor} • Competência: {mes_cfg:02d}/{ano_cfg}')
+            portal_excel_key = f'portal_xls|{setor}|{ano_cfg}|{mes_cfg}|{chapa}'
+            if st.button('📊 Gerar Excel do setor', key=f'portal_xls_gen_{setor}_{chapa}_{ano_cfg}_{mes_cfg}'):
+                xls_bytes = gerar_excel_modelo_rh(setor, int(ano_cfg), int(mes_cfg))
+                if not xls_bytes:
+                    st.warning('Não há escala gerada para essa competência no seu setor.')
+                else:
+                    st.session_state[portal_excel_key] = xls_bytes
+                    st.success('Excel do setor gerado com sucesso.')
+
+            xls_ready = st.session_state.get(portal_excel_key)
+            if xls_ready:
+                st.download_button(
+                    '📥 Baixar Excel modelo do setor',
+                    data=xls_ready,
+                    file_name=f'escala_modelo_{setor}_{ano_cfg}_{mes_cfg:02d}.xlsx',
+                    mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                    key=f'portal_xls_down_{setor}_{chapa}_{ano_cfg}_{mes_cfg}',
+                )
 
 def page_app():
     auth = st.session_state.get("auth") or {}
@@ -8031,39 +8185,10 @@ def page_app():
         colab_by = {}
 
         if _ajustes_precisam_escala:
-            ajustes_cache_key = f"ajustes_payload_{setor}_{ano}_{mes}"
-            ajustes_loaded_key = f"ajustes_loaded_{setor}_{ano}_{mes}"
-            ajustes_sig_key = f"ajustes_sig_{setor}_{ano}_{mes}"
-            sec_sig = f"{sec_aj}|{setor}|{ano}|{mes}"
-            if st.session_state.get(ajustes_sig_key) != sec_sig:
-                st.session_state[ajustes_sig_key] = sec_sig
-                st.session_state.setdefault(ajustes_loaded_key, False)
-
-            ca1, ca2, ca3 = st.columns([1, 1, 4])
-            if ca1.button("📥 Carregar dados dos ajustes", use_container_width=True, key=f"aj_load_{setor}_{ano}_{mes}"):
-                with st.spinner("Carregando dados dos ajustes..."):
-                    _hist_db = get_hist_mes_com_overrides_cached(setor, ano, mes)
-                    _colaboradores = load_colaboradores_setor(setor)
-                st.session_state[ajustes_cache_key] = {
-                    "hist_db": _hist_db,
-                    "colaboradores": _colaboradores,
-                }
-                st.session_state[ajustes_loaded_key] = True
-                st.rerun()
-            if ca2.button("🧹 Limpar cache desta tela", use_container_width=True, key=f"aj_clear_{setor}_{ano}_{mes}"):
-                st.session_state.pop(ajustes_cache_key, None)
-                st.session_state.pop(ajustes_loaded_key, None)
-                st.rerun()
-            ca3.caption("Para deixar leve, a grade só carrega quando você clicar no botão.")
-
-            if not st.session_state.get(ajustes_loaded_key, False):
-                st.info("Esta aba agora carrega sob demanda. Clique em **📥 Carregar dados dos ajustes** para abrir a grade.")
-                return
-
-            payload = st.session_state.get(ajustes_cache_key) or {}
-            hist_db = payload.get("hist_db") or {}
-            colaboradores = payload.get("colaboradores") or []
-            colab_by = {str(c["Chapa"]): c for c in colaboradores}
+            with st.spinner("Carregando dados dos ajustes..."):
+                hist_db = get_hist_mes_com_overrides_cached(setor, ano, mes)
+                colaboradores = load_colaboradores_setor(setor)
+                colab_by = {c["Chapa"]: c for c in colaboradores}
 
             if not hist_db:
                 st.info("Gere a escala primeiro na aba 🚀 Gerar Escala.")
@@ -8076,7 +8201,7 @@ def page_app():
                 # Regra v8.4:
                 # - Se você selecionar 1+ colaboradores, a grade mostra SOMENTE os selecionados (mesmo se "Mostrar todos" estiver marcado).
                 # - Se não selecionar ninguém, a grade respeita o checkbox (todos ou nenhum).
-                show_all = st.checkbox("👥 Mostrar todos os colaboradores", value=False, key="grid_show_all")
+                show_all = st.checkbox("👥 Mostrar todos os colaboradores", value=True, key="grid_show_all")
 
                 labels_opts = [f'{c["Nome"]} ({c["Chapa"]})' for c in colaboradores]
                 inv_label = {f'{c["Nome"]} ({c["Chapa"]})': str(c["Chapa"]) for c in colaboradores}
@@ -8095,15 +8220,8 @@ def page_app():
                 else:
                     colaboradores = colaboradores if show_all else []
                     if not show_all:
-                        st.info("Para evitar lentidão, a grade não abre todos automaticamente. Selecione colaboradores acima ou marque 'Mostrar todos'.")
+                        st.info("Marque 'Mostrar todos' ou selecione 1+ colaboradores acima.")
 
-                if colaboradores:
-                    max_grid = st.number_input("Máximo de colaboradores na grade", min_value=1, max_value=max(1, len(colaboradores)), value=min(15, len(colaboradores)), step=1, key="grid_max_rows")
-                    total_grid = len(colaboradores)
-                    colaboradores = colaboradores[:int(max_grid)]
-                    st.caption(f"Mostrando 1-{len(colaboradores)} de {total_grid} registro(s).")
-                else:
-                    st.stop()
 
                 qtd = calendar.monthrange(int(ano), int(mes))[1]
                 dias = list(range(1, qtd + 1))
@@ -8143,7 +8261,7 @@ def page_app():
                     key="grid_editor"
                 )
 
-                auto_readequar = st.checkbox("🔄 Readequar escala ao salvar", value=False, key="grid_auto_regen")
+                auto_readequar = st.checkbox("🔄 Readequar escala ao salvar", value=True, key="grid_auto_regen")
 
                 if st.button("💾 Salvar folgas manuais (e readequar mês)", key="grid_save"):
                     set_folga = 0
@@ -8184,7 +8302,7 @@ def page_app():
                             dias2 = list(range(1, qtd2 + 1))
 
                             # --- filtro/seleção de colaboradores (mesmo layout da grade de folgas)
-                            show_all_th = st.checkbox("👥 Mostrar todos os colaboradores", value=False, key="th_show_all")
+                            show_all_th = st.checkbox("👥 Mostrar todos os colaboradores", value=True, key="th_show_all")
 
                             labels_opts_th = [f'{c["Nome"]} ({c["Chapa"]})' for c in colaboradores]
                             inv_label_th = {f'{c["Nome"]} ({c["Chapa"]})': str(c["Chapa"]) for c in colaboradores}
@@ -8203,14 +8321,9 @@ def page_app():
                             else:
                                 colaboradores = colaboradores if show_all_th else []
                                 if not colaboradores:
-                                    st.info("Para evitar lentidão, a grade não abre todos automaticamente. Selecione colaboradores acima ou marque 'Mostrar todos'.")
+                                    st.info("Selecione colaboradores acima ou marque 'Mostrar todos'.")
                                     # evita montar grade vazia que confunde
                                     st.stop()
-
-                            max_grid_th = st.number_input("Máximo de colaboradores na grade", min_value=1, max_value=max(1, len(colaboradores)), value=min(15, len(colaboradores)), step=1, key="th_max_rows")
-                            total_grid_th = len(colaboradores)
-                            colaboradores = colaboradores[:int(max_grid_th)]
-                            st.caption(f"Mostrando 1-{len(colaboradores)} de {total_grid_th} registro(s).")
 
                             # ação a aplicar (horário/folga/afastamento)
                             acao_th = st.selectbox(
@@ -8263,7 +8376,7 @@ def page_app():
                                 key="th_grid_editor"
                             )
 
-                            auto_readequar_th = st.checkbox("🔄 Readequar escala ao salvar", value=False, key="th_auto_regen")
+                            auto_readequar_th = st.checkbox("🔄 Readequar escala ao salvar", value=True, key="th_auto_regen")
 
                             if st.button("💾 Salvar troca de horários (aplicar nos dias marcados)", key="th_save"):
                                 applied = 0
@@ -8299,7 +8412,7 @@ def page_app():
                                                 applied += 1
                                             else:
                                                 # desmarcado: remove override de horário (limpa h_entrada do dia)
-                                                delete_override(setor, ano, mes, ch, d, "h_entrada")
+                                                del_override(setor, ano, mes, ch, d, "h_entrada")
 
                                         elif acao_th == "Folga":
                                             # Folga sobrepõe qualquer horário: salva status e remove h_entrada
@@ -8309,10 +8422,10 @@ def page_app():
                                                 continue
                                             if want:
                                                 set_override(setor, ano, mes, ch, d, "status", "Folga")
-                                                delete_override(setor, ano, mes, ch, d, "h_entrada")
+                                                del_override(setor, ano, mes, ch, d, "h_entrada")
                                                 applied += 1
                                             else:
-                                                delete_override(setor, ano, mes, ch, d, "status")
+                                                del_override(setor, ano, mes, ch, d, "status")
 
                                         else:  # Afastamento
                                             if st_norm in ("FER","FÉRIAS","FERIAS"):
@@ -8321,10 +8434,10 @@ def page_app():
                                                 continue
                                             if want:
                                                 set_override(setor, ano, mes, ch, d, "status", "AFA")
-                                                delete_override(setor, ano, mes, ch, d, "h_entrada")
+                                                del_override(setor, ano, mes, ch, d, "h_entrada")
                                                 applied += 1
                                             else:
-                                                delete_override(setor, ano, mes, ch, d, "status")
+                                                del_override(setor, ano, mes, ch, d, "status")
 
                                 if auto_readequar_th:
                                     _regenerar_mes_inteiro(setor, ano, mes, seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
