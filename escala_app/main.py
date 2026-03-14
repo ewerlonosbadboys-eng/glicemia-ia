@@ -3687,6 +3687,37 @@ def admin_set_user_lider(setor: str, chapa: str, enabled: bool):
     return changed
 
 
+def admin_set_user_admin(setor: str, chapa: str, enabled: bool):
+    setor = _norm_setor(setor)
+    chapa = _norm_chapa(chapa)
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute(
+        "UPDATE usuarios_sistema SET is_admin=? WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?",
+        (1 if enabled else 0, setor, chapa),
+    )
+    changed = cur.rowcount > 0
+    con.commit()
+    con.close()
+    return changed
+
+
+def admin_update_user_profile(setor: str, chapa: str, perfil: str):
+    perfil = str(perfil or '').strip().upper()
+    is_admin = 1 if perfil == 'ADMIN' else 0
+    is_lider = 1 if perfil in ('ADMIN', 'LIDER', 'LÍDER') else 0
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute(
+        "UPDATE usuarios_sistema SET is_admin=?, is_lider=? WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?",
+        (is_admin, is_lider, _norm_setor(setor), _norm_chapa(chapa)),
+    )
+    changed = cur.rowcount > 0
+    con.commit()
+    con.close()
+    return changed
+
+
 def admin_move_user_setor(setor_atual: str, chapa: str, setor_novo: str):
     setor_atual = _norm_setor(setor_atual)
     setor_novo = _norm_setor(setor_novo)
@@ -9017,9 +9048,9 @@ def page_app():
             senha_man = st.text_input("Senha do usuário", type="password", key="adm_man_pwd", help="Se deixar em branco, a senha padrão será a própria chapa sem símbolos.")
             cman4, cman5, cman6 = st.columns([1, 1, 1])
             with cman4:
-                lider_man = st.checkbox("É líder", value=False, key="adm_man_lider")
+                perfil_man = st.selectbox("Perfil do usuário", options=["COLABORADOR", "LIDER", "ADMIN"], index=0, key="adm_man_perfil")
             with cman5:
-                admin_man = st.checkbox("É admin", value=False, key="adm_man_admin")
+                subgrupo_man = st.text_input("Subgrupo", key="adm_man_subgrupo", placeholder="Ex.: LIDERANÇA")
             with cman6:
                 criar_colab_man = st.checkbox("Criar colaborador junto", value=True, key="adm_man_colab")
             if st.button("Salvar usuário manualmente", key="adm_man_btn"):
@@ -9027,24 +9058,30 @@ def page_app():
                 chapa_norm = _norm_chapa(chapa_man)
                 nome_final = (nome_man or chapa_norm).strip()
                 senha_final = (senha_man or default_password_for_chapa(chapa_norm)).strip()
+                perfil_norm = str(perfil_man or 'COLABORADOR').strip().upper()
+                is_admin_man = 1 if perfil_norm == 'ADMIN' else 0
+                is_lider_man = 1 if perfil_norm in ('ADMIN', 'LIDER', 'LÍDER') else 0
+                subgrupo_final = str(subgrupo_man or '').strip()
                 if not setor_norm or not chapa_norm:
                     st.error("Digite setor e chapa.")
                 else:
                     try:
                         if criar_colab_man and not colaborador_exists(setor_norm, chapa_norm):
-                            create_colaborador(nome_final, setor_norm, chapa_norm, criar_login=False)
-                        create_system_user(nome_final, setor_norm, chapa_norm, senha_final, is_lider=int(lider_man), is_admin=int(admin_man))
+                            create_colaborador(nome_final, setor_norm, chapa_norm, subgrupo=subgrupo_final, criar_login=False)
+                        elif subgrupo_final:
+                            admin_update_user_subgrupo(setor_norm, chapa_norm, subgrupo_final)
+                        create_system_user(nome_final, setor_norm, chapa_norm, senha_final, is_lider=is_lider_man, is_admin=is_admin_man)
                         try:
                             st.cache_data.clear()
                         except Exception:
                             pass
-                        st.success(f"Usuário salvo com sucesso. Senha ativa: {senha_final}")
+                        st.success(f"Usuário salvo com sucesso. Perfil: {perfil_norm}. Senha ativa: {senha_final}")
                         st.rerun()
                     except Exception as e:
                         st.error(f"Falha ao salvar usuário: {e}")
 
             st.markdown("---")
-            st.subheader("🛠️ Gestão rápida de acesso e perfil")
+            st.subheader("🛠️ Gestão rápida de acesso, perfil e subgrupo")
             dfp = admin_list_people_full()
             if dfp.empty:
                 st.info("Nenhum usuário do sistema encontrado para gerenciar.")
@@ -9058,33 +9095,23 @@ def page_app():
                 nome_sel = str(recp.get("nome") or "").strip()
                 st.caption(f"Gerenciando: {nome_sel} | setor {setor_sel} | chapa {chapa_sel}")
 
-                cgp1, cgp2, cgp3 = st.columns([1, 1, 1.2])
+                perfil_atual = "ADMIN" if bool(int(recp.get("is_admin") or 0)) else ("LIDER" if bool(int(recp.get("is_lider") or 0)) else "COLABORADOR")
+                cgp1, cgp2 = st.columns([1.2, 1])
                 with cgp1:
-                    if st.button("Promover para líder", key="adm_promove_lider"):
-                        ok = admin_set_user_lider(setor_sel, chapa_sel, True)
-                        if ok:
-                            try:
-                                st.cache_data.clear()
-                            except Exception:
-                                pass
-                            st.success("Perfil de líder liberado com sucesso.")
-                            st.rerun()
-                        else:
-                            st.error("Não consegui promover esse usuário para líder.")
+                    perfil_novo = st.selectbox("Perfil do usuário", options=["COLABORADOR", "LIDER", "ADMIN"], index=["COLABORADOR", "LIDER", "ADMIN"].index(perfil_atual), key="adm_manage_profile")
                 with cgp2:
-                    if st.button("Remover líder", key="adm_remove_lider"):
-                        ok = admin_set_user_lider(setor_sel, chapa_sel, False)
-                        if ok:
-                            try:
-                                st.cache_data.clear()
-                            except Exception:
-                                pass
-                            st.success("Perfil de líder removido com sucesso.")
-                            st.rerun()
-                        else:
-                            st.error("Não consegui remover o perfil de líder.")
-                with cgp3:
-                    st.checkbox("Líder ativo", value=bool(int(recp.get("is_lider") or 0)), disabled=True, key="adm_view_is_lider")
+                    st.text_input("Perfil atual", value=perfil_atual, disabled=True, key="adm_view_profile")
+                if st.button("Salvar perfil", key="adm_save_profile"):
+                    ok = admin_update_user_profile(setor_sel, chapa_sel, perfil_novo)
+                    if ok:
+                        try:
+                            st.cache_data.clear()
+                        except Exception:
+                            pass
+                        st.success(f"Perfil atualizado para {perfil_novo}.")
+                        st.rerun()
+                    else:
+                        st.error("Não consegui atualizar o perfil desse usuário.")
 
                 st.markdown("#### Alterar setor do usuário")
                 setores_exist = sorted({str(x).strip() for x in dfp["setor"].tolist() if str(x).strip()})
