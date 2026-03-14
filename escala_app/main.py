@@ -3225,7 +3225,7 @@ def _safe_exec(cur, sql: str, params=None):
     except Exception:
         pass
 
-def db_init():
+def db_init(startup_light: bool = False):
     con = db_conn()
     cur = con.cursor()
 
@@ -3413,7 +3413,7 @@ def db_init():
         pass
 
     restore_ok = False
-    if SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY:
+    if (not startup_light) and SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY:
         try:
             restore_ok = bool(_restore_from_supabase_if_local_empty(force=True))
         except Exception as e:
@@ -3441,13 +3441,13 @@ def db_init():
         """, ("Administrador", "ADMIN", "admin", senha_hash, salt, 1, 1, datetime.now().isoformat()))
         con.commit()
 
-    if SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY:
+    if (not startup_light) and SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY:
         try:
             _restore_from_supabase_if_local_empty(force=False)
         except Exception:
             pass
 
-    if SUPABASE_AUTO_BOOTSTRAP_AFTER_SCHEMA:
+    if (not startup_light) and SUPABASE_AUTO_BOOTSTRAP_AFTER_SCHEMA:
         try:
             _bootstrap_from_supabase_after_schema(force=False)
         except Exception:
@@ -7605,7 +7605,37 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
             else:
                 st.dataframe(df_sol, use_container_width=True, hide_index=True)
 
+def _run_post_login_startup_once():
+    if st.session_state.get("_post_login_startup_done", False):
+        return
+
+    st.session_state["_post_login_startup_done"] = True
+
+    try:
+        with st.spinner("Preparando base após login..."):
+            if SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY:
+                try:
+                    _restore_from_supabase_if_local_empty(force=False)
+                except Exception as e:
+                    _set_supabase_error(e)
+
+            if SUPABASE_AUTO_BOOTSTRAP_AFTER_SCHEMA:
+                try:
+                    _bootstrap_from_supabase_after_schema(force=False)
+                except Exception as e:
+                    _set_supabase_error(e)
+
+            if not FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP:
+                try:
+                    auto_backup_if_due()
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+
 def page_app():
+    _run_post_login_startup_once()
     auth = st.session_state.get("auth") or {}
     setor = auth.get("setor", "GERAL")
 
@@ -9409,9 +9439,7 @@ def _fast_restore_bundled_latest_before_start() -> None:
 # MAIN
 # =========================================================
 _fast_restore_bundled_latest_before_start()
-db_init()
-if not FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP:
-    auto_backup_if_due()
+db_init(startup_light=True)
 
 if st.session_state["auth"] is None:
     page_login()
