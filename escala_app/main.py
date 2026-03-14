@@ -1107,7 +1107,7 @@ FAST_SNAPSHOT_THROTTLE_SECONDS = int((os.getenv("FAST_SNAPSHOT_THROTTLE_SECONDS"
 FAST_SNAPSHOT_SKIP_ON_CLOSE = (os.getenv("FAST_SNAPSHOT_SKIP_ON_CLOSE", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
 _LAST_SNAPSHOT_TS = 0.0
 _LAST_SNAPSHOT_DB_MTIME = 0.0
-RESTORE_GUARD_ENABLED = (os.getenv("RESTORE_GUARD_ENABLED", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
+RESTORE_GUARD_ENABLED = False
 _RESTORE_GUARD_ACTIVE = False
 _RESTORE_GUARD_MESSAGE = ""
 
