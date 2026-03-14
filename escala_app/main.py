@@ -7870,8 +7870,6 @@ def page_app():
     # ------------------------------------------------------
     if sec_main == "👥 Colaboradores":
         _col_tabs = ["👥 Colaboradores", "➕ Cadastrar colaborador", "🗑️ Excluir colaborador", "✏️ Editar perfil"]
-        if _perfil_gestao:
-            _col_tabs.append("📌 Subgrupos (editável)")
         sec_col = st.radio(
             "",
             _col_tabs,
