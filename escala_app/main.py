@@ -3671,6 +3671,124 @@ def admin_reset_user_password(user_id: int, nova_senha: str):
     update_password(setor, chapa, nova_senha)
     return True
 
+
+def admin_set_user_lider(setor: str, chapa: str, enabled: bool):
+    setor = _norm_setor(setor)
+    chapa = _norm_chapa(chapa)
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute(
+        "UPDATE usuarios_sistema SET is_lider=? WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?",
+        (1 if enabled else 0, setor, chapa),
+    )
+    changed = cur.rowcount > 0
+    con.commit()
+    con.close()
+    return changed
+
+
+def admin_move_user_setor(setor_atual: str, chapa: str, setor_novo: str):
+    setor_atual = _norm_setor(setor_atual)
+    setor_novo = _norm_setor(setor_novo)
+    chapa = _norm_chapa(chapa)
+    if not setor_atual or not setor_novo or not chapa:
+        return False, "Informe setor atual, setor novo e chapa."
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute(
+        "SELECT nome, subgrupo, entrada, folga_sab FROM colaboradores WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=? LIMIT 1",
+        (setor_atual, chapa),
+    )
+    row_colab = cur.fetchone()
+    cur.execute(
+        "SELECT nome, senha_hash, salt, is_admin, is_lider, criado_em FROM usuarios_sistema WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=? LIMIT 1",
+        (setor_atual, chapa),
+    )
+    row_user = cur.fetchone()
+    if not row_colab and not row_user:
+        con.close()
+        return False, "Usuário/colaborador não encontrado."
+    try:
+        if row_colab:
+            nome, subgrupo, entrada, folga_sab = row_colab
+            cur.execute(
+                "DELETE FROM colaboradores WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?",
+                (setor_atual, chapa),
+            )
+            cur.execute(
+                "INSERT OR REPLACE INTO colaboradores(nome, setor, chapa, subgrupo, entrada, folga_sab, criado_em) VALUES(?,?,?,?,?,?,COALESCE((SELECT criado_em FROM colaboradores WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?), ?))",
+                (nome, setor_novo, chapa, subgrupo or '', entrada or '06:00', int(folga_sab or 0), setor_novo, chapa, datetime.now().isoformat()),
+            )
+            if str(subgrupo or '').strip():
+                cur.execute("INSERT OR IGNORE INTO subgrupos_setor(setor, nome) VALUES (?, ?)", (setor_novo, str(subgrupo).strip()))
+                cur.execute(
+                    "INSERT OR IGNORE INTO subgrupo_regras(setor, subgrupo, evitar_seg, evitar_ter, evitar_qua, evitar_qui, evitar_sex, evitar_sab) VALUES (?, ?, 0, 0, 0, 0, 0, 0)",
+                    (setor_novo, str(subgrupo).strip()),
+                )
+        if row_user:
+            nome_u, senha_hash, salt, is_admin, is_lider, criado_em = row_user
+            cur.execute(
+                "DELETE FROM usuarios_sistema WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?",
+                (setor_atual, chapa),
+            )
+            cur.execute(
+                "INSERT OR REPLACE INTO usuarios_sistema(nome, setor, chapa, senha_hash, salt, is_admin, is_lider, criado_em) VALUES(?,?,?,?,?,?,?,?)",
+                (nome_u, setor_novo, chapa, senha_hash, salt, int(is_admin or 0), int(is_lider or 0), criado_em or datetime.now().isoformat()),
+            )
+        con.commit()
+        return True, "Setor atualizado com sucesso."
+    except Exception as e:
+        con.rollback()
+        return False, str(e)
+    finally:
+        con.close()
+
+
+def admin_update_user_subgrupo(setor: str, chapa: str, subgrupo_novo: str):
+    setor = _norm_setor(setor)
+    chapa = _norm_chapa(chapa)
+    subgrupo_novo = str(subgrupo_novo or '').strip()
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute(
+        "UPDATE colaboradores SET subgrupo=? WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?",
+        (subgrupo_novo, setor, chapa),
+    )
+    changed = cur.rowcount > 0
+    if changed and subgrupo_novo:
+        cur.execute("INSERT OR IGNORE INTO subgrupos_setor(setor, nome) VALUES (?, ?)", (setor, subgrupo_novo))
+        cur.execute(
+            "INSERT OR IGNORE INTO subgrupo_regras(setor, subgrupo, evitar_seg, evitar_ter, evitar_qua, evitar_qui, evitar_sex, evitar_sab) VALUES (?, ?, 0, 0, 0, 0, 0, 0)",
+            (setor, subgrupo_novo),
+        )
+    con.commit()
+    con.close()
+    return changed
+
+
+def admin_list_people_full():
+    con = db_conn()
+    df = pd.read_sql_query(
+        """
+        SELECT 
+            COALESCE(u.id, 0) AS id,
+            COALESCE(u.nome, c.nome, '') AS nome,
+            COALESCE(u.setor, c.setor, '') AS setor,
+            COALESCE(u.chapa, c.chapa, '') AS chapa,
+            COALESCE(c.subgrupo, '') AS subgrupo,
+            COALESCE(u.is_admin, 0) AS is_admin,
+            COALESCE(u.is_lider, 0) AS is_lider
+        FROM usuarios_sistema u
+        LEFT JOIN colaboradores c
+          ON UPPER(TRIM(c.setor)) = UPPER(TRIM(u.setor))
+         AND TRIM(c.chapa) = TRIM(u.chapa)
+        ORDER BY COALESCE(u.setor, c.setor, ''), COALESCE(u.nome, c.nome, '')
+        """,
+        con,
+    )
+    con.close()
+    return df
+
 # =========================================================
 # COLABORADORES
 # =========================================================
@@ -8912,6 +9030,85 @@ def page_app():
                         st.rerun()
                     except Exception as e:
                         st.error(f"Falha ao salvar usuário: {e}")
+
+            st.markdown("---")
+            st.subheader("🛠️ Gestão rápida de acesso e perfil")
+            dfp = admin_list_people_full()
+            if dfp.empty:
+                st.info("Nenhum usuário do sistema encontrado para gerenciar.")
+            else:
+                dfp = dfp.copy()
+                dfp["rotulo"] = dfp.apply(lambda r: f"{str(r['nome']).strip()} | setor {str(r['setor']).strip()} | chapa {str(r['chapa']).strip()} | subgrupo {str(r['subgrupo']).strip() or 'SEM SUBGRUPO'}", axis=1)
+                pessoa_sel = st.selectbox("Usuário para gerenciar", dfp["rotulo"].tolist(), key="adm_manage_pick")
+                recp = dfp[dfp["rotulo"] == pessoa_sel].iloc[0].to_dict()
+                setor_sel = str(recp.get("setor") or "").strip()
+                chapa_sel = str(recp.get("chapa") or "").strip()
+                nome_sel = str(recp.get("nome") or "").strip()
+                st.caption(f"Gerenciando: {nome_sel} | setor {setor_sel} | chapa {chapa_sel}")
+
+                cgp1, cgp2, cgp3 = st.columns([1, 1, 1.2])
+                with cgp1:
+                    if st.button("Promover para líder", key="adm_promove_lider"):
+                        ok = admin_set_user_lider(setor_sel, chapa_sel, True)
+                        if ok:
+                            try:
+                                st.cache_data.clear()
+                            except Exception:
+                                pass
+                            st.success("Perfil de líder liberado com sucesso.")
+                            st.rerun()
+                        else:
+                            st.error("Não consegui promover esse usuário para líder.")
+                with cgp2:
+                    if st.button("Remover líder", key="adm_remove_lider"):
+                        ok = admin_set_user_lider(setor_sel, chapa_sel, False)
+                        if ok:
+                            try:
+                                st.cache_data.clear()
+                            except Exception:
+                                pass
+                            st.success("Perfil de líder removido com sucesso.")
+                            st.rerun()
+                        else:
+                            st.error("Não consegui remover o perfil de líder.")
+                with cgp3:
+                    st.checkbox("Líder ativo", value=bool(int(recp.get("is_lider") or 0)), disabled=True, key="adm_view_is_lider")
+
+                st.markdown("#### Alterar setor do usuário")
+                setores_exist = sorted({str(x).strip() for x in dfp["setor"].tolist() if str(x).strip()})
+                setor_novo_adm = st.selectbox("Novo setor", options=setores_exist + ([setor_sel] if setor_sel and setor_sel not in setores_exist else []), index=(setores_exist.index(setor_sel) if setor_sel in setores_exist else 0) if (setores_exist or setor_sel) else 0, key="adm_move_setor_new") if (setores_exist or setor_sel) else st.text_input("Novo setor", value=setor_sel, key="adm_move_setor_new_txt")
+                if st.button("Mover usuário de setor", key="adm_move_setor_btn"):
+                    ok, msg = admin_move_user_setor(setor_sel, chapa_sel, setor_novo_adm)
+                    if ok:
+                        try:
+                            st.cache_data.clear()
+                        except Exception:
+                            pass
+                        st.success(msg)
+                        st.rerun()
+                    else:
+                        st.error(msg)
+                st.caption("Essa ação move o cadastro principal do usuário e do colaborador para o novo setor.")
+
+                st.markdown("#### Alterar subgrupo do colaborador")
+                sub_opts = [""] + list_subgrupos(setor_sel)
+                sub_atual = str(recp.get("subgrupo") or "").strip()
+                if sub_atual and sub_atual not in sub_opts:
+                    sub_opts.append(sub_atual)
+                subgrupo_novo = st.selectbox("Novo subgrupo", options=sub_opts, index=sub_opts.index(sub_atual) if sub_atual in sub_opts else 0, key="adm_subgrupo_select")
+                subgrupo_extra = st.text_input("Ou digite um novo subgrupo", key="adm_subgrupo_extra")
+                if st.button("Salvar subgrupo", key="adm_subgrupo_btn"):
+                    sub_final = str(subgrupo_extra or subgrupo_novo).strip()
+                    ok = admin_update_user_subgrupo(setor_sel, chapa_sel, sub_final)
+                    if ok:
+                        try:
+                            st.cache_data.clear()
+                        except Exception:
+                            pass
+                        st.success("Subgrupo atualizado com sucesso.")
+                        st.rerun()
+                    else:
+                        st.error("Não consegui atualizar o subgrupo desse colaborador.")
 
             st.markdown("---")
             st.subheader("🗄️ Backup / Restauração (escala.db)")
