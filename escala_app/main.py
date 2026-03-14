@@ -4375,6 +4375,73 @@ def delete_override(setor: str, ano: int, mes: int, chapa: str, dia: int, campo:
         pass
 
 
+def apply_override_batch(set_ops: list[tuple], delete_ops: list[tuple]):
+    """
+    Aplica vários overrides em uma única transação.
+    Cada item de set_ops: (setor, ano, mes, chapa, dia, campo, valor)
+    Cada item de delete_ops: (setor, ano, mes, chapa, dia, campo)
+    """
+    if not set_ops and not delete_ops:
+        return
+
+    con = db_conn()
+    cur = con.cursor()
+    try:
+        cur.execute("BEGIN")
+
+        if set_ops:
+            set_rows = [
+                (
+                    str(setor).strip().upper(),
+                    int(ano),
+                    int(mes),
+                    str(chapa).strip(),
+                    int(dia),
+                    _norm_override_campo(campo),
+                    str(valor).strip(),
+                )
+                for (setor, ano, mes, chapa, dia, campo, valor) in set_ops
+            ]
+            cur.executemany(
+                """
+                INSERT INTO overrides(setor, ano, mes, chapa, dia, campo, valor)
+                VALUES(?,?,?,?,?,?,?)
+                ON CONFLICT(setor, ano, mes, chapa, dia, campo)
+                DO UPDATE SET valor=excluded.valor
+                """,
+                set_rows,
+            )
+
+        if delete_ops:
+            delete_rows = [
+                (
+                    str(setor).strip().upper(),
+                    int(ano),
+                    int(mes),
+                    str(chapa).strip(),
+                    int(dia),
+                    _norm_override_campo(campo),
+                )
+                for (setor, ano, mes, chapa, dia, campo) in delete_ops
+            ]
+            cur.executemany(
+                """
+                DELETE FROM overrides
+                WHERE setor=? AND ano=? AND mes=? AND chapa=? AND dia=? AND campo=?
+                """,
+                delete_rows,
+            )
+
+        con.commit()
+    finally:
+        con.close()
+
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+
+
 def delete_overrides_mes(setor: str, ano: int, mes: int, keep_campos: set[str] | None = None):
     """
     Remove overrides do mês inteiro (útil para "Gerar do zero").
@@ -8253,16 +8320,16 @@ def page_app():
                                 key="th_grid_editor"
                             )
 
-                            auto_readequar_th = st.checkbox("🔄 Readequar escala ao salvar", value=True, key="th_auto_regen")
+                            auto_readequar_th = st.checkbox("🔄 Readequar escala ao salvar", value=False, key="th_auto_regen")
 
                             if st.button("💾 Salvar troca de horários (aplicar nos dias marcados)", key="th_save"):
                                 applied = 0
                                 skipped = 0
+                                set_ops = []
+                                delete_ops = []
                                 for _, r in edited_th.iterrows():
                                     ch = str(r["Chapa"])
                                     dfh = hist_db.get(ch)
-                                    # horário padrão para fallback
-                                    ent_pad = (colab_by.get(ch, {}) or {}).get("Entrada", BALANCO_DIA_ENTRADA)
 
                                     for d in dias2:
                                         want = bool(r[str(d)])
@@ -8279,44 +8346,45 @@ def page_app():
 
                                         if acao_th == "Horário":
                                             # ✅ regra: Folga/Férias/Afastamento sempre prevalecem (não aplicar horário)
-                                            if st_norm in ("FOLGA","FOLG","FÉRIAS","FERIAS","FER","AFA","AFASTAMENTO"):
+                                            if st_norm in ("FOLGA", "FOLG", "FÉRIAS", "FERIAS", "FER", "AFA", "AFASTAMENTO"):
                                                 if want:
                                                     skipped += 1
                                                 continue
 
                                             if want:
-                                                set_override(setor, ano, mes, ch, d, "h_entrada", horario_sel)
+                                                set_ops.append((setor, ano, mes, ch, d, "h_entrada", horario_sel))
                                                 applied += 1
                                             else:
-                                                # desmarcado: remove override de horário (limpa h_entrada do dia)
-                                                delete_override(setor, ano, mes, ch, d, "h_entrada")
+                                                delete_ops.append((setor, ano, mes, ch, d, "h_entrada"))
 
                                         elif acao_th == "Folga":
                                             # Folga sobrepõe qualquer horário: salva status e remove h_entrada
-                                            if st_norm in ("FER","FÉRIAS","FERIAS"):
+                                            if st_norm in ("FER", "FÉRIAS", "FERIAS"):
                                                 if want:
                                                     skipped += 1
                                                 continue
                                             if want:
-                                                set_override(setor, ano, mes, ch, d, "status", "Folga")
-                                                delete_override(setor, ano, mes, ch, d, "h_entrada")
+                                                set_ops.append((setor, ano, mes, ch, d, "status", "Folga"))
+                                                delete_ops.append((setor, ano, mes, ch, d, "h_entrada"))
                                                 applied += 1
                                             else:
-                                                delete_override(setor, ano, mes, ch, d, "status")
+                                                delete_ops.append((setor, ano, mes, ch, d, "status"))
 
                                         else:  # Afastamento
-                                            if st_norm in ("FER","FÉRIAS","FERIAS"):
+                                            if st_norm in ("FER", "FÉRIAS", "FERIAS"):
                                                 if want:
                                                     skipped += 1
                                                 continue
                                             if want:
-                                                set_override(setor, ano, mes, ch, d, "status", "AFA")
-                                                delete_override(setor, ano, mes, ch, d, "h_entrada")
+                                                set_ops.append((setor, ano, mes, ch, d, "status", "AFA"))
+                                                delete_ops.append((setor, ano, mes, ch, d, "h_entrada"))
                                                 applied += 1
                                             else:
-                                                delete_override(setor, ano, mes, ch, d, "status")
+                                                delete_ops.append((setor, ano, mes, ch, d, "status"))
 
-                                if auto_readequar_th:
+                                apply_override_batch(set_ops, delete_ops)
+
+                                if auto_readequar_th and applied > 0:
                                     _regenerar_mes_inteiro(setor, ano, mes, seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
 
                                 st.success(f"Salvo! Ação: {acao_th}. Aplicados: {applied}. Ignorados (por conflito com Folga/Férias): {skipped}.")
