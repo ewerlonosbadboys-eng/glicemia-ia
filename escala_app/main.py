@@ -3640,6 +3640,98 @@ def admin_reset_user_password(user_id: int, nova_senha: str):
     update_password(setor, chapa, nova_senha)
     return True
 
+
+def admin_update_funcionario(setor: str, chapa_atual: str, nome_novo: str, subgrupo_novo: str, perfil_novo: str, entrada_nova: str = '06:00', folga_sab: bool = False, criar_usuario_se_nao_existir: bool = True):
+    """
+    Atualiza cadastro do colaborador e sincroniza o usuário do sistema.
+    Perfil aceito: COLABORADOR, LIDER, ADMIN.
+    """
+    setor = _norm_setor(setor)
+    chapa_atual = _norm_chapa(chapa_atual)
+    nome_novo = str(nome_novo or '').strip()
+    subgrupo_novo = str(subgrupo_novo or '').strip()
+    perfil_novo = _norm_subgrupo_label(perfil_novo or 'COLABORADOR')
+    entrada_nova = str(entrada_nova or '06:00').strip() or '06:00'
+
+    if not setor or not chapa_atual:
+        raise ValueError('Setor e chapa são obrigatórios.')
+
+    rec = get_colaborador_record(setor, chapa_atual)
+    if not rec:
+        raise ValueError('Colaborador não encontrado para este setor/chapa.')
+
+    nome_final = nome_novo or str(rec.get('Nome') or chapa_atual).strip()
+    subgrupo_final = subgrupo_novo or str(rec.get('Subgrupo') or '').strip()
+    entrada_final = entrada_nova or str(rec.get('Entrada') or '06:00').strip() or '06:00'
+
+    if perfil_novo not in ['COLABORADOR', 'LIDER', 'ADMIN']:
+        perfil_novo = 'COLABORADOR'
+
+    if perfil_novo == 'LIDER' and not subgrupo_final:
+        subgrupo_final = 'LIDERANÇA'
+    if perfil_novo == 'ADMIN' and not subgrupo_final:
+        subgrupo_final = 'ADMIN'
+
+    update_colaborador_perfil(
+        setor=setor,
+        chapa_antiga=chapa_atual,
+        chapa_nova=chapa_atual,
+        nome_novo=nome_final,
+        subgrupo=subgrupo_final,
+        entrada=entrada_final,
+        folga_sab=bool(folga_sab),
+    )
+
+    is_admin = 1 if perfil_novo == 'ADMIN' else 0
+    is_lider = 1 if perfil_novo in ['LIDER', 'ADMIN'] else 0
+
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute(
+        """
+        SELECT id FROM usuarios_sistema
+        WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?
+        LIMIT 1
+        """,
+        (setor, chapa_atual),
+    )
+    row = cur.fetchone()
+    con.close()
+
+    if row:
+        con = db_conn()
+        cur = con.cursor()
+        cur.execute(
+            """
+            UPDATE usuarios_sistema
+            SET nome=?, is_admin=?, is_lider=?
+            WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?
+            """,
+            (nome_final, int(is_admin), int(is_lider), setor, chapa_atual),
+        )
+        con.commit()
+        con.close()
+    elif criar_usuario_se_nao_existir:
+        senha_padrao = default_password_for_chapa(chapa_atual)
+        create_system_user(nome_final, setor, chapa_atual, senha_padrao, is_lider=int(is_lider), is_admin=int(is_admin))
+
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+
+    return {
+        'nome': nome_final,
+        'setor': setor,
+        'chapa': chapa_atual,
+        'subgrupo': subgrupo_final,
+        'perfil': perfil_novo,
+        'entrada': entrada_final,
+        'folga_sab': bool(folga_sab),
+        'is_admin': bool(is_admin),
+        'is_lider': bool(is_lider),
+    }
+
 # =========================================================
 # COLABORADORES
 # =========================================================
@@ -8815,6 +8907,89 @@ def page_app():
     # ------------------------------------------------------
     elif is_admin_area and sec_main == "🔒 Admin":
             st.subheader("🔒 Admin do Sistema (somente ADMIN)")
+
+            st.markdown("### 🛠️ Atualizar funcionário de qualquer setor")
+            st.caption("Aqui o ADMIN pode alterar nome, subgrupo e perfil do colaborador em qualquer setor. O perfil sincroniza o login do sistema.")
+            try:
+                con = db_conn()
+                df_func_adm = pd.read_sql_query(
+                    """
+                    SELECT nome, setor, chapa, COALESCE(subgrupo,'') AS subgrupo, COALESCE(entrada,'06:00') AS entrada, COALESCE(folga_sab,0) AS folga_sab
+                    FROM colaboradores
+                    ORDER BY setor, nome
+                    """,
+                    con,
+                )
+                df_login_adm = pd.read_sql_query(
+                    """
+                    SELECT setor, chapa, COALESCE(is_admin,0) AS is_admin, COALESCE(is_lider,0) AS is_lider
+                    FROM usuarios_sistema
+                    """,
+                    con,
+                )
+                con.close()
+            except Exception:
+                df_func_adm = pd.DataFrame(columns=['nome','setor','chapa','subgrupo','entrada','folga_sab'])
+                df_login_adm = pd.DataFrame(columns=['setor','chapa','is_admin','is_lider'])
+
+            if df_func_adm.empty:
+                st.info("Nenhum colaborador cadastrado para atualizar.")
+            else:
+                setores_func = sorted({_norm_setor(x) for x in df_func_adm['setor'].dropna().tolist() if str(x).strip()})
+                admf1, admf2 = st.columns([1, 1.7])
+                with admf1:
+                    setor_func = st.selectbox("Setor do funcionário", setores_func, key="adm_func_setor")
+                df_func_setor = df_func_adm[df_func_adm['setor'].astype(str).str.strip().str.upper() == _norm_setor(setor_func)].copy()
+                opts_func = [f"{str(r['nome']).strip()} ({str(r['chapa']).strip()})" for _, r in df_func_setor.iterrows()]
+                with admf2:
+                    pick_func = st.selectbox("Funcionário", opts_func, key="adm_func_pick") if opts_func else None
+
+                rec_func = None
+                chapa_func = ""
+                if pick_func:
+                    chapa_func = pick_func.rsplit("(", 1)[-1].replace(")", "").strip()
+                    df_hit = df_func_setor[df_func_setor['chapa'].astype(str).str.strip() == chapa_func]
+                    if not df_hit.empty:
+                        rec_func = df_hit.iloc[0].to_dict()
+
+                if rec_func:
+                    login_hit = df_login_adm[(df_login_adm['setor'].astype(str).str.strip().str.upper() == _norm_setor(setor_func)) & (df_login_adm['chapa'].astype(str).str.strip() == chapa_func)]
+                    is_admin_cur = bool(int(login_hit.iloc[0]['is_admin'])) if not login_hit.empty else False
+                    is_lider_cur = bool(int(login_hit.iloc[0]['is_lider'])) if not login_hit.empty else False
+                    perfil_cur = 'ADMIN' if is_admin_cur else ('LIDER' if is_lider_cur or _norm_subgrupo_label(rec_func.get('subgrupo','')) == 'LIDERANCA' else 'COLABORADOR')
+
+                    st.write(f"Atualizando: **{str(rec_func.get('nome') or '').strip()}** — chapa **{chapa_func}**")
+                    af1, af2, af3, af4 = st.columns([1.4, 1.2, 1.2, 1])
+                    with af1:
+                        nome_func_novo = st.text_input("Nome", value=str(rec_func.get('nome') or '').strip(), key='adm_func_nome')
+                    with af2:
+                        subgrupo_func_novo = st.text_input("Subgrupo", value=str(rec_func.get('subgrupo') or '').strip(), key='adm_func_subgrupo')
+                    with af3:
+                        entrada_func_nova = st.text_input("Entrada padrão", value=str(rec_func.get('entrada') or '06:00').strip() or '06:00', key='adm_func_entrada')
+                    with af4:
+                        folga_sab_func = st.checkbox("Folga sábado", value=bool(int(rec_func.get('folga_sab', 0) or 0)), key='adm_func_folga_sab')
+
+                    perfil_func_novo = st.selectbox("Perfil do sistema", ['COLABORADOR', 'LIDER', 'ADMIN'], index=['COLABORADOR', 'LIDER', 'ADMIN'].index(perfil_cur), key='adm_func_perfil')
+                    criar_login_func = st.checkbox("Criar login do sistema se não existir", value=True, key='adm_func_criar_login')
+
+                    if st.button("Salvar atualização do funcionário", key='adm_func_salvar'):
+                        try:
+                            res = admin_update_funcionario(
+                                setor=setor_func,
+                                chapa_atual=chapa_func,
+                                nome_novo=nome_func_novo,
+                                subgrupo_novo=subgrupo_func_novo,
+                                perfil_novo=perfil_func_novo,
+                                entrada_nova=entrada_func_nova,
+                                folga_sab=bool(folga_sab_func),
+                                criar_usuario_se_nao_existir=bool(criar_login_func),
+                            )
+                            st.success(f"Funcionário atualizado com sucesso. Perfil final: {res['perfil']} | Subgrupo: {res['subgrupo'] or 'SEM SUBGRUPO'}")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Falha ao atualizar funcionário: {e}")
+
+            st.markdown("---")
             dfu = admin_list_users()
             st.dataframe(dfu, use_container_width=True, height=420)
 
