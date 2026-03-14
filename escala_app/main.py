@@ -7605,59 +7605,38 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
                 st.dataframe(df_sol, use_container_width=True, hide_index=True)
 
 def _run_post_login_startup_once():
-    """
-    Boot leve após login.
-    Por padrão não executa restore/pull/push/backup pesado aqui,
-    porque isso estava travando a entrada no app e deixando a navegação lenta.
-    Só roda o fluxo pesado se a sessão pedir explicitamente.
-    """
     if st.session_state.get("_post_login_startup_done", False):
         return
 
     st.session_state["_post_login_startup_done"] = True
 
-    if not bool(st.session_state.get("_allow_heavy_post_login_sync", False)):
-        return
-
     try:
-        if SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY:
-            try:
-                _restore_from_supabase_if_local_empty(force=False)
-            except Exception as e:
-                _set_supabase_error(e)
+        with st.spinner("Preparando base após login..."):
+            if SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY:
+                try:
+                    _restore_from_supabase_if_local_empty(force=False)
+                except Exception as e:
+                    _set_supabase_error(e)
 
-        if SUPABASE_AUTO_BOOTSTRAP_AFTER_SCHEMA:
-            try:
-                _bootstrap_from_supabase_after_schema(force=False)
-            except Exception as e:
-                _set_supabase_error(e)
+            if SUPABASE_AUTO_BOOTSTRAP_AFTER_SCHEMA:
+                try:
+                    _bootstrap_from_supabase_after_schema(force=False)
+                except Exception as e:
+                    _set_supabase_error(e)
 
-        if not FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP:
-            try:
-                auto_backup_if_due()
-            except Exception:
-                pass
+            if not FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP:
+                try:
+                    auto_backup_if_due()
+                except Exception:
+                    pass
     except Exception:
         pass
+
+
 def page_app():
     _run_post_login_startup_once()
     auth = st.session_state.get("auth") or {}
     setor = auth.get("setor", "GERAL")
-
-    # Recalcula permissões em tempo real a partir do cadastro do colaborador.
-    # Isso evita ficar preso no portal de colaborador quando o perfil já foi
-    # alterado para líder/admin, mas a sessão antiga ainda não refletiu isso.
-    try:
-        rec_auth = get_colaborador_record(setor, auth.get('chapa', '')) or {}
-    except Exception:
-        rec_auth = {}
-    try:
-        auth["is_lider"] = bool(auth.get("is_lider", False)) or colaborador_eh_lideranca(setor, auth.get('chapa', ''))
-    except Exception:
-        auth["is_lider"] = bool(auth.get("is_lider", False))
-    if rec_auth:
-        auth["nome"] = str(rec_auth.get("Nome") or auth.get("nome") or "").strip() or auth.get("nome", "")
-    st.session_state["auth"] = auth
 
     # ---- Competência (mês/ano) compartilhada
     ano_cfg = int(st.session_state.get("cfg_ano", datetime.now().year))
@@ -8956,6 +8935,88 @@ def page_app():
     # ------------------------------------------------------
     # ABA 6: Admin (somente ADMIN)
     # ------------------------------------------------------
+    elif sec_main == "✍️ Assinaturas":
+        st.subheader("✍️ Assinaturas do setor")
+        ano_ass = int(st.session_state.get("cfg_ano", datetime.now().year))
+        mes_ass = int(st.session_state.get("cfg_mes", datetime.now().month))
+
+        df_ass = list_assinaturas_setor(setor, ano_ass, mes_ass)
+        if df_ass.empty:
+            st.info("Nenhuma assinatura encontrada para este setor nesta competência.")
+        else:
+            try:
+                tipos_pend = []
+                for _, rr in df_ass.iterrows():
+                    status_rr = get_assinatura_status(setor, rr.get("Chapa", ""), ano_ass, mes_ass, rr.get("Tipo", "oficial"))
+                    tipos_pend.append(status_rr.get("status", "-"))
+                df_ass = df_ass.copy()
+                df_ass.insert(len(df_ass.columns), "Status", tipos_pend)
+            except Exception:
+                pass
+
+            c1, c2 = st.columns([2, 1])
+            termo_ass = c1.text_input("Buscar assinatura por nome/chapa/subgrupo", key="ass_busca_setor")
+            filtro_status = c2.selectbox("Status", ["Todos", "Assinado", "Reassinatura pendente"], index=0, key="ass_status_setor")
+
+            df_view_ass = df_ass.copy()
+            if termo_ass:
+                t = str(termo_ass).strip().lower()
+                mask = (
+                    df_view_ass["Nome"].astype(str).str.lower().str.contains(t, na=False)
+                    | df_view_ass["Chapa"].astype(str).str.lower().str.contains(t, na=False)
+                    | df_view_ass["Subgrupo"].astype(str).str.lower().str.contains(t, na=False)
+                )
+                df_view_ass = df_view_ass.loc[mask].copy()
+            if filtro_status != "Todos" and "Status" in df_view_ass.columns:
+                df_view_ass = df_view_ass[df_view_ass["Status"].astype(str) == filtro_status].copy()
+
+            st.caption(f"Assinaturas do setor {setor} para {mes_ass:02d}/{ano_ass}. Tudo que o colaborador assinar entra aqui para o líder do mesmo setor.")
+            st.dataframe(df_view_ass, use_container_width=True, hide_index=True, height=420)
+
+    elif sec_main == "📨 Minhas solicitações":
+        st.subheader("📨 Solicitações do setor")
+        df_sol_setor = list_solicitacoes_setor(setor)
+        if df_sol_setor.empty:
+            st.info("Nenhuma solicitação encontrada para este setor.")
+        else:
+            c1, c2, c3 = st.columns([2, 1, 1])
+            termo_sol = c1.text_input("Buscar solicitação por nome/chapa/subgrupo", key="sol_busca_setor")
+            status_opts = ["Todos"] + sorted([str(x) for x in df_sol_setor["Status"].dropna().astype(str).unique().tolist()])
+            status_sel = c2.selectbox("Status", status_opts, index=0, key="sol_status_setor")
+            tipo_opts = ["Todos"] + sorted([str(x) for x in df_sol_setor["Tipo"].dropna().astype(str).unique().tolist()])
+            tipo_sel = c3.selectbox("Tipo", tipo_opts, index=0, key="sol_tipo_setor")
+
+            df_view_sol = df_sol_setor.copy()
+            if termo_sol:
+                t = str(termo_sol).strip().lower()
+                mask = (
+                    df_view_sol["Nome"].astype(str).str.lower().str.contains(t, na=False)
+                    | df_view_sol["Chapa"].astype(str).str.lower().str.contains(t, na=False)
+                    | df_view_sol["Subgrupo"].astype(str).str.lower().str.contains(t, na=False)
+                )
+                df_view_sol = df_view_sol.loc[mask].copy()
+            if status_sel != "Todos":
+                df_view_sol = df_view_sol[df_view_sol["Status"].astype(str) == status_sel].copy()
+            if tipo_sel != "Todos":
+                df_view_sol = df_view_sol[df_view_sol["Tipo"].astype(str) == tipo_sel].copy()
+
+            pendentes = int((df_sol_setor["Status"].astype(str) == "Em análise").sum())
+            st.caption(f"Solicitações do setor {setor}. Pendentes: {pendentes}. Tudo que colaborador do {setor} enviar aparece aqui para o líder do {setor}.")
+            st.dataframe(df_view_sol, use_container_width=True, hide_index=True, height=360)
+
+            with st.expander("Atualizar status da solicitação", expanded=False):
+                ids_disp = df_view_sol["ID"].tolist() if not df_view_sol.empty else df_sol_setor["ID"].tolist()
+                if ids_disp:
+                    id_sel = st.selectbox("Solicitação", ids_disp, key="sol_id_setor")
+                    novo_status = st.selectbox("Novo status", ["Em análise", "Aprovada", "Recusada"], index=0, key="sol_novo_status_setor")
+                    if st.button("Salvar status", key="sol_salvar_status_setor"):
+                        atualizar_status_solicitacao(int(id_sel), str(novo_status))
+                        st.success("Status atualizado.")
+                        st.rerun()
+                else:
+                    st.info("Nenhuma solicitação disponível para atualizar.")
+
+
     elif is_admin_area and sec_main == "🔒 Admin":
             st.subheader("🔒 Admin do Sistema (somente ADMIN)")
 
@@ -9244,26 +9305,6 @@ def page_app():
                     st.rerun()
                 except Exception as e:
                     st.error(str(e))
-
-            st.markdown("---")
-            st.subheader("👥 Importar colaboradores (CSV / Excel)")
-            st.write("Colunas aceitas: **nome, chapa, subgrupo, entrada, folga_sabado** (folga_sabado opcional).")
-            setor_imp = st.selectbox("Setor destino", setores, key="adm_imp_setor")
-            imp = st.file_uploader("Enviar CSV/XLSX", type=["csv", "xlsx"], key="adm_imp_file")
-            if imp is not None:
-                try:
-                    if imp.name.lower().endswith(".csv"):
-                        df_imp = pd.read_csv(imp)
-                    else:
-                        df_imp = pd.read_excel(imp)
-                    st.dataframe(df_imp.head(50), use_container_width=True, height=260)
-                    if st.button("Importar agora", key="adm_imp_run"):
-                        ins, upd = importar_colaboradores_df(setor_imp, df_imp)
-                        st.success(f"Importação concluída. Inseridos: {ins} | Atualizados: {upd}")
-                except Exception as e:
-                    st.error(f"Erro ao ler/importar: {e}")
-
-            st.markdown("---")
 
             st.markdown("---")
 
