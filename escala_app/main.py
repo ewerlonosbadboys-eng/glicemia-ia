@@ -7284,19 +7284,19 @@ def colaborador_eh_lideranca(setor: str, chapa: str) -> bool:
         return False
 
     sg = _norm_subgrupo_label((rec or {}).get('Subgrupo', ''))
-    perfil = _norm_subgrupo_label((rec or {}).get('Perfil', ''))
-    lider = _norm_subgrupo_label((rec or {}).get('Lider', ''))
 
     if sg in ['LIDERANCA', 'LIDER', 'LIDERES', 'LIDERANCA FLV']:
         return True
 
-    if perfil in ['LIDER', 'LIDERANCA', 'ENCARREGADO', 'RESPONSAVEL']:
-        return True
-
-    if lider in ['SIM', 'S', '1', 'TRUE']:
-        return True
-
     return False
+
+
+def usuario_tem_perfil_gestao(auth: dict, setor: str) -> bool:
+    if bool((auth or {}).get('is_admin', False)):
+        return True
+    if bool((auth or {}).get('is_lider', False)):
+        return True
+    return colaborador_eh_lideranca(setor, (auth or {}).get('chapa', ''))
 
 def list_assinaturas_setor(setor: str, ano: int, mes: int) -> pd.DataFrame:
     setor = _norm_setor(setor)
@@ -7532,8 +7532,8 @@ def page_app():
 
         _colab_sb = get_colaborador_record(setor, auth.get('chapa',''))
         _subgrupo_auth = (_colab_sb or {}).get('Subgrupo', 'SEM SUBGRUPO')
-        _lideranca_ok = bool(auth.get('is_lider', False)) or colaborador_eh_lideranca(setor, auth.get('chapa',''))
-        _perfil_gestao = bool(auth.get('is_admin', False)) or _lideranca_ok
+        _perfil_gestao = usuario_tem_perfil_gestao(auth, setor)
+        _lideranca_ok = _perfil_gestao and not bool(auth.get('is_admin', False))
 
         cA, cB = st.columns([1, 1])
         perfil_label = 'ADMIN' if auth.get('is_admin', False) else ('LÍDER' if _lideranca_ok else 'COLABORADOR')
@@ -7581,8 +7581,8 @@ def page_app():
         page_gestao_dashboard(int(st.session_state["cfg_ano"]), int(st.session_state["cfg_mes"]))
         return
 
-    _lideranca_ok = bool(auth.get('is_lider', False)) and colaborador_eh_lideranca(setor, auth.get('chapa',''))
-    _perfil_gestao = bool(auth.get('is_admin', False)) or _lideranca_ok
+    _perfil_gestao = usuario_tem_perfil_gestao(auth, setor)
+    _lideranca_ok = _perfil_gestao and not bool(auth.get('is_admin', False))
 
     if not _perfil_gestao:
         page_portal_colaborador(auth, int(st.session_state["cfg_ano"]), int(st.session_state["cfg_mes"]))
