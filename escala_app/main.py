@@ -3289,6 +3289,23 @@ def db_init():
     """)
 
     _safe_exec(cur, """
+    CREATE TABLE IF NOT EXISTS folgas_fixas (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        setor TEXT NOT NULL,
+        chapa TEXT NOT NULL,
+        seg INTEGER NOT NULL DEFAULT 0,
+        ter INTEGER NOT NULL DEFAULT 0,
+        qua INTEGER NOT NULL DEFAULT 0,
+        qui INTEGER NOT NULL DEFAULT 0,
+        sex INTEGER NOT NULL DEFAULT 0,
+        sab INTEGER NOT NULL DEFAULT 0,
+        dom INTEGER NOT NULL DEFAULT 0,
+        atualizado_em TEXT NOT NULL DEFAULT '',
+        UNIQUE(setor, chapa)
+    )
+    """)
+
+    _safe_exec(cur, """
     CREATE TABLE IF NOT EXISTS ferias (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         setor TEXT NOT NULL,
@@ -5909,6 +5926,9 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
         else:
             regras_cache[sg] = get_subgrupo_regras(setor, sg)
 
+    folgas_fixas_map = load_folgas_fixas_map(setor, [c.get("Chapa") for c in colaboradores])
+    wd_key_map = {0: "seg", 1: "ter", 2: "qua", 3: "qui", 4: "sex", 5: "sab", 6: "dom"}
+
     hist_all = {}
     colab_by_chapa = {c["Chapa"]: c for c in colaboradores}
     locked_idx = {}
@@ -6030,7 +6050,11 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
                         dia = df_ref_cur.loc[j, "Dia"]
                         weekday_prio = 0 if dia in ["seg", "ter", "qua", "qui", "sex"] else 1
                         pref_pen = PREF_EVITAR_PENALTY if pref.get(dia, 0) == 1 else 0
+                        wd = int(pd.to_datetime(df_ref_cur.loc[j, "Data"]).weekday())
+                        fixa_cfg = folgas_fixas_map.get(str(ch), {}) or {}
+                        fixa_boost = -1000 if int(bool(fixa_cfg.get(wd_key_map.get(wd, ""), 0))) else 0
                         return (
+                            fixa_boost,
                             counts_day.get(j, 0),
                             counts_day_hour.get((j, ent_bucket), 0),
                             pref_pen,
@@ -8208,7 +8232,7 @@ def page_app():
             c2.caption("Alterar em 🗓️ Competência (sidebar)")
             c3.caption("Ajustes aplicam na competência ativa.")
 
-        sec_aj = st.radio("", ["🧩 Folgas manuais em grade", "🔁 Troca de horários", "✅ Preferência por subgrupo", "📌 Subgrupos (editável)"], horizontal=True, key="ajustes_nav_fast", label_visibility="collapsed")
+        sec_aj = st.radio("", ["🧩 Folgas manuais em grade", "🔁 Troca de horários", "✅ Preferência por subgrupo", "📌 Subgrupos (editável)", "🔒 Folgas fixas"], horizontal=True, key="ajustes_nav_fast", label_visibility="collapsed")
 
         _ajustes_precisam_escala = sec_aj in ("🧩 Folgas manuais em grade", "🔁 Troca de horários")
         hist_db = {}
@@ -8555,6 +8579,55 @@ def page_app():
                         st.rerun()
                 else:
                     st.caption("Nenhum subgrupo cadastrado.")
+
+        elif sec_aj == "🔒 Folgas fixas":
+            st.markdown("## 🔒 Folgas fixas")
+            st.caption("Defina dias fixos preferenciais de folga por colaborador. A geração tenta respeitar essas folgas sem quebrar as regras principais da escala.")
+
+            colaboradores_ff = load_colaboradores_setor(setor)
+            if not colaboradores_ff:
+                st.info("Cadastre colaboradores neste setor primeiro.")
+            else:
+                ff1, ff2 = st.columns([2, 1])
+                busca_ff = (ff1.text_input("Buscar colaborador por nome ou chapa", key="ff_busca", placeholder="Digite parte do nome ou da chapa") or "").strip().lower()
+                subgrupos_ff = sorted({str((c.get("Subgrupo") or "SEM SUBGRUPO")).strip() or "SEM SUBGRUPO" for c in colaboradores_ff})
+                sg_ff = ff2.selectbox("Filtrar por subgrupo", options=["(todos)"] + subgrupos_ff, key="ff_sg")
+
+                base_ff = colaboradores_ff
+                if sg_ff != "(todos)":
+                    base_ff = [c for c in base_ff if (str((c.get("Subgrupo") or "SEM SUBGRUPO")).strip() or "SEM SUBGRUPO") == sg_ff]
+                if busca_ff:
+                    base_ff = [c for c in base_ff if busca_ff in str(c.get("Nome") or "").lower() or busca_ff in str(c.get("Chapa") or "").lower()]
+
+                labels_ff = [f'{c["Nome"]} ({c["Chapa"]})' for c in base_ff]
+                inv_ff = {f'{c["Nome"]} ({c["Chapa"]})': c for c in base_ff}
+                escolha_ff = st.selectbox("Colaborador", options=["(selecione)"] + labels_ff, key="ff_colab")
+
+                if escolha_ff == "(selecione)":
+                    st.info("Selecione um colaborador para configurar as folgas fixas.")
+                else:
+                    csel = inv_ff[escolha_ff]
+                    ch_ff = str(csel.get("Chapa") or "").strip()
+                    regras_ff = get_folga_fixa(setor, ch_ff)
+                    st.caption(f"Colaborador: **{csel.get('Nome','')}** · Chapa **{ch_ff}** · Subgrupo **{(csel.get('Subgrupo') or 'SEM SUBGRUPO')}**")
+                    d1, d2, d3, d4 = st.columns(4)
+                    seg = d1.checkbox("SEG", value=bool(regras_ff.get("seg", 0)), key=f"ff_seg_{ch_ff}")
+                    ter = d1.checkbox("TER", value=bool(regras_ff.get("ter", 0)), key=f"ff_ter_{ch_ff}")
+                    qua = d2.checkbox("QUA", value=bool(regras_ff.get("qua", 0)), key=f"ff_qua_{ch_ff}")
+                    qui = d2.checkbox("QUI", value=bool(regras_ff.get("qui", 0)), key=f"ff_qui_{ch_ff}")
+                    sex = d3.checkbox("SEX", value=bool(regras_ff.get("sex", 0)), key=f"ff_sex_{ch_ff}")
+                    sab = d3.checkbox("SÁB", value=bool(regras_ff.get("sab", 0)), key=f"ff_sab_{ch_ff}")
+                    dom = d4.checkbox("DOM", value=bool(regras_ff.get("dom", 0)), key=f"ff_dom_{ch_ff}")
+                    d4.caption("Domingo entra como preferência forte; a regra 1x1 continua valendo.")
+
+                    if st.button("Salvar folgas fixas", key=f"ff_save_{ch_ff}"):
+                        set_folga_fixa(setor, ch_ff, {
+                            "seg": int(seg), "ter": int(ter), "qua": int(qua), "qui": int(qui),
+                            "sex": int(sex), "sab": int(sab), "dom": int(dom),
+                        })
+                        _clear_preview_cache(setor, int(ano), int(mes))
+                        st.success("Folgas fixas salvas. A próxima geração vai priorizar esses dias, respeitando as regras da escala.")
+                        st.rerun()
 
     # ------------------------------------------------------
     # ABA 4: Férias
