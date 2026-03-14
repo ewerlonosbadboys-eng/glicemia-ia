@@ -99,6 +99,13 @@ def _admin_user_truthy(v):
     return s in ("1", "true", "t", "yes", "y", "sim", "on")
 
 
+
+def _perfil_lider_por_subgrupo(subgrupo: str) -> bool:
+    s = str(subgrupo or "").strip().upper()
+    s = s.replace("Ç", "C").replace("Ã", "A").replace("Á", "A")
+    return s in ("LIDERANCA", "LIDERANÇA")
+
+
 # =========================================================
 # PDF IMPORT (AUTOMÁTICO) — modelo ESCALA_PONTO_NEW (Savegnago)
 # Extrai: Nome, Chapa, Entrada (primeira linha), FOLG/FER/AFA
@@ -3621,15 +3628,40 @@ def verify_login(setor: str, chapa: str, senha: str):
     chapa_norm = _norm_chapa(chapa_db)
     rec_colab = get_colaborador_record(setor_norm, chapa_norm) or {}
     subgrupo = (rec_colab.get("Subgrupo") or "").strip() or "SEM SUBGRUPO"
-    lider_por_subgrupo = _norm_subgrupo_label(subgrupo) == "LIDERANCA"
+
+    # fallback extra: tenta achar subgrupo pela chapa em qualquer setor
+    if not _perfil_lider_por_subgrupo(subgrupo):
+        try:
+            con2 = db_conn()
+            cur2 = con2.cursor()
+            cur2.execute("""
+                SELECT COALESCE(subgrupo, ''), COALESCE(setor, '')
+                FROM colaboradores
+                WHERE TRIM(chapa)=?
+                ORDER BY id DESC
+                LIMIT 1
+            """, (chapa_norm,))
+            row2 = cur2.fetchone()
+            con2.close()
+            if row2:
+                sub2 = str(row2[0] or "").strip()
+                set2 = str(row2[1] or "").strip()
+                if sub2:
+                    subgrupo = sub2
+                if set2:
+                    setor_norm = _norm_setor(set2)
+        except Exception:
+            pass
+
+    is_lider_final = bool(is_lider) or _perfil_lider_por_subgrupo(subgrupo)
 
     return {
         "nome": nome,
         "setor": setor_norm,
         "chapa": chapa_norm,
         "is_admin": bool(is_admin),
-        "is_lider": bool(is_lider) or lider_por_subgrupo,
-        "subgrupo": subgrupo,
+        "is_lider": is_lider_final,
+        "subgrupo": subgrupo or "SEM SUBGRUPO",
     }
 
     nome, senha_hash, salt, is_admin, is_lider, setor_db, chapa_db = row
@@ -7752,7 +7784,7 @@ def page_app():
 
         _colab_sb = get_colaborador_record(setor, auth.get('chapa',''))
         _subgrupo_auth = (auth.get('subgrupo') or (_colab_sb or {}).get('Subgrupo') or 'SEM SUBGRUPO')
-        _lideranca_ok = _flag_on(auth.get('is_lider', 0)) or (_norm_subgrupo_label(_subgrupo_auth) == 'LIDERANCA')
+        _lideranca_ok = _flag_on(auth.get('is_lider', 0)) or _perfil_lider_por_subgrupo(_subgrupo_auth)
         _admin_ok = _flag_on(auth.get('is_admin', 0))
         _perfil_gestao = usuario_tem_acesso_lider(auth, setor)
 
