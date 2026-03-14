@@ -7605,32 +7605,31 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
                 st.dataframe(df_sol, use_container_width=True, hide_index=True)
 
 def _run_post_login_startup_once():
+    """Boot pós-login desativado para evitar travamentos no app.
+    Restore/sync/backup ficam somente na área administrativa/manual.
+    """
     if st.session_state.get("_post_login_startup_done", False):
         return
-
     st.session_state["_post_login_startup_done"] = True
+    return
 
-    try:
-        with st.spinner("Preparando base após login..."):
-            if SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY:
-                try:
-                    _restore_from_supabase_if_local_empty(force=False)
-                except Exception as e:
-                    _set_supabase_error(e)
 
-            if SUPABASE_AUTO_BOOTSTRAP_AFTER_SCHEMA:
-                try:
-                    _bootstrap_from_supabase_after_schema(force=False)
-                except Exception as e:
-                    _set_supabase_error(e)
+def _get_ajustes_payload_cached_session(setor: str, ano: int, mes: int):
+    """Cache leve por sessão para evitar reler SQLite e remontar histórico em todo rerun."""
+    key = f"ajustes_payload::{setor}::{int(ano)}::{int(mes)}"
+    cached = st.session_state.get(key)
+    if isinstance(cached, dict):
+        return cached
 
-            if not FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP:
-                try:
-                    auto_backup_if_due()
-                except Exception:
-                    pass
-    except Exception:
-        pass
+    hist_db = get_hist_mes_com_overrides_cached(setor, ano, mes)
+    colaboradores = load_colaboradores_setor(setor)
+    payload = {
+        "hist_db": hist_db,
+        "colaboradores": colaboradores,
+        "colab_by": {c["Chapa"]: c for c in colaboradores},
+    }
+    st.session_state[key] = payload
+    return payload
 
 
 def page_app():
@@ -8062,9 +8061,10 @@ def page_app():
 
         if _ajustes_precisam_escala:
             with st.spinner("Carregando dados dos ajustes..."):
-                hist_db = get_hist_mes_com_overrides_cached(setor, ano, mes)
-                colaboradores = load_colaboradores_setor(setor)
-                colab_by = {c["Chapa"]: c for c in colaboradores}
+                _payload_aj = _get_ajustes_payload_cached_session(setor, ano, mes)
+                hist_db = _payload_aj.get("hist_db", {})
+                colaboradores = list(_payload_aj.get("colaboradores", []))
+                colab_by = dict(_payload_aj.get("colab_by", {}))
 
             if not hist_db:
                 st.info("Gere a escala primeiro na aba 🚀 Gerar Escala.")
