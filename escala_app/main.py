@@ -113,6 +113,153 @@ def _perfil_lider_por_subgrupo(subgrupo: str) -> bool:
 # =========================================================
 
 
+
+def _perfil_label_from_flags(is_admin, is_lider, subgrupo="") -> str:
+    if _admin_user_truthy(is_admin):
+        return "ADMIN"
+    if _admin_user_truthy(is_lider) or _perfil_lider_por_subgrupo(subgrupo):
+        return "LIDER"
+    return "COLABORADOR"
+
+
+def _buscar_identidade_por_chapa(chapa: str):
+    """
+    Consolida perfil/setor/subgrupo entre usuarios_sistema e colaboradores.
+    Retorna valores canônicos para uso na sessão.
+    """
+    chapa = _norm_chapa(chapa)
+    out = {
+        "nome": "",
+        "chapa": chapa,
+        "setor": "",
+        "subgrupo": "SEM SUBGRUPO",
+        "is_admin": False,
+        "is_lider": False,
+    }
+    con = db_conn()
+    cur = con.cursor()
+
+    # usuarios_sistema
+    try:
+        cur.execute("""
+            SELECT nome, setor, chapa, COALESCE(is_admin,0), COALESCE(is_lider,0)
+            FROM usuarios_sistema
+            WHERE TRIM(chapa)=?
+            ORDER BY CASE WHEN UPPER(TRIM(setor))='ADMIN' THEN 1 ELSE 0 END, rowid DESC
+            LIMIT 1
+        """, (chapa,))
+        r1 = cur.fetchone()
+    except Exception:
+        r1 = None
+
+    # colaboradores
+    try:
+        cur.execute("""
+            SELECT nome, setor, chapa, COALESCE(subgrupo,''), COALESCE(is_admin,0), COALESCE(is_lider,0)
+            FROM colaboradores
+            WHERE TRIM(chapa)=?
+            ORDER BY CASE WHEN UPPER(TRIM(setor))='ADMIN' THEN 1 ELSE 0 END, rowid DESC
+            LIMIT 1
+        """, (chapa,))
+        r2 = cur.fetchone()
+    except Exception:
+        r2 = None
+
+    con.close()
+
+    if r1:
+        out["nome"] = str(r1[0] or "").strip()
+        out["setor"] = _norm_setor(r1[1] or "")
+        out["is_admin"] = _admin_user_truthy(r1[3])
+        out["is_lider"] = _admin_user_truthy(r1[4])
+
+    if r2:
+        nome2 = str(r2[0] or "").strip()
+        setor2 = _norm_setor(r2[1] or "")
+        sub2 = str(r2[3] or "").strip()
+        is_admin2 = _admin_user_truthy(r2[4])
+        is_lider2 = _admin_user_truthy(r2[5])
+
+        if nome2:
+            out["nome"] = nome2 or out["nome"]
+        # Preferir setor do colaborador quando existir
+        if setor2:
+            out["setor"] = setor2
+        if sub2:
+            out["subgrupo"] = sub2
+        out["is_admin"] = bool(out["is_admin"] or is_admin2)
+        out["is_lider"] = bool(out["is_lider"] or is_lider2 or _perfil_lider_por_subgrupo(sub2))
+
+    if not out["subgrupo"]:
+        out["subgrupo"] = "SEM SUBGRUPO"
+
+    # líder também por subgrupo
+    if _perfil_lider_por_subgrupo(out["subgrupo"]):
+        out["is_lider"] = True
+
+    return out
+
+
+def _sincronizar_identidade_por_chapa(chapa: str):
+    """
+    Mantém perfil/setor/subgrupo sincronizados entre usuarios_sistema e colaboradores.
+    Não bloqueia o app: se falhar, devolve o melhor estado possível.
+    """
+    data = _buscar_identidade_por_chapa(chapa)
+    chapa = _norm_chapa(data.get("chapa", chapa))
+    nome = str(data.get("nome") or "").strip()
+    setor = _norm_setor(data.get("setor") or "")
+    subgrupo = str(data.get("subgrupo") or "").strip() or "SEM SUBGRUPO"
+    is_admin = 1 if _admin_user_truthy(data.get("is_admin")) else 0
+    is_lider = 1 if (_admin_user_truthy(data.get("is_lider")) or _perfil_lider_por_subgrupo(subgrupo)) else 0
+
+    try:
+        con = db_conn()
+        cur = con.cursor()
+
+        # atualiza usuarios_sistema por chapa
+        try:
+            cur.execute("""
+                UPDATE usuarios_sistema
+                SET setor=?, is_admin=?, is_lider=?
+                WHERE TRIM(chapa)=?
+            """, (setor, is_admin, is_lider, chapa))
+        except Exception:
+            pass
+
+        # atualiza colaboradores por chapa
+        try:
+            cur.execute("""
+                UPDATE colaboradores
+                SET setor=?, subgrupo=?, is_admin=?, is_lider=?
+                WHERE TRIM(chapa)=?
+            """, (setor, subgrupo, is_admin, is_lider, chapa))
+        except Exception:
+            try:
+                cur.execute("""
+                    UPDATE colaboradores
+                    SET setor=?, subgrupo=?
+                    WHERE TRIM(chapa)=?
+                """, (setor, subgrupo, chapa))
+            except Exception:
+                pass
+
+        con.commit()
+        con.close()
+    except Exception:
+        pass
+
+    return {
+        "nome": nome,
+        "setor": setor,
+        "chapa": chapa,
+        "is_admin": bool(is_admin),
+        "is_lider": bool(is_lider),
+        "subgrupo": subgrupo,
+        "perfil": _perfil_label_from_flags(is_admin, is_lider, subgrupo),
+    }
+
+
 _PDF_TOKEN_RE = re.compile(r"(\d{2}:\d{2}|FOLG|FER|AFA)", flags=re.IGNORECASE)
 
 def _norm_pdf_text(s: str) -> str:
@@ -3624,45 +3771,12 @@ def verify_login(setor: str, chapa: str, senha: str):
     if not verify_password_compat(senha, senha_hash, salt):
         return None
 
-    setor_norm = _norm_setor(setor_db)
-    chapa_norm = _norm_chapa(chapa_db)
-    rec_colab = get_colaborador_record(setor_norm, chapa_norm) or {}
-    subgrupo = (rec_colab.get("Subgrupo") or "").strip() or "SEM SUBGRUPO"
-
-    # fallback extra: tenta achar subgrupo pela chapa em qualquer setor
-    if not _perfil_lider_por_subgrupo(subgrupo):
-        try:
-            con2 = db_conn()
-            cur2 = con2.cursor()
-            cur2.execute("""
-                SELECT COALESCE(subgrupo, ''), COALESCE(setor, '')
-                FROM colaboradores
-                WHERE TRIM(chapa)=?
-                ORDER BY id DESC
-                LIMIT 1
-            """, (chapa_norm,))
-            row2 = cur2.fetchone()
-            con2.close()
-            if row2:
-                sub2 = str(row2[0] or "").strip()
-                set2 = str(row2[1] or "").strip()
-                if sub2:
-                    subgrupo = sub2
-                if set2:
-                    setor_norm = _norm_setor(set2)
-        except Exception:
-            pass
-
-    is_lider_final = bool(is_lider) or _perfil_lider_por_subgrupo(subgrupo)
-
-    return {
-        "nome": nome,
-        "setor": setor_norm,
-        "chapa": chapa_norm,
-        "is_admin": bool(is_admin),
-        "is_lider": is_lider_final,
-        "subgrupo": subgrupo or "SEM SUBGRUPO",
-    }
+    synced = _sincronizar_identidade_por_chapa(chapa_db)
+    if not synced.get("nome"):
+        synced["nome"] = nome
+    if not synced.get("setor"):
+        synced["setor"] = _norm_setor(setor_db)
+    return synced
 
     nome, senha_hash, salt, is_admin, is_lider, setor_db, chapa_db = row
     if verify_password_compat(senha, senha_hash, salt):
@@ -7763,7 +7877,15 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
                 st.dataframe(df_sol, use_container_width=True, hide_index=True)
 
 def page_app():
-    auth = st.session_state.get("auth") or {}
+    auth = st.session_state.get("auth")
+    if auth and auth.get("chapa"):
+        try:
+            auth_sync = _sincronizar_identidade_por_chapa(auth.get("chapa"))
+            if auth_sync:
+                auth.update(auth_sync)
+                st.session_state["auth"] = auth
+        except Exception:
+            pass or {}
     setor = auth.get("setor", "GERAL")
 
     # ---- Competência (mês/ano) compartilhada
