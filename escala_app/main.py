@@ -77,7 +77,6 @@ import unicodedata
 import time
 import json
 import requests
-import threading
 
 import hashlib
 import secrets
@@ -93,171 +92,11 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib import colors
 st.set_page_config(page_title="Escala 5x2 Oficial", layout="wide")
 
-
-def _admin_user_truthy(v):
-    s = str(v).strip().lower()
-    return s in ("1", "true", "t", "yes", "y", "sim", "on")
-
-
-
-def _perfil_lider_por_subgrupo(subgrupo: str) -> bool:
-    s = str(subgrupo or "").strip().upper()
-    s = s.replace("Ç", "C").replace("Ã", "A").replace("Á", "A")
-    return s in ("LIDERANCA", "LIDERANÇA")
-
-
 # =========================================================
 # PDF IMPORT (AUTOMÁTICO) — modelo ESCALA_PONTO_NEW (Savegnago)
 # Extrai: Nome, Chapa, Entrada (primeira linha), FOLG/FER/AFA
 # Aplica no sistema via overrides + (opcional) cadastro de férias
 # =========================================================
-
-
-
-def _perfil_label_from_flags(is_admin, is_lider, subgrupo="") -> str:
-    if _admin_user_truthy(is_admin):
-        return "ADMIN"
-    if _admin_user_truthy(is_lider) or _perfil_lider_por_subgrupo(subgrupo):
-        return "LIDER"
-    return "COLABORADOR"
-
-
-def _buscar_identidade_por_chapa(chapa: str):
-    """
-    Consolida perfil/setor/subgrupo entre usuarios_sistema e colaboradores.
-    Retorna valores canônicos para uso na sessão.
-    """
-    chapa = _norm_chapa(chapa)
-    out = {
-        "nome": "",
-        "chapa": chapa,
-        "setor": "",
-        "subgrupo": "SEM SUBGRUPO",
-        "is_admin": False,
-        "is_lider": False,
-    }
-    con = db_conn()
-    cur = con.cursor()
-
-    # usuarios_sistema
-    try:
-        cur.execute("""
-            SELECT nome, setor, chapa, COALESCE(is_admin,0), COALESCE(is_lider,0)
-            FROM usuarios_sistema
-            WHERE TRIM(chapa)=?
-            ORDER BY CASE WHEN UPPER(TRIM(setor))='ADMIN' THEN 1 ELSE 0 END, rowid DESC
-            LIMIT 1
-        """, (chapa,))
-        r1 = cur.fetchone()
-    except Exception:
-        r1 = None
-
-    # colaboradores
-    try:
-        cur.execute("""
-            SELECT nome, setor, chapa, COALESCE(subgrupo,''), COALESCE(is_admin,0), COALESCE(is_lider,0)
-            FROM colaboradores
-            WHERE TRIM(chapa)=?
-            ORDER BY CASE WHEN UPPER(TRIM(setor))='ADMIN' THEN 1 ELSE 0 END, rowid DESC
-            LIMIT 1
-        """, (chapa,))
-        r2 = cur.fetchone()
-    except Exception:
-        r2 = None
-
-    con.close()
-
-    if r1:
-        out["nome"] = str(r1[0] or "").strip()
-        out["setor"] = _norm_setor(r1[1] or "")
-        out["is_admin"] = _admin_user_truthy(r1[3])
-        out["is_lider"] = _admin_user_truthy(r1[4])
-
-    if r2:
-        nome2 = str(r2[0] or "").strip()
-        setor2 = _norm_setor(r2[1] or "")
-        sub2 = str(r2[3] or "").strip()
-        is_admin2 = _admin_user_truthy(r2[4])
-        is_lider2 = _admin_user_truthy(r2[5])
-
-        if nome2:
-            out["nome"] = nome2 or out["nome"]
-        # Preferir setor do colaborador quando existir
-        if setor2:
-            out["setor"] = setor2
-        if sub2:
-            out["subgrupo"] = sub2
-        out["is_admin"] = bool(out["is_admin"] or is_admin2)
-        out["is_lider"] = bool(out["is_lider"] or is_lider2 or _perfil_lider_por_subgrupo(sub2))
-
-    if not out["subgrupo"]:
-        out["subgrupo"] = "SEM SUBGRUPO"
-
-    # líder também por subgrupo
-    if _perfil_lider_por_subgrupo(out["subgrupo"]):
-        out["is_lider"] = True
-
-    return out
-
-
-def _sincronizar_identidade_por_chapa(chapa: str):
-    """
-    Mantém perfil/setor/subgrupo sincronizados entre usuarios_sistema e colaboradores.
-    Não bloqueia o app: se falhar, devolve o melhor estado possível.
-    """
-    data = _buscar_identidade_por_chapa(chapa)
-    chapa = _norm_chapa(data.get("chapa", chapa))
-    nome = str(data.get("nome") or "").strip()
-    setor = _norm_setor(data.get("setor") or "")
-    subgrupo = str(data.get("subgrupo") or "").strip() or "SEM SUBGRUPO"
-    is_admin = 1 if _admin_user_truthy(data.get("is_admin")) else 0
-    is_lider = 1 if (_admin_user_truthy(data.get("is_lider")) or _perfil_lider_por_subgrupo(subgrupo)) else 0
-
-    try:
-        con = db_conn()
-        cur = con.cursor()
-
-        # atualiza usuarios_sistema por chapa
-        try:
-            cur.execute("""
-                UPDATE usuarios_sistema
-                SET setor=?, is_admin=?, is_lider=?
-                WHERE TRIM(chapa)=?
-            """, (setor, is_admin, is_lider, chapa))
-        except Exception:
-            pass
-
-        # atualiza colaboradores por chapa
-        try:
-            cur.execute("""
-                UPDATE colaboradores
-                SET setor=?, subgrupo=?, is_admin=?, is_lider=?
-                WHERE TRIM(chapa)=?
-            """, (setor, subgrupo, is_admin, is_lider, chapa))
-        except Exception:
-            try:
-                cur.execute("""
-                    UPDATE colaboradores
-                    SET setor=?, subgrupo=?
-                    WHERE TRIM(chapa)=?
-                """, (setor, subgrupo, chapa))
-            except Exception:
-                pass
-
-        con.commit()
-        con.close()
-    except Exception:
-        pass
-
-    return {
-        "nome": nome,
-        "setor": setor,
-        "chapa": chapa,
-        "is_admin": bool(is_admin),
-        "is_lider": bool(is_lider),
-        "subgrupo": subgrupo,
-        "perfil": _perfil_label_from_flags(is_admin, is_lider, subgrupo),
-    }
 
 
 _PDF_TOKEN_RE = re.compile(r"(\d{2}:\d{2}|FOLG|FER|AFA)", flags=re.IGNORECASE)
@@ -1258,14 +1097,14 @@ SUPABASE_SCHEMA = (os.getenv("SUPABASE_SCHEMA") or "public").strip() or "public"
 SUPABASE_SYNC_ENABLED = bool(SUPABASE_URL and SUPABASE_KEY)
 SUPABASE_SYNC_DEBOUNCE_SEC = int(os.getenv("SUPABASE_SYNC_DEBOUNCE_SEC", "12") or 12)
 SUPABASE_AUTO_PULL_ON_START = (os.getenv("SUPABASE_AUTO_PULL_ON_START", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
-SUPABASE_AUTO_PUSH_ON_COMMIT = (os.getenv("SUPABASE_AUTO_PUSH_ON_COMMIT", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
+SUPABASE_AUTO_PUSH_ON_COMMIT = (os.getenv("SUPABASE_AUTO_PUSH_ON_COMMIT", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
 SUPABASE_AUTO_PUSH_ON_CLOSE = (os.getenv("SUPABASE_AUTO_PUSH_ON_CLOSE", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
 SUPABASE_AUTO_BOOTSTRAP_AFTER_SCHEMA = (os.getenv("SUPABASE_AUTO_BOOTSTRAP_AFTER_SCHEMA", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
 SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY = (os.getenv("SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
 FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP = (os.getenv("FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
 FAST_BACKUP_DISABLE_ROLLING_ON_COMMIT = (os.getenv("FAST_BACKUP_DISABLE_ROLLING_ON_COMMIT", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
 FAST_SNAPSHOT_THROTTLE_SECONDS = int((os.getenv("FAST_SNAPSHOT_THROTTLE_SECONDS", "300") or "300").strip())
-FAST_SNAPSHOT_SKIP_ON_CLOSE = (os.getenv("FAST_SNAPSHOT_SKIP_ON_CLOSE", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
+FAST_SNAPSHOT_SKIP_ON_CLOSE = (os.getenv("FAST_SNAPSHOT_SKIP_ON_CLOSE", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
 _LAST_SNAPSHOT_TS = 0.0
 _LAST_SNAPSHOT_DB_MTIME = 0.0
 RESTORE_GUARD_ENABLED = (os.getenv("RESTORE_GUARD_ENABLED", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
@@ -1278,7 +1117,6 @@ _SUPABASE_SYNC_IN_PROGRESS = False
 _SUPABASE_LAST_ERROR = ""
 _SUPABASE_BOOTSTRAP_DONE = False
 _SUPABASE_SYNC_STARTED_AT = 0.0
-_SUPABASE_BG_PUSH_THREAD = None
 SUPABASE_SYNC_LOCK_TIMEOUT_SEC = int((os.getenv("SUPABASE_SYNC_LOCK_TIMEOUT_SEC", "45") or "45").strip())
 SUPABASE_TABLE_MAP = {}
 try:
@@ -1842,30 +1680,6 @@ def _supabase_push_all_from_sqlite(force: bool = False) -> bool:
     finally:
         _supabase_end_sync()
 
-def _schedule_supabase_push_background(force: bool = False) -> bool:
-    global _SUPABASE_BG_PUSH_THREAD
-    if not SUPABASE_SYNC_ENABLED:
-        return False
-    try:
-        th = _SUPABASE_BG_PUSH_THREAD
-        if th is not None and th.is_alive():
-            return False
-    except Exception:
-        pass
-
-    def _runner():
-        try:
-            _supabase_push_all_from_sqlite(force=force)
-        except Exception:
-            pass
-
-    try:
-        _SUPABASE_BG_PUSH_THREAD = threading.Thread(target=_runner, name="supabase-push-bg", daemon=True)
-        _SUPABASE_BG_PUSH_THREAD.start()
-        return True
-    except Exception:
-        return False
-
 def _supabase_pull_all_to_sqlite(force: bool = False) -> bool:
     global _SUPABASE_LAST_PULL_TS
     if not SUPABASE_SYNC_ENABLED:
@@ -2020,28 +1834,21 @@ class SQLiteSyncConnection(sqlite3.Connection):
     def commit(self):
         result = super().commit()
         try:
-            _maybe_save_latest_stable_snapshot_fast("commit")
+            _save_latest_stable_snapshot_safely()
         except Exception:
-            try:
-                _save_latest_stable_snapshot_safely()
-            except Exception:
-                pass
+            pass
         if SUPABASE_AUTO_PUSH_ON_COMMIT:
             try:
-                if not _schedule_supabase_push_background(force=False):
-                    _supabase_push_all_from_sqlite(force=False)
+                _supabase_push_all_from_sqlite(force=False)
             except Exception:
                 pass
         return result
 
     def close(self):
         try:
-            _maybe_save_latest_stable_snapshot_fast("close")
+            _save_latest_stable_snapshot_safely()
         except Exception:
-            try:
-                _save_latest_stable_snapshot_safely()
-            except Exception:
-                pass
+            pass
         if SUPABASE_AUTO_PUSH_ON_CLOSE:
             try:
                 _supabase_push_all_from_sqlite(force=True)
@@ -3766,18 +3573,6 @@ def verify_login(setor: str, chapa: str, senha: str):
     con.close()
     if not row:
         return None
-
-    nome, senha_hash, salt, is_admin, is_lider, setor_db, chapa_db = row
-    if not verify_password_compat(senha, senha_hash, salt):
-        return None
-
-    synced = _sincronizar_identidade_por_chapa(chapa_db)
-    if not synced.get("nome"):
-        synced["nome"] = nome
-    if not synced.get("setor"):
-        synced["setor"] = _norm_setor(setor_db)
-    return synced
-
     nome, senha_hash, salt, is_admin, is_lider, setor_db, chapa_db = row
     if verify_password_compat(senha, senha_hash, salt):
         return {
@@ -3842,155 +3637,6 @@ def admin_reset_user_password(user_id: int, nova_senha: str):
     con.close()
     update_password(setor, chapa, nova_senha)
     return True
-
-
-def admin_set_user_lider(setor: str, chapa: str, enabled: bool):
-    setor = _norm_setor(setor)
-    chapa = _norm_chapa(chapa)
-    con = db_conn()
-    cur = con.cursor()
-    cur.execute(
-        "UPDATE usuarios_sistema SET is_lider=? WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?",
-        (1 if enabled else 0, setor, chapa),
-    )
-    changed = cur.rowcount > 0
-    con.commit()
-    con.close()
-    return changed
-
-
-def admin_set_user_admin(setor: str, chapa: str, enabled: bool):
-    setor = _norm_setor(setor)
-    chapa = _norm_chapa(chapa)
-    con = db_conn()
-    cur = con.cursor()
-    cur.execute(
-        "UPDATE usuarios_sistema SET is_admin=? WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?",
-        (1 if enabled else 0, setor, chapa),
-    )
-    changed = cur.rowcount > 0
-    con.commit()
-    con.close()
-    return changed
-
-
-def admin_update_user_profile(setor: str, chapa: str, perfil: str):
-    perfil = str(perfil or '').strip().upper()
-    is_admin = 1 if perfil == 'ADMIN' else 0
-    is_lider = 1 if perfil in ('ADMIN', 'LIDER', 'LÍDER') else 0
-    con = db_conn()
-    cur = con.cursor()
-    cur.execute(
-        "UPDATE usuarios_sistema SET is_admin=?, is_lider=? WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?",
-        (is_admin, is_lider, _norm_setor(setor), _norm_chapa(chapa)),
-    )
-    changed = cur.rowcount > 0
-    con.commit()
-    con.close()
-    return changed
-
-
-def admin_move_user_setor(setor_atual: str, chapa: str, setor_novo: str):
-    setor_atual = _norm_setor(setor_atual)
-    setor_novo = _norm_setor(setor_novo)
-    chapa = _norm_chapa(chapa)
-    if not setor_atual or not setor_novo or not chapa:
-        return False, "Informe setor atual, setor novo e chapa."
-    con = db_conn()
-    cur = con.cursor()
-    cur.execute(
-        "SELECT nome, subgrupo, entrada, folga_sab FROM colaboradores WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=? LIMIT 1",
-        (setor_atual, chapa),
-    )
-    row_colab = cur.fetchone()
-    cur.execute(
-        "SELECT nome, senha_hash, salt, is_admin, is_lider, criado_em FROM usuarios_sistema WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=? LIMIT 1",
-        (setor_atual, chapa),
-    )
-    row_user = cur.fetchone()
-    if not row_colab and not row_user:
-        con.close()
-        return False, "Usuário/colaborador não encontrado."
-    try:
-        if row_colab:
-            nome, subgrupo, entrada, folga_sab = row_colab
-            cur.execute(
-                "DELETE FROM colaboradores WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?",
-                (setor_atual, chapa),
-            )
-            cur.execute(
-                "INSERT OR REPLACE INTO colaboradores(nome, setor, chapa, subgrupo, entrada, folga_sab, criado_em) VALUES(?,?,?,?,?,?,COALESCE((SELECT criado_em FROM colaboradores WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?), ?))",
-                (nome, setor_novo, chapa, subgrupo or '', entrada or '06:00', int(folga_sab or 0), setor_novo, chapa, datetime.now().isoformat()),
-            )
-            if str(subgrupo or '').strip():
-                cur.execute("INSERT OR IGNORE INTO subgrupos_setor(setor, nome) VALUES (?, ?)", (setor_novo, str(subgrupo).strip()))
-                cur.execute(
-                    "INSERT OR IGNORE INTO subgrupo_regras(setor, subgrupo, evitar_seg, evitar_ter, evitar_qua, evitar_qui, evitar_sex, evitar_sab) VALUES (?, ?, 0, 0, 0, 0, 0, 0)",
-                    (setor_novo, str(subgrupo).strip()),
-                )
-        if row_user:
-            nome_u, senha_hash, salt, is_admin, is_lider, criado_em = row_user
-            cur.execute(
-                "DELETE FROM usuarios_sistema WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?",
-                (setor_atual, chapa),
-            )
-            cur.execute(
-                "INSERT OR REPLACE INTO usuarios_sistema(nome, setor, chapa, senha_hash, salt, is_admin, is_lider, criado_em) VALUES(?,?,?,?,?,?,?,?)",
-                (nome_u, setor_novo, chapa, senha_hash, salt, int(is_admin or 0), int(is_lider or 0), criado_em or datetime.now().isoformat()),
-            )
-        con.commit()
-        return True, "Setor atualizado com sucesso."
-    except Exception as e:
-        con.rollback()
-        return False, str(e)
-    finally:
-        con.close()
-
-
-def admin_update_user_subgrupo(setor: str, chapa: str, subgrupo_novo: str):
-    setor = _norm_setor(setor)
-    chapa = _norm_chapa(chapa)
-    subgrupo_novo = str(subgrupo_novo or '').strip()
-    con = db_conn()
-    cur = con.cursor()
-    cur.execute(
-        "UPDATE colaboradores SET subgrupo=? WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?",
-        (subgrupo_novo, setor, chapa),
-    )
-    changed = cur.rowcount > 0
-    if changed and subgrupo_novo:
-        cur.execute("INSERT OR IGNORE INTO subgrupos_setor(setor, nome) VALUES (?, ?)", (setor, subgrupo_novo))
-        cur.execute(
-            "INSERT OR IGNORE INTO subgrupo_regras(setor, subgrupo, evitar_seg, evitar_ter, evitar_qua, evitar_qui, evitar_sex, evitar_sab) VALUES (?, ?, 0, 0, 0, 0, 0, 0)",
-            (setor, subgrupo_novo),
-        )
-    con.commit()
-    con.close()
-    return changed
-
-
-def admin_list_people_full():
-    con = db_conn()
-    df = pd.read_sql_query(
-        """
-        SELECT 
-            COALESCE(u.id, 0) AS id,
-            COALESCE(u.nome, c.nome, '') AS nome,
-            COALESCE(u.setor, c.setor, '') AS setor,
-            COALESCE(u.chapa, c.chapa, '') AS chapa,
-            COALESCE(c.subgrupo, '') AS subgrupo,
-            COALESCE(u.is_admin, 0) AS is_admin,
-            COALESCE(u.is_lider, 0) AS is_lider
-        FROM usuarios_sistema u
-        LEFT JOIN colaboradores c
-          ON UPPER(TRIM(c.setor)) = UPPER(TRIM(u.setor))
-         AND TRIM(c.chapa) = TRIM(u.chapa)
-        ORDER BY COALESCE(u.setor, c.setor, ''), COALESCE(u.nome, c.nome, '')
-        """,
-        con,
-    )
-    con.close()
-    return df
 
 # =========================================================
 # COLABORADORES
@@ -7459,7 +7105,7 @@ def get_colaborador_record(setor: str, chapa: str):
     cur = con.cursor()
     cur.execute(
         """
-        SELECT nome, chapa, subgrupo, entrada, folga_sab, setor
+        SELECT nome, chapa, subgrupo, entrada, folga_sab
         FROM colaboradores
         WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?
         LIMIT 1
@@ -7467,24 +7113,6 @@ def get_colaborador_record(setor: str, chapa: str):
         (setor, chapa),
     )
     row = cur.fetchone()
-
-    # fallback defensivo: se não achar pelo setor, tenta pela chapa
-    if not row:
-        try:
-            cur.execute(
-                """
-                SELECT nome, chapa, subgrupo, entrada, folga_sab, setor
-                FROM colaboradores
-                WHERE TRIM(chapa)=?
-                ORDER BY CASE WHEN UPPER(TRIM(setor))='ADMIN' THEN 1 ELSE 0 END, id DESC
-                LIMIT 1
-                """,
-                (chapa,),
-            )
-            row = cur.fetchone()
-        except Exception:
-            row = None
-
     con.close()
     if not row:
         return None
@@ -7494,9 +7122,8 @@ def get_colaborador_record(setor: str, chapa: str):
         "Subgrupo": (row[2] or "").strip() or "SEM SUBGRUPO",
         "Entrada": (row[3] or "").strip() or "06:00",
         "Folga_Sab": bool(row[4]),
-        "Setor": _norm_setor(row[5] or setor),
+        "Setor": setor,
     }
-
 
 
 def get_escala_colaborador_mes(setor: str, chapa: str, ano: int, mes: int) -> pd.DataFrame:
@@ -7645,24 +7272,10 @@ def _norm_subgrupo_label(v: str) -> str:
     s = ''.join(ch for ch in s if not unicodedata.combining(ch))
     return s
 
-def _flag_on(v) -> bool:
-    if isinstance(v, bool):
-        return v
-    if isinstance(v, (int, float)):
-        return int(v) != 0
-    s = str(v or '').strip().lower()
-    return s in ('1', 'true', 'yes', 'on', 'sim')
-
-
 def colaborador_eh_lideranca(setor: str, chapa: str) -> bool:
     rec = get_colaborador_record(setor, chapa)
     sg = _norm_subgrupo_label((rec or {}).get('Subgrupo', ''))
     return sg == 'LIDERANCA'
-
-
-def usuario_tem_acesso_lider(auth: dict, setor: str) -> bool:
-    auth = auth or {}
-    return _flag_on(auth.get('is_admin', 0)) or _flag_on(auth.get('is_lider', 0))
 
 def list_assinaturas_setor(setor: str, ano: int, mes: int) -> pd.DataFrame:
     setor = _norm_setor(setor)
@@ -7877,15 +7490,7 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
                 st.dataframe(df_sol, use_container_width=True, hide_index=True)
 
 def page_app():
-    auth = st.session_state.get("auth")
-    if auth and auth.get("chapa"):
-        try:
-            auth_sync = _sincronizar_identidade_por_chapa(auth.get("chapa"))
-            if auth_sync:
-                auth.update(auth_sync)
-                st.session_state["auth"] = auth
-        except Exception:
-            pass or {}
+    auth = st.session_state.get("auth") or {}
     setor = auth.get("setor", "GERAL")
 
     # ---- Competência (mês/ano) compartilhada
@@ -7905,19 +7510,20 @@ def page_app():
         st.caption("Acesso por setor (usuário / líder / admin)")
 
         _colab_sb = get_colaborador_record(setor, auth.get('chapa',''))
-        _subgrupo_auth = (auth.get('subgrupo') or (_colab_sb or {}).get('Subgrupo') or 'SEM SUBGRUPO')
-        _lideranca_ok = _flag_on(auth.get('is_lider', 0)) or _perfil_lider_por_subgrupo(_subgrupo_auth)
-        _admin_ok = _flag_on(auth.get('is_admin', 0))
-        _perfil_gestao = usuario_tem_acesso_lider(auth, setor)
+        _subgrupo_auth = (_colab_sb or {}).get('Subgrupo', 'SEM SUBGRUPO')
+        _lideranca_ok = bool(auth.get('is_lider', False)) and colaborador_eh_lideranca(setor, auth.get('chapa',''))
+        _perfil_gestao = bool(auth.get('is_admin', False)) or _lideranca_ok
 
         cA, cB = st.columns([1, 1])
-        perfil_label = 'ADMIN' if _admin_ok else ('LÍDER' if _lideranca_ok else 'COLABORADOR')
+        perfil_label = 'ADMIN' if auth.get('is_admin', False) else ('LÍDER' if _lideranca_ok else 'COLABORADOR')
         cA.write(f"**Nome:** {auth.get('nome','-')}")
         cB.write(f"**Perfil:** {perfil_label}")
 
         st.write(f"**Setor:** {setor}")
         st.write(f"**Chapa:** {auth.get('chapa','-')}")
         st.write(f"**Subgrupo:** {_subgrupo_auth}")
+        if bool(auth.get('is_lider', False)) and not _lideranca_ok and not bool(auth.get('is_admin', False)):
+            st.warning('Perfil líder liberado somente para colaborador do subgrupo LIDERANÇA neste setor.')
 
         st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
 
@@ -7954,9 +7560,8 @@ def page_app():
         page_gestao_dashboard(int(st.session_state["cfg_ano"]), int(st.session_state["cfg_mes"]))
         return
 
-    _lideranca_ok = _flag_on(auth.get('is_lider', 0))
-    _admin_ok = _flag_on(auth.get('is_admin', 0))
-    _perfil_gestao = usuario_tem_acesso_lider(auth, setor)
+    _lideranca_ok = bool(auth.get('is_lider', False)) and colaborador_eh_lideranca(setor, auth.get('chapa',''))
+    _perfil_gestao = bool(auth.get('is_admin', False)) or _lideranca_ok
 
     if not _perfil_gestao:
         page_portal_colaborador(auth, int(st.session_state["cfg_ano"]), int(st.session_state["cfg_mes"]))
@@ -8001,11 +7606,10 @@ def page_app():
     # =========================
     # ABAS
     # =========================
-    is_admin_area = _admin_ok and setor == "ADMIN"
+    tabs = ["👥 Colaboradores", "🚀 Gerar Escala", "⚙️ Ajustes", "🏖️ Férias", "🖨️ Impressão", "✍️ Assinaturas", "📨 Minhas solicitações"]
+    is_admin_area = bool(auth.get("is_admin", False)) and setor == "ADMIN"
     if is_admin_area:
-        tabs = ["🔒 Admin"]
-    else:
-        tabs = ["👥 Colaboradores", "🚀 Gerar Escala", "⚙️ Ajustes", "🏖️ Férias", "🖨️ Impressão", "✍️ Assinaturas", "📨 Minhas solicitações"]
+        tabs.append("🔒 Admin")
 
     sec_main = st.radio("Navegação", tabs, horizontal=True, key="main_nav_radio_ultra_fast")
 
@@ -9248,9 +8852,9 @@ def page_app():
             senha_man = st.text_input("Senha do usuário", type="password", key="adm_man_pwd", help="Se deixar em branco, a senha padrão será a própria chapa sem símbolos.")
             cman4, cman5, cman6 = st.columns([1, 1, 1])
             with cman4:
-                perfil_man = st.selectbox("Perfil do usuário", options=["COLABORADOR", "LIDER", "ADMIN"], index=0, key="adm_man_perfil")
+                lider_man = st.checkbox("É líder", value=False, key="adm_man_lider")
             with cman5:
-                subgrupo_man = st.text_input("Subgrupo", key="adm_man_subgrupo", placeholder="Ex.: LIDERANÇA")
+                admin_man = st.checkbox("É admin", value=False, key="adm_man_admin")
             with cman6:
                 criar_colab_man = st.checkbox("Criar colaborador junto", value=True, key="adm_man_colab")
             if st.button("Salvar usuário manualmente", key="adm_man_btn"):
@@ -9258,96 +8862,21 @@ def page_app():
                 chapa_norm = _norm_chapa(chapa_man)
                 nome_final = (nome_man or chapa_norm).strip()
                 senha_final = (senha_man or default_password_for_chapa(chapa_norm)).strip()
-                perfil_norm = str(perfil_man or 'COLABORADOR').strip().upper()
-                is_admin_man = 1 if perfil_norm == 'ADMIN' else 0
-                is_lider_man = 1 if perfil_norm in ('ADMIN', 'LIDER', 'LÍDER') else 0
-                subgrupo_final = str(subgrupo_man or '').strip()
                 if not setor_norm or not chapa_norm:
                     st.error("Digite setor e chapa.")
                 else:
                     try:
                         if criar_colab_man and not colaborador_exists(setor_norm, chapa_norm):
-                            create_colaborador(nome_final, setor_norm, chapa_norm, subgrupo=subgrupo_final, criar_login=False)
-                        elif subgrupo_final:
-                            admin_update_user_subgrupo(setor_norm, chapa_norm, subgrupo_final)
-                        create_system_user(nome_final, setor_norm, chapa_norm, senha_final, is_lider=is_lider_man, is_admin=is_admin_man)
+                            create_colaborador(nome_final, setor_norm, chapa_norm, criar_login=False)
+                        create_system_user(nome_final, setor_norm, chapa_norm, senha_final, is_lider=int(lider_man), is_admin=int(admin_man))
                         try:
                             st.cache_data.clear()
                         except Exception:
                             pass
-                        st.success(f"Usuário salvo com sucesso. Perfil: {perfil_norm}. Senha ativa: {senha_final}")
+                        st.success(f"Usuário salvo com sucesso. Senha ativa: {senha_final}")
                         st.rerun()
                     except Exception as e:
                         st.error(f"Falha ao salvar usuário: {e}")
-
-            st.markdown("---")
-            st.subheader("🛠️ Gestão rápida de acesso, perfil e subgrupo")
-            dfp = admin_list_people_full()
-            if dfp.empty:
-                st.info("Nenhum usuário do sistema encontrado para gerenciar.")
-            else:
-                dfp = dfp.copy()
-                dfp["rotulo"] = dfp.apply(lambda r: f"{str(r['nome']).strip()} | setor {str(r['setor']).strip()} | chapa {str(r['chapa']).strip()} | subgrupo {str(r['subgrupo']).strip() or 'SEM SUBGRUPO'}", axis=1)
-                pessoa_sel = st.selectbox("Usuário para gerenciar", dfp["rotulo"].tolist(), key="adm_manage_pick")
-                recp = dfp[dfp["rotulo"] == pessoa_sel].iloc[0].to_dict()
-                setor_sel = str(recp.get("setor") or "").strip()
-                chapa_sel = str(recp.get("chapa") or "").strip()
-                nome_sel = str(recp.get("nome") or "").strip()
-                st.caption(f"Gerenciando: {nome_sel} | setor {setor_sel} | chapa {chapa_sel}")
-
-                perfil_atual = "ADMIN" if bool(int(recp.get("is_admin") or 0)) else ("LIDER" if bool(int(recp.get("is_lider") or 0)) else "COLABORADOR")
-                cgp1, cgp2 = st.columns([1.2, 1])
-                with cgp1:
-                    perfil_novo = st.selectbox("Perfil do usuário", options=["COLABORADOR", "LIDER", "ADMIN"], index=["COLABORADOR", "LIDER", "ADMIN"].index(perfil_atual), key="adm_manage_profile")
-                with cgp2:
-                    st.text_input("Perfil atual", value=perfil_atual, disabled=True, key="adm_view_profile")
-                if st.button("Salvar perfil", key="adm_save_profile"):
-                    ok = admin_update_user_profile(setor_sel, chapa_sel, perfil_novo)
-                    if ok:
-                        try:
-                            st.cache_data.clear()
-                        except Exception:
-                            pass
-                        st.success(f"Perfil atualizado para {perfil_novo}.")
-                        st.rerun()
-                    else:
-                        st.error("Não consegui atualizar o perfil desse usuário.")
-
-                st.markdown("#### Alterar setor do usuário")
-                setores_exist = sorted({str(x).strip() for x in dfp["setor"].tolist() if str(x).strip()})
-                setor_novo_adm = st.selectbox("Novo setor", options=setores_exist + ([setor_sel] if setor_sel and setor_sel not in setores_exist else []), index=(setores_exist.index(setor_sel) if setor_sel in setores_exist else 0) if (setores_exist or setor_sel) else 0, key="adm_move_setor_new") if (setores_exist or setor_sel) else st.text_input("Novo setor", value=setor_sel, key="adm_move_setor_new_txt")
-                if st.button("Mover usuário de setor", key="adm_move_setor_btn"):
-                    ok, msg = admin_move_user_setor(setor_sel, chapa_sel, setor_novo_adm)
-                    if ok:
-                        try:
-                            st.cache_data.clear()
-                        except Exception:
-                            pass
-                        st.success(msg)
-                        st.rerun()
-                    else:
-                        st.error(msg)
-                st.caption("Essa ação move o cadastro principal do usuário e do colaborador para o novo setor.")
-
-                st.markdown("#### Alterar subgrupo do colaborador")
-                sub_opts = [""] + list_subgrupos(setor_sel)
-                sub_atual = str(recp.get("subgrupo") or "").strip()
-                if sub_atual and sub_atual not in sub_opts:
-                    sub_opts.append(sub_atual)
-                subgrupo_novo = st.selectbox("Novo subgrupo", options=sub_opts, index=sub_opts.index(sub_atual) if sub_atual in sub_opts else 0, key="adm_subgrupo_select")
-                subgrupo_extra = st.text_input("Ou digite um novo subgrupo", key="adm_subgrupo_extra")
-                if st.button("Salvar subgrupo", key="adm_subgrupo_btn"):
-                    sub_final = str(subgrupo_extra or subgrupo_novo).strip()
-                    ok = admin_update_user_subgrupo(setor_sel, chapa_sel, sub_final)
-                    if ok:
-                        try:
-                            st.cache_data.clear()
-                        except Exception:
-                            pass
-                        st.success("Subgrupo atualizado com sucesso.")
-                        st.rerun()
-                    else:
-                        st.error("Não consegui atualizar o subgrupo desse colaborador.")
 
             st.markdown("---")
             st.subheader("🗄️ Backup / Restauração (escala.db)")
