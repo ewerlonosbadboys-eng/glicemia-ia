@@ -91,6 +91,7 @@ from reportlab.lib.pagesizes import landscape, A4
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib import colors
 st.set_page_config(page_title="Escala 5x2 Oficial", layout="wide")
+st.sidebar.info('ADMIN_FIX_VISIVEL_2026_03_14')
 VERSAO_ACESSO_LIDER = "ACESSO_LIDER_FIX_2026_03_14_v2"
 
 
@@ -8908,7 +8909,8 @@ def page_app():
     elif is_admin_area and sec_main == "🔒 Admin":
             st.subheader("🔒 Admin do Sistema (somente ADMIN)")
 
-            st.markdown("### 🛠️ Atualizar funcionário de qualquer setor")
+            st.markdown("## 🛠️ ATUALIZAR FUNCIONÁRIO DE QUALQUER SETOR")
+            st.warning("NOVO BLOCO ADMIN ATIVO: aqui você altera subgrupo e perfil do sistema do funcionário.")
             st.caption("Aqui o ADMIN pode alterar nome, subgrupo e perfil do colaborador em qualquer setor. O perfil sincroniza o login do sistema.")
             try:
                 con = db_conn()
