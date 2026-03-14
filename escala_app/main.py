@@ -7933,18 +7933,25 @@ def page_app():
             st.warning("Cadastre colaboradores.")
         else:
             b1, b2, b3, _ = st.columns([1, 1, 1, 5])
+            preview_key = f"gerar_preview_loaded_{setor}_{ano}_{mes}"
+            if preview_key not in st.session_state:
+                st.session_state[preview_key] = False
+
             if b1.button("🚀 Gerar agora (respeita ajustes)", use_container_width=True, key="gen_btn"):
                 _clear_preview_cache(setor, int(ano), int(mes))
+                st.session_state[preview_key] = False
                 st.session_state["last_seed"] = int(seed)
                 ok = _regenerar_mes_inteiro(setor, int(ano), int(mes), seed=int(seed), respeitar_ajustes=True)
                 if ok:
                     st.success("Escala gerada (ajustes/travas preservados)!")
+                    st.info("Calendário ficou oculto após gerar para deixar a tela mais leve. Clique em 📅 Carregar calendário só quando quiser visualizar.")
                 else:
                     st.warning("Sem colaboradores.")
                 st.rerun()
 
             if b2.button("🔄 Recarregar do banco", use_container_width=True, key="gen_reload_btn"):
                 _clear_preview_cache(setor, int(ano), int(mes))
+                st.session_state[preview_key] = False
                 st.rerun()
 
             # 🧹 Gerar do zero: ignora travas/ajustes (recalcula o mês totalmente)
@@ -7961,10 +7968,12 @@ def page_app():
                     # Ao gerar do zero, limpamos overrides do mês selecionado (não mexe em meses anteriores).
                     delete_overrides_mes(setor, int(ano), int(mes))
                     _clear_preview_cache(setor, int(ano), int(mes))
+                    st.session_state[preview_key] = False
                     st.session_state["last_seed"] = int(seed)
                     ok = _regenerar_mes_inteiro(setor, int(ano), int(mes), seed=int(seed), respeitar_ajustes=False)
                     if ok:
                         st.success("Escala gerada do zero (ajustes ignorados)!")
+                        st.info("Calendário ficou oculto após gerar para deixar a tela mais leve. Clique em 📅 Carregar calendário só quando quiser visualizar.")
                     else:
                         st.warning("Sem colaboradores.")
                     st.rerun()
@@ -7974,10 +7983,6 @@ def page_app():
                     st.info("Ação cancelada.")
                     st.rerun()
 
-
-            preview_key = f"gerar_preview_loaded_{setor}_{ano}_{mes}"
-            if preview_key not in st.session_state:
-                st.session_state[preview_key] = False
 
             cprev1, cprev2 = st.columns([1, 5])
             if cprev1.button("📅 Carregar calendário", use_container_width=True, key=f"btn_load_preview_{setor}_{ano}_{mes}"):
@@ -8006,7 +8011,7 @@ def page_app():
                 else:
                     st.info("Sem escala no mês. Clique em **Gerar agora**.")
             else:
-                st.info("Visualização pesada ficou sob demanda para deixar a navegação mais rápida. Clique em **Carregar calendário** quando quiser ver a escala do mês.")
+                st.info("Visualização pesada ficou sob demanda para deixar a navegação mais rápida. Depois de gerar, o calendário fica oculto. Clique em **Carregar calendário** apenas quando quiser ver a escala do mês.")
 
     # ------------------------------------------------------
     # ABA 3: Ajustes
