@@ -91,7 +91,6 @@ from reportlab.lib.pagesizes import landscape, A4
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib import colors
 st.set_page_config(page_title="Escala 5x2 Oficial", layout="wide")
-st.sidebar.info('ADMIN_FIX_VISIVEL_2026_03_14')
 VERSAO_ACESSO_LIDER = "ACESSO_LIDER_FIX_2026_03_14_v2"
 
 
@@ -3225,7 +3224,7 @@ def _safe_exec(cur, sql: str, params=None):
     except Exception:
         pass
 
-def db_init(startup_light: bool = False):
+def db_init():
     con = db_conn()
     cur = con.cursor()
 
@@ -3413,7 +3412,7 @@ def db_init(startup_light: bool = False):
         pass
 
     restore_ok = False
-    if (not startup_light) and SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY:
+    if SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY:
         try:
             restore_ok = bool(_restore_from_supabase_if_local_empty(force=True))
         except Exception as e:
@@ -3441,13 +3440,13 @@ def db_init(startup_light: bool = False):
         """, ("Administrador", "ADMIN", "admin", senha_hash, salt, 1, 1, datetime.now().isoformat()))
         con.commit()
 
-    if (not startup_light) and SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY:
+    if SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY:
         try:
             _restore_from_supabase_if_local_empty(force=False)
         except Exception:
             pass
 
-    if (not startup_light) and SUPABASE_AUTO_BOOTSTRAP_AFTER_SCHEMA:
+    if SUPABASE_AUTO_BOOTSTRAP_AFTER_SCHEMA:
         try:
             _bootstrap_from_supabase_after_schema(force=False)
         except Exception:
@@ -4369,73 +4368,6 @@ def delete_override(setor: str, ano: int, mes: int, chapa: str, dia: int, campo:
         """, (setor, int(ano), int(mes), chapa, int(dia)))
     con.commit()
     con.close()
-    try:
-        st.cache_data.clear()
-    except Exception:
-        pass
-
-
-def apply_override_batch(set_ops: list[tuple], delete_ops: list[tuple]):
-    """
-    Aplica vários overrides em uma única transação.
-    Cada item de set_ops: (setor, ano, mes, chapa, dia, campo, valor)
-    Cada item de delete_ops: (setor, ano, mes, chapa, dia, campo)
-    """
-    if not set_ops and not delete_ops:
-        return
-
-    con = db_conn()
-    cur = con.cursor()
-    try:
-        cur.execute("BEGIN")
-
-        if set_ops:
-            set_rows = [
-                (
-                    str(setor).strip().upper(),
-                    int(ano),
-                    int(mes),
-                    str(chapa).strip(),
-                    int(dia),
-                    _norm_override_campo(campo),
-                    str(valor).strip(),
-                )
-                for (setor, ano, mes, chapa, dia, campo, valor) in set_ops
-            ]
-            cur.executemany(
-                """
-                INSERT INTO overrides(setor, ano, mes, chapa, dia, campo, valor)
-                VALUES(?,?,?,?,?,?,?)
-                ON CONFLICT(setor, ano, mes, chapa, dia, campo)
-                DO UPDATE SET valor=excluded.valor
-                """,
-                set_rows,
-            )
-
-        if delete_ops:
-            delete_rows = [
-                (
-                    str(setor).strip().upper(),
-                    int(ano),
-                    int(mes),
-                    str(chapa).strip(),
-                    int(dia),
-                    _norm_override_campo(campo),
-                )
-                for (setor, ano, mes, chapa, dia, campo) in delete_ops
-            ]
-            cur.executemany(
-                """
-                DELETE FROM overrides
-                WHERE setor=? AND ano=? AND mes=? AND chapa=? AND dia=? AND campo=?
-                """,
-                delete_rows,
-            )
-
-        con.commit()
-    finally:
-        con.close()
-
     try:
         st.cache_data.clear()
     except Exception:
@@ -7672,37 +7604,7 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
             else:
                 st.dataframe(df_sol, use_container_width=True, hide_index=True)
 
-def _run_post_login_startup_once():
-    if st.session_state.get("_post_login_startup_done", False):
-        return
-
-    st.session_state["_post_login_startup_done"] = True
-
-    try:
-        with st.spinner("Preparando base após login..."):
-            if SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY:
-                try:
-                    _restore_from_supabase_if_local_empty(force=False)
-                except Exception as e:
-                    _set_supabase_error(e)
-
-            if SUPABASE_AUTO_BOOTSTRAP_AFTER_SCHEMA:
-                try:
-                    _bootstrap_from_supabase_after_schema(force=False)
-                except Exception as e:
-                    _set_supabase_error(e)
-
-            if not FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP:
-                try:
-                    auto_backup_if_due()
-                except Exception:
-                    pass
-    except Exception:
-        pass
-
-
 def page_app():
-    _run_post_login_startup_once()
     auth = st.session_state.get("auth") or {}
     setor = auth.get("setor", "GERAL")
 
@@ -8129,10 +8031,39 @@ def page_app():
         colab_by = {}
 
         if _ajustes_precisam_escala:
-            with st.spinner("Carregando dados dos ajustes..."):
-                hist_db = get_hist_mes_com_overrides_cached(setor, ano, mes)
-                colaboradores = load_colaboradores_setor(setor)
-                colab_by = {c["Chapa"]: c for c in colaboradores}
+            ajustes_cache_key = f"ajustes_payload_{setor}_{ano}_{mes}"
+            ajustes_loaded_key = f"ajustes_loaded_{setor}_{ano}_{mes}"
+            ajustes_sig_key = f"ajustes_sig_{setor}_{ano}_{mes}"
+            sec_sig = f"{sec_aj}|{setor}|{ano}|{mes}"
+            if st.session_state.get(ajustes_sig_key) != sec_sig:
+                st.session_state[ajustes_sig_key] = sec_sig
+                st.session_state.setdefault(ajustes_loaded_key, False)
+
+            ca1, ca2, ca3 = st.columns([1, 1, 4])
+            if ca1.button("📥 Carregar dados dos ajustes", use_container_width=True, key=f"aj_load_{setor}_{ano}_{mes}"):
+                with st.spinner("Carregando dados dos ajustes..."):
+                    _hist_db = get_hist_mes_com_overrides_cached(setor, ano, mes)
+                    _colaboradores = load_colaboradores_setor(setor)
+                st.session_state[ajustes_cache_key] = {
+                    "hist_db": _hist_db,
+                    "colaboradores": _colaboradores,
+                }
+                st.session_state[ajustes_loaded_key] = True
+                st.rerun()
+            if ca2.button("🧹 Limpar cache desta tela", use_container_width=True, key=f"aj_clear_{setor}_{ano}_{mes}"):
+                st.session_state.pop(ajustes_cache_key, None)
+                st.session_state.pop(ajustes_loaded_key, None)
+                st.rerun()
+            ca3.caption("Para deixar leve, a grade só carrega quando você clicar no botão.")
+
+            if not st.session_state.get(ajustes_loaded_key, False):
+                st.info("Esta aba agora carrega sob demanda. Clique em **📥 Carregar dados dos ajustes** para abrir a grade.")
+                return
+
+            payload = st.session_state.get(ajustes_cache_key) or {}
+            hist_db = payload.get("hist_db") or {}
+            colaboradores = payload.get("colaboradores") or []
+            colab_by = {str(c["Chapa"]): c for c in colaboradores}
 
             if not hist_db:
                 st.info("Gere a escala primeiro na aba 🚀 Gerar Escala.")
@@ -8145,7 +8076,7 @@ def page_app():
                 # Regra v8.4:
                 # - Se você selecionar 1+ colaboradores, a grade mostra SOMENTE os selecionados (mesmo se "Mostrar todos" estiver marcado).
                 # - Se não selecionar ninguém, a grade respeita o checkbox (todos ou nenhum).
-                show_all = st.checkbox("👥 Mostrar todos os colaboradores", value=True, key="grid_show_all")
+                show_all = st.checkbox("👥 Mostrar todos os colaboradores", value=False, key="grid_show_all")
 
                 labels_opts = [f'{c["Nome"]} ({c["Chapa"]})' for c in colaboradores]
                 inv_label = {f'{c["Nome"]} ({c["Chapa"]})': str(c["Chapa"]) for c in colaboradores}
@@ -8164,8 +8095,15 @@ def page_app():
                 else:
                     colaboradores = colaboradores if show_all else []
                     if not show_all:
-                        st.info("Marque 'Mostrar todos' ou selecione 1+ colaboradores acima.")
+                        st.info("Para evitar lentidão, a grade não abre todos automaticamente. Selecione colaboradores acima ou marque 'Mostrar todos'.")
 
+                if colaboradores:
+                    max_grid = st.number_input("Máximo de colaboradores na grade", min_value=1, max_value=max(1, len(colaboradores)), value=min(15, len(colaboradores)), step=1, key="grid_max_rows")
+                    total_grid = len(colaboradores)
+                    colaboradores = colaboradores[:int(max_grid)]
+                    st.caption(f"Mostrando 1-{len(colaboradores)} de {total_grid} registro(s).")
+                else:
+                    st.stop()
 
                 qtd = calendar.monthrange(int(ano), int(mes))[1]
                 dias = list(range(1, qtd + 1))
@@ -8205,7 +8143,7 @@ def page_app():
                     key="grid_editor"
                 )
 
-                auto_readequar = st.checkbox("🔄 Readequar escala ao salvar", value=True, key="grid_auto_regen")
+                auto_readequar = st.checkbox("🔄 Readequar escala ao salvar", value=False, key="grid_auto_regen")
 
                 if st.button("💾 Salvar folgas manuais (e readequar mês)", key="grid_save"):
                     set_folga = 0
@@ -8246,7 +8184,7 @@ def page_app():
                             dias2 = list(range(1, qtd2 + 1))
 
                             # --- filtro/seleção de colaboradores (mesmo layout da grade de folgas)
-                            show_all_th = st.checkbox("👥 Mostrar todos os colaboradores", value=True, key="th_show_all")
+                            show_all_th = st.checkbox("👥 Mostrar todos os colaboradores", value=False, key="th_show_all")
 
                             labels_opts_th = [f'{c["Nome"]} ({c["Chapa"]})' for c in colaboradores]
                             inv_label_th = {f'{c["Nome"]} ({c["Chapa"]})': str(c["Chapa"]) for c in colaboradores}
@@ -8265,9 +8203,14 @@ def page_app():
                             else:
                                 colaboradores = colaboradores if show_all_th else []
                                 if not colaboradores:
-                                    st.info("Selecione colaboradores acima ou marque 'Mostrar todos'.")
+                                    st.info("Para evitar lentidão, a grade não abre todos automaticamente. Selecione colaboradores acima ou marque 'Mostrar todos'.")
                                     # evita montar grade vazia que confunde
                                     st.stop()
+
+                            max_grid_th = st.number_input("Máximo de colaboradores na grade", min_value=1, max_value=max(1, len(colaboradores)), value=min(15, len(colaboradores)), step=1, key="th_max_rows")
+                            total_grid_th = len(colaboradores)
+                            colaboradores = colaboradores[:int(max_grid_th)]
+                            st.caption(f"Mostrando 1-{len(colaboradores)} de {total_grid_th} registro(s).")
 
                             # ação a aplicar (horário/folga/afastamento)
                             acao_th = st.selectbox(
@@ -8325,11 +8268,11 @@ def page_app():
                             if st.button("💾 Salvar troca de horários (aplicar nos dias marcados)", key="th_save"):
                                 applied = 0
                                 skipped = 0
-                                set_ops = []
-                                delete_ops = []
                                 for _, r in edited_th.iterrows():
                                     ch = str(r["Chapa"])
                                     dfh = hist_db.get(ch)
+                                    # horário padrão para fallback
+                                    ent_pad = (colab_by.get(ch, {}) or {}).get("Entrada", BALANCO_DIA_ENTRADA)
 
                                     for d in dias2:
                                         want = bool(r[str(d)])
@@ -8346,45 +8289,44 @@ def page_app():
 
                                         if acao_th == "Horário":
                                             # ✅ regra: Folga/Férias/Afastamento sempre prevalecem (não aplicar horário)
-                                            if st_norm in ("FOLGA", "FOLG", "FÉRIAS", "FERIAS", "FER", "AFA", "AFASTAMENTO"):
+                                            if st_norm in ("FOLGA","FOLG","FÉRIAS","FERIAS","FER","AFA","AFASTAMENTO"):
                                                 if want:
                                                     skipped += 1
                                                 continue
 
                                             if want:
-                                                set_ops.append((setor, ano, mes, ch, d, "h_entrada", horario_sel))
+                                                set_override(setor, ano, mes, ch, d, "h_entrada", horario_sel)
                                                 applied += 1
                                             else:
-                                                delete_ops.append((setor, ano, mes, ch, d, "h_entrada"))
+                                                # desmarcado: remove override de horário (limpa h_entrada do dia)
+                                                delete_override(setor, ano, mes, ch, d, "h_entrada")
 
                                         elif acao_th == "Folga":
                                             # Folga sobrepõe qualquer horário: salva status e remove h_entrada
-                                            if st_norm in ("FER", "FÉRIAS", "FERIAS"):
+                                            if st_norm in ("FER","FÉRIAS","FERIAS"):
                                                 if want:
                                                     skipped += 1
                                                 continue
                                             if want:
-                                                set_ops.append((setor, ano, mes, ch, d, "status", "Folga"))
-                                                delete_ops.append((setor, ano, mes, ch, d, "h_entrada"))
+                                                set_override(setor, ano, mes, ch, d, "status", "Folga")
+                                                delete_override(setor, ano, mes, ch, d, "h_entrada")
                                                 applied += 1
                                             else:
-                                                delete_ops.append((setor, ano, mes, ch, d, "status"))
+                                                delete_override(setor, ano, mes, ch, d, "status")
 
                                         else:  # Afastamento
-                                            if st_norm in ("FER", "FÉRIAS", "FERIAS"):
+                                            if st_norm in ("FER","FÉRIAS","FERIAS"):
                                                 if want:
                                                     skipped += 1
                                                 continue
                                             if want:
-                                                set_ops.append((setor, ano, mes, ch, d, "status", "AFA"))
-                                                delete_ops.append((setor, ano, mes, ch, d, "h_entrada"))
+                                                set_override(setor, ano, mes, ch, d, "status", "AFA")
+                                                delete_override(setor, ano, mes, ch, d, "h_entrada")
                                                 applied += 1
                                             else:
-                                                delete_ops.append((setor, ano, mes, ch, d, "status"))
+                                                delete_override(setor, ano, mes, ch, d, "status")
 
-                                apply_override_batch(set_ops, delete_ops)
-
-                                if auto_readequar_th and applied > 0:
+                                if auto_readequar_th:
                                     _regenerar_mes_inteiro(setor, ano, mes, seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
 
                                 st.success(f"Salvo! Ação: {acao_th}. Aplicados: {applied}. Ignorados (por conflito com Folga/Férias): {skipped}.")
@@ -9507,7 +9449,9 @@ def _fast_restore_bundled_latest_before_start() -> None:
 # MAIN
 # =========================================================
 _fast_restore_bundled_latest_before_start()
-db_init(startup_light=True)
+db_init()
+if not FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP:
+    auto_backup_if_due()
 
 if st.session_state["auth"] is None:
     page_login()
