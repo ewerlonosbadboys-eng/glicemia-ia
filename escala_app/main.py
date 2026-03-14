@@ -3612,6 +3612,26 @@ def verify_login(setor: str, chapa: str, senha: str):
     con.close()
     if not row:
         return None
+
+    nome, senha_hash, salt, is_admin, is_lider, setor_db, chapa_db = row
+    if not verify_password_compat(senha, senha_hash, salt):
+        return None
+
+    setor_norm = _norm_setor(setor_db)
+    chapa_norm = _norm_chapa(chapa_db)
+    rec_colab = get_colaborador_record(setor_norm, chapa_norm) or {}
+    subgrupo = (rec_colab.get("Subgrupo") or "").strip() or "SEM SUBGRUPO"
+    lider_por_subgrupo = _norm_subgrupo_label(subgrupo) == "LIDERANCA"
+
+    return {
+        "nome": nome,
+        "setor": setor_norm,
+        "chapa": chapa_norm,
+        "is_admin": bool(is_admin),
+        "is_lider": bool(is_lider) or lider_por_subgrupo,
+        "subgrupo": subgrupo,
+    }
+
     nome, senha_hash, salt, is_admin, is_lider, setor_db, chapa_db = row
     if verify_password_compat(senha, senha_hash, salt):
         return {
@@ -7293,7 +7313,7 @@ def get_colaborador_record(setor: str, chapa: str):
     cur = con.cursor()
     cur.execute(
         """
-        SELECT nome, chapa, subgrupo, entrada, folga_sab
+        SELECT nome, chapa, subgrupo, entrada, folga_sab, setor
         FROM colaboradores
         WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?
         LIMIT 1
@@ -7301,6 +7321,24 @@ def get_colaborador_record(setor: str, chapa: str):
         (setor, chapa),
     )
     row = cur.fetchone()
+
+    # fallback defensivo: se não achar pelo setor, tenta pela chapa
+    if not row:
+        try:
+            cur.execute(
+                """
+                SELECT nome, chapa, subgrupo, entrada, folga_sab, setor
+                FROM colaboradores
+                WHERE TRIM(chapa)=?
+                ORDER BY CASE WHEN UPPER(TRIM(setor))='ADMIN' THEN 1 ELSE 0 END, id DESC
+                LIMIT 1
+                """,
+                (chapa,),
+            )
+            row = cur.fetchone()
+        except Exception:
+            row = None
+
     con.close()
     if not row:
         return None
@@ -7310,8 +7348,9 @@ def get_colaborador_record(setor: str, chapa: str):
         "Subgrupo": (row[2] or "").strip() or "SEM SUBGRUPO",
         "Entrada": (row[3] or "").strip() or "06:00",
         "Folga_Sab": bool(row[4]),
-        "Setor": setor,
+        "Setor": _norm_setor(row[5] or setor),
     }
+
 
 
 def get_escala_colaborador_mes(setor: str, chapa: str, ano: int, mes: int) -> pd.DataFrame:
@@ -7712,8 +7751,8 @@ def page_app():
         st.caption("Acesso por setor (usuário / líder / admin)")
 
         _colab_sb = get_colaborador_record(setor, auth.get('chapa',''))
-        _subgrupo_auth = (_colab_sb or {}).get('Subgrupo', 'SEM SUBGRUPO')
-        _lideranca_ok = _flag_on(auth.get('is_lider', 0))
+        _subgrupo_auth = (auth.get('subgrupo') or (_colab_sb or {}).get('Subgrupo') or 'SEM SUBGRUPO')
+        _lideranca_ok = _flag_on(auth.get('is_lider', 0)) or (_norm_subgrupo_label(_subgrupo_auth) == 'LIDERANCA')
         _admin_ok = _flag_on(auth.get('is_admin', 0))
         _perfil_gestao = usuario_tem_acesso_lider(auth, setor)
 
