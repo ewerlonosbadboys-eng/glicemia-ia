@@ -7869,9 +7869,12 @@ def page_app():
     # ABA 1: Colaboradores
     # ------------------------------------------------------
     if sec_main == "👥 Colaboradores":
+        _col_tabs = ["👥 Colaboradores", "➕ Cadastrar colaborador", "🗑️ Excluir colaborador", "✏️ Editar perfil"]
+        if _perfil_gestao:
+            _col_tabs.append("📌 Subgrupos (editável)")
         sec_col = st.radio(
             "",
-            ["👥 Colaboradores", "➕ Cadastrar colaborador", "🗑️ Excluir colaborador", "✏️ Editar perfil"],
+            _col_tabs,
             horizontal=True,
             key="sec_col_radio_real_speed",
             label_visibility="collapsed",
@@ -8049,6 +8052,32 @@ def page_app():
                             st.error(str(e))
 
                 st.markdown("---")
+
+        elif sec_col == "📌 Subgrupos (editável)":
+            st.markdown("### 📌 Subgrupos (editável)")
+            subgrupos = list_subgrupos(setor)
+
+            cA, cB = st.columns([1, 1])
+            with cA:
+                novo_sub = st.text_input("Novo subgrupo:", key="sg_new_col")
+                if st.button("Adicionar subgrupo", key="sg_add_col"):
+                    if novo_sub.strip():
+                        add_subgrupo(setor, novo_sub.strip())
+                        st.success("Subgrupo adicionado!")
+                        st.rerun()
+                    else:
+                        st.error("Digite o nome do subgrupo.")
+
+            with cB:
+                if subgrupos:
+                    del_sel = st.selectbox("Remover subgrupo:", ["(nenhum)"] + subgrupos, key="sg_del_col")
+                    if del_sel != "(nenhum)" and st.button("Remover", key="sg_del_btn_col"):
+                        delete_subgrupo(setor, del_sel)
+                        _regenerar_mes_inteiro(setor, ano, mes, seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
+                        st.success("Subgrupo removido e escala readequada!")
+                        st.rerun()
+                else:
+                    st.caption("Nenhum subgrupo cadastrado.")
 
     elif sec_main == "🚀 Gerar Escala":
         st.subheader("🚀 Gerar escala")
