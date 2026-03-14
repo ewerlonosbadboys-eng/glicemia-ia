@@ -4081,6 +4081,110 @@ def set_subgrupo_regras(setor: str, subgrupo: str, regras: dict):
     except Exception:
         pass
 
+
+@st.cache_data(show_spinner=False)
+def get_folga_fixa(setor: str, chapa: str):
+    setor = _norm_setor(setor)
+    chapa = _norm_chapa(chapa)
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute("""
+        SELECT seg, ter, qua, qui, sex, sab, dom
+        FROM folgas_fixas
+        WHERE setor=? AND chapa=?
+        LIMIT 1
+    """, (setor, chapa))
+    row = cur.fetchone()
+    con.close()
+    if not row:
+        return {"seg": 0, "ter": 0, "qua": 0, "qui": 0, "sex": 0, "sab": 0, "dom": 0}
+    return {
+        "seg": int(row[0] or 0),
+        "ter": int(row[1] or 0),
+        "qua": int(row[2] or 0),
+        "qui": int(row[3] or 0),
+        "sex": int(row[4] or 0),
+        "sab": int(row[5] or 0),
+        "dom": int(row[6] or 0),
+    }
+
+def set_folga_fixa(setor: str, chapa: str, regras: dict):
+    setor = _norm_setor(setor)
+    chapa = _norm_chapa(chapa)
+    regras = regras or {}
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute("""
+        INSERT INTO folgas_fixas(setor, chapa, seg, ter, qua, qui, sex, sab, dom, atualizado_em)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(setor, chapa) DO UPDATE SET
+            seg=excluded.seg,
+            ter=excluded.ter,
+            qua=excluded.qua,
+            qui=excluded.qui,
+            sex=excluded.sex,
+            sab=excluded.sab,
+            dom=excluded.dom,
+            atualizado_em=excluded.atualizado_em
+    """, (
+        setor, chapa,
+        int(regras.get("seg", 0)),
+        int(regras.get("ter", 0)),
+        int(regras.get("qua", 0)),
+        int(regras.get("qui", 0)),
+        int(regras.get("sex", 0)),
+        int(regras.get("sab", 0)),
+        int(regras.get("dom", 0)),
+        datetime.now().isoformat(timespec='seconds'),
+    ))
+    con.commit()
+    con.close()
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+
+@st.cache_data(show_spinner=False)
+def load_folgas_fixas_map(setor: str, chapas=None):
+    setor = _norm_setor(setor)
+    chapas_norm = []
+    for ch in (chapas or []):
+        chn = _norm_chapa(ch)
+        if chn:
+            chapas_norm.append(chn)
+
+    con = db_conn()
+    cur = con.cursor()
+    if chapas_norm:
+        ph = ','.join(['?'] * len(chapas_norm))
+        cur.execute(f"""
+            SELECT chapa, seg, ter, qua, qui, sex, sab, dom
+            FROM folgas_fixas
+            WHERE setor=? AND chapa IN ({ph})
+        """, [setor, *chapas_norm])
+    else:
+        cur.execute("""
+            SELECT chapa, seg, ter, qua, qui, sex, sab, dom
+            FROM folgas_fixas
+            WHERE setor=?
+        """, (setor,))
+    rows = cur.fetchall()
+    con.close()
+
+    out = {}
+    for row in rows:
+        ch = _norm_chapa(row[0])
+        out[ch] = {
+            "seg": int(row[1] or 0),
+            "ter": int(row[2] or 0),
+            "qua": int(row[3] or 0),
+            "qui": int(row[4] or 0),
+            "sex": int(row[5] or 0),
+            "sab": int(row[6] or 0),
+            "dom": int(row[7] or 0),
+        }
+    return out
+
 # =========================================================
 # FÉRIAS
 # =========================================================
