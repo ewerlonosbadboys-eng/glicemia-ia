@@ -9593,10 +9593,21 @@ def _fast_restore_bundled_latest_before_start() -> None:
 # =========================================================
 # MAIN
 # =========================================================
-_fast_restore_bundled_latest_before_start()
-db_init()
-if not FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP:
-    auto_backup_if_due()
+_APP_BOOTSTRAPPED = globals().get("_APP_BOOTSTRAPPED", False)
+
+def _ensure_app_bootstrap_once():
+    global _APP_BOOTSTRAPPED
+    if _APP_BOOTSTRAPPED:
+        return
+    _fast_restore_bundled_latest_before_start()
+    db_init()
+    if not FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP:
+        auto_backup_if_due()
+    _APP_BOOTSTRAPPED = True
+
+if not st.session_state.get("_runtime_boot_ok", False):
+    _ensure_app_bootstrap_once()
+    st.session_state["_runtime_boot_ok"] = True
 
 if st.session_state["auth"] is None:
     page_login()
