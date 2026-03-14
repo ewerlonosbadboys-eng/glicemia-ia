@@ -6694,6 +6694,11 @@ def page_login():
         if st.button("Entrar", key="lg_btn"):
             u = verify_login(setor_norm, chapa.strip(), senha)
             if u:
+                try:
+                    u["is_lider"] = bool(u.get("is_lider", False)) or colaborador_eh_lideranca(setor_norm, chapa.strip())
+                except Exception:
+                    pass
+
                 st.session_state["auth"] = u
 
                 # salva recente
@@ -7270,12 +7275,28 @@ def _norm_subgrupo_label(v: str) -> str:
     s = str(v or '').strip().upper()
     s = unicodedata.normalize('NFKD', s)
     s = ''.join(ch for ch in s if not unicodedata.combining(ch))
+    s = re.sub(r'\s+', ' ', s).strip()
     return s
 
 def colaborador_eh_lideranca(setor: str, chapa: str) -> bool:
     rec = get_colaborador_record(setor, chapa)
+    if not rec:
+        return False
+
     sg = _norm_subgrupo_label((rec or {}).get('Subgrupo', ''))
-    return sg == 'LIDERANCA'
+    perfil = _norm_subgrupo_label((rec or {}).get('Perfil', ''))
+    lider = _norm_subgrupo_label((rec or {}).get('Lider', ''))
+
+    if sg in ['LIDERANCA', 'LIDER', 'LIDERES', 'LIDERANCA FLV']:
+        return True
+
+    if perfil in ['LIDER', 'LIDERANCA', 'ENCARREGADO', 'RESPONSAVEL']:
+        return True
+
+    if lider in ['SIM', 'S', '1', 'TRUE']:
+        return True
+
+    return False
 
 def list_assinaturas_setor(setor: str, ano: int, mes: int) -> pd.DataFrame:
     setor = _norm_setor(setor)
@@ -7511,7 +7532,7 @@ def page_app():
 
         _colab_sb = get_colaborador_record(setor, auth.get('chapa',''))
         _subgrupo_auth = (_colab_sb or {}).get('Subgrupo', 'SEM SUBGRUPO')
-        _lideranca_ok = bool(auth.get('is_lider', False)) and colaborador_eh_lideranca(setor, auth.get('chapa',''))
+        _lideranca_ok = bool(auth.get('is_lider', False)) or colaborador_eh_lideranca(setor, auth.get('chapa',''))
         _perfil_gestao = bool(auth.get('is_admin', False)) or _lideranca_ok
 
         cA, cB = st.columns([1, 1])
