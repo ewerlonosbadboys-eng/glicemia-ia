@@ -93,6 +93,12 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib import colors
 st.set_page_config(page_title="Escala 5x2 Oficial", layout="wide")
 
+
+def _admin_user_truthy(v):
+    s = str(v).strip().lower()
+    return s in ("1", "true", "t", "yes", "y", "sim", "on")
+
+
 # =========================================================
 # PDF IMPORT (AUTOMÁTICO) — modelo ESCALA_PONTO_NEW (Savegnago)
 # Extrai: Nome, Chapa, Entrada (primeira linha), FOLG/FER/AFA
@@ -7802,10 +7808,11 @@ def page_app():
     # =========================
     # ABAS
     # =========================
-    tabs = ["👥 Colaboradores", "🚀 Gerar Escala", "⚙️ Ajustes", "🏖️ Férias", "🖨️ Impressão", "✍️ Assinaturas", "📨 Minhas solicitações"]
     is_admin_area = _admin_ok and setor == "ADMIN"
     if is_admin_area:
-        tabs.append("🔒 Admin")
+        tabs = ["🔒 Admin"]
+    else:
+        tabs = ["👥 Colaboradores", "🚀 Gerar Escala", "⚙️ Ajustes", "🏖️ Férias", "🖨️ Impressão", "✍️ Assinaturas", "📨 Minhas solicitações"]
 
     sec_main = st.radio("Navegação", tabs, horizontal=True, key="main_nav_radio_ultra_fast")
 
