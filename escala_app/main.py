@@ -7310,6 +7310,10 @@ def colaborador_eh_lideranca(setor: str, chapa: str) -> bool:
     sg = _norm_subgrupo_label((rec or {}).get('Subgrupo', ''))
     return sg == 'LIDERANCA'
 
+
+def usuario_tem_acesso_lider(auth: dict, setor: str) -> bool:
+    return bool((auth or {}).get('is_admin', False) or (auth or {}).get('is_lider', False))
+
 def list_assinaturas_setor(setor: str, ano: int, mes: int) -> pd.DataFrame:
     setor = _norm_setor(setor)
     con = db_conn()
@@ -7544,8 +7548,8 @@ def page_app():
 
         _colab_sb = get_colaborador_record(setor, auth.get('chapa',''))
         _subgrupo_auth = (_colab_sb or {}).get('Subgrupo', 'SEM SUBGRUPO')
-        _lideranca_ok = bool(auth.get('is_lider', False)) and colaborador_eh_lideranca(setor, auth.get('chapa',''))
-        _perfil_gestao = bool(auth.get('is_admin', False)) or _lideranca_ok
+        _lideranca_ok = bool(auth.get('is_lider', False))
+        _perfil_gestao = usuario_tem_acesso_lider(auth, setor)
 
         cA, cB = st.columns([1, 1])
         perfil_label = 'ADMIN' if auth.get('is_admin', False) else ('LÍDER' if _lideranca_ok else 'COLABORADOR')
@@ -7555,8 +7559,6 @@ def page_app():
         st.write(f"**Setor:** {setor}")
         st.write(f"**Chapa:** {auth.get('chapa','-')}")
         st.write(f"**Subgrupo:** {_subgrupo_auth}")
-        if bool(auth.get('is_lider', False)) and not _lideranca_ok and not bool(auth.get('is_admin', False)):
-            st.warning('Perfil líder liberado somente para colaborador do subgrupo LIDERANÇA neste setor.')
 
         st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
 
@@ -7593,8 +7595,8 @@ def page_app():
         page_gestao_dashboard(int(st.session_state["cfg_ano"]), int(st.session_state["cfg_mes"]))
         return
 
-    _lideranca_ok = bool(auth.get('is_lider', False)) and colaborador_eh_lideranca(setor, auth.get('chapa',''))
-    _perfil_gestao = bool(auth.get('is_admin', False)) or _lideranca_ok
+    _lideranca_ok = bool(auth.get('is_lider', False))
+    _perfil_gestao = usuario_tem_acesso_lider(auth, setor)
 
     if not _perfil_gestao:
         page_portal_colaborador(auth, int(st.session_state["cfg_ano"]), int(st.session_state["cfg_mes"]))
