@@ -8528,7 +8528,7 @@ def page_app():
                         st.success("Preferência salva e escala readequada!")
                         st.rerun()
                 else:
-                    st.info("Crie pelo menos 1 subgrupo na aba 👥 Colaboradores.")
+                    st.info("Crie pelo menos 1 subgrupo na subaba 📌 Subgrupos (editável) dentro de ⚙️ Ajustes.")
 
             elif sec_aj == "📌 Subgrupos (editável)":
                 st.markdown("## 📌 Subgrupos (editável)")
