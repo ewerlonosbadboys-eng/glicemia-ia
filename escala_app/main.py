@@ -77,6 +77,7 @@ import unicodedata
 import time
 import json
 import requests
+import threading
 
 import hashlib
 import secrets
@@ -1097,17 +1098,17 @@ SUPABASE_SCHEMA = (os.getenv("SUPABASE_SCHEMA") or "public").strip() or "public"
 SUPABASE_SYNC_ENABLED = bool(SUPABASE_URL and SUPABASE_KEY)
 SUPABASE_SYNC_DEBOUNCE_SEC = int(os.getenv("SUPABASE_SYNC_DEBOUNCE_SEC", "12") or 12)
 SUPABASE_AUTO_PULL_ON_START = (os.getenv("SUPABASE_AUTO_PULL_ON_START", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
-SUPABASE_AUTO_PUSH_ON_COMMIT = (os.getenv("SUPABASE_AUTO_PUSH_ON_COMMIT", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
+SUPABASE_AUTO_PUSH_ON_COMMIT = (os.getenv("SUPABASE_AUTO_PUSH_ON_COMMIT", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
 SUPABASE_AUTO_PUSH_ON_CLOSE = (os.getenv("SUPABASE_AUTO_PUSH_ON_CLOSE", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
 SUPABASE_AUTO_BOOTSTRAP_AFTER_SCHEMA = (os.getenv("SUPABASE_AUTO_BOOTSTRAP_AFTER_SCHEMA", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
 SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY = (os.getenv("SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
 FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP = (os.getenv("FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
 FAST_BACKUP_DISABLE_ROLLING_ON_COMMIT = (os.getenv("FAST_BACKUP_DISABLE_ROLLING_ON_COMMIT", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
 FAST_SNAPSHOT_THROTTLE_SECONDS = int((os.getenv("FAST_SNAPSHOT_THROTTLE_SECONDS", "300") or "300").strip())
-FAST_SNAPSHOT_SKIP_ON_CLOSE = (os.getenv("FAST_SNAPSHOT_SKIP_ON_CLOSE", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
+FAST_SNAPSHOT_SKIP_ON_CLOSE = (os.getenv("FAST_SNAPSHOT_SKIP_ON_CLOSE", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
 _LAST_SNAPSHOT_TS = 0.0
 _LAST_SNAPSHOT_DB_MTIME = 0.0
-RESTORE_GUARD_ENABLED = False
+RESTORE_GUARD_ENABLED = (os.getenv("RESTORE_GUARD_ENABLED", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
 _RESTORE_GUARD_ACTIVE = False
 _RESTORE_GUARD_MESSAGE = ""
 
@@ -1117,6 +1118,7 @@ _SUPABASE_SYNC_IN_PROGRESS = False
 _SUPABASE_LAST_ERROR = ""
 _SUPABASE_BOOTSTRAP_DONE = False
 _SUPABASE_SYNC_STARTED_AT = 0.0
+_SUPABASE_BG_PUSH_THREAD = None
 SUPABASE_SYNC_LOCK_TIMEOUT_SEC = int((os.getenv("SUPABASE_SYNC_LOCK_TIMEOUT_SEC", "45") or "45").strip())
 SUPABASE_TABLE_MAP = {}
 try:
@@ -1680,6 +1682,30 @@ def _supabase_push_all_from_sqlite(force: bool = False) -> bool:
     finally:
         _supabase_end_sync()
 
+def _schedule_supabase_push_background(force: bool = False) -> bool:
+    global _SUPABASE_BG_PUSH_THREAD
+    if not SUPABASE_SYNC_ENABLED:
+        return False
+    try:
+        th = _SUPABASE_BG_PUSH_THREAD
+        if th is not None and th.is_alive():
+            return False
+    except Exception:
+        pass
+
+    def _runner():
+        try:
+            _supabase_push_all_from_sqlite(force=force)
+        except Exception:
+            pass
+
+    try:
+        _SUPABASE_BG_PUSH_THREAD = threading.Thread(target=_runner, name="supabase-push-bg", daemon=True)
+        _SUPABASE_BG_PUSH_THREAD.start()
+        return True
+    except Exception:
+        return False
+
 def _supabase_pull_all_to_sqlite(force: bool = False) -> bool:
     global _SUPABASE_LAST_PULL_TS
     if not SUPABASE_SYNC_ENABLED:
@@ -1834,21 +1860,28 @@ class SQLiteSyncConnection(sqlite3.Connection):
     def commit(self):
         result = super().commit()
         try:
-            _save_latest_stable_snapshot_safely()
+            _maybe_save_latest_stable_snapshot_fast("commit")
         except Exception:
-            pass
+            try:
+                _save_latest_stable_snapshot_safely()
+            except Exception:
+                pass
         if SUPABASE_AUTO_PUSH_ON_COMMIT:
             try:
-                _supabase_push_all_from_sqlite(force=False)
+                if not _schedule_supabase_push_background(force=False):
+                    _supabase_push_all_from_sqlite(force=False)
             except Exception:
                 pass
         return result
 
     def close(self):
         try:
-            _save_latest_stable_snapshot_safely()
+            _maybe_save_latest_stable_snapshot_fast("close")
         except Exception:
-            pass
+            try:
+                _save_latest_stable_snapshot_safely()
+            except Exception:
+                pass
         if SUPABASE_AUTO_PUSH_ON_CLOSE:
             try:
                 _supabase_push_all_from_sqlite(force=True)
