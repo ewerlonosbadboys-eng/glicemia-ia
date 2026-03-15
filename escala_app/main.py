@@ -94,7 +94,16 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib import colors
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
-import qrcode
+
+# QR Code opcional: no Streamlit Cloud o pacote pode não estar instalado.
+# O app continua funcionando e apenas mostra o link de validação no PDF quando a lib faltar.
+try:
+    import qrcode  # type: ignore
+    HAS_QRCODE = True
+except Exception:
+    qrcode = None
+    HAS_QRCODE = False
+
 st.set_page_config(page_title="Escala 5x2 Oficial", layout="wide")
 
 VERSAO_ACESSO_LIDER = "ACESSO_LIDER_FIX_2026_03_15_v3"
@@ -7956,17 +7965,27 @@ def gerar_pdf_colaborador_portal(setor: str, ano: int, mes: int, colab: dict, df
     c.drawString(margem_x, y, f"Chapa: {chapa}    Subgrupo: {subgrupo}    Entrada padrão: {entrada_padrao}")
     y -= 14
     c.drawString(margem_x, y, f"Competência: {mes:02d}/{ano}")
+    y -= 14
+    c.setFont("Helvetica", 8)
+    c.drawString(margem_x, y, f"Validação: {valid_url[:95]}")
 
-    try:
-        qr_img = qrcode.make(valid_url)
-        qr_buf = io.BytesIO()
-        qr_img.save(qr_buf, format='PNG')
-        qr_buf.seek(0)
-        c.drawImage(ImageReader(qr_buf), width - 120, height - 125, width=72, height=72, preserveAspectRatio=True, mask='auto')
+    qr_drawn = False
+    if HAS_QRCODE and qrcode is not None:
+        try:
+            qr_img = qrcode.make(valid_url)
+            qr_buf = io.BytesIO()
+            qr_img.save(qr_buf, format='PNG')
+            qr_buf.seek(0)
+            c.drawImage(ImageReader(qr_buf), width - 120, height - 125, width=72, height=72, preserveAspectRatio=True, mask='auto')
+            c.setFont("Helvetica", 8)
+            c.drawRightString(width - 36, height - 132, "Validação da escala")
+            qr_drawn = True
+        except Exception:
+            qr_drawn = False
+
+    if not qr_drawn:
         c.setFont("Helvetica", 8)
-        c.drawRightString(width - 36, height - 132, "Validação da escala")
-    except Exception:
-        pass
+        c.drawRightString(width - 36, height - 132, "Validação: use o link abaixo")
 
     y -= 26
     c.setFont("Helvetica-Bold", 10)
