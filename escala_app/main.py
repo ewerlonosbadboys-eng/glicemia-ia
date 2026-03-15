@@ -8220,32 +8220,32 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
             st.dataframe(df_pre, use_container_width=True, hide_index=True)
             st.caption('Assinatura bloqueada até o início do mês vigente correspondente.')
 
-   with tab3:
-    st.markdown(f"### 🖨️ Imprimir / baixar — {mes_vigente:02d}/{ano_vigente}")
-
-    pdf_key = f"pdf_colab_{setor}_{chapa}_{ano_vigente}_{mes_vigente}"
-
-    if st.button("📄 Preparar PDF do mês vigente", key=f"prep_{pdf_key}"):
-        st.session_state[pdf_key] = gerar_pdf_colaborador_portal(
-            setor,
-            ano_vigente,
-            mes_vigente,
-            {"Nome": colab.get("Nome", ""), "Chapa": chapa},
-            df_oficial
-        )
-        st.success("PDF preparado com sucesso.")
-
-    pdf_bytes = st.session_state.get(pdf_key)
-
-    if pdf_bytes:
-        nome_pdf = f"escala_{colab.get('Nome','colaborador')}_{mes_vigente:02d}_{ano_vigente}.pdf"
-        st.download_button(
-            "⬇️ Baixar escala em PDF",
-            data=pdf_bytes,
-            file_name=nome_pdf,
-            mime="application/pdf",
-            key=f"down_{pdf_key}"
-        )
+       with tab3:
+        st.markdown(f"### 🖨️ Imprimir / baixar — {mes_vigente:02d}/{ano_vigente}")
+    
+        pdf_key = f"pdf_colab_{setor}_{chapa}_{ano_vigente}_{mes_vigente}"
+    
+        if st.button("📄 Preparar PDF do mês vigente", key=f"prep_{pdf_key}"):
+            st.session_state[pdf_key] = gerar_pdf_colaborador_portal(
+                setor,
+                ano_vigente,
+                mes_vigente,
+                {"Nome": colab.get("Nome", ""), "Chapa": chapa},
+                df_oficial
+            )
+            st.success("PDF preparado com sucesso.")
+    
+        pdf_bytes = st.session_state.get(pdf_key)
+    
+        if pdf_bytes:
+            nome_pdf = f"escala_{colab.get('Nome','colaborador')}_{mes_vigente:02d}_{ano_vigente}.pdf"
+            st.download_button(
+                "⬇️ Baixar escala em PDF",
+                data=pdf_bytes,
+                file_name=nome_pdf,
+                mime="application/pdf",
+                key=f"down_{pdf_key}"
+            )
 
 with tab4:
     st.markdown(f"### 📝 Histórico de mudanças — {mes_vigente:02d}/{ano_vigente}")
