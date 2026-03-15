@@ -3329,6 +3329,7 @@ def db_init_fast_login():
     )
     """)
     _ensure_usuarios_sistema_security_columns(cur)
+    _ensure_usuarios_perfil_extra_table(cur)
 
     _safe_exec(cur, """
     CREATE TABLE IF NOT EXISTS colaboradores (
@@ -3396,6 +3397,7 @@ def db_init():
     )
     """)
     _ensure_usuarios_sistema_security_columns(cur)
+    _ensure_usuarios_perfil_extra_table(cur)
 
     _safe_exec(cur, """
     CREATE TABLE IF NOT EXISTS colaboradores (
@@ -3681,27 +3683,117 @@ def default_password_for_chapa(chapa: str) -> str:
     return nums or chapa or "123456"
 
 
-def ensure_system_user_from_colaborador(nome: str, setor: str, chapa: str, senha_padrao: str | None = None, is_lider: int = 0, is_admin: int = 0):
+
+
+def _ensure_usuarios_perfil_extra_table(cur):
+    _safe_exec(cur, """
+    CREATE TABLE IF NOT EXISTS usuarios_perfil_extra (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        setor TEXT NOT NULL,
+        chapa TEXT NOT NULL,
+        perfil_tipo TEXT NOT NULL DEFAULT 'COLABORADOR',
+        criado_em TEXT NOT NULL DEFAULT '',
+        atualizado_em TEXT NOT NULL DEFAULT '',
+        UNIQUE(setor, chapa)
+    )
+    """)
+
+
+def _derive_perfil_tipo_default(is_admin: int | bool = 0, is_lider: int | bool = 0) -> str:
+    if bool(is_admin):
+        return 'ADMIN'
+    if bool(is_lider):
+        return 'LIDER'
+    return 'COLABORADOR'
+
+
+def get_user_profile_tipo(setor: str, chapa: str, is_admin: int | bool = 0, is_lider: int | bool = 0) -> str:
+    setor = _norm_setor(setor)
+    chapa = _norm_chapa(chapa)
+    con = db_conn()
+    try:
+        cur = con.cursor()
+        _ensure_usuarios_perfil_extra_table(cur)
+        try:
+            cur.execute(
+                """
+                SELECT perfil_tipo
+                FROM usuarios_perfil_extra
+                WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?
+                LIMIT 1
+                """,
+                (setor, chapa),
+            )
+            row = cur.fetchone()
+        except Exception:
+            row = None
+    finally:
+        con.close()
+    perfil = str((row[0] if row else '') or '').strip().upper()
+    if perfil in ('ADMIN', 'LIDER', 'COLABORADOR', 'LIDER_AX'):
+        return perfil
+    return _derive_perfil_tipo_default(is_admin, is_lider)
+
+
+def set_user_profile_tipo(setor: str, chapa: str, perfil_tipo: str | None, cur=None) -> str:
+    setor = _norm_setor(setor)
+    chapa = _norm_chapa(chapa)
+    perfil = str(perfil_tipo or '').strip().upper() or 'COLABORADOR'
+    if perfil not in ('ADMIN', 'LIDER', 'COLABORADOR', 'LIDER_AX'):
+        perfil = 'COLABORADOR'
+    own_con = None
+    if cur is None:
+        own_con = db_conn()
+        cur = own_con.cursor()
+    _ensure_usuarios_perfil_extra_table(cur)
+    now_iso = datetime.now().isoformat()
+    cur.execute(
+        """
+        INSERT INTO usuarios_perfil_extra(setor, chapa, perfil_tipo, criado_em, atualizado_em)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(setor, chapa) DO UPDATE SET
+            perfil_tipo=excluded.perfil_tipo,
+            atualizado_em=excluded.atualizado_em
+        """,
+        (setor, chapa, perfil, now_iso, now_iso),
+    )
+    if own_con is not None:
+        own_con.commit()
+        own_con.close()
+    return perfil
+
+
+def colaborador_eh_lider_ax(setor: str, chapa: str) -> bool:
+    perfil = get_user_profile_tipo(setor, chapa)
+    return perfil == 'LIDER_AX'
+
+
+def ensure_system_user_from_colaborador(nome: str, setor: str, chapa: str, senha_padrao: str | None = None, is_lider: int = 0, is_admin: int = 0, perfil_tipo: str | None = None):
     setor = _norm_setor(setor)
     chapa = _norm_chapa(chapa)
     nome = (nome or "").strip() or chapa
     if system_user_exists(setor, chapa):
         return False
     senha_final = (senha_padrao or default_password_for_chapa(chapa)).strip()
-    create_system_user(nome, setor, chapa, senha_final, is_lider=is_lider, is_admin=is_admin)
+    create_system_user(nome, setor, chapa, senha_final, is_lider=is_lider, is_admin=is_admin, perfil_tipo=perfil_tipo)
     return True
 
 
-def create_system_user(nome: str, setor: str, chapa: str, senha: str, is_lider: int = 0, is_admin: int = 0):
-    nome = (nome or "").strip() or _norm_chapa(chapa)
+def create_system_user(nome: str, setor: str, chapa: str, senha: str, is_lider: int = 0, is_admin: int = 0, perfil_tipo: str | None = None):
     setor = _norm_setor(setor)
     chapa = _norm_chapa(chapa)
-    senha = (senha or "").strip()
-    salt = secrets.token_hex(16)
-    senha_hash = hash_password(senha, salt)
+    nome = str(nome or '').strip() or chapa
+    senha = str(senha or '').strip()
+    if not setor or not chapa or not senha:
+        return False
+
     con = db_conn()
     cur = con.cursor()
-    cur.execute("INSERT OR IGNORE INTO setores(nome) VALUES (?)", (setor,))
+    _ensure_usuarios_sistema_security_columns(cur)
+    _ensure_usuarios_perfil_extra_table(cur)
+
+    salt = secrets.token_hex(16)
+    senha_hash = hash_password(senha, salt)
     cur.execute(
         """
         SELECT id FROM usuarios_sistema
@@ -3728,15 +3820,17 @@ def create_system_user(nome: str, setor: str, chapa: str, senha: str, is_lider: 
             """,
             (nome, setor, chapa, senha_hash, salt, int(is_admin), int(is_lider), datetime.now().isoformat()),
         )
+    set_user_profile_tipo(setor, chapa, perfil_tipo or _derive_perfil_tipo_default(is_admin, is_lider), cur=cur)
     con.commit()
     con.close()
+    return True
 
-def recover_system_user_from_colaborador(setor: str, chapa: str, senha: str, is_lider: int = 0, is_admin: int = 0):
+def recover_system_user_from_colaborador(setor: str, chapa: str, senha: str, is_lider: int = 0, is_admin: int = 0, perfil_tipo: str | None = None):
     row = colaborador_lookup(setor, chapa)
     if not row:
         return False
     nome, setor_db, chapa_db = row
-    create_system_user(nome or chapa_db, setor_db, chapa_db, senha, is_lider=is_lider, is_admin=is_admin)
+    create_system_user(nome or chapa_db, setor_db, chapa_db, senha, is_lider=is_lider, is_admin=is_admin, perfil_tipo=perfil_tipo)
     return True
 
 def verify_login(setor: str, chapa: str, senha: str):
@@ -3777,6 +3871,7 @@ def verify_login(setor: str, chapa: str, senha: str):
         return None
     nome, senha_hash, salt, is_admin, is_lider, setor_db, chapa_db, forcar_troca_senha = row
     if verify_password_compat(senha, senha_hash, salt):
+        perfil_tipo = get_user_profile_tipo(setor_db, chapa_db, is_admin=is_admin, is_lider=is_lider)
         return {
             "nome": nome,
             "setor": _norm_setor(setor_db),
@@ -3784,6 +3879,7 @@ def verify_login(setor: str, chapa: str, senha: str):
             "is_admin": bool(is_admin),
             "is_lider": bool(is_lider),
             "forcar_troca_senha": bool(forcar_troca_senha),
+            "perfil_tipo": perfil_tipo,
         }
     return None
 
@@ -3830,32 +3926,38 @@ def set_force_change_password(setor: str, chapa: str, ativo: bool = True):
         con.close()
 
 
-def upsert_usuario_sistema(nome: str, setor: str, chapa: str, senha: str, is_admin: bool = False, is_lider: bool = False, forcar_troca_senha: bool = False):
+def upsert_usuario_sistema(nome: str, setor: str, chapa: str, senha: str, is_admin: bool = False, is_lider: bool = False, forcar_troca_senha: bool = False, perfil_tipo: str | None = None):
     setor = _norm_setor(setor)
     chapa = _norm_chapa(chapa)
-    nome = (nome or "").strip() or chapa
-    salt = secrets.token_hex(16)
-    senha_hash = hash_password((senha or "").strip(), salt)
+    nome = str(nome or '').strip() or chapa
+    senha = str(senha or '').strip()
+    if not setor or not chapa or not senha:
+        return False
+
     con = db_conn()
     cur = con.cursor()
-    try:
-        cur.execute(
-            """
-            INSERT INTO usuarios_sistema(nome, setor, chapa, senha_hash, salt, is_admin, is_lider, criado_em, forcar_troca_senha)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(setor, chapa) DO UPDATE SET
-                nome=excluded.nome,
-                senha_hash=excluded.senha_hash,
-                salt=excluded.salt,
-                is_admin=excluded.is_admin,
-                is_lider=excluded.is_lider,
-                forcar_troca_senha=excluded.forcar_troca_senha
-            """,
-            (nome, setor, chapa, senha_hash, salt, 1 if is_admin else 0, 1 if is_lider else 0, datetime.now().isoformat(), 1 if forcar_troca_senha else 0),
-        )
-        con.commit()
-    finally:
-        con.close()
+    _ensure_usuarios_sistema_security_columns(cur)
+    _ensure_usuarios_perfil_extra_table(cur)
+    salt = secrets.token_hex(16)
+    senha_hash = hash_password(senha, salt)
+    cur.execute(
+        """
+        INSERT INTO usuarios_sistema(nome, setor, chapa, senha_hash, salt, is_admin, is_lider, criado_em, forcar_troca_senha)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(setor, chapa) DO UPDATE SET
+            nome=excluded.nome,
+            senha_hash=excluded.senha_hash,
+            salt=excluded.salt,
+            is_admin=excluded.is_admin,
+            is_lider=excluded.is_lider,
+            forcar_troca_senha=excluded.forcar_troca_senha
+        """,
+        (nome, setor, chapa, senha_hash, salt, 1 if is_admin else 0, 1 if is_lider else 0, datetime.now().isoformat(), 1 if forcar_troca_senha else 0),
+    )
+    set_user_profile_tipo(setor, chapa, perfil_tipo or _derive_perfil_tipo_default(is_admin, is_lider), cur=cur)
+    con.commit()
+    con.close()
+    return True
 
 
 def get_usuario_sistema_por_setor_chapa(setor: str, chapa: str):
@@ -3933,7 +4035,7 @@ def admin_reset_user_password(user_id: int, nova_senha: str):
 def admin_update_funcionario(setor: str, chapa_atual: str, nome_novo: str, subgrupo_novo: str, perfil_novo: str, entrada_nova: str = '06:00', folga_sab: bool = False, criar_usuario_se_nao_existir: bool = True):
     """
     Atualiza cadastro do colaborador e sincroniza o usuário do sistema.
-    Perfil aceito: COLABORADOR, LIDER, ADMIN.
+    Perfil aceito: COLABORADOR, LIDER, LIDER_AX, ADMIN.
     """
     setor = _norm_setor(setor)
     chapa_atual = _norm_chapa(chapa_atual)
@@ -3953,11 +4055,13 @@ def admin_update_funcionario(setor: str, chapa_atual: str, nome_novo: str, subgr
     subgrupo_final = subgrupo_novo or str(rec.get('Subgrupo') or '').strip()
     entrada_final = entrada_nova or str(rec.get('Entrada') or '06:00').strip() or '06:00'
 
-    if perfil_novo not in ['COLABORADOR', 'LIDER', 'ADMIN']:
+    if perfil_novo not in ['COLABORADOR', 'LIDER', 'LIDER_AX', 'ADMIN']:
         perfil_novo = 'COLABORADOR'
 
     if perfil_novo == 'LIDER' and not subgrupo_final:
         subgrupo_final = 'LIDERANÇA'
+    if perfil_novo == 'LIDER_AX' and not subgrupo_final:
+        subgrupo_final = 'AX'
     if perfil_novo == 'ADMIN' and not subgrupo_final:
         subgrupo_final = 'ADMIN'
 
@@ -3972,7 +4076,7 @@ def admin_update_funcionario(setor: str, chapa_atual: str, nome_novo: str, subgr
     )
 
     is_admin = 1 if perfil_novo == 'ADMIN' else 0
-    is_lider = 1 if perfil_novo in ['LIDER', 'ADMIN'] else 0
+    is_lider = 1 if perfil_novo in ['LIDER', 'LIDER_AX', 'ADMIN'] else 0
 
     con = db_conn()
     cur = con.cursor()
@@ -3998,11 +4102,12 @@ def admin_update_funcionario(setor: str, chapa_atual: str, nome_novo: str, subgr
             """,
             (nome_final, int(is_admin), int(is_lider), setor, chapa_atual),
         )
+        set_user_profile_tipo(setor, chapa_atual, perfil_novo, cur=cur)
         con.commit()
         con.close()
     elif criar_usuario_se_nao_existir:
         senha_padrao = default_password_for_chapa(chapa_atual)
-        create_system_user(nome_final, setor, chapa_atual, senha_padrao, is_lider=int(is_lider), is_admin=int(is_admin))
+        create_system_user(nome_final, setor, chapa_atual, senha_padrao, is_lider=int(is_lider), is_admin=int(is_admin), perfil_tipo=perfil_novo)
 
     try:
         st.cache_data.clear()
@@ -8293,19 +8398,21 @@ def page_app():
 
         _colab_sb = get_colaborador_record(setor, auth.get('chapa',''))
         _subgrupo_auth = (_colab_sb or {}).get('Subgrupo', 'SEM SUBGRUPO')
-        _lideranca_ok = bool(auth.get('is_lider', False)) or colaborador_eh_lideranca(setor, auth.get('chapa',''))
-        _perfil_gestao = bool(auth.get('is_admin', False)) or _lideranca_ok
+        _perfil_tipo_auth = str(auth.get('perfil_tipo', '') or get_user_profile_tipo(setor, auth.get('chapa',''), auth.get('is_admin', False), auth.get('is_lider', False))).upper()
+        _lider_ax_ok = _perfil_tipo_auth == 'LIDER_AX' or colaborador_eh_lider_ax(setor, auth.get('chapa',''))
+        _lideranca_ok = (bool(auth.get('is_lider', False)) or colaborador_eh_lideranca(setor, auth.get('chapa',''))) and not _lider_ax_ok
+        _perfil_gestao = bool(auth.get('is_admin', False)) or _lideranca_ok or _lider_ax_ok
 
         cA, cB = st.columns([1, 1])
-        perfil_label = 'ADMIN' if auth.get('is_admin', False) else ('LÍDER' if _lideranca_ok else 'COLABORADOR')
+        perfil_label = 'ADMIN' if auth.get('is_admin', False) else ('AX DO LÍDER' if _lider_ax_ok else ('LÍDER' if _lideranca_ok else 'COLABORADOR'))
         cA.write(f"**Nome:** {auth.get('nome','-')}")
         cB.write(f"**Perfil:** {perfil_label}")
 
         st.write(f"**Setor:** {setor}")
         st.write(f"**Chapa:** {auth.get('chapa','-')}")
         st.write(f"**Subgrupo:** {_subgrupo_auth}")
-        if bool(auth.get('is_lider', False)) and not _lideranca_ok and not bool(auth.get('is_admin', False)):
-            st.warning('Perfil líder liberado somente para colaborador do subgrupo LIDERANÇA neste setor.')
+        if bool(auth.get('is_lider', False)) and not (_lideranca_ok or _lider_ax_ok) and not bool(auth.get('is_admin', False)):
+            st.warning('Perfil líder liberado somente para colaborador com permissão válida neste setor.')
 
         st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
 
@@ -8342,8 +8449,10 @@ def page_app():
         page_gestao_dashboard(int(st.session_state["cfg_ano"]), int(st.session_state["cfg_mes"]))
         return
 
-    _lideranca_ok = bool(auth.get('is_lider', False)) or colaborador_eh_lideranca(setor, auth.get('chapa',''))
-    _perfil_gestao = bool(auth.get('is_admin', False)) or _lideranca_ok
+    _perfil_tipo_auth = str(auth.get('perfil_tipo', '') or get_user_profile_tipo(setor, auth.get('chapa',''), auth.get('is_admin', False), auth.get('is_lider', False))).upper()
+    _lider_ax_ok = _perfil_tipo_auth == 'LIDER_AX' or colaborador_eh_lider_ax(setor, auth.get('chapa',''))
+    _lideranca_ok = (bool(auth.get('is_lider', False)) or colaborador_eh_lideranca(setor, auth.get('chapa',''))) and not _lider_ax_ok
+    _perfil_gestao = bool(auth.get('is_admin', False)) or _lideranca_ok or _lider_ax_ok
 
     if not _perfil_gestao:
         page_portal_colaborador(auth, int(st.session_state["cfg_ano"]), int(st.session_state["cfg_mes"]))
@@ -8388,7 +8497,11 @@ def page_app():
     # =========================
     # ABAS
     # =========================
-    tabs = ["👥 Colaboradores", "🚀 Gerar Escala", "⚙️ Ajustes", "🏖️ Férias", "🖨️ Impressão", "✍️ Assinaturas", "📨 Minhas solicitações"]
+    is_lider_ax_area = _perfil_tipo_auth == "LIDER_AX" or _lider_ax_ok
+    if is_lider_ax_area:
+        tabs = ["👥 Colaboradores", "🖨️ Impressão"]
+    else:
+        tabs = ["👥 Colaboradores", "🚀 Gerar Escala", "⚙️ Ajustes", "🏖️ Férias", "🖨️ Impressão", "✍️ Assinaturas", "📨 Minhas solicitações"]
     is_admin_area = bool(auth.get("is_admin", False)) and setor == "ADMIN"
     if is_admin_area:
         tabs.append("🔒 Admin")
@@ -8399,9 +8512,10 @@ def page_app():
     # ABA 1: Colaboradores
     # ------------------------------------------------------
     if sec_main == "👥 Colaboradores":
+        _col_tabs = ["👥 Colaboradores"] if is_lider_ax_area else (["👥 Colaboradores", "➕ Cadastrar colaborador", "🗑️ Excluir colaborador", "✏️ Editar perfil", "🔑 Alterar senha colaborador"] + (["🔄 Rodízio Caixa"] if str(setor).strip().upper() == "FRENTECAIXA" else []))
         sec_col = st.radio(
             "",
-            (["👥 Colaboradores", "➕ Cadastrar colaborador", "🗑️ Excluir colaborador", "✏️ Editar perfil", "🔑 Alterar senha colaborador"] + (["🔄 Rodízio Caixa"] if str(setor).strip().upper() == "FRENTECAIXA" else [])), 
+            _col_tabs, 
             horizontal=True,
             key="sec_col_radio_real_speed",
             label_visibility="collapsed",
@@ -9827,7 +9941,7 @@ def page_app():
                     login_hit = df_login_adm[(df_login_adm['setor'].astype(str).str.strip().str.upper() == _norm_setor(setor_func)) & (df_login_adm['chapa'].astype(str).str.strip() == chapa_func)]
                     is_admin_cur = bool(int(login_hit.iloc[0]['is_admin'])) if not login_hit.empty else False
                     is_lider_cur = bool(int(login_hit.iloc[0]['is_lider'])) if not login_hit.empty else False
-                    perfil_cur = 'ADMIN' if is_admin_cur else ('LIDER' if is_lider_cur or _norm_subgrupo_label(rec_func.get('subgrupo','')) == 'LIDERANCA' else 'COLABORADOR')
+                    perfil_cur = get_user_profile_tipo(setor_sel_adm, chapa_sel_adm, is_admin=is_admin_cur, is_lider=is_lider_cur)
 
                     st.write(f"Atualizando: **{str(rec_func.get('nome') or '').strip()}** — chapa **{chapa_func}**")
                     af1, af2, af3, af4 = st.columns([1.4, 1.2, 1.2, 1])
@@ -9840,7 +9954,10 @@ def page_app():
                     with af4:
                         folga_sab_func = st.checkbox("Folga sábado", value=bool(int(rec_func.get('folga_sab', 0) or 0)), key='adm_func_folga_sab')
 
-                    perfil_func_novo = st.selectbox("Perfil do sistema", ['COLABORADOR', 'LIDER', 'ADMIN'], index=['COLABORADOR', 'LIDER', 'ADMIN'].index(perfil_cur), key='adm_func_perfil')
+                    _perfil_opts_adm = ['COLABORADOR', 'LIDER_AX', 'LIDER', 'ADMIN']
+                    if perfil_cur not in _perfil_opts_adm:
+                        perfil_cur = 'COLABORADOR'
+                    perfil_func_novo = st.selectbox("Perfil do sistema", _perfil_opts_adm, index=_perfil_opts_adm.index(perfil_cur), key='adm_func_perfil')
                     criar_login_func = st.checkbox("Criar login do sistema se não existir", value=True, key='adm_func_criar_login')
 
                     if st.button("Salvar atualização do funcionário", key='adm_func_salvar'):
