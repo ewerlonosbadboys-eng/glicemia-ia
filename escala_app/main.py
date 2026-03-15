@@ -8244,7 +8244,6 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
                 mime='application/pdf',
                 key=f'portal_pdf_{setor}_{chapa}_{ano_vigente}_{mes_vigente}'
             )
-            st.caption('Esse PDF pode ser salvo no celular, impresso e compartilhado.')
 
 
             historicos = []
@@ -8271,7 +8270,6 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
                         key=f'portal_pdf_hist_{setor}_{chapa}_{y}_{m}'
                     )
             else:
-                st.caption('Nenhum mês anterior encontrado para esta chapa.')
 
 def page_app():
     auth = st.session_state.get("auth") or {}
