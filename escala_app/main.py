@@ -5524,170 +5524,6 @@ def build_inventario_comparativo(setor: str, ano: int, mes: int, hist_db: dict |
     return pd.DataFrame(rows)
 
 
-
-def _inventario_bucket_default_entry(bucket: str) -> str:
-    bucket = str(bucket or '').strip()
-    if bucket == 'Abertura':
-        return '06:00'
-    if bucket == 'Intermediário':
-        return '10:00'
-    return '14:00'
-
-
-def _set_shift_bucket(df: pd.DataFrame, idx: int, bucket: str, entrada_padrao_colab: str = '06:00', locked_status: set[int] | None = None) -> bool:
-    if _locked(locked_status, idx):
-        return False
-    if str(df.loc[idx, 'Status']) == 'Férias':
-        return False
-
-    ent_colab = str(entrada_padrao_colab or '').strip()
-    if _classificar_turno_por_entrada(ent_colab) == str(bucket):
-        ent = ent_colab
-    else:
-        ent = _inventario_bucket_default_entry(bucket)
-
-    df.loc[idx, 'Status'] = 'Trabalho'
-    df.loc[idx, 'H_Entrada'] = ent
-    df.loc[idx, 'H_Saida'] = _saida_from_entrada(ent)
-    return True
-
-
-def _apply_inventory_day_targets(
-    hist_all: dict,
-    colab_by_chapa: dict,
-    setor: str,
-    ano: int,
-    mes: int,
-    locked_idx: dict | None = None,
-) -> dict:
-    """
-    Aplica o inventário como regra operacional FORTE no(s) dia(s) cadastrado(s):
-    - bate quantidade exata de Abertura / Intermediário / Fechamento quando houver gente destravada suficiente;
-    - primeiro reaproveita pessoas já trabalhando no dia;
-    - depois tira folga de quem precisar voltar para cobrir;
-    - por último, excedente vira folga no próprio dia;
-    - nunca altera férias nem dia travado manualmente.
-
-    Observação: esta rotina roda no final da geração para preservar rigorosamente o dia do balanço,
-    mesmo que a semana fique mais carregada nos outros dias.
-    """
-    locked_idx = locked_idx or {}
-    inv = get_inventario_mes(setor, ano, mes)
-    if inv is None or inv.empty:
-        return hist_all
-
-    metas_map = {}
-    for _, r in inv.iterrows():
-        dia = int(r.get('Dia', 0) or 0)
-        if dia <= 0:
-            continue
-        metas_map[dia] = {
-            'Abertura': max(0, int(r.get('Abertura', 0) or 0)),
-            'Intermediário': max(0, int(r.get('Intermediario', 0) or 0)),
-            'Fechamento': max(0, int(r.get('Fechamento', 0) or 0)),
-        }
-
-    if not metas_map:
-        return hist_all
-
-    ordem_buckets = ['Abertura', 'Intermediário', 'Fechamento']
-
-    for dia, metas in metas_map.items():
-        idx = int(dia) - 1
-        if idx < 0:
-            continue
-
-        workers_by_bucket = {b: [] for b in ordem_buckets}
-        folgas_disponiveis = []
-
-        for ch, df in list((hist_all or {}).items()):
-            if df is None or idx >= len(df):
-                continue
-            locked = set((locked_idx or {}).get(ch, set()))
-            stt = str(df.loc[idx, 'Status'])
-            if stt == 'Férias':
-                continue
-            entrada_padrao = str((colab_by_chapa.get(ch, {}) or {}).get('Entrada', '06:00') or '06:00').strip() or '06:00'
-            rec = {
-                'chapa': ch,
-                'df': df,
-                'locked': locked,
-                'entrada_padrao': entrada_padrao,
-                'status': stt,
-            }
-            if stt in WORK_STATUSES:
-                bucket = _classificar_turno_por_entrada(str(df.loc[idx, 'H_Entrada'] or entrada_padrao)) or _classificar_turno_por_entrada(entrada_padrao) or 'Abertura'
-                rec['bucket'] = bucket
-                workers_by_bucket.setdefault(bucket, []).append(rec)
-            else:
-                folgas_disponiveis.append(rec)
-
-        deficits = {b: int(metas.get(b, 0) or 0) - len(workers_by_bucket.get(b, [])) for b in ordem_buckets}
-
-        # 1) Realoca primeiro excesso de um bucket para bucket faltante.
-        for dest in ordem_buckets:
-            while deficits.get(dest, 0) > 0:
-                origem_escolhida = None
-                cand = None
-                for origem in ordem_buckets:
-                    if origem == dest:
-                        continue
-                    excesso = len(workers_by_bucket.get(origem, [])) - int(metas.get(origem, 0) or 0)
-                    if excesso <= 0:
-                        continue
-                    livres = [r for r in workers_by_bucket.get(origem, []) if idx not in set(r.get('locked', set()))]
-                    if livres:
-                        origem_escolhida = origem
-                        cand = livres[-1]
-                        break
-                if not cand:
-                    break
-                if _set_shift_bucket(cand['df'], idx, dest, entrada_padrao_colab=cand['entrada_padrao'], locked_status=cand['locked']):
-                    workers_by_bucket[origem_escolhida].remove(cand)
-                    cand['bucket'] = dest
-                    workers_by_bucket[dest].append(cand)
-                    deficits[dest] -= 1
-                else:
-                    break
-
-        # 2) Se ainda faltar gente, puxa da folga para trabalho no bucket necessário.
-        for dest in ordem_buckets:
-            while deficits.get(dest, 0) > 0:
-                cand = next((r for r in folgas_disponiveis if idx not in set(r.get('locked', set()))), None)
-                if not cand:
-                    break
-                if _set_shift_bucket(cand['df'], idx, dest, entrada_padrao_colab=cand['entrada_padrao'], locked_status=cand['locked']):
-                    folgas_disponiveis.remove(cand)
-                    cand['status'] = 'Trabalho'
-                    cand['bucket'] = dest
-                    workers_by_bucket[dest].append(cand)
-                    deficits[dest] -= 1
-                else:
-                    break
-
-        # 3) Se sobrou gente num bucket acima da meta, vira folga no próprio dia.
-        for bucket in ordem_buckets:
-            while len(workers_by_bucket.get(bucket, [])) > int(metas.get(bucket, 0) or 0):
-                livres = [r for r in workers_by_bucket.get(bucket, []) if idx not in set(r.get('locked', set()))]
-                if not livres:
-                    break
-                cand = livres[-1]
-                if _locked(cand['locked'], idx) or str(cand['df'].loc[idx, 'Status']) == 'Férias':
-                    break
-                _set_folga(cand['df'], idx, locked_status=cand['locked'])
-                workers_by_bucket[bucket].remove(cand)
-                folgas_disponiveis.append(cand)
-
-        # garante write-back explícito
-        for bucket in ordem_buckets:
-            for rec in workers_by_bucket.get(bucket, []):
-                hist_all[rec['chapa']] = rec['df']
-        for rec in folgas_disponiveis:
-            hist_all[rec['chapa']] = rec['df']
-
-    return hist_all
-
-
 def _ov_map(setor: str, ano: int, mes: int):
     df = load_overrides(setor, ano, mes)
     ov = {}
@@ -7441,18 +7277,6 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
                 locked_status=_merge_locked_status(locked_idx.get(ch, set()), _sunday_indices_df(df)),
                 df_ref_prev=df_ref_prev
             )
-    except Exception:
-        pass
-
-    try:
-        hist_all = _apply_inventory_day_targets(
-            hist_all,
-            colab_by_chapa,
-            setor,
-            ano,
-            mes,
-            locked_idx=locked_idx,
-        )
     except Exception:
         pass
 
@@ -9708,19 +9532,38 @@ def page_app():
                     )
                     base_inv = inv_map.get(int(dia_inv), {})
                     data_inv = date(int(ano), int(mes), int(dia_inv))
+                    st.info("Aqui você define quantas pessoas quer no dia do balanço em cada faixa: abertura, intermediário e fechamento.")
                     st.caption(f"Data escolhida: {data_inv.strftime('%d/%m/%Y')} — {WEEKDAY_LABELS_LONG[data_inv.weekday()]}")
 
                     ci1, ci2, ci3 = st.columns(3)
-                    meta_ab = ci1.number_input("Abertura", min_value=0, step=1, value=int(base_inv["Abertura"]) if base_inv != {} else 0, key=f"meta_abertura::{dia_inv}")
-                    meta_in = ci2.number_input("Intermediário", min_value=0, step=1, value=int(base_inv["Intermediario"]) if base_inv != {} else 0, key=f"meta_intermediario::{dia_inv}")
-                    meta_fe = ci3.number_input("Fechamento", min_value=0, step=1, value=int(base_inv["Fechamento"]) if base_inv != {} else 0, key=f"meta_fechamento::{dia_inv}")
+                    meta_ab = ci1.number_input(
+                        "Abertura",
+                        min_value=0,
+                        step=1,
+                        value=int(base_inv["Abertura"]) if base_inv != {} else 0,
+                        key=f"meta_abertura::{setor}::{ano}::{mes}::{dia_inv}",
+                    )
+                    meta_in = ci2.number_input(
+                        "Intermediário",
+                        min_value=0,
+                        step=1,
+                        value=int(base_inv["Intermediario"]) if base_inv != {} else 0,
+                        key=f"meta_intermediario::{setor}::{ano}::{mes}::{dia_inv}",
+                    )
+                    meta_fe = ci3.number_input(
+                        "Fechamento",
+                        min_value=0,
+                        step=1,
+                        value=int(base_inv["Fechamento"]) if base_inv != {} else 0,
+                        key=f"meta_fechamento::{setor}::{ano}::{mes}::{dia_inv}",
+                    )
 
                     csave1, csave2 = st.columns([1, 3])
-                    if csave1.button("💾 Salvar dia selecionado", key="inventario_salvar_dia"):
+                    if csave1.button("💾 Salvar dia selecionado", key=f"inventario_salvar_dia::{setor}::{ano}::{mes}::{dia_inv}"):
                         upsert_inventario_dia(setor, ano, mes, int(dia_inv), int(meta_ab), int(meta_in), int(meta_fe))
                         st.success(f"Inventário salvo para o dia {int(dia_inv):02d}/{int(mes):02d}/{int(ano)}.")
                         st.rerun()
-                    csave2.caption("Use esta área para cadastrar a necessidade do dia. Na geração da escala, o dia do inventário passa a respeitar rigorosamente essas quantidades, sem apagar o restante do sistema.")
+                    csave2.caption("Use esta área para cadastrar a necessidade do dia. Isso entra na geração da escala quando houver inventário configurado.")
 
                     rows_inv = []
                     for dia in range(1, qtd_inv + 1):
