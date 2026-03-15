@@ -74,19 +74,6 @@ import re
 import shutil
 from pathlib import Path
 import unicodedata
-
-
-def _slugify_filename(value: str) -> str:
-    value = str(value or '').strip()
-    if not value:
-        return 'arquivo'
-    value = unicodedata.normalize('NFKD', value)
-    value = ''.join(ch for ch in value if not unicodedata.combining(ch))
-    value = value.lower()
-    value = re.sub(r'[^a-z0-9]+', '_', value)
-    value = re.sub(r'_+', '_', value).strip('_')
-    return value or 'arquivo'
-
 import time
 import json
 import requests
@@ -94,7 +81,6 @@ import threading
 
 import hashlib
 import secrets
-from urllib.parse import quote as urlquote
 from openpyxl.styles import PatternFill, Alignment, Border, Side, Font
 from openpyxl.utils import get_column_letter
 
@@ -105,11 +91,9 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, 
 from reportlab.lib.pagesizes import landscape, A4
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib import colors
-from reportlab.pdfgen import canvas
-
 st.set_page_config(page_title="Escala 5x2 Oficial", layout="wide")
 
-VERSAO_ACESSO_LIDER = "ACESSO_LIDER_FIX_2026_03_15_v3"
+VERSAO_ACESSO_LIDER = "ACESSO_LIDER_FIX_2026_03_14_v2"
 
 
 # =========================================================
@@ -2679,6 +2663,7 @@ def gerar_pdf_modelo_oficial(setor: str, ano: int, mes: int, hist_db: dict, cola
     - Manual supremo: o PDF reflete exatamente o que está salvo em hist_db.
     """
     from io import BytesIO
+    from reportlab.pdfgen import canvas
     from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
     from reportlab.lib.pagesizes import landscape, A4
     from reportlab.lib.styles import getSampleStyleSheet
@@ -3447,16 +3432,6 @@ def db_init():
         evitar_sex INTEGER NOT NULL DEFAULT 0,
         evitar_sab INTEGER NOT NULL DEFAULT 0,
         UNIQUE(setor, subgrupo)
-    )
-    """)
-
-    _safe_exec(cur, """
-    CREATE TABLE IF NOT EXISTS folga_fixa (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        setor TEXT NOT NULL,
-        chapa TEXT NOT NULL,
-        dia_semana TEXT NOT NULL,
-        UNIQUE(setor, chapa, dia_semana)
     )
     """)
 
@@ -4607,123 +4582,6 @@ def set_subgrupo_regras(setor: str, subgrupo: str, regras: dict):
     ))
     con.commit()
     con.close()
-    try:
-        st.cache_data.clear()
-    except Exception:
-        pass
-
-
-# =========================================================
-# FOLGA FIXA (POR COLABORADOR)
-# =========================================================
-DIA_FOLGA_FIXA_OPCOES = ["SEG", "TER", "QUA", "QUI", "SEX", "SÁB", "DOM"]
-_DIA_FOLGA_FIXA_MAP = {
-    "SEG": "seg", "TER": "ter", "QUA": "qua", "QUI": "qui", "SEX": "sex", "SAB": "sáb", "SÁB": "sáb", "DOM": "dom",
-    "seg": "seg", "ter": "ter", "qua": "qua", "qui": "qui", "sex": "sex", "sáb": "sáb", "sab": "sáb", "dom": "dom",
-}
-_DIA_FOLGA_FIXA_LABEL = {"seg": "SEG", "ter": "TER", "qua": "QUA", "qui": "QUI", "sex": "SEX", "sáb": "SÁB", "dom": "DOM"}
-
-
-def _normalize_dia_folga_fixa(value: str) -> str:
-    return _DIA_FOLGA_FIXA_MAP.get(str(value or "").strip().upper(), "")
-
-
-def _ensure_folga_fixa_table():
-    con = db_conn()
-    cur = con.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS folga_fixa (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            setor TEXT NOT NULL,
-            chapa TEXT NOT NULL,
-            dia_semana TEXT NOT NULL,
-            UNIQUE(setor, chapa, dia_semana)
-        )
-    """)
-    con.commit()
-    con.close()
-
-
-@st.cache_data(show_spinner=False, ttl=120)
-def list_folga_fixa_setor(setor: str):
-    _ensure_folga_fixa_table()
-    con = db_conn()
-    cur = con.cursor()
-    cur.execute("SELECT chapa, dia_semana FROM folga_fixa WHERE setor=? ORDER BY chapa, dia_semana", (setor,))
-    rows = cur.fetchall()
-    con.close()
-    out = {}
-    for chapa, dia in rows:
-        nd = _normalize_dia_folga_fixa(dia)
-        if nd:
-            out.setdefault(str(chapa), []).append(_DIA_FOLGA_FIXA_LABEL.get(nd, nd.upper()))
-    for ch in list(out.keys()):
-        out[ch] = [d for d in DIA_FOLGA_FIXA_OPCOES if d in set(out[ch])]
-    return out
-
-
-def get_folga_fixa_colaborador(setor: str, chapa: str):
-    data = list_folga_fixa_setor(setor)
-    return list(data.get(str(chapa), []))
-
-
-def replace_folga_fixa_colaborador(setor: str, chapa: str, dias_semana: list[str]):
-    _ensure_folga_fixa_table()
-    dias_norm = []
-    for d in dias_semana or []:
-        nd = _normalize_dia_folga_fixa(d)
-        if nd and nd not in dias_norm:
-            dias_norm.append(nd)
-    con = db_conn()
-    cur = con.cursor()
-    cur.execute("DELETE FROM folga_fixa WHERE setor=? AND chapa=?", (setor, str(chapa)))
-    for d in dias_norm:
-        cur.execute("INSERT OR IGNORE INTO folga_fixa(setor, chapa, dia_semana) VALUES (?, ?, ?)", (setor, str(chapa), d))
-    con.commit()
-    con.close()
-    try:
-        st.cache_data.clear()
-    except Exception:
-        pass
-
-
-def clear_folga_fixa_colaborador(setor: str, ano: int, mes: int, chapa: str):
-    _ensure_folga_fixa_table()
-    con = db_conn()
-    cur = con.cursor()
-    cur.execute("DELETE FROM folga_fixa WHERE setor=? AND chapa=?", (setor, str(chapa)))
-    con.commit()
-    con.close()
-    for d in range(1, calendar.monthrange(int(ano), int(mes))[1] + 1):
-        delete_override(setor, int(ano), int(mes), str(chapa), int(d), "folga_fixa_auto")
-        delete_override(setor, int(ano), int(mes), str(chapa), int(d), "status")
-    try:
-        st.cache_data.clear()
-    except Exception:
-        pass
-
-
-def apply_folga_fixa_overrides_mes(setor: str, ano: int, mes: int, chapa: str | None = None):
-    _ensure_folga_fixa_table()
-    alvo = {str(chapa)} if chapa else None
-    mapa = list_folga_fixa_setor(setor)
-    qtd = calendar.monthrange(int(ano), int(mes))[1]
-    datas = [date(int(ano), int(mes), d) for d in range(1, qtd + 1)]
-
-    chapas = set(mapa.keys()) if alvo is None else set(mapa.keys()) & alvo
-    for ch in chapas:
-        for d in range(1, qtd + 1):
-            try:
-                delete_override(setor, int(ano), int(mes), ch, int(d), "folga_fixa_auto")
-            except Exception:
-                pass
-        dias_fixos = {_normalize_dia_folga_fixa(x) for x in mapa.get(ch, [])}
-        dias_fixos.discard("")
-        for idx, dt in enumerate(datas, start=1):
-            dia_sem = D_PT[dt.strftime('%A')]
-            if dia_sem in dias_fixos:
-                set_override(setor, int(ano), int(mes), ch, int(idx), "status", "Folga")
-                set_override(setor, int(ano), int(mes), ch, int(idx), "folga_fixa_auto", "1")
     try:
         st.cache_data.clear()
     except Exception:
@@ -6188,6 +6046,9 @@ def rebalance_folgas_dia(
     past_flag: bool = False,
     max_iters=240
 ):
+    """
+    Rebalance do subgrupo por SEMANA REAL (seg->dom), com proteção anti-loop.
+
     # 🔒 REGRA: se o usuário alterou "Folgas manuais em grade", NÃO rebalancear
     try:
         import streamlit as st
@@ -6195,9 +6056,6 @@ def rebalance_folgas_dia(
             return
     except Exception:
         pass
-
-    """
-    Rebalance do subgrupo por SEMANA REAL (seg->dom), com proteção anti-loop.
 
     Objetivo:
     - reduzir dias leves/zerados e dias muito carregados
@@ -8062,100 +7920,6 @@ def atualizar_status_solicitacao(solicitacao_id: int, novo_status: str):
     con.commit()
     con.close()
 
-def _build_validacao_escala_url(setor: str, chapa: str, ano: int, mes: int, nome: str = "") -> str:
-    base = os.getenv("VALIDACAO_ESCALA_URL", "https://example.com/validar-escala").strip() or "https://example.com/validar-escala"
-    query = f"setor={urlquote(str(setor or ''))}&chapa={urlquote(str(chapa or ''))}&ano={int(ano)}&mes={int(mes)}&nome={urlquote(str(nome or ''))}"
-    sep = '&' if '?' in base else '?'
-    return f"{base}{sep}{query}"
-
-
-def gerar_pdf_colaborador_portal(setor: str, ano: int, mes: int, colab: dict, df_escala: pd.DataFrame) -> bytes:
-    """PDF individual do colaborador, otimizado para portal/celular, sem QR e sem validação externa."""
-    buf = io.BytesIO()
-    c = canvas.Canvas(buf, pagesize=A4)
-    width, height = A4
-    margem_x = 36
-    y = height - 42
-
-    nome = str((colab or {}).get('Nome', '-') or '-')
-    chapa = str((colab or {}).get('Chapa', '-') or '-')
-    subgrupo = str((colab or {}).get('Subgrupo', 'SEM SUBGRUPO') or 'SEM SUBGRUPO')
-    entrada_padrao = str((colab or {}).get('Entrada', '06:00') or '06:00')
-
-    c.setTitle(f"Escala_{nome}_{mes:02d}_{ano}")
-    c.setFont("Helvetica-Bold", 16)
-    c.drawString(margem_x, y, "ESCALA INDIVIDUAL DO COLABORADOR")
-    y -= 24
-    c.setFont("Helvetica", 10)
-    c.drawString(margem_x, y, f"Setor: {setor}")
-    y -= 14
-    c.drawString(margem_x, y, f"Nome: {nome}")
-    y -= 14
-    c.drawString(margem_x, y, f"Chapa: {chapa}    Subgrupo: {subgrupo}    Entrada padrão: {entrada_padrao}")
-    y -= 14
-    c.drawString(margem_x, y, f"Competência: {mes:02d}/{ano}")
-    y -= 14
-    y -= 26
-    c.setFont("Helvetica-Bold", 10)
-    c.drawString(margem_x, y, "Dia")
-    c.drawString(margem_x + 42, y, "Data")
-    c.drawString(margem_x + 102, y, "Semana")
-    c.drawString(margem_x + 170, y, "Status")
-    c.drawString(margem_x + 285, y, "Entrada")
-    c.drawString(margem_x + 350, y, "Saída")
-    y -= 8
-    c.line(margem_x, y, width - 36, y)
-    y -= 14
-
-    if isinstance(df_escala, pd.DataFrame):
-        df_show = df_escala.copy()
-    else:
-        df_show = pd.DataFrame()
-    if not df_show.empty and 'Data' in df_show.columns:
-        try:
-            df_show['Data'] = pd.to_datetime(df_show['Data'], errors='coerce').dt.strftime('%d/%m/%Y')
-        except Exception:
-            pass
-
-    for _, row in df_show.iterrows():
-        if y < 72:
-            c.showPage()
-            y = height - 42
-            c.setFont("Helvetica-Bold", 10)
-            c.drawString(margem_x, y, f"Escala individual — {nome} — {mes:02d}/{ano}")
-            y -= 24
-            c.setFont("Helvetica-Bold", 10)
-            c.drawString(margem_x, y, "Dia")
-            c.drawString(margem_x + 42, y, "Data")
-            c.drawString(margem_x + 102, y, "Semana")
-            c.drawString(margem_x + 170, y, "Status")
-            c.drawString(margem_x + 285, y, "Entrada")
-            c.drawString(margem_x + 350, y, "Saída")
-            y -= 8
-            c.line(margem_x, y, width - 36, y)
-            y -= 14
-            c.setFont("Helvetica", 9)
-
-        c.setFont("Helvetica", 9)
-        c.drawString(margem_x, y, str(row.get('Dia', '')))
-        c.drawString(margem_x + 42, y, str(row.get('Data', '')))
-        c.drawString(margem_x + 102, y, str(row.get('Dia da semana', '')))
-        c.drawString(margem_x + 170, y, str(row.get('Status', '')))
-        c.drawString(margem_x + 285, y, str(row.get('Entrada', '')))
-        c.drawString(margem_x + 350, y, str(row.get('Saída', '')))
-        y -= 14
-
-    y -= 6
-    c.line(margem_x, y, width - 36, y)
-    y -= 14
-    c.setFont("Helvetica", 8)
-    c.drawString(margem_x, y, "Documento gerado pelo Portal do Colaborador.")
-
-    c.save()
-    buf.seek(0)
-    return buf.getvalue()
-
-
 def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
     setor = _norm_setor(auth.get('setor', ''))
     chapa = _norm_chapa(auth.get('chapa', ''))
@@ -8195,14 +7959,13 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
     ass_escala = get_assinatura_status(setor, chapa, ano_vigente, mes_vigente, 'oficial')
     ass_mud = get_assinatura_status(setor, chapa, ano_vigente, mes_vigente, 'historico')
 
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         '📋 Escala Oficial',
         '🕒 Pré-Escala',
         '📝 Histórico de Mudanças',
         '✍️ Assinaturas',
         '🏖️ Férias',
         '⚙️ Ajustes',
-        '🖨️ Imprimir',
     ])
 
     with tab1:
@@ -8358,59 +8121,6 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
             else:
                 st.dataframe(df_sol, use_container_width=True, hide_index=True)
 
-    with tab7:
-        st.markdown(f"#### Imprimir / baixar — {mes_vigente:02d}/{ano_vigente}")
-        if df_oficial.empty:
-            st.info('Ainda não há escala oficial para gerar o PDF individual.')
-        else:
-            pdf_key = f'portal_pdf_blob_{setor}_{chapa}_{ano_vigente}_{mes_vigente}'
-            hist_key = f'portal_pdf_hist_ready_{setor}_{chapa}_{ano_vigente}_{mes_vigente}'
-
-            if st.button('📄 Preparar PDF do mês vigente', key=f'prep_portal_pdf_{setor}_{chapa}_{ano_vigente}_{mes_vigente}'):
-                with st.spinner('Preparando PDF...'):
-                    st.session_state[pdf_key] = gerar_pdf_colaborador_portal(setor, ano_vigente, mes_vigente, colab, df_oficial)
-
-            if st.session_state.get(pdf_key):
-                st.download_button(
-                    '⬇️ Baixar escala em PDF',
-                    data=st.session_state[pdf_key],
-                    file_name=f"escala_{_slugify_filename(colab.get('Nome','colaborador'))}_{mes_vigente:02d}_{ano_vigente}.pdf",
-                    mime='application/pdf',
-                    key=f'portal_pdf_{setor}_{chapa}_{ano_vigente}_{mes_vigente}'
-                )
-
-            with st.expander('Meses anteriores para download', expanded=False):
-                if st.button('🕘 Carregar meses anteriores', key=f'load_hist_portal_{setor}_{chapa}_{ano_vigente}_{mes_vigente}'):
-                    st.session_state[hist_key] = True
-
-                if st.session_state.get(hist_key, False):
-                    historicos = []
-                    for back in range(1, 7):
-                        y = ano_vigente
-                        m = mes_vigente - back
-                        while m <= 0:
-                            m += 12
-                            y -= 1
-                        df_hist_mes = get_escala_colaborador_mes(setor, chapa, y, m)
-                        if not df_hist_mes.empty:
-                            historicos.append((y, m, df_hist_mes))
-
-                    if historicos:
-                        cols_hist = st.columns(min(3, len(historicos)))
-                        for idx, (y, m, df_hist_mes) in enumerate(historicos):
-                            hist_pdf_key = f'portal_pdf_hist_blob_{setor}_{chapa}_{y}_{m}'
-                            if hist_pdf_key not in st.session_state:
-                                st.session_state[hist_pdf_key] = gerar_pdf_colaborador_portal(setor, y, m, colab, df_hist_mes)
-                            cols_hist[idx % len(cols_hist)].download_button(
-                                f'⬇️ {m:02d}/{y}',
-                                data=st.session_state[hist_pdf_key],
-                                file_name=f"escala_{_slugify_filename(colab.get('Nome','colaborador'))}_{m:02d}_{y}.pdf",
-                                mime='application/pdf',
-                                key=f'portal_pdf_hist_{setor}_{chapa}_{y}_{m}'
-                            )
-                    else:
-                        pass
-
 def page_app():
     auth = st.session_state.get("auth") or {}
     setor = auth.get("setor", "GERAL")
@@ -8558,11 +8268,10 @@ def page_app():
     # =========================
     # ABAS
     # =========================
+    tabs = ["👥 Colaboradores", "🚀 Gerar Escala", "⚙️ Ajustes", "🏖️ Férias", "🖨️ Impressão", "✍️ Assinaturas", "📨 Minhas solicitações"]
     is_admin_area = bool(auth.get("is_admin", False)) and setor == "ADMIN"
     if is_admin_area:
-        tabs = ["🔒 Admin"]
-    else:
-        tabs = ["👥 Colaboradores", "🚀 Gerar Escala", "⚙️ Ajustes", "🏖️ Férias", "🖨️ Impressão", "✍️ Assinaturas", "📨 Minhas solicitações"]
+        tabs.append("🔒 Admin")
 
     sec_main = st.radio("Navegação", tabs, horizontal=True, key="main_nav_radio_ultra_fast")
 
@@ -9010,9 +8719,9 @@ def page_app():
             c2.caption("Alterar em 🗓️ Competência (sidebar)")
             c3.caption("Ajustes aplicam na competência ativa.")
 
-        sec_aj = st.radio("", ["📌 Folga fixa", "🧩 Folgas manuais em grade", "🔁 Troca de horários", "✅ Preferência por subgrupo", "📌 Subgrupos (editável)"], horizontal=True, key="ajustes_nav_fast", label_visibility="collapsed")
+        sec_aj = st.radio("", ["🧩 Folgas manuais em grade", "🔁 Troca de horários", "✅ Preferência por subgrupo", "📌 Subgrupos (editável)"], horizontal=True, key="ajustes_nav_fast", label_visibility="collapsed")
 
-        _ajustes_precisam_escala = sec_aj in ("📌 Folga fixa", "🧩 Folgas manuais em grade", "🔁 Troca de horários")
+        _ajustes_precisam_escala = sec_aj in ("🧩 Folgas manuais em grade", "🔁 Troca de horários")
         hist_db = {}
         colaboradores = []
         colab_by = {}
@@ -9039,49 +8748,7 @@ def page_app():
                     st.info("Gere a escala primeiro na aba 🚀 Gerar Escala.")
                     return
 
-                if sec_aj == "📌 Folga fixa":
-                    st.markdown("### 📌 Folga fixa (por colaborador)")
-                    st.caption("Escolha os dias fixos da semana para o colaborador. Ao salvar, o sistema pergunta se deve fazer a correção automática do mês (sim/não).")
-
-                    labels_opts_fx = [f'{c["Nome"]} ({c["Chapa"]})' for c in colaboradores]
-                    inv_label_fx = {f'{c["Nome"]} ({c["Chapa"]})': str(c["Chapa"]) for c in colaboradores}
-                    if not labels_opts_fx:
-                        st.info("Nenhum colaborador encontrado no setor.")
-                    else:
-                        folga_fixa_mapa = list_folga_fixa_setor(setor)
-                        col_fx = st.selectbox("Colaborador:", labels_opts_fx, index=0, key="folga_fixa_colab")
-                        chapa_fx = inv_label_fx[col_fx]
-                        atual_fx = folga_fixa_mapa.get(chapa_fx, [])
-                        dias_fx = st.multiselect(
-                            "Dias fixos de folga:",
-                            options=DIA_FOLGA_FIXA_OPCOES,
-                            default=atual_fx,
-                            key=f"folga_fixa_dias_{chapa_fx}_{ano}_{mes}",
-                        )
-                        auto_corrigir_fx = st.radio(
-                            "Se quebrar alguma regra ao montar o mês, deseja fazer correção automática?",
-                            ["Sim", "Não"],
-                            horizontal=True,
-                            key=f"folga_fixa_corrigir_{chapa_fx}_{ano}_{mes}",
-                        )
-
-                        cfx1, cfx2 = st.columns(2)
-                        if cfx1.button("💾 Salvar folga fixa", key=f"folga_fixa_save_{chapa_fx}_{ano}_{mes}"):
-                            replace_folga_fixa_colaborador(setor, chapa_fx, dias_fx)
-                            apply_folga_fixa_overrides_mes(setor, ano, mes, chapa_fx)
-                            if auto_corrigir_fx == "Sim":
-                                _regenerar_mes_inteiro(setor, ano, mes, seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
-                                st.success("Folga fixa salva e mês readequado com correção automática.")
-                            else:
-                                st.warning("Folga fixa salva sem correção automática. Se precisar, depois clique em gerar/readequar.")
-                            st.rerun()
-                        if cfx2.button("🗑️ Limpar folga fixa do colaborador", key=f"folga_fixa_clear_{chapa_fx}_{ano}_{mes}"):
-                            clear_folga_fixa_colaborador(setor, ano, mes, chapa_fx)
-                            _regenerar_mes_inteiro(setor, ano, mes, seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
-                            st.success("Folga fixa removida e mês readequado.")
-                            st.rerun()
-
-                elif sec_aj == "🧩 Folgas manuais em grade":
+                if sec_aj == "🧩 Folgas manuais em grade":
                     st.markdown("### 🧩 Folgas manuais em grade (por colaborador)")
                     st.caption("Marque/desmarque as folgas do mês. Isso cria/remove travas (overrides) de Status=Folga. Domingo é editável aqui (manual é soberano).")
                     # --- filtro de colaboradores (para facilitar)
@@ -9148,10 +8815,9 @@ def page_app():
                         key="grid_editor"
                     )
 
-                    auto_readequar = st.checkbox("🔄 Readequar escala ao salvar", value=False, key="grid_auto_regen")
+                    auto_readequar = st.checkbox("🔄 Readequar escala ao salvar", value=True, key="grid_auto_regen")
 
                     if st.button("💾 Salvar folgas manuais (e readequar mês)", key="grid_save"):
-                        st.session_state["manual_folga_lock"] = True
                         set_folga = 0
                         set_trab = 0
                         for _, r in edited.iterrows():
@@ -9178,8 +8844,6 @@ def page_app():
 
                         if auto_readequar:
                             _regenerar_mes_inteiro(setor, ano, mes, seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
-                        else:
-                            st.session_state["manual_folga_lock"] = True
 
                         st.success(f"Salvo! Folgas travadas: {set_folga} | Trabalhos travados: {set_trab}.")
                         st.rerun()
@@ -9646,6 +9310,23 @@ def page_app():
 
                     row_idx = 3
                     total_linhas_gravadas = 0
+                    resumo_cobertura = {
+                        "abertura": [0] * total_dias,
+                        "intermediario": [0] * total_dias,
+                        "fechamento": [0] * total_dias,
+                        "total_trabalhando": [0] * total_dias,
+                    }
+
+                    def _minutos_hora_excel(v):
+                        s = str(v or "").strip()
+                        if not s or ":" not in s:
+                            return None
+                        try:
+                            hh, mm = s.split(":", 1)
+                            return int(hh) * 60 + int(mm)
+                        except Exception:
+                            return None
+
                     for sg in sorted(subgrupo_map.keys()):
                         ws.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx, end_column=total_dias + 1)
                         t = ws.cell(row_idx, 1, f"SUBGRUPO: {sg}")
@@ -9659,7 +9340,8 @@ def page_app():
                         for chx in chapas_sg:
                             df_f = hist_db[chx].copy().reset_index(drop=True)
                             nome = str(colab_by.get(str(chx), {}).get("Nome", chx))
-                            c_nome = ws.cell(row_idx, 1, f"{nome}\nCHAPA: {chx}")
+                            c_nome = ws.cell(row_idx, 1, f"{nome}
+CHAPA: {chx}")
                             c_nome.fill = fill_nome
                             c_nome.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
                             c_nome.border = border
@@ -9690,8 +9372,47 @@ def page_app():
                                     else:
                                         cell1.fill = fill_folga
                                         cell2.fill = fill_folga
+                                else:
+                                    ent_min = _minutos_hora_excel(v1)
+                                    if ent_min is not None:
+                                        resumo_cobertura["total_trabalhando"][i] += 1
+                                        if 360 <= ent_min <= 600:
+                                            resumo_cobertura["abertura"][i] += 1
+                                        elif 601 <= ent_min <= 720:
+                                            resumo_cobertura["intermediario"][i] += 1
+                                        elif ent_min >= 760:
+                                            resumo_cobertura["fechamento"][i] += 1
                             total_linhas_gravadas += 1
                             row_idx += 2
+                        row_idx += 1
+
+                    row_idx += 1
+                    ws.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx, end_column=total_dias + 1)
+                    t_res = ws.cell(row_idx, 1, "RESUMO DE COBERTURA — TODOS OS SUBGRUPOS")
+                    t_res.fill = fill_header
+                    t_res.font = font_header
+                    t_res.alignment = Alignment(horizontal="left", vertical="center")
+                    t_res.border = border
+                    row_idx += 1
+
+                    resumo_rows = [
+                        ("ABERTURA (06:00 até 10:00)", resumo_cobertura["abertura"]),
+                        ("INTERMEDIÁRIO (10:01 até 12:00)", resumo_cobertura["intermediario"]),
+                        ("FECHAMENTO (a partir de 12:40)", resumo_cobertura["fechamento"]),
+                        ("TOTAL TRABALHANDO", resumo_cobertura["total_trabalhando"]),
+                    ]
+                    for titulo_resumo, valores_resumo in resumo_rows:
+                        c0 = ws.cell(row_idx, 1, titulo_resumo)
+                        c0.fill = fill_group
+                        c0.font = Font(bold=True)
+                        c0.alignment = Alignment(horizontal="left", vertical="center")
+                        c0.border = border
+                        for i, valor_resumo in enumerate(valores_resumo):
+                            c1 = ws.cell(row_idx, i + 2, int(valor_resumo))
+                            c1.alignment = center
+                            c1.border = border
+                            if str(df_ref_xls.iloc[i].get("Dia", "")) == "dom":
+                                c1.fill = fill_folga
                         row_idx += 1
 
                     try:
