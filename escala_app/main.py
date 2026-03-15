@@ -105,17 +105,7 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, 
 from reportlab.lib.pagesizes import landscape, A4
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib import colors
-from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
-
-# QR Code opcional: no Streamlit Cloud o pacote pode não estar instalado.
-# O app continua funcionando e apenas mostra o link de validação no PDF quando a lib faltar.
-try:
-    import qrcode  # type: ignore
-    HAS_QRCODE = True
-except Exception:
-    qrcode = None
-    HAS_QRCODE = False
 
 st.set_page_config(page_title="Escala 5x2 Oficial", layout="wide")
 
@@ -7953,7 +7943,7 @@ def _build_validacao_escala_url(setor: str, chapa: str, ano: int, mes: int, nome
 
 
 def gerar_pdf_colaborador_portal(setor: str, ano: int, mes: int, colab: dict, df_escala: pd.DataFrame) -> bytes:
-    """PDF individual do colaborador, otimizado para portal/celular, com QR de validação."""
+    """PDF individual do colaborador, otimizado para portal/celular, sem QR e sem validação externa."""
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
     width, height = A4
@@ -7964,7 +7954,6 @@ def gerar_pdf_colaborador_portal(setor: str, ano: int, mes: int, colab: dict, df
     chapa = str((colab or {}).get('Chapa', '-') or '-')
     subgrupo = str((colab or {}).get('Subgrupo', 'SEM SUBGRUPO') or 'SEM SUBGRUPO')
     entrada_padrao = str((colab or {}).get('Entrada', '06:00') or '06:00')
-    valid_url = _build_validacao_escala_url(setor, chapa, ano, mes, nome)
 
     c.setTitle(f"Escala_{nome}_{mes:02d}_{ano}")
     c.setFont("Helvetica-Bold", 16)
@@ -7979,27 +7968,6 @@ def gerar_pdf_colaborador_portal(setor: str, ano: int, mes: int, colab: dict, df
     y -= 14
     c.drawString(margem_x, y, f"Competência: {mes:02d}/{ano}")
     y -= 14
-    c.setFont("Helvetica", 8)
-    c.drawString(margem_x, y, f"Validação: {valid_url[:95]}")
-
-    qr_drawn = False
-    if HAS_QRCODE and qrcode is not None:
-        try:
-            qr_img = qrcode.make(valid_url)
-            qr_buf = io.BytesIO()
-            qr_img.save(qr_buf, format='PNG')
-            qr_buf.seek(0)
-            c.drawImage(ImageReader(qr_buf), width - 120, height - 125, width=72, height=72, preserveAspectRatio=True, mask='auto')
-            c.setFont("Helvetica", 8)
-            c.drawRightString(width - 36, height - 132, "Validação da escala")
-            qr_drawn = True
-        except Exception:
-            qr_drawn = False
-
-    if not qr_drawn:
-        c.setFont("Helvetica", 8)
-        c.drawRightString(width - 36, height - 132, "Validação: use o link abaixo")
-
     y -= 26
     c.setFont("Helvetica-Bold", 10)
     c.drawString(margem_x, y, "Dia")
@@ -8054,20 +8022,11 @@ def gerar_pdf_colaborador_portal(setor: str, ano: int, mes: int, colab: dict, df
     c.line(margem_x, y, width - 36, y)
     y -= 14
     c.setFont("Helvetica", 8)
-    c.drawString(margem_x, y, f"Código de validação: {hashlib.sha1(f'{setor}|{chapa}|{ano}|{mes}'.encode('utf-8')).hexdigest()[:12].upper()}")
-    y -= 11
     c.drawString(margem_x, y, "Documento gerado pelo Portal do Colaborador.")
-    y -= 11
-    c.drawString(margem_x, y, valid_url[:110])
 
     c.save()
     buf.seek(0)
     return buf.getvalue()
-
-
-def _build_whatsapp_share_link(nome: str, setor: str, ano: int, mes: int) -> str:
-    msg = f"Olá! Segue minha escala de {mes:02d}/{ano}. Colaborador: {nome} | Setor: {setor}."
-    return f"https://wa.me/?text={urlquote(msg)}"
 
 
 def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
@@ -8287,10 +8246,6 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
             )
             st.caption('Esse PDF pode ser salvo no celular, impresso e compartilhado.')
 
-            valid_url = _build_validacao_escala_url(setor, chapa, ano_vigente, mes_vigente, colab.get('Nome',''))
-            wa_link = _build_whatsapp_share_link(colab.get('Nome',''), setor, ano_vigente, mes_vigente)
-            st.link_button('📲 Enviar mensagem pelo WhatsApp', wa_link, use_container_width=True)
-            st.link_button('🔎 Abrir validação da escala', valid_url, use_container_width=True)
 
             historicos = []
             for back in range(1, 7):
