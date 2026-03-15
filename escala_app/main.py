@@ -8522,11 +8522,19 @@ def page_app():
                             st.session_state["pwd_temp_last"] = senha_final
                             st.session_state["pwd_temp_last_chapa"] = ch_sel_pwd
                             st.success(msg_base)
+                            st.success("🔑 Senha temporária criada com sucesso.")
+                            st.code(senha_final, language=None)
+                            st.caption("Copie essa senha e envie ao colaborador. No próximo login ele será obrigado a trocar a senha.")
+                            st.session_state["pwd_nova"] = ""
+                            st.session_state["pwd_confirma"] = ""
+                            st.session_state["pwd_auto_temp"] = True
                         else:
                             st.session_state["pwd_temp_last"] = ""
                             st.session_state["pwd_temp_last_chapa"] = ""
                             st.success(msg_base)
-                        st.rerun()
+                            st.session_state["pwd_nova"] = ""
+                            st.session_state["pwd_confirma"] = ""
+                            st.rerun()
                     except Exception as e:
                         st.error(f"Falha ao alterar senha: {e}")
             else:
