@@ -8649,7 +8649,8 @@ def page_app():
             st.caption("Geração pesada ficou sob demanda para deixar a aba Impressão rápida.")
             excel_key = f"{setor}|{ano}|{mes}"
             if st.button("📊 Gerar Excel", key="xls_btn"):
-                if excel_key in excel_cache:
+                st.session_state.pop("xls_cached_bytes", None)
+                if excel_key in excel_cache and excel_cache.get(excel_key):
                     st.session_state["xls_cached_bytes"] = excel_cache[excel_key]
                 else:
                     colaboradores = load_colaboradores_setor(setor)
@@ -8826,9 +8827,13 @@ def page_app():
                             if "Sheet" in wb.sheetnames and len(wb.sheetnames) > 1:
                                 wb.remove(wb["Sheet"])
 
-                            excel_bytes = output.getvalue()
+                        output.seek(0)
+                        excel_bytes = output.getvalue()
+                        if excel_bytes and len(excel_bytes) > 2000:
                             excel_cache[excel_key] = excel_bytes
                             st.session_state["xls_cached_bytes"] = excel_bytes
+                        else:
+                            st.error("Excel gerado vazio. Gere a escala do mês e tente novamente.")
             if st.session_state.get("xls_cached_bytes"):
                 st.download_button(
                     "📥 Baixar Excel",
