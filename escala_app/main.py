@@ -8839,9 +8839,9 @@ def page_app():
             c2.caption("Alterar em 🗓️ Competência (sidebar)")
             c3.caption("Ajustes aplicam na competência ativa.")
 
-        sec_aj = st.radio("", ["🧩 Folgas manuais em grade", "🔁 Troca de horários", "✅ Preferência por subgrupo", "📌 Subgrupos (editável)"], horizontal=True, key="ajustes_nav_fast", label_visibility="collapsed")
+        sec_aj = st.radio("", ["🧩 Folgas manuais em grade", "🧷 Folga fixa", "🔁 Troca de horários", "🗂️ Inventário", "📝 Histórico", "✅ Preferência por subgrupo", "📌 Subgrupos (editável)"], horizontal=True, key="ajustes_nav_fast", label_visibility="collapsed")
 
-        _ajustes_precisam_escala = sec_aj in ("🧩 Folgas manuais em grade", "🔁 Troca de horários")
+        _ajustes_precisam_escala = sec_aj in ("🧩 Folgas manuais em grade", "🧷 Folga fixa", "🔁 Troca de horários", "🗂️ Inventário", "📝 Histórico")
         hist_db = {}
         colaboradores = []
         colab_by = {}
@@ -9118,6 +9118,143 @@ def page_app():
 
                                     st.success(f"Salvo! Ação: {acao_th}. Aplicados: {applied}. Ignorados (por conflito com Folga/Férias): {skipped}.")
                                     st.rerun()
+
+        elif sec_aj == "🧷 Folga fixa":
+            st.markdown("### 🧷 Folga fixa na competência ativa")
+            st.caption("Aplica folga fixa por dia da semana somente no mês/ano ativo. Isso cria travas manuais de Status=Folga e respeita Férias.")
+
+            if not colaboradores:
+                st.info("Nenhum colaborador carregado para esta competência.")
+            else:
+                opts_fx = [f'{c["Nome"]} ({c["Chapa"]})' for c in colaboradores]
+                inv_fx = {f'{c["Nome"]} ({c["Chapa"]})': str(c["Chapa"]) for c in colaboradores}
+                lab_fx = st.selectbox("Colaborador:", opts_fx, key="fx_colab")
+                chapa_fx = inv_fx.get(lab_fx, "")
+                dias_semana_fx = {
+                    "SEG": 0,
+                    "TER": 1,
+                    "QUA": 2,
+                    "QUI": 3,
+                    "SEX": 4,
+                    "SÁB": 5,
+                    "DOM": 6,
+                }
+                dias_sel_fx = st.multiselect(
+                    "Dias da semana para travar como folga no mês ativo:",
+                    list(dias_semana_fx.keys()),
+                    default=[],
+                    key="fx_weekdays",
+                )
+                cfx1, cfx2 = st.columns(2)
+                aplicar_fx = cfx1.button("💾 Aplicar folga fixa no mês", key="fx_apply")
+                limpar_fx = cfx2.button("🧹 Remover folga fixa do colaborador no mês", key="fx_clear")
+
+                if aplicar_fx and chapa_fx:
+                    qtd_fx = calendar.monthrange(int(ano), int(mes))[1]
+                    aplicadas_fx = 0
+                    ignoradas_fx = 0
+                    dfh_fx = hist_db.get(chapa_fx)
+                    for d in range(1, qtd_fx + 1):
+                        dt_fx = date(int(ano), int(mes), int(d))
+                        if dt_fx.weekday() not in {dias_semana_fx[x] for x in dias_sel_fx}:
+                            continue
+                        if dfh_fx is not None and len(dfh_fx) >= d and str(dfh_fx.loc[d - 1, "Status"]) == "Férias":
+                            ignoradas_fx += 1
+                            continue
+                        set_override(setor, ano, mes, chapa_fx, d, "status", "Folga")
+                        aplicadas_fx += 1
+                    if aplicadas_fx:
+                        _regenerar_mes_inteiro(setor, ano, mes, seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
+                    st.success(f"Folga fixa aplicada no mês. Dias travados: {aplicadas_fx}. Ignorados por férias: {ignoradas_fx}.")
+                    st.rerun()
+
+                if limpar_fx and chapa_fx:
+                    qtd_fx = calendar.monthrange(int(ano), int(mes))[1]
+                    removidas_fx = 0
+                    for d in range(1, qtd_fx + 1):
+                        cur_ov = load_overrides(setor, ano, mes)
+                        if cur_ov is None or cur_ov.empty:
+                            break
+                        mask = (
+                            (cur_ov["chapa"].astype(str).str.strip() == str(chapa_fx).strip())
+                            & (cur_ov["dia"].astype(int) == int(d))
+                            & (cur_ov["campo"].astype(str).str.lower() == "status")
+                            & (cur_ov["valor"].astype(str).str.upper() == "FOLGA")
+                        )
+                        if bool(mask.any()):
+                            del_override(setor, ano, mes, chapa_fx, d, "status")
+                            removidas_fx += 1
+                    if removidas_fx:
+                        _regenerar_mes_inteiro(setor, ano, mes, seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
+                    st.success(f"Folgas fixas removidas do mês: {removidas_fx}.")
+                    st.rerun()
+
+                ovdf_fx = load_overrides(setor, ano, mes)
+                if ovdf_fx is not None and not ovdf_fx.empty:
+                    ovdf_fx = ovdf_fx.copy()
+                    ovdf_fx["campo"] = ovdf_fx["campo"].astype(str).str.lower()
+                    ovdf_fx["valor"] = ovdf_fx["valor"].astype(str).str.upper()
+                    ovdf_fx = ovdf_fx[(ovdf_fx["campo"] == "status") & (ovdf_fx["valor"] == "FOLGA")]
+                    if not ovdf_fx.empty:
+                        st.markdown("#### Folgas travadas no mês")
+                        st.dataframe(ovdf_fx[["chapa", "dia", "campo", "valor"]], use_container_width=True, hide_index=True)
+
+        elif sec_aj == "🗂️ Inventário":
+            st.markdown("### 🗂️ Inventário da competência ativa")
+            st.caption("Resumo operacional do mês atual sem alterar regras da escala.")
+            rows_inv = []
+            ovdf_inv = load_overrides(setor, ano, mes)
+            for c in colaboradores:
+                ch = str(c["Chapa"])
+                dfh = hist_db.get(ch)
+                if dfh is None or len(dfh) == 0:
+                    continue
+                status = dfh["Status"].astype(str)
+                rows_inv.append({
+                    "Nome": c.get("Nome", ""),
+                    "Chapa": ch,
+                    "Subgrupo": c.get("Subgrupo", "SEM SUBGRUPO"),
+                    "Trabalho": int(status.isin(list(WORK_STATUSES)).sum()),
+                    "Folga": int((status == "Folga").sum()),
+                    "Férias": int((status == "Férias").sum()),
+                    "Afastamento": int((status == "Afastamento").sum() + (status == "AFA").sum()),
+                    "Dias no mês": int(len(dfh)),
+                    "Overrides": int((((ovdf_inv["chapa"].astype(str).str.strip() == ch.strip()))).sum()) if ovdf_inv is not None and not ovdf_inv.empty else 0,
+                })
+            if rows_inv:
+                df_inv = pd.DataFrame(rows_inv)
+                st.dataframe(df_inv, use_container_width=True, hide_index=True)
+                k1, k2, k3, k4 = st.columns(4)
+                k1.metric("Colaboradores", len(df_inv))
+                k2.metric("Folgas no mês", int(df_inv["Folga"].sum()))
+                k3.metric("Férias no mês", int(df_inv["Férias"].sum()))
+                k4.metric("Overrides", int(df_inv["Overrides"].sum()))
+            else:
+                st.info("Sem dados de inventário para a competência ativa.")
+
+        elif sec_aj == "📝 Histórico":
+            st.markdown("### 📝 Histórico de ajustes e escala")
+            st.caption("Mostra o que foi travado manualmente e a escala consolidada da competência ativa.")
+            ovdf_hist = load_overrides(setor, ano, mes)
+            if ovdf_hist is None or ovdf_hist.empty:
+                st.info("Não há overrides registrados nesta competência.")
+            else:
+                ovdf_hist = ovdf_hist.copy()
+                st.markdown("#### Overrides registrados")
+                st.dataframe(ovdf_hist, use_container_width=True, hide_index=True)
+
+            if colaboradores:
+                opts_hist = [f'{c["Nome"]} ({c["Chapa"]})' for c in colaboradores]
+                inv_hist = {f'{c["Nome"]} ({c["Chapa"]})': str(c["Chapa"]) for c in colaboradores}
+                lab_hist = st.selectbox("Colaborador para ver a escala consolidada:", opts_hist, key="hist_colab")
+                chapa_hist = inv_hist.get(lab_hist, "")
+                dfh_hist = hist_db.get(chapa_hist)
+                if dfh_hist is not None and len(dfh_hist) > 0:
+                    df_show_hist = dfh_hist.copy()
+                    st.markdown("#### Escala consolidada do colaborador")
+                    st.dataframe(df_show_hist, use_container_width=True, hide_index=True)
+                else:
+                    st.info("Sem escala consolidada para o colaborador selecionado.")
 
         if sec_aj == "✅ Preferência por subgrupo":
             st.markdown("### ✅ Preferência por subgrupo (Evitar folga se possível)")
