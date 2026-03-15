@@ -5134,6 +5134,15 @@ def _ensure_folga_fixa_schema():
             UNIQUE(setor, chapa, dia_semana)
         )
         """)
+        try:
+            cols = {str(r[1]).strip().lower() for r in cur.execute("PRAGMA table_info(folga_fixa)").fetchall()}
+        except Exception:
+            cols = set()
+        if 'ativo' not in cols:
+            _safe_exec(cur, "ALTER TABLE folga_fixa ADD COLUMN ativo INTEGER NOT NULL DEFAULT 1")
+        if 'criado_em' not in cols:
+            _safe_exec(cur, "ALTER TABLE folga_fixa ADD COLUMN criado_em TEXT")
+            _safe_exec(cur, "UPDATE folga_fixa SET criado_em = COALESCE(criado_em, ?) WHERE criado_em IS NULL OR TRIM(COALESCE(criado_em,'')) = ''", (datetime.now().isoformat(),))
         con.commit()
     finally:
         con.close()
@@ -5158,6 +5167,23 @@ def _ensure_inventario_diario_schema():
             UNIQUE(setor, ano, mes, dia)
         )
         """)
+        try:
+            cols = {str(r[1]).strip().lower() for r in cur.execute("PRAGMA table_info(inventario_diario)").fetchall()}
+        except Exception:
+            cols = set()
+        if 'abertura' not in cols:
+            _safe_exec(cur, "ALTER TABLE inventario_diario ADD COLUMN abertura INTEGER NOT NULL DEFAULT 0")
+        if 'intermediario' not in cols:
+            _safe_exec(cur, "ALTER TABLE inventario_diario ADD COLUMN intermediario INTEGER NOT NULL DEFAULT 0")
+        if 'fechamento' not in cols:
+            _safe_exec(cur, "ALTER TABLE inventario_diario ADD COLUMN fechamento INTEGER NOT NULL DEFAULT 0")
+        if 'criado_em' not in cols:
+            _safe_exec(cur, "ALTER TABLE inventario_diario ADD COLUMN criado_em TEXT")
+        if 'atualizado_em' not in cols:
+            _safe_exec(cur, "ALTER TABLE inventario_diario ADD COLUMN atualizado_em TEXT")
+        agora = datetime.now().isoformat()
+        _safe_exec(cur, "UPDATE inventario_diario SET criado_em = COALESCE(criado_em, ?) WHERE criado_em IS NULL OR TRIM(COALESCE(criado_em,'')) = ''", (agora,))
+        _safe_exec(cur, "UPDATE inventario_diario SET atualizado_em = COALESCE(atualizado_em, ?) WHERE atualizado_em IS NULL OR TRIM(COALESCE(atualizado_em,'')) = ''", (agora,))
         con.commit()
     finally:
         con.close()
@@ -5169,27 +5195,35 @@ def list_folga_fixa(setor: str, chapa: str | None = None) -> pd.DataFrame:
     params = [setor]
     sql = """
         SELECT f.chapa AS Chapa,
-               COALESCE(c.nome, f.chapa) AS Nome,
                f.dia_semana AS DiaSemana,
-               f.ativo AS Ativo,
-               f.criado_em AS CriadoEm
+               COALESCE(f.ativo, 1) AS Ativo,
+               COALESCE(f.criado_em, '') AS CriadoEm
         FROM folga_fixa f
-        LEFT JOIN colaboradores c
-          ON UPPER(TRIM(c.setor)) = UPPER(TRIM(f.setor))
-         AND TRIM(c.chapa) = TRIM(f.chapa)
         WHERE UPPER(TRIM(f.setor)) = ?
     """
     if chapa is not None:
         sql += " AND TRIM(f.chapa) = ?"
         params.append(_norm_chapa(chapa))
-    sql += " ORDER BY Nome, DiaSemana"
+    sql += " ORDER BY f.chapa, f.dia_semana"
     try:
         df = pd.read_sql_query(sql, con, params=tuple(params))
     finally:
         con.close()
-    if not df.empty:
-        df["Dia"] = df["DiaSemana"].map(WEEKDAY_LABELS_LONG)
-        df["Ativo"] = df["Ativo"].apply(lambda x: "Sim" if int(x or 0) else "Não")
+    if df.empty:
+        df["Nome"] = []
+        df["Dia"] = []
+        return df
+
+    nomes = {}
+    try:
+        for c in load_colaboradores(setor):
+            nomes[str(c.get('Chapa', '') or '').strip()] = str(c.get('Nome', '') or '').strip()
+    except Exception:
+        nomes = {}
+
+    df["Nome"] = df["Chapa"].apply(lambda ch: nomes.get(str(ch).strip(), str(ch).strip()))
+    df["Dia"] = df["DiaSemana"].map(WEEKDAY_LABELS_LONG)
+    df["Ativo"] = df["Ativo"].apply(lambda x: "Sim" if int(x or 0) else "Não")
     return df
 
 
