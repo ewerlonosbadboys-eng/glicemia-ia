@@ -4638,204 +4638,65 @@ def is_de_ferias(setor: str, chapa: str, data_obj: date) -> bool:
     con.close()
     return ok
 
-def is_first_week_after_return(setor: str, chapa: str, data_obj: date) -> bool:
-    ontem = data_obj - timedelta(days=1)
-    if is_de_ferias(setor, chapa, data_obj):
-        return False
-    if is_de_ferias(setor, chapa, ontem):
-        return True
+def get_retorno_ferias_info(setor: str, chapa: str, ano: int, mes: int) -> dict | None:
+    """
+    Retorna informações do último período de férias que impacta o mês atual.
+
+    Regra de negócio pedida:
+    - o ÚLTIMO dia de férias já conta como 1 folga da semana;
+    - na volta, o sistema olha somente o PRIMEIRO domingo após o retorno;
+    - se esse domingo for um dos menos cobertos do setor, o colaborador trabalha;
+    - se esse domingo já estiver forte, o colaborador folga;
+    - depois volta à regra normal da escala.
+    """
+    mes_ini = date(int(ano), int(mes), 1)
+    mes_fim = date(int(ano), int(mes), calendar.monthrange(int(ano), int(mes))[1])
+
     con = db_conn()
     cur = con.cursor()
-    cur.execute("""
-        SELECT fim FROM ferias
-        WHERE setor=? AND chapa=? AND date(fim) < date(?)
+    cur.execute(
+        """
+        SELECT fim
+        FROM ferias
+        WHERE setor=? AND chapa=? AND date(fim) <= date(?)
         ORDER BY date(fim) DESC
         LIMIT 1
-    """, (setor, chapa, data_obj.strftime("%Y-%m-%d")))
+        """,
+        (setor, chapa, mes_fim.strftime("%Y-%m-%d")),
+    )
     row = cur.fetchone()
     con.close()
     if not row:
-        return False
-    fim = datetime.strptime(row[0], "%Y-%m-%d").date()
+        return None
+
+    try:
+        fim = datetime.strptime(str(row[0]), "%Y-%m-%d").date()
+    except Exception:
+        return None
+
     retorno = fim + timedelta(days=1)
-    return retorno <= data_obj <= (retorno + timedelta(days=6))
-
-
-def get_last_ferias_fim_before(setor: str, chapa: str, data_obj: date) -> date | None:
-    """
-    Retorna o último dia de férias (fim) imediatamente anterior a `data_obj`.
-    Usado para tratar a 1ª semana de retorno:
-    - o último dia de férias conta como 1 folga da semana
-    - nessa 1ª semana o colaborador pode trabalhar até 5 dias seguidos
-    """
-    con = db_conn()
-    cur = con.cursor()
-    cur.execute("""
-        SELECT fim FROM ferias
-        WHERE setor=? AND chapa=? AND date(fim) < date(?)
-        ORDER BY date(fim) DESC
-        LIMIT 1
-    """, (setor, chapa, data_obj.strftime("%Y-%m-%d")))
-    row = cur.fetchone()
-    con.close()
-    if not row:
-        return None
-    try:
-        return datetime.strptime(str(row[0]), "%Y-%m-%d").date()
-    except Exception:
+    if retorno > mes_fim:
         return None
 
-
-def get_return_date_in_month(setor: str, chapa: str, ano: int, mes: int) -> date | None:
-    """
-    Retorna a data de retorno ao trabalho (fim das férias + 1)
-    quando essa volta acontece dentro do mês informado.
-    """
-    ini_mes = date(int(ano), int(mes), 1)
-    fim_mes = date(int(ano), int(mes), calendar.monthrange(int(ano), int(mes))[1])
-    con = db_conn()
-    cur = con.cursor()
-    cur.execute("""
-        SELECT fim FROM ferias
-        WHERE setor=? AND chapa=?
-          AND date(fim) < date(?)
-        ORDER BY date(fim) DESC
-        LIMIT 1
-    """, (setor, chapa, (fim_mes + timedelta(days=1)).strftime("%Y-%m-%d")))
-    row = cur.fetchone()
-    con.close()
-    if not row:
+    domingo_offset = (6 - retorno.weekday()) % 7
+    primeiro_domingo = retorno + timedelta(days=domingo_offset)
+    if not (mes_ini <= primeiro_domingo <= mes_fim):
         return None
-    try:
-        fim_fer = datetime.strptime(str(row[0]), "%Y-%m-%d").date()
-    except Exception:
-        return None
-    retorno = fim_fer + timedelta(days=1)
-    if ini_mes <= retorno <= fim_mes:
-        return retorno
-    return None
+
+    return {
+        "fim_ferias": fim,
+        "retorno": retorno,
+        "primeiro_domingo": primeiro_domingo,
+    }
 
 
-def apply_return_from_vacation_first_week_rules(
-    hist_all: dict,
-    colab_by_chapa: dict,
-    locked_idx: dict,
-    setor: str,
-    ano: int,
-    mes: int,
-) -> set:
-    """
-    Regras especiais SOMENTE para a 1ª semana de volta de férias:
-
-    1) O último dia de férias (AFS / fim das férias) conta como 1 folga da semana.
-       Portanto, na semana de retorno NÃO obrigamos 2 folgas dentro do mês atual.
-       No mês atual, essa semana pode ficar com 0 ou 1 folga, dependendo da necessidade.
-
-    2) Domingo da 1ª semana de retorno:
-       entre os domingos do mês do setor, se o domingo dessa semana estiver entre os
-       menos cobertos, o colaborador volta trabalhando nesse domingo, desde que não
-       esteja travado manualmente e não esteja em férias/afastamento no dia.
-
-    3) Se a semana atual estiver com mais de 1 folga no mês corrente, removemos o excesso
-       (preferindo remover domingo quando ele estiver entre os menos cobertos).
-       Isso preserva a ideia de que o último dia de férias já valeu como 1 folga da semana.
-
-    Importante:
-    - não mexe em férias/afastamento
-    - respeita travas manuais
-    - não tenta “inventar” folga extra nessa semana
-    """
-    if not hist_all:
-        return set()
-
-    any_df = next(iter(hist_all.values()))
-    if any_df is None or len(any_df) == 0:
-        return set()
-
-    # conta cobertura de todos os domingos do mês no setor
-    sunday_idxs = [i for i in range(len(any_df)) if str(any_df.loc[i, "Dia"]) == "dom"]
-    sunday_work_counts = {}
-    for idx in sunday_idxs:
-        total_work = 0
-        for chx, dfx in hist_all.items():
-            try:
-                stt = str(dfx.loc[idx, "Status"] or "")
-            except Exception:
-                stt = ""
-            if stt in WORK_STATUSES:
-                total_work += 1
-        sunday_work_counts[idx] = total_work
-    min_sunday_work = min(sunday_work_counts.values()) if sunday_work_counts else None
-
-    changed = set()
-
-    for ch, df in list(hist_all.items()):
-        retorno = get_return_date_in_month(setor, ch, int(ano), int(mes))
-        if not retorno:
-            continue
-
-        ws = pd.to_datetime(retorno) - pd.to_timedelta(int(pd.to_datetime(retorno).weekday()), unit="D")
-        ws = pd.to_datetime(ws).normalize()
-        we = ws + pd.Timedelta(days=6)
-
-        idxs_week = []
-        for i in range(len(df)):
-            dd = pd.to_datetime(df.loc[i, "Data"], errors="coerce")
-            if pd.isna(dd):
-                continue
-            ddn = dd.normalize()
-            if ws <= ddn <= we:
-                idxs_week.append(i)
-        if not idxs_week:
-            continue
-
-        locked = set((locked_idx or {}).get(ch, set()))
-        ent = str((colab_by_chapa.get(ch, {}) or {}).get("Entrada", "06:00") or "06:00")
-
-        # domingo da semana de retorno
-        dom_idx = None
-        for i in idxs_week:
-            if str(df.loc[i, "Dia"]) == "dom":
-                dom_idx = i
-                break
-
-        # Se este domingo for um dos menos cobertos do setor, força trabalho nele
-        if dom_idx is not None and min_sunday_work is not None:
-            dom_status = str(df.loc[dom_idx, "Status"] or "")
-            if (
-                sunday_work_counts.get(dom_idx, 0) <= min_sunday_work
-                and dom_idx not in locked
-                and dom_status not in ("Férias", "Afastamento")
-                and _is_folga_status(dom_status)
-            ):
-                _set_trabalho(df, dom_idx, ent, locked_status=locked)
-                changed.add(ch)
-
-        current_week_folgas = [i for i in idxs_week if _is_folga_status(str(df.loc[i, "Status"] or ""))]
-
-        # Na 1ª semana de volta, no mês atual deixamos no máximo 1 folga.
-        if len(current_week_folgas) > 1:
-            def _remove_prio(i: int):
-                is_dom = 0 if (dom_idx is not None and i == dom_idx and sunday_work_counts.get(i, 999999) <= min_sunday_work) else 1
-                return (
-                    is_dom,  # remove primeiro o domingo se ele estiver fraco no setor
-                    -int(pd.to_datetime(df.loc[i, "Data"]).day),
-                )
-
-            for i in sorted(current_week_folgas, key=_remove_prio):
-                if len([j for j in idxs_week if _is_folga_status(str(df.loc[j, "Status"] or ""))]) <= 1:
-                    break
-                if i in locked:
-                    continue
-                stt = str(df.loc[i, "Status"] or "")
-                if stt in ("Férias", "Afastamento"):
-                    continue
-                _set_trabalho(df, i, ent, locked_status=locked)
-                changed.add(ch)
-
-        hist_all[ch] = df
-
-    return changed
+def is_first_week_after_return(setor: str, chapa: str, data_obj: date) -> bool:
+    info = get_retorno_ferias_info(setor, chapa, data_obj.year, data_obj.month)
+    if not info:
+        return False
+    retorno = info["retorno"]
+    domingo = info["primeiro_domingo"]
+    return retorno <= data_obj <= domingo
 
 # =========================================================
 # ESTADO
@@ -6530,6 +6391,55 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
         hist_all[ch] = df
 
     # =====================================================
+    # ✅ VOLTA DE FÉRIAS — regra especial do PRIMEIRO domingo após o retorno
+    # - último dia de férias conta como 1 folga da semana
+    # - olha somente o primeiro domingo após o retorno
+    # - se esse domingo for um dos menos cobertos do setor => Trabalha
+    # - se não for => Folga
+    # =====================================================
+    sunday_idx_map = {pd.to_datetime(df_ref_cur.loc[i, "Data"]).date(): i for i in range(len(df_ref_cur)) if str(df_ref_cur.loc[i, "Dia"]) == "dom"}
+    if sunday_idx_map:
+        def _count_working_on_sunday(idx: int) -> int:
+            total = 0
+            for _ch2, _df2 in hist_all.items():
+                try:
+                    if str(_df2.loc[idx, "Status"]) in WORK_STATUSES:
+                        total += 1
+                except Exception:
+                    pass
+            return total
+
+        for ch, df in hist_all.items():
+            info_ret = get_retorno_ferias_info(setor, ch, int(ano), int(mes))
+            if not info_ret:
+                continue
+            dom_date = info_ret.get("primeiro_domingo")
+            dom_idx = sunday_idx_map.get(dom_date)
+            if dom_idx is None:
+                continue
+            locked = locked_idx.get(ch, set())
+            if dom_idx in locked:
+                continue
+            if str(df.loc[dom_idx, "Status"]) == "Férias":
+                continue
+
+            sunday_counts = {d: _count_working_on_sunday(i) for d, i in sunday_idx_map.items()}
+            if not sunday_counts:
+                continue
+            min_count = min(sunday_counts.values())
+            ent = str((colab_by_chapa.get(ch, {}) or {}).get("Entrada", "06:00") or "06:00").strip() or "06:00"
+
+            if sunday_counts.get(dom_date, 999999) <= min_count:
+                df.loc[dom_idx, "Status"] = "Trabalho"
+                df.loc[dom_idx, "H_Entrada"] = ent
+                df.loc[dom_idx, "H_Saida"] = _saida_from_entrada(ent)
+            else:
+                df.loc[dom_idx, "Status"] = "Folga"
+                df.loc[dom_idx, "H_Entrada"] = ""
+                df.loc[dom_idx, "H_Saida"] = ""
+            hist_all[ch] = df
+
+    # =====================================================
     # ✅ REGRA SEMANAL NOVA (SEG->DOM) DEPENDE DO DOMINGO
     # =====================================================
     for sg, membros in grupos.items():
@@ -6753,35 +6663,6 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
     )
     try:
         enforce_max_two_folgas_per_week(hist_all, list(hist_all.keys()), df_ref_cur, setor, ano, mes, locked_idx_map=locked_idx)
-    except Exception:
-        pass
-
-    # ✅ Regra especial de retorno de férias:
-    # - último dia de férias conta como 1 folga da semana
-    # - na 1ª semana de volta não força a 2ª folga no mês atual
-    # - se o domingo dessa semana for um dos menos cobertos do setor, coloca para trabalhar
-    try:
-        _ret_changed = apply_return_from_vacation_first_week_rules(
-            hist_all, colab_by_chapa, locked_idx, setor, ano, mes
-        )
-        for ch in list(_ret_changed or set()):
-            if ch not in hist_all:
-                continue
-            df = hist_all[ch]
-            ent = colab_by_chapa[ch].get("Entrada", "06:00")
-            locked = locked_idx.get(ch, set())
-            pode_sab = bool(colab_by_chapa[ch].get("Folga_Sab", False))
-            ultima_saida_prev = "" if _past else (estado_prev.get(ch, {}).get("ultima_saida", "") or "")
-            enforce_max_5_consecutive_work(
-                df, ent, pode_sab,
-                initial_consec=(0 if _past else int((estado_prev.get(ch, {}) or {}).get('consec_trab_final', 0))),
-                locked_status=locked
-            )
-            enforce_no_consecutive_folga(df, locked_status=locked)
-            enforce_global_rest_keep_targets(df, ent, locked_status=locked, ultima_saida_prev=ultima_saida_prev)
-            if respeitar_ajustes:
-                _apply_overrides_to_df_inplace(df, setor, ch, ovmap)
-            hist_all[ch] = df
     except Exception:
         pass
 
