@@ -5117,7 +5117,53 @@ def _classificar_turno_por_entrada(h_entrada: str) -> str:
     return "Fechamento"
 
 
+
+
+def _ensure_folga_fixa_schema():
+    con = db_conn()
+    try:
+        cur = con.cursor()
+        _safe_exec(cur, """
+        CREATE TABLE IF NOT EXISTS folga_fixa (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            setor TEXT NOT NULL,
+            chapa TEXT NOT NULL,
+            dia_semana INTEGER NOT NULL,
+            ativo INTEGER NOT NULL DEFAULT 1,
+            criado_em TEXT NOT NULL,
+            UNIQUE(setor, chapa, dia_semana)
+        )
+        """)
+        con.commit()
+    finally:
+        con.close()
+
+
+def _ensure_inventario_diario_schema():
+    con = db_conn()
+    try:
+        cur = con.cursor()
+        _safe_exec(cur, """
+        CREATE TABLE IF NOT EXISTS inventario_diario (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            setor TEXT NOT NULL,
+            ano INTEGER NOT NULL,
+            mes INTEGER NOT NULL,
+            dia INTEGER NOT NULL,
+            abertura INTEGER NOT NULL DEFAULT 0,
+            intermediario INTEGER NOT NULL DEFAULT 0,
+            fechamento INTEGER NOT NULL DEFAULT 0,
+            criado_em TEXT NOT NULL,
+            atualizado_em TEXT NOT NULL,
+            UNIQUE(setor, ano, mes, dia)
+        )
+        """)
+        con.commit()
+    finally:
+        con.close()
+
 def list_folga_fixa(setor: str, chapa: str | None = None) -> pd.DataFrame:
+    _ensure_folga_fixa_schema()
     setor = _norm_setor(setor)
     con = db_conn()
     params = [setor]
@@ -5148,6 +5194,7 @@ def list_folga_fixa(setor: str, chapa: str | None = None) -> pd.DataFrame:
 
 
 def save_folga_fixa(setor: str, chapa: str, weekdays: list[int]):
+    _ensure_folga_fixa_schema()
     setor = _norm_setor(setor)
     chapa = _norm_chapa(chapa)
     weekdays = sorted({int(x) for x in weekdays if int(x) in range(7)})
@@ -5165,6 +5212,7 @@ def save_folga_fixa(setor: str, chapa: str, weekdays: list[int]):
 
 
 def remove_folga_fixa(setor: str, chapa: str):
+    _ensure_folga_fixa_schema()
     setor = _norm_setor(setor)
     chapa = _norm_chapa(chapa)
     con = db_conn()
