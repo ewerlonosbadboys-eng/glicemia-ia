@@ -9226,9 +9226,9 @@ def page_app():
             c2.caption("Alterar em 🗓️ Competência (sidebar)")
             c3.caption("Ajustes aplicam na competência ativa.")
 
-        sec_aj = st.radio("", ["🧩 Folgas manuais em grade", "🧷 Folga fixa", "🗂️ Inventário", "📝 Histórico diário", "🔁 Troca de horários", "✅ Preferência por subgrupo", "📌 Subgrupos (editável)"], horizontal=True, key="ajustes_nav_fast", label_visibility="collapsed")
+        sec_aj = st.radio("", ["🧩 Folgas manuais em grade", "🧷 Folga fixa", "🗂️ Inventário", "📝 Histórico", "🔁 Troca de horários", "✅ Preferência por subgrupo", "📌 Subgrupos (editável)"], horizontal=True, key="ajustes_nav_fast", label_visibility="collapsed")
 
-        _ajustes_precisam_escala = sec_aj in ("🧩 Folgas manuais em grade", "🧷 Folga fixa", "📝 Histórico diário", "🔁 Troca de horários")
+        _ajustes_precisam_escala = sec_aj in ("🧩 Folgas manuais em grade", "🧷 Folga fixa", "📝 Histórico", "🔁 Troca de horários")
         hist_db = {}
         colaboradores = []
         colab_by = {}
@@ -9415,11 +9415,33 @@ def page_app():
                         st.info("Nenhuma folga fixa cadastrada ainda.")
 
                 elif sec_aj == "🗂️ Inventário":
-                    st.markdown("### 🗂️ Inventário diário")
-                    st.caption("Escolha quantas pessoas você quer por dia em abertura, intermediário e fechamento.")
+                    st.markdown("### 🗂️ Inventário")
+                    st.caption("Escolha o dia e informe quantas pessoas você quer em abertura, intermediário e fechamento. A tabela mensal continua abaixo para conferência rápida.")
                     qtd_inv = calendar.monthrange(int(ano), int(mes))[1]
                     inv_atual = get_inventario_mes(setor, ano, mes)
                     inv_map = {int(r["Dia"]): r for _, r in inv_atual.iterrows()} if not inv_atual.empty else {}
+
+                    dia_inv = st.selectbox(
+                        "Dia do inventário:",
+                        options=list(range(1, qtd_inv + 1)),
+                        key=f"inventario_dia_foco::{setor}::{ano}::{mes}",
+                    )
+                    base_inv = inv_map.get(int(dia_inv), {})
+                    data_inv = date(int(ano), int(mes), int(dia_inv))
+                    st.caption(f"Data escolhida: {data_inv.strftime('%d/%m/%Y')} — {WEEKDAY_LABELS_LONG[data_inv.weekday()]}")
+
+                    ci1, ci2, ci3 = st.columns(3)
+                    meta_ab = ci1.number_input("Abertura", min_value=0, step=1, value=int(base_inv["Abertura"]) if base_inv != {} else 0, key=f"meta_abertura::{dia_inv}")
+                    meta_in = ci2.number_input("Intermediário", min_value=0, step=1, value=int(base_inv["Intermediario"]) if base_inv != {} else 0, key=f"meta_intermediario::{dia_inv}")
+                    meta_fe = ci3.number_input("Fechamento", min_value=0, step=1, value=int(base_inv["Fechamento"]) if base_inv != {} else 0, key=f"meta_fechamento::{dia_inv}")
+
+                    csave1, csave2 = st.columns([1, 3])
+                    if csave1.button("💾 Salvar dia selecionado", key="inventario_salvar_dia"):
+                        upsert_inventario_dia(setor, ano, mes, int(dia_inv), int(meta_ab), int(meta_in), int(meta_fe))
+                        st.success(f"Inventário salvo para o dia {int(dia_inv):02d}/{int(mes):02d}/{int(ano)}.")
+                        st.rerun()
+                    csave2.caption("Use esta área para cadastrar a necessidade do dia. Não altera a escala automaticamente.")
+
                     rows_inv = []
                     for dia in range(1, qtd_inv + 1):
                         base = inv_map.get(dia, {})
@@ -9428,29 +9450,26 @@ def page_app():
                             "Data": date(int(ano), int(mes), dia).strftime("%d/%m/%Y"),
                             "Semana": WEEKDAY_LABELS_LONG[date(int(ano), int(mes), dia).weekday()],
                             "Abertura": int(base["Abertura"]) if base != {} else 0,
-                            "Intermediario": int(base["Intermediario"]) if base != {} else 0,
+                            "Intermediário": int(base["Intermediario"]) if base != {} else 0,
                             "Fechamento": int(base["Fechamento"]) if base != {} else 0,
                         })
-                    df_inv_edit = pd.DataFrame(rows_inv)
-                    ed_inv = st.data_editor(df_inv_edit, use_container_width=True, hide_index=True, num_rows="fixed", key="inventario_editor")
-                    if st.button("💾 Salvar inventário", key="inventario_salvar"):
-                        for _, r in ed_inv.iterrows():
-                            upsert_inventario_dia(setor, ano, mes, int(r["Dia"]), int(r["Abertura"]), int(r["Intermediario"]), int(r["Fechamento"]))
-                        st.success("Inventário salvo para a competência ativa.")
-                        st.rerun()
-                    if hist_db:
-                        comp_inv = build_inventario_comparativo(setor, ano, mes, hist_db)
+                    df_inv_view = pd.DataFrame(rows_inv)
+                    st.markdown("#### Inventário do mês")
+                    st.dataframe(df_inv_view, use_container_width=True, hide_index=True)
+
+                    comp_inv = build_inventario_comparativo(setor, ano, mes, hist_db if hist_db else None)
+                    if not comp_inv.empty:
                         st.markdown("#### Comparativo meta x escala atual")
                         st.dataframe(comp_inv, use_container_width=True, hide_index=True)
                     else:
-                        st.info("Gere ou carregue a escala para ver o comparativo real x meta.")
+                        st.info("Cadastre as metas do mês para acompanhar o comparativo depois.")
 
-                elif sec_aj == "📝 Histórico diário":
-                    st.markdown("### 📝 Histórico diário de folgas")
-                    st.caption("Mostra quantas pessoas estarão de folga em cada dia da competência e quais são elas.")
+                elif sec_aj == "📝 Histórico":
+                    st.markdown("### 📝 Histórico")
+                    st.caption("Mostra quantas pessoas estarão de folga em cada dia da competência e quem são elas.")
                     hist_view = hist_db or get_hist_mes_com_overrides_cached(setor, ano, mes)
                     if not hist_view:
-                        st.info("Gere a escala primeiro para visualizar o histórico diário.")
+                        st.info("Gere a escala primeiro para visualizar o histórico.")
                     else:
                         df_hist_dia = build_historico_folgas_diario(setor, ano, mes, hist_view)
                         st.dataframe(df_hist_dia, use_container_width=True, hide_index=True)
@@ -9458,6 +9477,12 @@ def page_app():
                         dia_sel_hist = st.selectbox("Ver detalhes do dia:", options=dias_hist, key="hist_dia_sel")
                         row_hist = df_hist_dia[df_hist_dia["Dia"] == int(dia_sel_hist)].iloc[0]
                         st.info(f"{row_hist['Data']} — Folga: {row_hist['Folga']} | Férias: {row_hist['Férias']} | Afastamento: {row_hist['Afastamento']} | Trabalho: {row_hist['Trabalho']}")
+                        nomes_folga = str(row_hist.get('Pessoas de folga', '') or '').strip()
+                        if nomes_folga:
+                            st.write("**Pessoas de folga no dia:**")
+                            st.write(nomes_folga)
+                        else:
+                            st.write("**Pessoas de folga no dia:** nenhuma")
                         st.text_area("Pessoas de folga no dia selecionado", value=str(row_hist["Pessoas de folga"] or ""), height=140, key="hist_pessoas_folga", disabled=True)
 
                 elif sec_aj == "🔁 Troca de horários":
