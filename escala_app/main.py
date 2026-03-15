@@ -8270,6 +8270,7 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
                         key=f'portal_pdf_hist_{setor}_{chapa}_{y}_{m}'
                     )
             else:
+                pass
 
 def page_app():
     auth = st.session_state.get("auth") or {}
