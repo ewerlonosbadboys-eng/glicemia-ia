@@ -91,7 +91,6 @@ from reportlab.lib.pagesizes import landscape, A4
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib import colors
 st.set_page_config(page_title="Escala 5x2 Oficial", layout="wide")
-st.sidebar.info('ADMIN_FIX_VISIVEL_2026_03_14')
 VERSAO_ACESSO_LIDER = "ACESSO_LIDER_FIX_2026_03_14_v2"
 
 
@@ -6810,30 +6809,46 @@ if "last_seed" not in st.session_state:
 
 
 def page_login():
-    @st.cache_data(ttl=60, show_spinner=False)
+    @st.cache_data(ttl=300, show_spinner=False)
     def _cache_login_setores():
         con = db_conn()
         try:
-            setores_df = pd.concat([
-                pd.read_sql_query("SELECT nome AS setor FROM setores", con),
-                pd.read_sql_query("SELECT DISTINCT setor FROM usuarios_sistema", con),
-                pd.read_sql_query("SELECT DISTINCT setor FROM colaboradores", con),
-            ], ignore_index=True)
-            return sorted({_norm_setor(x) for x in setores_df["setor"].dropna().tolist() if str(x).strip()})
+            q = """
+                SELECT setor
+                FROM (
+                    SELECT nome AS setor FROM setores
+                    UNION
+                    SELECT setor FROM usuarios_sistema
+                    UNION
+                    SELECT setor FROM colaboradores
+                ) t
+                WHERE TRIM(COALESCE(setor, '')) <> ''
+                ORDER BY setor
+            """
+            df = pd.read_sql_query(q, con)
+            return [_norm_setor(x) for x in df["setor"].dropna().tolist() if str(x).strip()]
         finally:
             con.close()
 
-    @st.cache_data(ttl=30, show_spinner=False)
+    @st.cache_data(ttl=120, show_spinner=False)
     def _cache_login_recent():
         con = db_conn()
         try:
-            rec = pd.read_sql_query("SELECT setor, chapa, ts FROM login_recent ORDER BY ts DESC LIMIT 6", con)
-            try:
-                rec2 = rec.merge(pd.read_sql_query("SELECT setor, chapa, nome FROM usuarios_sistema", con), on=["setor","chapa"], how="left")
-            except Exception:
-                rec2 = rec.copy()
-                rec2["nome"] = ""
-            return rec2
+            q = """
+                SELECT
+                    r.setor,
+                    r.chapa,
+                    r.ts,
+                    COALESCE(u.nome, c.nome, '') AS nome
+                FROM login_recent r
+                LEFT JOIN usuarios_sistema u
+                    ON u.setor = r.setor AND u.chapa = r.chapa
+                LEFT JOIN colaboradores c
+                    ON c.setor = r.setor AND c.chapa = r.chapa
+                ORDER BY r.ts DESC
+                LIMIT 6
+            """
+            return pd.read_sql_query(q, con)
         finally:
             con.close()
 
@@ -9561,10 +9576,22 @@ def _fast_restore_bundled_latest_before_start() -> None:
 # =========================================================
 # MAIN
 # =========================================================
-_fast_restore_bundled_latest_before_start()
-db_init()
-if not FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP:
-    auto_backup_if_due()
+@st.cache_resource(show_spinner=False)
+def _ensure_global_startup_once():
+    _fast_restore_bundled_latest_before_start()
+    db_init()
+    if not FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP:
+        auto_backup_if_due()
+    return True
+
+
+def _ensure_session_startup_once():
+    if not st.session_state.get("_startup_ready", False):
+        _ensure_global_startup_once()
+        st.session_state["_startup_ready"] = True
+
+
+_ensure_session_startup_once()
 
 if st.session_state["auth"] is None:
     page_login()
