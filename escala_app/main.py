@@ -8363,41 +8363,53 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
         if df_oficial.empty:
             st.info('Ainda não há escala oficial para gerar o PDF individual.')
         else:
-            pdf_individual = gerar_pdf_colaborador_portal(setor, ano_vigente, mes_vigente, colab, df_oficial)
-            st.download_button(
-                '⬇️ Baixar escala em PDF',
-                data=pdf_individual,
-                file_name=f"escala_{_slugify_filename(colab.get('Nome','colaborador'))}_{mes_vigente:02d}_{ano_vigente}.pdf",
-                mime='application/pdf',
-                key=f'portal_pdf_{setor}_{chapa}_{ano_vigente}_{mes_vigente}'
-            )
+            pdf_key = f'portal_pdf_blob_{setor}_{chapa}_{ano_vigente}_{mes_vigente}'
+            hist_key = f'portal_pdf_hist_ready_{setor}_{chapa}_{ano_vigente}_{mes_vigente}'
 
+            if st.button('📄 Preparar PDF do mês vigente', key=f'prep_portal_pdf_{setor}_{chapa}_{ano_vigente}_{mes_vigente}'):
+                with st.spinner('Preparando PDF...'):
+                    st.session_state[pdf_key] = gerar_pdf_colaborador_portal(setor, ano_vigente, mes_vigente, colab, df_oficial)
 
-            historicos = []
-            for back in range(1, 7):
-                y = ano_vigente
-                m = mes_vigente - back
-                while m <= 0:
-                    m += 12
-                    y -= 1
-                df_hist_mes = get_escala_colaborador_mes(setor, chapa, y, m)
-                if not df_hist_mes.empty:
-                    historicos.append((y, m, df_hist_mes))
+            if st.session_state.get(pdf_key):
+                st.download_button(
+                    '⬇️ Baixar escala em PDF',
+                    data=st.session_state[pdf_key],
+                    file_name=f"escala_{_slugify_filename(colab.get('Nome','colaborador'))}_{mes_vigente:02d}_{ano_vigente}.pdf",
+                    mime='application/pdf',
+                    key=f'portal_pdf_{setor}_{chapa}_{ano_vigente}_{mes_vigente}'
+                )
 
-            if historicos:
-                st.markdown('##### Meses anteriores para download')
-                cols_hist = st.columns(min(3, len(historicos)))
-                for idx, (y, m, df_hist_mes) in enumerate(historicos):
-                    pdf_hist = gerar_pdf_colaborador_portal(setor, y, m, colab, df_hist_mes)
-                    cols_hist[idx % len(cols_hist)].download_button(
-                        f'⬇️ {m:02d}/{y}',
-                        data=pdf_hist,
-                        file_name=f"escala_{_slugify_filename(colab.get('Nome','colaborador'))}_{m:02d}_{y}.pdf",
-                        mime='application/pdf',
-                        key=f'portal_pdf_hist_{setor}_{chapa}_{y}_{m}'
-                    )
-            else:
-                pass
+            with st.expander('Meses anteriores para download', expanded=False):
+                if st.button('🕘 Carregar meses anteriores', key=f'load_hist_portal_{setor}_{chapa}_{ano_vigente}_{mes_vigente}'):
+                    st.session_state[hist_key] = True
+
+                if st.session_state.get(hist_key, False):
+                    historicos = []
+                    for back in range(1, 7):
+                        y = ano_vigente
+                        m = mes_vigente - back
+                        while m <= 0:
+                            m += 12
+                            y -= 1
+                        df_hist_mes = get_escala_colaborador_mes(setor, chapa, y, m)
+                        if not df_hist_mes.empty:
+                            historicos.append((y, m, df_hist_mes))
+
+                    if historicos:
+                        cols_hist = st.columns(min(3, len(historicos)))
+                        for idx, (y, m, df_hist_mes) in enumerate(historicos):
+                            hist_pdf_key = f'portal_pdf_hist_blob_{setor}_{chapa}_{y}_{m}'
+                            if hist_pdf_key not in st.session_state:
+                                st.session_state[hist_pdf_key] = gerar_pdf_colaborador_portal(setor, y, m, colab, df_hist_mes)
+                            cols_hist[idx % len(cols_hist)].download_button(
+                                f'⬇️ {m:02d}/{y}',
+                                data=st.session_state[hist_pdf_key],
+                                file_name=f"escala_{_slugify_filename(colab.get('Nome','colaborador'))}_{m:02d}_{y}.pdf",
+                                mime='application/pdf',
+                                key=f'portal_pdf_hist_{setor}_{chapa}_{y}_{m}'
+                            )
+                    else:
+                        pass
 
 def page_app():
     auth = st.session_state.get("auth") or {}
