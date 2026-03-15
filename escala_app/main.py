@@ -10373,6 +10373,94 @@ def page_app():
 
 
     # ------------------------------------------------------
+    # ABA 6: Assinaturas (líder/admin)
+    # ------------------------------------------------------
+    elif sec_main == "✍️ Assinaturas":
+        ano = int(st.session_state["cfg_ano"])
+        mes = int(st.session_state["cfg_mes"])
+        st.subheader(f"✍️ Assinaturas do setor — {setor} — {mes:02d}/{ano}")
+        df_ass = list_assinaturas_setor(setor, ano, mes)
+        if df_ass.empty:
+            st.info("Nenhuma assinatura encontrada para esta competência.")
+        else:
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Assinaturas", len(df_ass))
+            m2.metric("Colaboradores com assinatura", int(df_ass['Chapa'].astype(str).nunique()))
+            m3.metric("Tipos assinados", int(df_ass['Tipo'].astype(str).nunique()))
+
+            tipo_opts = ["Todos"] + sorted(df_ass['Tipo'].astype(str).dropna().unique().tolist())
+            tipo_sel = st.selectbox("Filtrar tipo", tipo_opts, key="ass_setor_tipo")
+            df_view = df_ass.copy()
+            if tipo_sel != "Todos":
+                df_view = df_view[df_view['Tipo'].astype(str) == str(tipo_sel)].copy()
+
+            if 'Assinado_em' in df_view.columns:
+                try:
+                    df_view['Assinado_em'] = pd.to_datetime(df_view['Assinado_em'], errors='coerce').dt.strftime('%d/%m/%Y %H:%M')
+                except Exception:
+                    pass
+            st.dataframe(df_view, use_container_width=True, hide_index=True)
+
+    # ------------------------------------------------------
+    # ABA 7: Minhas solicitações (líder/admin)
+    # ------------------------------------------------------
+    elif sec_main == "📨 Minhas solicitações":
+        st.subheader(f"📨 Solicitações recebidas do setor — {setor}")
+        df_sol_setor = list_solicitacoes_setor(setor)
+        if df_sol_setor.empty:
+            st.info("Nenhuma solicitação enviada para este setor até agora.")
+        else:
+            pend = int((df_sol_setor['Status'].astype(str) == 'Em análise').sum()) if 'Status' in df_sol_setor.columns else 0
+            aprov = int((df_sol_setor['Status'].astype(str) == 'Aprovado').sum()) if 'Status' in df_sol_setor.columns else 0
+            rec = int((df_sol_setor['Status'].astype(str) == 'Recusado').sum()) if 'Status' in df_sol_setor.columns else 0
+            s1, s2, s3 = st.columns(3)
+            s1.metric('Em análise', pend)
+            s2.metric('Aprovadas', aprov)
+            s3.metric('Recusadas', rec)
+
+            status_opts = ['Todos'] + sorted(df_sol_setor['Status'].astype(str).dropna().unique().tolist())
+            filtro_status = st.selectbox('Filtrar status', status_opts, key='sol_setor_status')
+            df_view = df_sol_setor.copy()
+            if filtro_status != 'Todos':
+                df_view = df_view[df_view['Status'].astype(str) == str(filtro_status)].copy()
+
+            for c in ['Criado_em', 'Atualizado_em']:
+                if c in df_view.columns:
+                    try:
+                        df_view[c] = pd.to_datetime(df_view[c], errors='coerce').dt.strftime('%d/%m/%Y %H:%M')
+                    except Exception:
+                        pass
+
+            st.dataframe(df_view, use_container_width=True, hide_index=True)
+
+            pendentes = df_sol_setor[df_sol_setor['Status'].astype(str) == 'Em análise'].copy() if 'Status' in df_sol_setor.columns else pd.DataFrame()
+            if pendentes.empty:
+                st.success('Não há solicitações pendentes no momento.')
+            else:
+                ids_pend = [int(x) for x in pendentes['ID'].tolist()]
+                sol_id = st.selectbox('Selecionar solicitação pendente', ids_pend, key='sol_pendente_id')
+                sol_row = pendentes[pendentes['ID'].astype(int) == int(sol_id)].head(1)
+                if not sol_row.empty:
+                    r = sol_row.iloc[0]
+                    st.caption(f"{r.get('Nome','-')} • Chapa {r.get('Chapa','-')} • Data {r.get('Data','-')} • Tipo {r.get('Tipo','-')}")
+                    mot = str(r.get('Motivo', '') or '').strip()
+                    obs = str(r.get('Observação', '') or '').strip()
+                    if mot:
+                        st.write(f"**Motivo:** {mot}")
+                    if obs:
+                        st.write(f"**Observação:** {obs}")
+                a1, a2 = st.columns(2)
+                if a1.button('✅ Aprovar solicitação', key='aprovar_solicitacao_btn'):
+                    atualizar_status_solicitacao(int(sol_id), 'Aprovado')
+                    st.success('Solicitação aprovada com sucesso.')
+                    st.rerun()
+                if a2.button('❌ Recusar solicitação', key='recusar_solicitacao_btn'):
+                    atualizar_status_solicitacao(int(sol_id), 'Recusado')
+                    st.success('Solicitação recusada com sucesso.')
+                    st.rerun()
+
+
+    # ------------------------------------------------------
     # ABA 6: Admin (somente ADMIN)
     # ------------------------------------------------------
     elif is_admin_area and sec_main == "🔒 Admin":
