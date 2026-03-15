@@ -1101,7 +1101,7 @@ SUPABASE_SCHEMA = (os.getenv("SUPABASE_SCHEMA") or "public").strip() or "public"
 SUPABASE_SYNC_ENABLED = bool(SUPABASE_URL and SUPABASE_KEY)
 SUPABASE_SYNC_DEBOUNCE_SEC = int(os.getenv("SUPABASE_SYNC_DEBOUNCE_SEC", "12") or 12)
 SUPABASE_AUTO_PULL_ON_START = (os.getenv("SUPABASE_AUTO_PULL_ON_START", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
-SUPABASE_AUTO_PUSH_ON_COMMIT = (os.getenv("SUPABASE_AUTO_PUSH_ON_COMMIT", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
+SUPABASE_AUTO_PUSH_ON_COMMIT = (os.getenv("SUPABASE_AUTO_PUSH_ON_COMMIT", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
 SUPABASE_AUTO_PUSH_ON_CLOSE = (os.getenv("SUPABASE_AUTO_PUSH_ON_CLOSE", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
 SUPABASE_ASYNC_PUSH_ENABLED = (os.getenv("SUPABASE_ASYNC_PUSH_ENABLED", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
 SUPABASE_ASYNC_PUSH_DELAY_SEC = float((os.getenv("SUPABASE_ASYNC_PUSH_DELAY_SEC", "2.0") or "2.0").strip())
@@ -4143,6 +4143,23 @@ def add_ferias(setor: str, chapa: str, inicio: date, fim: date):
         st.cache_data.clear()
     except Exception:
         pass
+
+def _ferias_afeta_mes(inicio: date, fim: date, ano: int, mes: int) -> bool:
+    try:
+        ini_mes = date(int(ano), int(mes), 1)
+        fim_mes = date(int(ano), int(mes), calendar.monthrange(int(ano), int(mes))[1])
+        return not (fim < ini_mes or inicio > fim_mes)
+    except Exception:
+        return True
+
+def _readequar_mes_atual(setor: str) -> None:
+    _regenerar_mes_inteiro(
+        setor,
+        int(st.session_state.get("cfg_ano", datetime.now().year)),
+        int(st.session_state.get("cfg_mes", datetime.now().month)),
+        seed=int(st.session_state.get("last_seed", 0)),
+        respeitar_ajustes=True,
+    )
 
 def delete_ferias_row(setor: str, chapa: str, inicio: str, fim: str):
     con = db_conn()
@@ -8516,15 +8533,27 @@ def page_app():
                 else:
                     st.warning("⚠️ Este colaborador ainda NÃO tem férias cadastradas.")
 
-                c1, c2, c3 = st.columns(3)
+                c1, c2 = st.columns(2)
                 ini = c1.date_input("Início", value=datetime.now().date(), key="fer_ini")
                 fim = c2.date_input("Fim", value=datetime.now().date(), key="fer_fim")
-                if c3.button("Salvar férias (e readequar mês)", key="fer_add_btn"):
+                st.caption("Salvamento rápido não recalcula o mês inteiro. Use a readequação só quando precisar.")
+                b1, b2 = st.columns(2)
+                if b1.button("Salvar férias (rápido)", key="fer_add_fast_btn"):
                     if fim < ini:
                         st.error("Data final não pode ser menor que a inicial.")
                     else:
                         add_ferias(setor, ch, ini, fim)
-                        _regenerar_mes_inteiro(setor, int(st.session_state["cfg_ano"]), int(st.session_state["cfg_mes"]), seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
+                        if _ferias_afeta_mes(ini, fim, int(st.session_state.get("cfg_ano", datetime.now().year)), int(st.session_state.get("cfg_mes", datetime.now().month))):
+                            st.success("Férias salvas com sucesso! Readequação do mês ficou manual para ficar rápido.")
+                        else:
+                            st.success("Férias salvas com sucesso!")
+                        st.rerun()
+                if b2.button("Salvar férias e readequar mês", key="fer_add_btn"):
+                    if fim < ini:
+                        st.error("Data final não pode ser menor que a inicial.")
+                    else:
+                        add_ferias(setor, ch, ini, fim)
+                        _readequar_mes_atual(setor)
                         st.success("Férias adicionadas e escala readequada!")
                         st.rerun()
 
@@ -8621,10 +8650,15 @@ def page_app():
                     df_f.insert(1, "Nome", df_f["Chapa"].astype(str).map(nome_by).fillna(""))
                     st.dataframe(df_f, use_container_width=True, height=260)
                     rem_idx = st.number_input("Linha para remover (1,2,3...)", min_value=1, max_value=len(df_f), value=1, key="fer_rem_idx")
-                    if st.button("Remover linha (e readequar mês)", key="fer_rem_btn"):
-                        r = df_f.iloc[int(rem_idx) - 1]
+                    r = df_f.iloc[int(rem_idx) - 1]
+                    b1, b2 = st.columns(2)
+                    if b1.button("Remover linha (rápido)", key="fer_rem_fast_btn"):
                         delete_ferias_row(setor, r["Chapa"], r["Início"], r["Fim"])
-                        _regenerar_mes_inteiro(setor, int(st.session_state["cfg_ano"]), int(st.session_state["cfg_mes"]), seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
+                        st.success("Férias removidas com sucesso!")
+                        st.rerun()
+                    if b2.button("Remover linha e readequar mês", key="fer_rem_btn"):
+                        delete_ferias_row(setor, r["Chapa"], r["Início"], r["Fim"])
+                        _readequar_mes_atual(setor)
                         st.success("Férias removidas e escala readequada!")
                         st.rerun()
 
