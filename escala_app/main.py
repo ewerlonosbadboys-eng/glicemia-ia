@@ -92,7 +92,7 @@ from reportlab.lib.pagesizes import landscape, A4
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib import colors
 st.set_page_config(page_title="Escala 5x2 Oficial", layout="wide")
-
+st.sidebar.info('ADMIN_FIX_VISIVEL_2026_03_14 | V101_ULTRA')
 VERSAO_ACESSO_LIDER = "ACESSO_LIDER_FIX_2026_03_14_v2"
 
 
@@ -1108,7 +1108,6 @@ SUPABASE_ASYNC_PUSH_DELAY_SEC = float((os.getenv("SUPABASE_ASYNC_PUSH_DELAY_SEC"
 SUPABASE_AUTO_BOOTSTRAP_AFTER_SCHEMA = (os.getenv("SUPABASE_AUTO_BOOTSTRAP_AFTER_SCHEMA", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
 SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY = (os.getenv("SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
 FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP = (os.getenv("FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
-QUICK_LOGIN_BOOT = (os.getenv("QUICK_LOGIN_BOOT", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
 FAST_BACKUP_DISABLE_ROLLING_ON_COMMIT = (os.getenv("FAST_BACKUP_DISABLE_ROLLING_ON_COMMIT", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
 FAST_SNAPSHOT_THROTTLE_SECONDS = int((os.getenv("FAST_SNAPSHOT_THROTTLE_SECONDS", "300") or "300").strip())
 FAST_SNAPSHOT_SKIP_ON_CLOSE = (os.getenv("FAST_SNAPSHOT_SKIP_ON_CLOSE", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
@@ -3290,86 +3289,6 @@ def _safe_exec(cur, sql: str, params=None):
     except Exception:
         pass
 
-def _ensure_usuarios_sistema_security_columns(cur):
-    try:
-        cur.execute("ALTER TABLE usuarios_sistema ADD COLUMN forcar_troca_senha INTEGER NOT NULL DEFAULT 0")
-    except Exception:
-        pass
-
-
-def gerar_senha_temporaria_colaborador(tamanho: int = 8) -> str:
-    alfabeto = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-    return "".join(secrets.choice(alfabeto) for _ in range(max(6, int(tamanho))))
-
-
-def db_init_fast_login():
-    """Inicialização mínima para abrir a tela de login rápido sem alterar regras."""
-    con = db_conn()
-    cur = con.cursor()
-
-    _safe_exec(cur, """
-    CREATE TABLE IF NOT EXISTS setores (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        nome TEXT UNIQUE NOT NULL
-    )
-    """)
-
-    _safe_exec(cur, """
-    CREATE TABLE IF NOT EXISTS usuarios_sistema (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        nome TEXT NOT NULL,
-        setor TEXT NOT NULL,
-        chapa TEXT NOT NULL,
-        senha_hash TEXT NOT NULL,
-        salt TEXT NOT NULL,
-        is_admin INTEGER NOT NULL DEFAULT 0,
-        is_lider INTEGER NOT NULL DEFAULT 0,
-        criado_em TEXT NOT NULL,
-        UNIQUE(setor, chapa)
-    )
-    """)
-    _ensure_usuarios_sistema_security_columns(cur)
-
-    _safe_exec(cur, """
-    CREATE TABLE IF NOT EXISTS colaboradores (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        nome TEXT NOT NULL,
-        setor TEXT NOT NULL,
-        chapa TEXT NOT NULL,
-        subgrupo TEXT DEFAULT '',
-        entrada TEXT DEFAULT '06:00',
-        folga_sab INTEGER DEFAULT 0,
-        criado_em TEXT NOT NULL,
-        UNIQUE(setor, chapa)
-    )
-    """)
-
-    _safe_exec(cur, """
-    CREATE TABLE IF NOT EXISTS login_recent (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        setor TEXT NOT NULL,
-        chapa TEXT NOT NULL,
-        ts TEXT NOT NULL
-    )
-    """)
-
-    _safe_exec(cur, "INSERT OR IGNORE INTO setores(nome) VALUES (?)", ("GERAL",))
-    _safe_exec(cur, "INSERT OR IGNORE INTO setores(nome) VALUES (?)", ("ADMIN",))
-    _safe_exec(cur, "INSERT OR IGNORE INTO setores(nome) VALUES (?)", ("GESTAO",))
-
-    cur.execute("SELECT 1 FROM usuarios_sistema WHERE setor=? AND chapa=? LIMIT 1", ("ADMIN", "admin"))
-    if cur.fetchone() is None:
-        salt = secrets.token_hex(16)
-        senha_hash = hash_password("123", salt)
-        cur.execute("""
-            INSERT INTO usuarios_sistema(nome, setor, chapa, senha_hash, salt, is_admin, is_lider, criado_em)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, ("Administrador", "ADMIN", "admin", senha_hash, salt, 1, 1, datetime.now().isoformat()))
-
-    con.commit()
-    con.close()
-
-
 def db_init():
     con = db_conn()
     cur = con.cursor()
@@ -3395,7 +3314,6 @@ def db_init():
         UNIQUE(setor, chapa)
     )
     """)
-    _ensure_usuarios_sistema_security_columns(cur)
 
     _safe_exec(cur, """
     CREATE TABLE IF NOT EXISTS colaboradores (
@@ -3584,35 +3502,6 @@ def db_init():
     )
     """)
 
-
-    _safe_exec(cur, """
-    CREATE TABLE IF NOT EXISTS folga_fixa (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        setor TEXT NOT NULL,
-        chapa TEXT NOT NULL,
-        dia_semana INTEGER NOT NULL,
-        ativo INTEGER NOT NULL DEFAULT 1,
-        criado_em TEXT NOT NULL,
-        UNIQUE(setor, chapa, dia_semana)
-    )
-    """)
-
-    _safe_exec(cur, """
-    CREATE TABLE IF NOT EXISTS inventario_diario (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        setor TEXT NOT NULL,
-        ano INTEGER NOT NULL,
-        mes INTEGER NOT NULL,
-        dia INTEGER NOT NULL,
-        abertura INTEGER NOT NULL DEFAULT 0,
-        intermediario INTEGER NOT NULL DEFAULT 0,
-        fechamento INTEGER NOT NULL DEFAULT 0,
-        criado_em TEXT NOT NULL,
-        atualizado_em TEXT NOT NULL,
-        UNIQUE(setor, ano, mes, dia)
-    )
-    """)
-
     # V91.1 — restore do Supabase antes de semear dados mínimos de login.
     # Isso evita o cenário em que o app recria apenas ADMIN/GERAL/GESTAO e
     # sobe “vazio” após reboot antes de puxar o conteúdo real do remoto.
@@ -3773,38 +3662,20 @@ def verify_login(setor: str, chapa: str, senha: str):
     chapa = _norm_chapa(chapa)
     con = db_conn()
     cur = con.cursor()
-    try:
-        try:
-            cur.execute(
-                """
-                SELECT nome, senha_hash, salt, is_admin, is_lider, setor, chapa, COALESCE(forcar_troca_senha,0)
-                FROM usuarios_sistema
-                WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?
-                LIMIT 1
-                """,
-                (setor, chapa),
-            )
-        except sqlite3.OperationalError:
-            _ensure_usuarios_sistema_security_columns(cur)
-            try:
-                con.commit()
-            except Exception:
-                pass
-            cur.execute(
-                """
-                SELECT nome, senha_hash, salt, is_admin, is_lider, setor, chapa, 0
-                FROM usuarios_sistema
-                WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?
-                LIMIT 1
-                """,
-                (setor, chapa),
-            )
-        row = cur.fetchone()
-    finally:
-        con.close()
+    cur.execute(
+        """
+        SELECT nome, senha_hash, salt, is_admin, is_lider, setor, chapa
+        FROM usuarios_sistema
+        WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?
+        LIMIT 1
+        """,
+        (setor, chapa),
+    )
+    row = cur.fetchone()
+    con.close()
     if not row:
         return None
-    nome, senha_hash, salt, is_admin, is_lider, setor_db, chapa_db, forcar_troca_senha = row
+    nome, senha_hash, salt, is_admin, is_lider, setor_db, chapa_db = row
     if verify_password_compat(senha, senha_hash, salt):
         return {
             "nome": nome,
@@ -3812,7 +3683,6 @@ def verify_login(setor: str, chapa: str, senha: str):
             "chapa": _norm_chapa(chapa_db),
             "is_admin": bool(is_admin),
             "is_lider": bool(is_lider),
-            "forcar_troca_senha": bool(forcar_troca_senha),
         }
     return None
 
@@ -3843,94 +3713,6 @@ def update_password(setor: str, chapa: str, nova_senha: str):
     )
     con.commit()
     con.close()
-
-def set_force_change_password(setor: str, chapa: str, ativo: bool = True):
-    setor = _norm_setor(setor)
-    chapa = _norm_chapa(chapa)
-    con = db_conn()
-    cur = con.cursor()
-    try:
-        cur.execute(
-            "UPDATE usuarios_sistema SET forcar_troca_senha=? WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?",
-            (1 if ativo else 0, setor, chapa),
-        )
-        con.commit()
-    finally:
-        con.close()
-
-
-def upsert_usuario_sistema(nome: str, setor: str, chapa: str, senha: str, is_admin: bool = False, is_lider: bool = False, forcar_troca_senha: bool = False):
-    setor = _norm_setor(setor)
-    chapa = _norm_chapa(chapa)
-    nome = (nome or "").strip() or chapa
-    salt = secrets.token_hex(16)
-    senha_hash = hash_password((senha or "").strip(), salt)
-    con = db_conn()
-    cur = con.cursor()
-    try:
-        cur.execute(
-            """
-            INSERT INTO usuarios_sistema(nome, setor, chapa, senha_hash, salt, is_admin, is_lider, criado_em, forcar_troca_senha)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(setor, chapa) DO UPDATE SET
-                nome=excluded.nome,
-                senha_hash=excluded.senha_hash,
-                salt=excluded.salt,
-                is_admin=excluded.is_admin,
-                is_lider=excluded.is_lider,
-                forcar_troca_senha=excluded.forcar_troca_senha
-            """,
-            (nome, setor, chapa, senha_hash, salt, 1 if is_admin else 0, 1 if is_lider else 0, datetime.now().isoformat(), 1 if forcar_troca_senha else 0),
-        )
-        con.commit()
-    finally:
-        con.close()
-
-
-def get_usuario_sistema_por_setor_chapa(setor: str, chapa: str):
-    setor = _norm_setor(setor)
-    chapa = _norm_chapa(chapa)
-    con = db_conn()
-    cur = con.cursor()
-    try:
-        try:
-            cur.execute(
-                """
-                SELECT nome, setor, chapa, is_admin, is_lider, COALESCE(forcar_troca_senha,0)
-                FROM usuarios_sistema
-                WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?
-                LIMIT 1
-                """,
-                (setor, chapa),
-            )
-        except sqlite3.OperationalError:
-            _ensure_usuarios_sistema_security_columns(cur)
-            try:
-                con.commit()
-            except Exception:
-                pass
-            cur.execute(
-                """
-                SELECT nome, setor, chapa, is_admin, is_lider, 0
-                FROM usuarios_sistema
-                WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?
-                LIMIT 1
-                """,
-                (setor, chapa),
-            )
-        row = cur.fetchone()
-    finally:
-        con.close()
-    if not row:
-        return None
-    return {
-        "nome": str(row[0] or "").strip(),
-        "setor": _norm_setor(row[1]),
-        "chapa": _norm_chapa(row[2]),
-        "is_admin": bool(row[3]),
-        "is_lider": bool(row[4]),
-        "forcar_troca_senha": bool(row[5]),
-    }
 # =========================================================
 # ADMIN
 # =========================================================
@@ -4667,7 +4449,12 @@ def is_de_ferias(setor: str, chapa: str, data_obj: date) -> bool:
     con.close()
     return ok
 
-def get_ultimo_fim_ferias_antes_de(setor: str, chapa: str, data_obj: date) -> date | None:
+def is_first_week_after_return(setor: str, chapa: str, data_obj: date) -> bool:
+    ontem = data_obj - timedelta(days=1)
+    if is_de_ferias(setor, chapa, data_obj):
+        return False
+    if is_de_ferias(setor, chapa, ontem):
+        return True
     con = db_conn()
     cur = con.cursor()
     cur.execute("""
@@ -4679,130 +4466,10 @@ def get_ultimo_fim_ferias_antes_de(setor: str, chapa: str, data_obj: date) -> da
     row = cur.fetchone()
     con.close()
     if not row:
-        return None
-    try:
-        return datetime.strptime(row[0], "%Y-%m-%d").date()
-    except Exception:
-        return None
-
-
-def is_first_week_after_return(setor: str, chapa: str, data_obj: date) -> bool:
-    """
-    `data_obj` representa a SEGUNDA da semana analisada.
-    A 1a semana de retorno é a semana (seg->dom) que contém o dia de retorno.
-    """
-    semana_inicio = data_obj
-    semana_fim = semana_inicio + timedelta(days=6)
-    fim = get_ultimo_fim_ferias_antes_de(setor, chapa, semana_fim + timedelta(days=1))
-    if not fim:
         return False
+    fim = datetime.strptime(row[0], "%Y-%m-%d").date()
     retorno = fim + timedelta(days=1)
-    return semana_inicio <= retorno <= semana_fim
-
-
-def _apply_regra_retorno_ferias_primeiro_domingo(hist_all: dict, colab_by_chapa: dict, locked_idx: dict, df_ref_cur: pd.DataFrame, setor: str) -> None:
-    """
-    Regra especial somente para a primeira semana de retorno de férias:
-    - considera o último dia de férias como a folga da semana de retorno;
-    - analisa somente o primeiro domingo após o retorno;
-    - se esse domingo estiver entre os menos cobertos do setor, o colaborador trabalha;
-      caso contrário, folga;
-    - se trabalhar nesse domingo e esse for o 5o dia trabalhado desde o retorno,
-      a segunda seguinte vira folga obrigatória (e conta na semana seguinte).
-    """
-    if df_ref_cur is None or len(df_ref_cur) == 0:
-        return
-
-    ref = df_ref_cur.reset_index(drop=True).copy()
-    ref["Data"] = pd.to_datetime(ref["Data"], errors="coerce")
-    sunday_idxs = [i for i in range(len(ref)) if str(ref.loc[i, "Dia"]) == "dom"]
-    if not sunday_idxs:
-        return
-
-    def _set_status(df: pd.DataFrame, idx: int, status: str, entrada_padrao: str) -> bool:
-        if idx < 0 or idx >= len(df):
-            return False
-        if idx in set(locked_idx.get(ch, set())):
-            return False
-        atual = str(df.loc[idx, "Status"])
-        if atual == "Férias":
-            return False
-        if status == "Folga":
-            df.loc[idx, "Status"] = "Folga"
-            df.loc[idx, "H_Entrada"] = ""
-            df.loc[idx, "H_Saida"] = ""
-            return True
-        df.loc[idx, "Status"] = "Trabalho"
-        ent = str(df.loc[idx, "H_Entrada"] or "").strip() or str(entrada_padrao or "06:00")
-        df.loc[idx, "H_Entrada"] = ent
-        df.loc[idx, "H_Saida"] = _saida_from_entrada(ent)
-        return True
-
-    for ch, df in list((hist_all or {}).items()):
-        fim = get_ultimo_fim_ferias_antes_de(setor, ch, ref.loc[len(ref)-1, "Data"].date() + timedelta(days=1))
-        if not fim:
-            continue
-        retorno = fim + timedelta(days=1)
-        # só aplica se o retorno cai em alguma semana coberta pelo mês atual
-        if retorno > ref.loc[len(ref)-1, "Data"].date():
-            continue
-
-        sunday_after_return = None
-        for i in sunday_idxs:
-            d = ref.loc[i, "Data"].date()
-            if d >= retorno:
-                sunday_after_return = i
-                break
-        if sunday_after_return is None:
-            continue
-
-        # aplica só se esse domingo pertence à 1a semana de retorno
-        semana_inicio = retorno - timedelta(days=retorno.weekday())
-        semana_fim = semana_inicio + timedelta(days=6)
-        sunday_date = ref.loc[sunday_after_return, "Data"].date()
-        if not (semana_inicio <= sunday_date <= semana_fim):
-            continue
-
-        # cobertura dos domingos do setor no mês
-        sunday_counts = {}
-        for sidx in sunday_idxs:
-            total = 0
-            for _ch2, _df2 in hist_all.items():
-                try:
-                    if str(_df2.loc[sidx, "Status"]) in WORK_STATUSES:
-                        total += 1
-                except Exception:
-                    pass
-            sunday_counts[sidx] = total
-        min_cov = min(sunday_counts.values()) if sunday_counts else 0
-        precisa_trabalhar = sunday_counts.get(sunday_after_return, 0) <= min_cov
-
-        entrada_padrao = str((colab_by_chapa.get(ch, {}) or {}).get("Entrada", "06:00") or "06:00")
-        if precisa_trabalhar:
-            _set_status(df, sunday_after_return, "Trabalho", entrada_padrao)
-            # conta dias trabalhados desde o retorno até o domingo inclusive
-            consec = 0
-            for i in range(len(ref)):
-                d = ref.loc[i, "Data"].date()
-                if d < retorno or d > sunday_date:
-                    continue
-                if str(df.loc[i, "Status"]) in WORK_STATUSES:
-                    consec += 1
-                else:
-                    consec = 0
-            if consec >= 5:
-                monday_date = sunday_date + timedelta(days=1)
-                monday_idx = None
-                for i in range(len(ref)):
-                    if ref.loc[i, "Data"].date() == monday_date:
-                        monday_idx = i
-                        break
-                if monday_idx is not None:
-                    _set_status(df, monday_idx, "Folga", entrada_padrao)
-        else:
-            _set_status(df, sunday_after_return, "Folga", entrada_padrao)
-
-        hist_all[ch] = df
+    return retorno <= data_obj <= (retorno + timedelta(days=6))
 
 # =========================================================
 # ESTADO
@@ -5084,364 +4751,6 @@ def load_overrides(setor: str, ano: int, mes: int):
     """, con, params=(setor, int(ano), int(mes)))
     con.close()
     return df
-
-WEEKDAY_LABELS = ["seg", "ter", "qua", "qui", "sex", "sáb", "dom"]
-WEEKDAY_LABELS_LONG = {
-    0: "Segunda-feira",
-    1: "Terça-feira",
-    2: "Quarta-feira",
-    3: "Quinta-feira",
-    4: "Sexta-feira",
-    5: "Sábado",
-    6: "Domingo",
-}
-
-
-def _parse_hora_min(v: str) -> tuple[int, int]:
-    s = str(v or "").strip()
-    if not re.fullmatch(r"\d{2}:\d{2}", s):
-        return (99, 99)
-    h, m = s.split(":", 1)
-    return int(h), int(m)
-
-
-def _classificar_turno_por_entrada(h_entrada: str) -> str:
-    hh, mm = _parse_hora_min(h_entrada)
-    total = hh * 60 + mm
-    if total == 99 * 60 + 99:
-        return ""
-    if total <= 8 * 60:
-        return "Abertura"
-    if total <= 13 * 60 + 59:
-        return "Intermediário"
-    return "Fechamento"
-
-
-
-
-def _ensure_folga_fixa_schema():
-    con = db_conn()
-    try:
-        cur = con.cursor()
-        _safe_exec(cur, """
-        CREATE TABLE IF NOT EXISTS folga_fixa (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            setor TEXT NOT NULL,
-            chapa TEXT NOT NULL,
-            dia_semana INTEGER NOT NULL,
-            ativo INTEGER NOT NULL DEFAULT 1,
-            criado_em TEXT NOT NULL,
-            UNIQUE(setor, chapa, dia_semana)
-        )
-        """)
-        try:
-            cols = {str(r[1]).strip().lower() for r in cur.execute("PRAGMA table_info(folga_fixa)").fetchall()}
-        except Exception:
-            cols = set()
-        if 'ativo' not in cols:
-            _safe_exec(cur, "ALTER TABLE folga_fixa ADD COLUMN ativo INTEGER NOT NULL DEFAULT 1")
-        if 'criado_em' not in cols:
-            _safe_exec(cur, "ALTER TABLE folga_fixa ADD COLUMN criado_em TEXT")
-            _safe_exec(cur, "UPDATE folga_fixa SET criado_em = COALESCE(criado_em, ?) WHERE criado_em IS NULL OR TRIM(COALESCE(criado_em,'')) = ''", (datetime.now().isoformat(),))
-        con.commit()
-    finally:
-        con.close()
-
-
-def _ensure_inventario_diario_schema():
-    con = db_conn()
-    try:
-        cur = con.cursor()
-        _safe_exec(cur, """
-        CREATE TABLE IF NOT EXISTS inventario_diario (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            setor TEXT NOT NULL,
-            ano INTEGER NOT NULL,
-            mes INTEGER NOT NULL,
-            dia INTEGER NOT NULL,
-            abertura INTEGER NOT NULL DEFAULT 0,
-            intermediario INTEGER NOT NULL DEFAULT 0,
-            fechamento INTEGER NOT NULL DEFAULT 0,
-            criado_em TEXT NOT NULL,
-            atualizado_em TEXT NOT NULL,
-            UNIQUE(setor, ano, mes, dia)
-        )
-        """)
-        try:
-            cols = {str(r[1]).strip().lower() for r in cur.execute("PRAGMA table_info(inventario_diario)").fetchall()}
-        except Exception:
-            cols = set()
-        if 'abertura' not in cols:
-            _safe_exec(cur, "ALTER TABLE inventario_diario ADD COLUMN abertura INTEGER NOT NULL DEFAULT 0")
-        if 'intermediario' not in cols:
-            _safe_exec(cur, "ALTER TABLE inventario_diario ADD COLUMN intermediario INTEGER NOT NULL DEFAULT 0")
-        if 'fechamento' not in cols:
-            _safe_exec(cur, "ALTER TABLE inventario_diario ADD COLUMN fechamento INTEGER NOT NULL DEFAULT 0")
-        if 'criado_em' not in cols:
-            _safe_exec(cur, "ALTER TABLE inventario_diario ADD COLUMN criado_em TEXT")
-        if 'atualizado_em' not in cols:
-            _safe_exec(cur, "ALTER TABLE inventario_diario ADD COLUMN atualizado_em TEXT")
-        agora = datetime.now().isoformat()
-        _safe_exec(cur, "UPDATE inventario_diario SET criado_em = COALESCE(criado_em, ?) WHERE criado_em IS NULL OR TRIM(COALESCE(criado_em,'')) = ''", (agora,))
-        _safe_exec(cur, "UPDATE inventario_diario SET atualizado_em = COALESCE(atualizado_em, ?) WHERE atualizado_em IS NULL OR TRIM(COALESCE(atualizado_em,'')) = ''", (agora,))
-        con.commit()
-    finally:
-        con.close()
-
-def list_folga_fixa(setor: str, chapa: str | None = None) -> pd.DataFrame:
-    _ensure_folga_fixa_schema()
-    setor = _norm_setor(setor)
-    con = db_conn()
-    params = [setor]
-    sql = """
-        SELECT f.chapa AS Chapa,
-               f.dia_semana AS DiaSemana,
-               COALESCE(f.ativo, 1) AS Ativo,
-               COALESCE(f.criado_em, '') AS CriadoEm
-        FROM folga_fixa f
-        WHERE UPPER(TRIM(f.setor)) = ?
-    """
-    if chapa is not None:
-        sql += " AND TRIM(f.chapa) = ?"
-        params.append(_norm_chapa(chapa))
-    sql += " ORDER BY f.chapa, f.dia_semana"
-    try:
-        df = pd.read_sql_query(sql, con, params=tuple(params))
-    finally:
-        con.close()
-    if df.empty:
-        df["Nome"] = []
-        df["Dia"] = []
-        return df
-
-    nomes = {}
-    try:
-        for c in load_colaboradores(setor):
-            nomes[str(c.get('Chapa', '') or '').strip()] = str(c.get('Nome', '') or '').strip()
-    except Exception:
-        nomes = {}
-
-    df["Nome"] = df["Chapa"].apply(lambda ch: nomes.get(str(ch).strip(), str(ch).strip()))
-    df["Dia"] = df["DiaSemana"].map(WEEKDAY_LABELS_LONG)
-    df["Ativo"] = df["Ativo"].apply(lambda x: "Sim" if int(x or 0) else "Não")
-    return df
-
-
-def save_folga_fixa(setor: str, chapa: str, weekdays: list[int]):
-    _ensure_folga_fixa_schema()
-    setor = _norm_setor(setor)
-    chapa = _norm_chapa(chapa)
-    weekdays = sorted({int(x) for x in weekdays if int(x) in range(7)})
-    agora = datetime.now().isoformat()
-    con = db_conn()
-    cur = con.cursor()
-    cur.execute("DELETE FROM folga_fixa WHERE setor=? AND chapa=?", (setor, chapa))
-    for wd in weekdays:
-        cur.execute(
-            "INSERT OR REPLACE INTO folga_fixa(setor, chapa, dia_semana, ativo, criado_em) VALUES(?,?,?,?,?)",
-            (setor, chapa, int(wd), 1, agora),
-        )
-    con.commit()
-    con.close()
-
-
-def remove_folga_fixa(setor: str, chapa: str):
-    _ensure_folga_fixa_schema()
-    setor = _norm_setor(setor)
-    chapa = _norm_chapa(chapa)
-    con = db_conn()
-    cur = con.cursor()
-    cur.execute("DELETE FROM folga_fixa WHERE setor=? AND chapa=?", (setor, chapa))
-    con.commit()
-    con.close()
-
-
-def get_folga_fixa_weekdays(setor: str, chapa: str) -> list[int]:
-    df = list_folga_fixa(setor, chapa)
-    if df.empty:
-        return []
-    return sorted({int(x) for x in df["DiaSemana"].tolist() if pd.notna(x)})
-
-
-def _dias_mes_por_weekdays(ano: int, mes: int, weekdays: list[int]) -> list[int]:
-    out = []
-    sel = set(int(x) for x in weekdays)
-    for d in range(1, calendar.monthrange(int(ano), int(mes))[1] + 1):
-        if date(int(ano), int(mes), d).weekday() in sel:
-            out.append(d)
-    return out
-
-
-def _week_chunks_for_month(ano: int, mes: int) -> list[list[int]]:
-    dias = _dias_mes(int(ano), int(mes))
-    ref = pd.DataFrame({'Data': dias, 'Dia': [D_PT[d.day_name()] for d in dias]})
-    weeks = []
-    current = []
-    for i in range(len(ref)):
-        current.append(i)
-        if str(ref.loc[i, 'Dia']) == 'dom':
-            weeks.append(current)
-            current = []
-    if current:
-        weeks.append(current)
-    return weeks
-
-
-def _simulate_folga_fixa_warnings(df_hist: pd.DataFrame, ano: int, mes: int, dias_fixos: list[int]) -> list[str]:
-    warns = []
-    if df_hist is None or len(df_hist) == 0:
-        return ["Não existe escala gerada para validar a folga fixa nesta competência."]
-    sim = df_hist.reset_index(drop=True).copy()
-    dias_fixos = sorted(set(int(x) for x in dias_fixos))
-    for dia in dias_fixos:
-        idx = dia - 1
-        if idx < 0 or idx >= len(sim):
-            continue
-        atual = str(sim.loc[idx, 'Status'])
-        if atual == 'Férias':
-            warns.append(f"Dia {dia:02d}: já está em Férias.")
-            continue
-        if atual == 'Afastamento':
-            warns.append(f"Dia {dia:02d}: já está em Afastamento.")
-        sim.loc[idx, 'Status'] = 'Folga'
-    # folga consecutiva
-    for i in range(1, len(sim)):
-        if str(sim.loc[i-1, 'Status']) == 'Folga' and str(sim.loc[i, 'Status']) == 'Folga':
-            warns.append(f"Folga consecutiva em {i:02d}/{mes:02d} e {i+1:02d}/{mes:02d}.")
-    # semanas > 2 folgas
-    weeks = _week_chunks_for_month(ano, mes)
-    for w in weeks:
-        qtd = sum(1 for i in w if str(sim.loc[i, 'Status']) == 'Folga')
-        if qtd > 2:
-            ini = int(sim.loc[w[0], 'Data'].day)
-            fim = int(sim.loc[w[-1], 'Data'].day)
-            warns.append(f"Semana {ini:02d}-{fim:02d} ficará com {qtd} folgas.")
-    # domingo
-    for dia in dias_fixos:
-        if date(int(ano), int(mes), int(dia)).weekday() == 6:
-            warns.append(f"Domingo {dia:02d}/{mes:02d} foi marcado como folga fixa; confira a alternância 1x1.")
-    # conflitos com inventário
-    return list(dict.fromkeys(warns))
-
-
-def upsert_inventario_dia(setor: str, ano: int, mes: int, dia: int, abertura: int, intermediario: int, fechamento: int):
-    setor = _norm_setor(setor)
-    agora = datetime.now().isoformat()
-    con = db_conn()
-    cur = con.cursor()
-    cur.execute(
-        """
-        INSERT INTO inventario_diario(setor, ano, mes, dia, abertura, intermediario, fechamento, criado_em, atualizado_em)
-        VALUES(?,?,?,?,?,?,?,?,?)
-        ON CONFLICT(setor, ano, mes, dia)
-        DO UPDATE SET abertura=excluded.abertura,
-                      intermediario=excluded.intermediario,
-                      fechamento=excluded.fechamento,
-                      atualizado_em=excluded.atualizado_em
-        """,
-        (setor, int(ano), int(mes), int(dia), int(abertura), int(intermediario), int(fechamento), agora, agora),
-    )
-    con.commit()
-    con.close()
-
-
-def get_inventario_mes(setor: str, ano: int, mes: int) -> pd.DataFrame:
-    setor = _norm_setor(setor)
-    if not setor or not ano or not mes:
-        return pd.DataFrame(columns=['Dia', 'Abertura', 'Intermediario', 'Fechamento'])
-    con = db_conn()
-    try:
-        df = pd.read_sql_query(
-            """
-            SELECT dia AS Dia, abertura AS Abertura, intermediario AS Intermediario, fechamento AS Fechamento,
-                   criado_em AS CriadoEm, atualizado_em AS AtualizadoEm
-            FROM inventario_diario
-            WHERE UPPER(TRIM(setor))=? AND ano=? AND mes=?
-            ORDER BY dia
-            """,
-            con,
-            params=(setor, int(ano), int(mes)),
-        )
-    finally:
-        con.close()
-    return df
-
-
-def build_historico_folgas_diario(setor: str, ano: int, mes: int, hist_db: dict | None = None) -> pd.DataFrame:
-    setor = _norm_setor(setor)
-    hist_db = hist_db or get_hist_mes_com_overrides_cached(setor, ano, mes)
-    dias = _dias_mes(int(ano), int(mes))
-    rows = []
-    for idx, dt_ in enumerate(dias):
-        folga = ferias = afast = trabalho = 0
-        nomes_folga = []
-        for ch, df in (hist_db or {}).items():
-            if df is None or idx >= len(df):
-                continue
-            stt = str(df.loc[idx, 'Status'])
-            if stt == 'Folga':
-                folga += 1
-                try:
-                    nomes_folga.append(str(df.loc[idx, 'Nome']))
-                except Exception:
-                    nomes_folga.append(str(ch))
-            elif stt == 'Férias':
-                ferias += 1
-            elif stt == 'Afastamento':
-                afast += 1
-            elif stt in WORK_STATUSES:
-                trabalho += 1
-        rows.append({
-            'Dia': int(dt_.day),
-            'Data': dt_.strftime('%d/%m/%Y'),
-            'Semana': WEEKDAY_LABELS_LONG.get(dt_.weekday(), ''),
-            'Folga': int(folga),
-            'Férias': int(ferias),
-            'Afastamento': int(afast),
-            'Trabalho': int(trabalho),
-            'Pessoas de folga': ', '.join(sorted([n for n in nomes_folga if n]))
-        })
-    return pd.DataFrame(rows)
-
-
-def build_inventario_comparativo(setor: str, ano: int, mes: int, hist_db: dict | None = None) -> pd.DataFrame:
-    hist_db = hist_db or get_hist_mes_com_overrides_cached(setor, ano, mes)
-    inv = get_inventario_mes(setor, ano, mes)
-    inv_map = {int(r['Dia']): r for _, r in inv.iterrows()} if inv is not None and not inv.empty else {}
-    rows = []
-    for d in range(1, calendar.monthrange(int(ano), int(mes))[1] + 1):
-        ab = inter = fech = 0
-        for _, df in (hist_db or {}).items():
-            if df is None or d - 1 >= len(df):
-                continue
-            if str(df.loc[d - 1, 'Status']) not in WORK_STATUSES:
-                continue
-            turno = _classificar_turno_por_entrada(str(df.loc[d - 1, 'H_Entrada'] or ''))
-            if turno == 'Abertura':
-                ab += 1
-            elif turno == 'Intermediário':
-                inter += 1
-            elif turno == 'Fechamento':
-                fech += 1
-        meta = inv_map.get(d, {})
-        meta_ab = int(meta['Abertura']) if meta != {} else 0
-        meta_in = int(meta['Intermediario']) if meta != {} else 0
-        meta_fe = int(meta['Fechamento']) if meta != {} else 0
-        rows.append({
-            'Dia': d,
-            'Data': date(int(ano), int(mes), d).strftime('%d/%m/%Y'),
-            'Meta abertura': meta_ab,
-            'Real abertura': ab,
-            'Dif abertura': ab - meta_ab,
-            'Meta intermediário': meta_in,
-            'Real intermediário': inter,
-            'Dif intermediário': inter - meta_in,
-            'Meta fechamento': meta_fe,
-            'Real fechamento': fech,
-            'Dif fechamento': fech - meta_fe,
-        })
-    return pd.DataFrame(rows)
-
 
 def _ov_map(setor: str, ano: int, mes: int):
     df = load_overrides(setor, ano, mes)
@@ -6855,11 +6164,6 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
         hist_all[ch] = df
 
     # =====================================================
-    # ✅ REGRA ESPECIAL: RETORNO DE FÉRIAS (somente 1a semana)
-    # =====================================================
-    _apply_regra_retorno_ferias_primeiro_domingo(hist_all, colab_by_chapa, locked_idx, df_ref_cur, setor)
-
-    # =====================================================
     # ✅ REGRA SEMANAL NOVA (SEG->DOM) DEPENDE DO DOMINGO
     # =====================================================
     for sg, membros in grupos.items():
@@ -7709,12 +7013,6 @@ def gerar_pdf_periodo_panoramico(setor: str, data_ini: date, data_fim: date, his
 # =========================================================
 if "auth" not in st.session_state:
     st.session_state["auth"] = None
-if "auth_force_change" not in st.session_state:
-    st.session_state["auth_force_change"] = False
-if "pwd_temp_last" not in st.session_state:
-    st.session_state["pwd_temp_last"] = ""
-if "pwd_temp_last_chapa" not in st.session_state:
-    st.session_state["pwd_temp_last_chapa"] = ""
 if "cfg_mes" not in st.session_state:
     st.session_state["cfg_mes"] = datetime.now().month
 if "cfg_ano" not in st.session_state:
@@ -7751,18 +7049,60 @@ def page_login():
         finally:
             con.close()
 
-    st.title("ESCALA 5x2 DO FUTURO")
+    st.title("🔐 Login por Setor (Colaborador / Líder / Admin)")
 
     if _RESTORE_GUARD_ACTIVE:
         st.warning(_RESTORE_GUARD_MESSAGE or "Base não restaurada automaticamente. O app liberou uma base mínima temporária para permitir o login.")
         st.info("Publique o latest_stable.db junto do projeto ou confirme que o Supabase tem os dados completos para recuperar a base real.")
 
-    login_sec = st.radio("", ["Entrar", "Esqueci a senha"], horizontal=True, key="login_nav_fast", label_visibility="collapsed")
+    login_sec = st.radio("", ["Entrar", "Cadastro do Colaborador", "Esqueci a senha"], horizontal=True, key="login_nav_fast", label_visibility="collapsed")
 
     if login_sec == "Entrar":
         setores = _cache_login_setores()
+        rec2 = _cache_login_recent()
+
+        st.caption("🔎 Buscar acesso / escala por setor, chapa ou nome — pode digitar em minúsculo (ex.: flv).")
+        kw = st.text_input("Buscar acesso:", value=st.session_state.get("lg_kw", ""), key="lg_kw").strip()
+
+        # opções recentes
+        recentes_opts = []
+        for _, r in rec2.iterrows():
+            s = str(r.get("setor","")).strip()
+            c = str(r.get("chapa","")).strip()
+            n = str(r.get("nome","") or "").strip()
+            label = f"{s} | {c}" + (f" — {n}" if n else "")
+            recentes_opts.append((label, s, c))
+
+        # filtro por keyword
+        if kw:
+            kwu = kw.upper()
+            recentes_opts_f = [t for t in recentes_opts if kwu in t[0].upper()]
+            setores_f = [s for s in setores if kwu in s.upper()]
+        else:
+            recentes_opts_f = recentes_opts
+            setores_f = setores
+
+        colA, colB = st.columns([1.4, 1.0])
+        with colA:
+            if recentes_opts_f:
+                recentes_labels = ["-- selecione --"] + [t[0] for t in recentes_opts_f]
+                pick = st.selectbox(
+                    "Recentes (clique para preencher):",
+                    recentes_labels,
+                    index=0,
+                    key="lg_recent_pick"
+                )
+                if pick != "-- selecione --":
+                    chosen = next((t for t in recentes_opts_f if t[0] == pick), None)
+                    if chosen:
+                        st.session_state["lg_setor_txt"] = chosen[1]
+                        st.session_state["lg_chapa"] = chosen[2]
+
+        with colB:
+            lembrar = st.checkbox("✅ Salvar setor/chapa neste dispositivo", value=True, key="lg_remember")
+
         setor_base = _norm_setor(st.session_state.get("lg_setor_txt", ""))
-        opcoes_setor = setores[:] if setores else []
+        opcoes_setor = setores_f[:] if setores_f else setores[:]
         if setor_base and setor_base not in opcoes_setor:
             opcoes_setor = [setor_base] + opcoes_setor
         if not opcoes_setor:
@@ -7788,7 +7128,20 @@ def page_login():
                     pass
 
                 st.session_state["auth"] = u
-                st.session_state["auth_force_change"] = bool(u.get("forcar_troca_senha", False))
+
+                # salva recente
+                if lembrar:
+                    try:
+                        con = db_conn()
+                        con.execute(
+                            "INSERT INTO login_recent(setor, chapa, ts) VALUES(?,?,?)",
+                            (setor_norm, chapa.strip(), dt.datetime.now().isoformat(timespec="seconds"))
+                        )
+                        con.commit()
+                        con.close()
+                    except Exception:
+                        pass
+
                 st.success("Login efetuado!")
                 st.rerun()
             else:
@@ -7796,6 +7149,8 @@ def page_login():
                     st.error("Este colaborador existe, mas o login do sistema foi apagado ou ainda não foi criado. Peça para o ADMIN recuperar o usuário na aba Admin.")
                 else:
                     st.error("Usuário ou senha inválidos.")
+
+        st.caption("Admin padrão: setor ADMIN | chapa admin | senha 123. Criação de setor/líder/admin permanece na aba Admin.")
 
     elif login_sec == "Cadastro do Colaborador":
         st.subheader("Primeiro acesso do colaborador")
@@ -7838,7 +7193,7 @@ def page_login():
 
     elif login_sec == "Esqueci a senha":
         st.subheader("Redefinir senha do colaborador")
-        st.caption("Use a senha temporária recebida do líder ou admin para criar sua nova senha.")
+        st.caption("A recuperação usa setor + chapa, que também são a chave para buscar sua escala no portal.")
         con = db_conn()
         setores_df = pd.concat([
             pd.read_sql_query("SELECT nome AS setor FROM setores", con),
@@ -7850,32 +7205,28 @@ def page_login():
 
         setor = st.selectbox("Setor:", setores, key="fp_setor") if setores else st.text_input("Setor:", key="fp_setor_txt")
         chapa = st.text_input("Chapa:", key="fp_chapa")
-        senha_temp = st.text_input("Senha temporária:", type="password", key="fp_temp")
         nova = st.text_input("Nova senha:", type="password", key="fp_nova")
         nova2 = st.text_input("Confirmar senha:", type="password", key="fp_nova2")
 
         if st.button("Redefinir", key="fp_btn"):
             setor_n = _norm_setor(setor)
             chapa_n = _norm_chapa(chapa)
-            senha_temp_n = (senha_temp or "").strip()
-            if not setor_n or not chapa_n or not senha_temp_n or not nova or not nova2:
-                st.error("Preencha setor, chapa, senha temporária, nova senha e confirmação.")
+            if not setor_n or not chapa_n or not nova:
+                st.error("Preencha setor, chapa e nova senha.")
             elif nova != nova2:
                 st.error("Senhas não conferem.")
             else:
-                user = verify_login(setor_n, chapa_n, senha_temp_n)
-                if not user:
-                    st.error("Senha temporária inválida para este setor/chapa.")
-                elif not bool(user.get("forcar_troca_senha", False)):
-                    st.error("Este colaborador não está com redefinição por senha temporária ativa.")
+                row = colaborador_lookup(setor_n, chapa_n)
+                if not row:
+                    st.error("Colaborador não encontrado neste setor.")
                 else:
-                    try:
-                        update_password(setor_n, chapa_n, nova)
-                        set_force_change_password(setor_n, chapa_n, False)
-                        st.success("Senha redefinida com sucesso. Agora faça login com a nova senha.")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Falha ao redefinir senha: {e}")
+                    nome_db, setor_db, chapa_db = row
+                    if system_user_exists(setor_db, chapa_db):
+                        update_password(setor_db, chapa_db, nova)
+                    else:
+                        create_system_user(nome_db or chapa_db, setor_db, chapa_db, nova, is_lider=0, is_admin=0)
+                    st.success("Senha redefinida com sucesso. Faça login com setor + chapa + senha.")
+                    st.rerun()
 
 def _regenerar_mes_inteiro(setor: str, ano: int, mes: int, seed: int = 0, respeitar_ajustes: bool = True):
     """
@@ -8632,35 +7983,6 @@ def page_app():
     auth = st.session_state.get("auth") or {}
     setor = auth.get("setor", "GERAL")
 
-    if st.session_state.get("auth_force_change", False):
-        st.markdown("## 🔐 Troca obrigatória de senha")
-        st.warning("Sua senha temporária precisa ser trocada antes de continuar.")
-        nova1 = st.text_input("Nova senha", type="password", key="force_pwd_1")
-        nova2 = st.text_input("Confirmar nova senha", type="password", key="force_pwd_2")
-        c1, c2 = st.columns([1,1])
-        if c1.button("Salvar nova senha", key="force_pwd_save"):
-            if not (nova1 or "").strip():
-                st.error("Digite a nova senha.")
-                st.stop()
-            if nova1 != nova2:
-                st.error("A confirmação da senha não confere.")
-                st.stop()
-            try:
-                update_password(setor, auth.get("chapa", ""), nova1)
-                set_force_change_password(setor, auth.get("chapa", ""), False)
-                st.session_state["auth_force_change"] = False
-                if st.session_state.get("auth"):
-                    st.session_state["auth"]["forcar_troca_senha"] = False
-                st.success("Senha atualizada com sucesso.")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Falha ao atualizar senha: {e}")
-        if c2.button("Sair", key="force_pwd_logout"):
-            st.session_state["auth"] = None
-            st.session_state["auth_force_change"] = False
-            st.rerun()
-        return
-
     # ---- Competência (mês/ano) compartilhada
     ano_cfg = int(st.session_state.get("cfg_ano", datetime.now().year))
     mes_cfg = int(st.session_state.get("cfg_mes", datetime.now().month))
@@ -8788,7 +8110,7 @@ def page_app():
     if sec_main == "👥 Colaboradores":
         sec_col = st.radio(
             "",
-            (["👥 Colaboradores", "➕ Cadastrar colaborador", "🗑️ Excluir colaborador", "✏️ Editar perfil", "🔑 Alterar senha colaborador"] + (["🔄 Rodízio Caixa"] if str(setor).strip().upper() == "FRENTECAIXA" else [])), 
+            (["👥 Colaboradores", "➕ Cadastrar colaborador", "🗑️ Excluir colaborador", "✏️ Editar perfil"] + (["🔄 Rodízio Caixa"] if str(setor).strip().upper() == "FRENTECAIXA" else [])), 
             horizontal=True,
             key="sec_col_radio_real_speed",
             label_visibility="collapsed",
@@ -8966,87 +8288,6 @@ def page_app():
                             st.error(str(e))
 
                 st.markdown("---")
-
-        elif sec_col == "🔑 Alterar senha colaborador":
-            colaboradores = load_colaboradores_setor(setor)
-            st.markdown("## 🔑 Alterar senha colaborador")
-            if colaboradores:
-                chapas = [c["Chapa"] for c in colaboradores]
-                nome_by_chapa = {c["Chapa"]: c.get("Nome", "") for c in colaboradores}
-                ch_sel_pwd = st.selectbox(
-                    "Colaborador (Nome — Chapa):",
-                    chapas,
-                    key="pwd_chapa",
-                    format_func=lambda ch: f"{(nome_by_chapa.get(ch, ch) or ch)} — {ch}",
-                )
-                csel_pwd = next(x for x in colaboradores if x["Chapa"] == ch_sel_pwd)
-                user_pwd = get_usuario_sistema_por_setor_chapa(setor, ch_sel_pwd)
-
-                colx1, colx2 = st.columns(2)
-                colx1.text_input("Nome:", value=(csel_pwd.get("Nome") or "").strip(), disabled=True, key="pwd_nome_view")
-                colx2.text_input("Chapa:", value=str(ch_sel_pwd or "").strip(), disabled=True, key="pwd_chapa_view")
-                colx3, colx4 = st.columns(2)
-                colx3.text_input("Setor:", value=str(setor or "").strip(), disabled=True, key="pwd_setor_view")
-                perfil_view = "ADMIN" if (user_pwd and user_pwd.get("is_admin")) else "LÍDER" if (user_pwd and user_pwd.get("is_lider")) else "COLABORADOR" if user_pwd else "SEM ACESSO"
-                colx4.text_input("Perfil:", value=perfil_view, disabled=True, key="pwd_perfil_view")
-
-                nova_senha = st.text_input("Nova senha", type="password", key="pwd_nova")
-                confirma_senha = st.text_input("Confirmar nova senha", type="password", key="pwd_confirma")
-                gerar_tmp = st.checkbox("Gerar senha temporária automática", value=False, key="pwd_auto_temp")
-
-                if st.session_state.get("pwd_temp_last") and st.session_state.get("pwd_temp_last_chapa") == ch_sel_pwd:
-                    st.success("🔑 Senha temporária criada com sucesso.")
-                    st.code(st.session_state.get("pwd_temp_last"), language=None)
-                    st.caption("Copie essa senha e envie ao colaborador. No próximo login ele será obrigado a trocar a senha.")
-
-                if st.button("Salvar nova senha", key="pwd_save"):
-                    senha_final = ""
-                    forcar_troca = False
-                    if gerar_tmp:
-                        senha_final = gerar_senha_temporaria_colaborador(8)
-                        forcar_troca = True
-                    else:
-                        senha_final = (nova_senha or "").strip()
-                        if not senha_final:
-                            st.error("Digite a nova senha ou marque a senha temporária automática.")
-                            st.stop()
-                        if senha_final != (confirma_senha or "").strip():
-                            st.error("A confirmação da senha não confere.")
-                            st.stop()
-                    try:
-                        if not user_pwd:
-                            upsert_usuario_sistema(
-                                nome=(csel_pwd.get("Nome") or "").strip(),
-                                setor=setor,
-                                chapa=ch_sel_pwd,
-                                senha=senha_final,
-                                is_admin=False,
-                                is_lider=False,
-                                forcar_troca_senha=forcar_troca,
-                            )
-                            msg_base = "Acesso criado e senha definida com sucesso."
-                        else:
-                            update_password(setor, ch_sel_pwd, senha_final)
-                            set_force_change_password(setor, ch_sel_pwd, forcar_troca)
-                            msg_base = "Senha alterada com sucesso."
-                        if gerar_tmp:
-                            st.session_state["pwd_temp_last"] = senha_final
-                            st.session_state["pwd_temp_last_chapa"] = ch_sel_pwd
-                            st.success(msg_base)
-                            st.success("🔑 Senha temporária criada com sucesso.")
-                            st.code(senha_final, language=None)
-                            st.caption("Copie essa senha e envie ao colaborador. No próximo login ele será obrigado a trocar a senha.")
-                        else:
-                            st.session_state["pwd_temp_last"] = ""
-                            st.session_state["pwd_temp_last_chapa"] = ""
-                            st.success(msg_base)
-                            st.rerun()
-                    except Exception as e:
-                        st.error(f"Falha ao alterar senha: {e}")
-            else:
-                st.info("Sem colaboradores para alterar senha.")
-
-            st.markdown("---")
 
         elif sec_col == "🔄 Rodízio Caixa":
             st.markdown("## 🔄 Rodízio mensal Caixa 01 ↔ Caixa 02")
@@ -9226,17 +8467,15 @@ def page_app():
             c2.caption("Alterar em 🗓️ Competência (sidebar)")
             c3.caption("Ajustes aplicam na competência ativa.")
 
-        sec_aj = st.radio("", ["🧩 Folgas manuais em grade", "🧷 Folga fixa", "🗂️ Inventário", "📝 Histórico", "🔁 Troca de horários", "✅ Preferência por subgrupo", "📌 Subgrupos (editável)"], horizontal=True, key="ajustes_nav_fast", label_visibility="collapsed")
+        sec_aj = st.radio("", ["🧩 Folgas manuais em grade", "🔁 Troca de horários", "✅ Preferência por subgrupo", "📌 Subgrupos (editável)"], horizontal=True, key="ajustes_nav_fast", label_visibility="collapsed")
 
-        _ajustes_precisam_escala = sec_aj in ("🧩 Folgas manuais em grade", "🧷 Folga fixa", "📝 Histórico", "🔁 Troca de horários")
+        _ajustes_precisam_escala = sec_aj in ("🧩 Folgas manuais em grade", "🔁 Troca de horários")
         hist_db = {}
         colaboradores = []
         colab_by = {}
 
         if _ajustes_precisam_escala:
             _aj_load_key = f"ajustes_loaded::{setor}::{ano}::{mes}::{sec_aj}"
-            if _aj_load_key not in st.session_state:
-                st.session_state[_aj_load_key] = True
             c_load1, c_load2, c_load3 = st.columns([1, 1, 3])
             if c_load1.button("📥 Carregar dados dos ajustes", key=f"btn_{_aj_load_key}"):
                 st.session_state[_aj_load_key] = True
@@ -9324,7 +8563,7 @@ def page_app():
                         key="grid_editor"
                     )
 
-                    auto_readequar = st.checkbox("🔄 Readequar escala ao salvar (somente se você quiser)", value=False, key="grid_auto_regen")
+                    auto_readequar = st.checkbox("🔄 Readequar escala ao salvar", value=True, key="grid_auto_regen")
 
                     if st.button("💾 Salvar folgas manuais (e readequar mês)", key="grid_save"):
                         set_folga = 0
@@ -9356,136 +8595,6 @@ def page_app():
 
                         st.success(f"Salvo! Folgas travadas: {set_folga} | Trabalhos travados: {set_trab}.")
                         st.rerun()
-
-                elif sec_aj == "🧷 Folga fixa":
-                    st.markdown("### 🧷 Folga fixa por colaborador")
-                    st.caption("Escolha a pessoa, marque os dias da semana de folga fixa e valide antes de salvar. Se quebrar regra, o sistema avisa e você decide se quer salvar mesmo assim.")
-
-                    if not colaboradores:
-                        colaboradores = load_colaboradores_setor(setor)
-                        colab_by = {c["Chapa"]: c for c in colaboradores}
-                    labels_ff = [f'{c["Nome"]} ({c["Chapa"]})' for c in colaboradores]
-                    inv_ff = {f'{c["Nome"]} ({c["Chapa"]})': str(c["Chapa"]) for c in colaboradores}
-                    label_sel_ff = st.selectbox("Colaborador:", options=labels_ff, key="folga_fixa_colab")
-                    chapa_ff = inv_ff.get(label_sel_ff, "")
-                    atuais_ff = get_folga_fixa_weekdays(setor, chapa_ff)
-                    dias_sel_ff = st.multiselect(
-                        "Dias da semana de folga fixa:",
-                        options=list(range(7)),
-                        default=atuais_ff,
-                        format_func=lambda x: WEEKDAY_LABELS_LONG.get(int(x), str(x)),
-                        key=f"folga_fixa_days::{chapa_ff}::{ano}::{mes}",
-                    )
-
-                    dias_mes_fixos = _dias_mes_por_weekdays(ano, mes, dias_sel_ff)
-                    st.caption("Dias da competência afetados: " + (", ".join(f"{d:02d}" for d in dias_mes_fixos) if dias_mes_fixos else "nenhum"))
-
-                    if hist_db:
-                        df_hist_ff = hist_db.get(chapa_ff)
-                    else:
-                        df_hist_ff = get_hist_mes_com_overrides_cached(setor, ano, mes).get(chapa_ff)
-                    warnings_ff = _simulate_folga_fixa_warnings(df_hist_ff, ano, mes, dias_mes_fixos) if chapa_ff else []
-                    if warnings_ff:
-                        st.warning("Validação da folga fixa encontrou estes pontos:")
-                        for msg in warnings_ff:
-                            st.write(f"- {msg}")
-                    else:
-                        st.success("Nenhuma quebra visível encontrada para esta folga fixa na competência ativa.")
-
-                    force_ff = st.checkbox("Salvar mesmo se houver alerta de regra", value=False, key="folga_fixa_force")
-                    col_ff1, col_ff2, col_ff3 = st.columns([1,1,2])
-                    if col_ff1.button("💾 Salvar folga fixa", key="folga_fixa_salvar"):
-                        if warnings_ff and not force_ff:
-                            st.error("Há alertas de regra. Marque a opção para salvar mesmo assim, se quiser forçar.")
-                        else:
-                            save_folga_fixa(setor, chapa_ff, dias_sel_ff)
-                            # aplica como trava manual do mês ativo
-                            if dias_mes_fixos:
-                                for dia in dias_mes_fixos:
-                                    set_override(setor, ano, mes, chapa_ff, dia, "status", "Folga")
-                            st.success("Folga fixa salva e aplicada como trava manual na competência ativa.")
-                            st.rerun()
-                    if col_ff2.button("🗑️ Remover folga fixa", key="folga_fixa_remover"):
-                        remove_folga_fixa(setor, chapa_ff)
-                        st.success("Folga fixa removida. As travas já gravadas no mês atual continuam até você alterar manualmente a grade ou regenerar.")
-                        st.rerun()
-                    folga_fixa_df = list_folga_fixa(setor)
-                    if not folga_fixa_df.empty:
-                        st.markdown("#### Folgas fixas cadastradas")
-                        st.dataframe(folga_fixa_df[["Nome", "Chapa", "Dia", "Ativo", "CriadoEm"]], use_container_width=True, hide_index=True)
-                    else:
-                        st.info("Nenhuma folga fixa cadastrada ainda.")
-
-                elif sec_aj == "🗂️ Inventário":
-                    st.markdown("### 🗂️ Inventário")
-                    st.caption("Escolha o dia e informe quantas pessoas você quer em abertura, intermediário e fechamento. A tabela mensal continua abaixo para conferência rápida.")
-                    qtd_inv = calendar.monthrange(int(ano), int(mes))[1]
-                    inv_atual = get_inventario_mes(setor, ano, mes)
-                    inv_map = {int(r["Dia"]): r for _, r in inv_atual.iterrows()} if not inv_atual.empty else {}
-
-                    dia_inv = st.selectbox(
-                        "Dia do inventário:",
-                        options=list(range(1, qtd_inv + 1)),
-                        key=f"inventario_dia_foco::{setor}::{ano}::{mes}",
-                    )
-                    base_inv = inv_map.get(int(dia_inv), {})
-                    data_inv = date(int(ano), int(mes), int(dia_inv))
-                    st.caption(f"Data escolhida: {data_inv.strftime('%d/%m/%Y')} — {WEEKDAY_LABELS_LONG[data_inv.weekday()]}")
-
-                    ci1, ci2, ci3 = st.columns(3)
-                    meta_ab = ci1.number_input("Abertura", min_value=0, step=1, value=int(base_inv["Abertura"]) if base_inv != {} else 0, key=f"meta_abertura::{dia_inv}")
-                    meta_in = ci2.number_input("Intermediário", min_value=0, step=1, value=int(base_inv["Intermediario"]) if base_inv != {} else 0, key=f"meta_intermediario::{dia_inv}")
-                    meta_fe = ci3.number_input("Fechamento", min_value=0, step=1, value=int(base_inv["Fechamento"]) if base_inv != {} else 0, key=f"meta_fechamento::{dia_inv}")
-
-                    csave1, csave2 = st.columns([1, 3])
-                    if csave1.button("💾 Salvar dia selecionado", key="inventario_salvar_dia"):
-                        upsert_inventario_dia(setor, ano, mes, int(dia_inv), int(meta_ab), int(meta_in), int(meta_fe))
-                        st.success(f"Inventário salvo para o dia {int(dia_inv):02d}/{int(mes):02d}/{int(ano)}.")
-                        st.rerun()
-                    csave2.caption("Use esta área para cadastrar a necessidade do dia. Não altera a escala automaticamente.")
-
-                    rows_inv = []
-                    for dia in range(1, qtd_inv + 1):
-                        base = inv_map.get(dia, {})
-                        rows_inv.append({
-                            "Dia": dia,
-                            "Data": date(int(ano), int(mes), dia).strftime("%d/%m/%Y"),
-                            "Semana": WEEKDAY_LABELS_LONG[date(int(ano), int(mes), dia).weekday()],
-                            "Abertura": int(base["Abertura"]) if base != {} else 0,
-                            "Intermediário": int(base["Intermediario"]) if base != {} else 0,
-                            "Fechamento": int(base["Fechamento"]) if base != {} else 0,
-                        })
-                    df_inv_view = pd.DataFrame(rows_inv)
-                    st.markdown("#### Inventário do mês")
-                    st.dataframe(df_inv_view, use_container_width=True, hide_index=True)
-
-                    comp_inv = build_inventario_comparativo(setor, ano, mes, hist_db if hist_db else None)
-                    if not comp_inv.empty:
-                        st.markdown("#### Comparativo meta x escala atual")
-                        st.dataframe(comp_inv, use_container_width=True, hide_index=True)
-                    else:
-                        st.info("Cadastre as metas do mês para acompanhar o comparativo depois.")
-
-                elif sec_aj == "📝 Histórico":
-                    st.markdown("### 📝 Histórico")
-                    st.caption("Mostra quantas pessoas estarão de folga em cada dia da competência e quem são elas.")
-                    hist_view = hist_db or get_hist_mes_com_overrides_cached(setor, ano, mes)
-                    if not hist_view:
-                        st.info("Gere a escala primeiro para visualizar o histórico.")
-                    else:
-                        df_hist_dia = build_historico_folgas_diario(setor, ano, mes, hist_view)
-                        st.dataframe(df_hist_dia, use_container_width=True, hide_index=True)
-                        dias_hist = df_hist_dia["Dia"].tolist()
-                        dia_sel_hist = st.selectbox("Ver detalhes do dia:", options=dias_hist, key="hist_dia_sel")
-                        row_hist = df_hist_dia[df_hist_dia["Dia"] == int(dia_sel_hist)].iloc[0]
-                        st.info(f"{row_hist['Data']} — Folga: {row_hist['Folga']} | Férias: {row_hist['Férias']} | Afastamento: {row_hist['Afastamento']} | Trabalho: {row_hist['Trabalho']}")
-                        nomes_folga = str(row_hist.get('Pessoas de folga', '') or '').strip()
-                        if nomes_folga:
-                            st.write("**Pessoas de folga no dia:**")
-                            st.write(nomes_folga)
-                        else:
-                            st.write("**Pessoas de folga no dia:** nenhuma")
-                        st.text_area("Pessoas de folga no dia selecionado", value=str(row_hist["Pessoas de folga"] or ""), height=140, key="hist_pessoas_folga", disabled=True)
 
                 elif sec_aj == "🔁 Troca de horários":
                                 st.markdown("### 🔁 Troca de horários em grade (por colaborador)")
@@ -9949,23 +9058,6 @@ def page_app():
 
                     row_idx = 3
                     total_linhas_gravadas = 0
-                    resumo_cobertura = {
-                        "abertura": [0] * total_dias,
-                        "intermediario": [0] * total_dias,
-                        "fechamento": [0] * total_dias,
-                        "total_trabalhando": [0] * total_dias,
-                    }
-
-                    def _minutos_hora_excel(v):
-                        s = str(v or "").strip()
-                        if not s or ":" not in s:
-                            return None
-                        try:
-                            hh, mm = s.split(":", 1)
-                            return int(hh) * 60 + int(mm)
-                        except Exception:
-                            return None
-
                     for sg in sorted(subgrupo_map.keys()):
                         ws.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx, end_column=total_dias + 1)
                         t = ws.cell(row_idx, 1, f"SUBGRUPO: {sg}")
@@ -9979,7 +9071,7 @@ def page_app():
                         for chx in chapas_sg:
                             df_f = hist_db[chx].copy().reset_index(drop=True)
                             nome = str(colab_by.get(str(chx), {}).get("Nome", chx))
-                            c_nome = ws.cell(row=row_idx, column=1, value=f"{nome}\nCHAPA: {chx}")
+                            c_nome = ws.cell(row_idx, 1, f"{nome}\nCHAPA: {chx}")
                             c_nome.fill = fill_nome
                             c_nome.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
                             c_nome.border = border
@@ -10010,47 +9102,8 @@ def page_app():
                                     else:
                                         cell1.fill = fill_folga
                                         cell2.fill = fill_folga
-                                else:
-                                    ent_min = _minutos_hora_excel(v1)
-                                    if ent_min is not None:
-                                        resumo_cobertura["total_trabalhando"][i] += 1
-                                        if 360 <= ent_min <= 600:
-                                            resumo_cobertura["abertura"][i] += 1
-                                        elif 601 <= ent_min <= 720:
-                                            resumo_cobertura["intermediario"][i] += 1
-                                        elif ent_min >= 760:
-                                            resumo_cobertura["fechamento"][i] += 1
                             total_linhas_gravadas += 1
                             row_idx += 2
-                        row_idx += 1
-
-                    row_idx += 1
-                    ws.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx, end_column=total_dias + 1)
-                    t_res = ws.cell(row_idx, 1, "RESUMO DE COBERTURA — TODOS OS SUBGRUPOS")
-                    t_res.fill = fill_header
-                    t_res.font = font_header
-                    t_res.alignment = Alignment(horizontal="left", vertical="center")
-                    t_res.border = border
-                    row_idx += 1
-
-                    resumo_rows = [
-                        ("ABERTURA (06:00 até 10:00)", resumo_cobertura["abertura"]),
-                        ("INTERMEDIÁRIO (10:01 até 12:00)", resumo_cobertura["intermediario"]),
-                        ("FECHAMENTO (a partir de 12:40)", resumo_cobertura["fechamento"]),
-                        ("TOTAL TRABALHANDO", resumo_cobertura["total_trabalhando"]),
-                    ]
-                    for titulo_resumo, valores_resumo in resumo_rows:
-                        c0 = ws.cell(row_idx, 1, titulo_resumo)
-                        c0.fill = fill_group
-                        c0.font = Font(bold=True)
-                        c0.alignment = Alignment(horizontal="left", vertical="center")
-                        c0.border = border
-                        for i, valor_resumo in enumerate(valores_resumo):
-                            c1 = ws.cell(row_idx, i + 2, int(valor_resumo))
-                            c1.alignment = center
-                            c1.border = border
-                            if str(df_ref_xls.iloc[i].get("Dia", "")) == "dom":
-                                c1.fill = fill_folga
                         row_idx += 1
 
                     try:
@@ -10797,17 +9850,11 @@ def _fast_restore_bundled_latest_before_start() -> None:
 # MAIN
 # =========================================================
 _fast_restore_bundled_latest_before_start()
+db_init()
+if not FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP:
+    auto_backup_if_due()
 
-if st.session_state["auth"] is None and QUICK_LOGIN_BOOT:
-    db_init_fast_login()
+if st.session_state["auth"] is None:
     page_login()
 else:
-    if not st.session_state.get("_full_boot_done", False):
-        db_init()
-        if not FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP:
-            auto_backup_if_due()
-        st.session_state["_full_boot_done"] = True
-    if st.session_state["auth"] is None:
-        page_login()
-    else:
-        page_app()
+    page_app()
