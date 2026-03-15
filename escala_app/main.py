@@ -60,6 +60,8 @@
 #      enforce_weekly_folga_targets e rebalance_folgas_dia e no "pós final (garantia)".
 # =========================================================
 
+ from __future__ import annotations
+
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta, date
