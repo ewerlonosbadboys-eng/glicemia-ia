@@ -74,6 +74,18 @@ import re
 import shutil
 from pathlib import Path
 import unicodedata
+
+
+def _slugify_filename(value: str) -> str:
+    value = str(value or '').strip()
+    if not value:
+        return 'arquivo'
+    value = unicodedata.normalize('NFKD', value)
+    value = ''.join(ch for ch in value if not unicodedata.combining(ch))
+    value = value.lower()
+    value = re.sub(r'[^a-z0-9]+', '_', value)
+    value = re.sub(r'_+', '_', value).strip('_')
+    return value or 'arquivo'
 import time
 import json
 import requests
@@ -663,291 +675,6 @@ def _rebuild_estado_out(hist_all: dict) -> dict:
     return estado_out
 
 
-
-
-def _classificar_faixa_horario(h_entrada: str) -> str:
-    s = str(h_entrada or '').strip()
-    if not re.fullmatch(r"\d{2}:\d{2}", s):
-        return ''
-    try:
-        hh, mm = map(int, s.split(':'))
-        mins = hh * 60 + mm
-    except Exception:
-        return ''
-    if 360 <= mins <= 600:   # 06:00 até 10:00
-        return 'ABERTURA'
-    if 601 <= mins <= 720:   # 10:01 até 12:00
-        return 'INTERMEDIÁRIO'
-    if mins >= 760:          # 12:40+
-        return 'FECHAMENTO'
-    return ''
-
-
-def _resumo_cobertura_por_dia(setor: str, ano: int, mes: int) -> pd.DataFrame:
-    hist = get_hist_mes_com_overrides_cached(setor, ano, mes) or {}
-    qtd = calendar.monthrange(int(ano), int(mes))[1]
-    out = []
-    dsem = {0:'Seg',1:'Ter',2:'Qua',3:'Qui',4:'Sex',5:'Sáb',6:'Dom'}
-
-    for dia in range(1, qtd + 1):
-        total = abertura = intermediario = fechamento = folga = ferias = afastamento = 0
-        for _, dfh in hist.items():
-            try:
-                if dfh is None or len(dfh) < dia:
-                    continue
-                row = dfh.iloc[dia - 1]
-                status = str(row.get('Status', '') or '').strip()
-                status_norm = status.upper()
-                if status_norm in ('FOLGA', 'FOLG'):
-                    folga += 1
-                    continue
-                if status_norm in ('FÉRIAS', 'FERIAS', 'FER'):
-                    ferias += 1
-                    continue
-                if status_norm in ('AFASTAMENTO', 'AFA'):
-                    afastamento += 1
-                    continue
-
-                h_entrada = str(row.get('H_Entrada', '') or '').strip()
-                faixa = _classificar_faixa_horario(h_entrada)
-                total += 1
-                if faixa == 'ABERTURA':
-                    abertura += 1
-                elif faixa == 'INTERMEDIÁRIO':
-                    intermediario += 1
-                elif faixa == 'FECHAMENTO':
-                    fechamento += 1
-            except Exception:
-                continue
-
-        data_ref = dt.date(int(ano), int(mes), int(dia))
-        out.append({
-            'Dia': dia,
-            'Dia semana': dsem.get(data_ref.weekday(), ''),
-            'Total trabalhando': total,
-            'Abertura': abertura,
-            'Intermediário': intermediario,
-            'Fechamento': fechamento,
-            'Folga': folga,
-            'Férias': ferias,
-            'Afastamento': afastamento,
-        })
-    return pd.DataFrame(out)
-
-
-def _week_range_dias_mes(ano: int, mes: int, dia: int) -> tuple[int, int]:
-    data_ref = dt.date(int(ano), int(mes), int(dia))
-    inicio = max(1, int(dia) - data_ref.weekday())
-    qtd = calendar.monthrange(int(ano), int(mes))[1]
-    fim = min(qtd, inicio + 6)
-    return inicio, fim
-
-
-def _status_is_off(status: str) -> bool:
-    s = str(status or '').strip().upper()
-    return s in ('FOLGA', 'FOLG', 'FÉRIAS', 'FERIAS', 'FER', 'AFASTAMENTO', 'AFA')
-
-
-def _max_consecutive_work_flags(flags: list[bool]) -> int:
-    best = cur = 0
-    for f in flags:
-        if f:
-            cur += 1
-            if cur > best:
-                best = cur
-        else:
-            cur = 0
-    return best
-
-
-def _entrada_sugerida_para_faixa(colab: dict, dfh: pd.DataFrame, faixa: str) -> str:
-    base = str((colab or {}).get('Entrada', '') or '').strip()
-    if _classificar_faixa_horario(base) == faixa:
-        return base
-    try:
-        if dfh is not None and len(dfh) > 0:
-            for _, row in dfh.iterrows():
-                ent = str(row.get('H_Entrada', '') or '').strip()
-                if _classificar_faixa_horario(ent) == faixa:
-                    return ent
-    except Exception:
-        pass
-    defaults = {
-        'ABERTURA': '08:00',
-        'INTERMEDIÁRIO': '11:00',
-        'FECHAMENTO': '12:40',
-    }
-    return defaults.get(faixa, base or '08:00')
-
-
-def _simular_inventario_inteligente(setor: str, ano: int, mes: int, dia_inventario: int, metas: dict) -> dict:
-    hist = get_hist_mes_com_overrides_cached(setor, ano, mes) or {}
-    colaboradores = load_colaboradores_setor(setor) or []
-    colab_by = {str(c.get('Chapa')): c for c in colaboradores}
-    ovmap = _ov_map(setor, ano, mes)
-    resumo = _resumo_cobertura_por_dia(setor, ano, mes)
-
-    if not hist:
-        return {'ok': False, 'motivo': 'Sem escala gerada no mês.', 'movimentos': [], 'atual': {}, 'final': {}}
-
-    row_atual = resumo[resumo['Dia'] == int(dia_inventario)]
-    if row_atual.empty:
-        return {'ok': False, 'motivo': 'Dia inválido para o mês.', 'movimentos': [], 'atual': {}, 'final': {}}
-    row_atual = row_atual.iloc[0]
-    atual = {
-        'ABERTURA': int(row_atual['Abertura']),
-        'INTERMEDIÁRIO': int(row_atual['Intermediário']),
-        'FECHAMENTO': int(row_atual['Fechamento']),
-        'TOTAL': int(row_atual['Total trabalhando']),
-    }
-
-    metas_norm = {
-        'ABERTURA': max(0, int(metas.get('ABERTURA', atual['ABERTURA']) or 0)),
-        'INTERMEDIÁRIO': max(0, int(metas.get('INTERMEDIÁRIO', atual['INTERMEDIÁRIO']) or 0)),
-        'FECHAMENTO': max(0, int(metas.get('FECHAMENTO', atual['FECHAMENTO']) or 0)),
-    }
-    deficits = {k: max(0, metas_norm[k] - atual[k]) for k in ('ABERTURA', 'INTERMEDIÁRIO', 'FECHAMENTO')}
-    if sum(deficits.values()) <= 0:
-        return {
-            'ok': True,
-            'motivo': 'As metas já estão atendidas no dia selecionado.',
-            'movimentos': [],
-            'atual': atual,
-            'final': dict(atual),
-            'metas': metas_norm,
-            'semana': _week_range_dias_mes(ano, mes, dia_inventario),
-        }
-
-    inicio_sem, fim_sem = _week_range_dias_mes(ano, mes, dia_inventario)
-    totais_semana = {int(r['Dia']): int(r['Total trabalhando']) for _, r in resumo.iterrows() if inicio_sem <= int(r['Dia']) <= fim_sem}
-    temp_flags = {}
-    for ch, dfh in hist.items():
-        flags = []
-        for i in range(len(dfh)):
-            stt = str(dfh.iloc[i].get('Status', '') or '')
-            flags.append(stt in WORK_STATUSES)
-        temp_flags[str(ch)] = flags
-
-    usados = set()
-    movimentos = []
-
-    def _status_locked(chapa: str, dia: int) -> bool:
-        return bool((ovmap.get(str(chapa), {}).get(int(dia), {}) or {}).get('status'))
-
-    def _find_remanejamento(chapa: str, dfh: pd.DataFrame, dia_idx: int):
-        flags = list(temp_flags.get(str(chapa), []))
-        opcoes = []
-        for d in range(inicio_sem, fim_sem + 1):
-            if d == dia_inventario:
-                continue
-            idx = d - 1
-            if idx < 0 or idx >= len(dfh):
-                continue
-            if _status_locked(chapa, d):
-                continue
-            rowd = dfh.iloc[idx]
-            stt = str(rowd.get('Status', '') or '')
-            if stt not in WORK_STATUSES:
-                continue
-            teste = flags.copy()
-            teste[dia_idx] = True
-            teste[idx] = False
-            if idx - 1 >= 0 and (not teste[idx - 1]):
-                continue
-            if idx + 1 < len(teste) and (not teste[idx + 1]):
-                continue
-            if _max_consecutive_work_flags(teste) > 5:
-                continue
-            opcoes.append((-(totais_semana.get(d, 0)), abs(d - dia_inventario), d, teste))
-        if not opcoes:
-            return None
-        opcoes.sort()
-        _, _, d_escolhido, teste_flags = opcoes[0]
-        return d_escolhido, teste_flags
-
-    for faixa in ('ABERTURA', 'INTERMEDIÁRIO', 'FECHAMENTO'):
-        while deficits[faixa] > 0:
-            candidatos = []
-            for ch, dfh in hist.items():
-                ch = str(ch)
-                if ch in usados:
-                    continue
-                dia_idx = int(dia_inventario) - 1
-                if dia_idx < 0 or dia_idx >= len(dfh):
-                    continue
-                if _status_locked(ch, dia_inventario):
-                    continue
-                row_inv = dfh.iloc[dia_idx]
-                stt_inv = str(row_inv.get('Status', '') or '')
-                if str(stt_inv).strip().upper() not in ('FOLGA', 'FOLG'):
-                    continue
-                flags = list(temp_flags.get(ch, []))
-                teste = flags.copy()
-                teste[dia_idx] = True
-                if _max_consecutive_work_flags(teste) > 5:
-                    continue
-                ent_sug = _entrada_sugerida_para_faixa(colab_by.get(ch, {}), dfh, faixa)
-                faixa_base = _classificar_faixa_horario(ent_sug)
-                rem = _find_remanejamento(ch, dfh, dia_idx)
-                if not rem:
-                    continue
-                dia_rem, flags_final = rem
-                prioridade = 0 if faixa_base == faixa else 1
-                candidatos.append((prioridade, -totais_semana.get(dia_rem, 0), ch, ent_sug, dia_rem, flags_final))
-            if not candidatos:
-                break
-            candidatos.sort()
-            _, _, ch_sel, ent_sel, dia_rem_sel, flags_final = candidatos[0]
-            usados.add(ch_sel)
-            temp_flags[ch_sel] = flags_final
-            totais_semana[dia_inventario] = totais_semana.get(dia_inventario, 0) + 1
-            totais_semana[dia_rem_sel] = max(0, totais_semana.get(dia_rem_sel, 0) - 1)
-            movimentos.append({
-                'Chapa': ch_sel,
-                'Nome': str((colab_by.get(ch_sel, {}) or {}).get('Nome', ch_sel)),
-                'Faixa': faixa,
-                'Entrada inventário': ent_sel,
-                'Remanejar folga para': int(dia_rem_sel),
-            })
-            deficits[faixa] -= 1
-
-    final = dict(atual)
-    for mov in movimentos:
-        final['TOTAL'] += 1
-        final[mov['Faixa']] += 1
-
-    return {
-        'ok': True,
-        'motivo': '',
-        'movimentos': movimentos,
-        'atual': atual,
-        'final': final,
-        'metas': metas_norm,
-        'semana': (inicio_sem, fim_sem),
-    }
-
-
-def _aplicar_inventario_inteligente(setor: str, ano: int, mes: int, dia_inventario: int, plano: dict) -> int:
-    movimentos = list((plano or {}).get('movimentos') or [])
-    aplicados = 0
-    for mov in movimentos:
-        ch = str(mov.get('Chapa') or '').strip()
-        if not ch:
-            continue
-        ent = str(mov.get('Entrada inventário') or '08:00').strip()
-        dia_rem = int(mov.get('Remanejar folga para') or 0)
-        set_override(setor, ano, mes, ch, int(dia_inventario), 'status', 'Trabalho')
-        set_override(setor, ano, mes, ch, int(dia_inventario), 'h_entrada', ent)
-        set_override(setor, ano, mes, ch, int(dia_inventario), 'h_saida', _saida_from_entrada(ent))
-        if dia_rem > 0:
-            set_override(setor, ano, mes, ch, dia_rem, 'status', 'Folga')
-            delete_override(setor, ano, mes, ch, dia_rem, 'h_entrada')
-            delete_override(setor, ano, mes, ch, dia_rem, 'h_saida')
-        aplicados += 1
-
-    if aplicados > 0:
-        _regenerar_mes_inteiro(setor, ano, mes, seed=int(st.session_state.get('last_seed', 0)), respeitar_ajustes=True)
-    return aplicados
 def _apply_pdf_import_to_db(
     setor_destino: str,
     ano: int,
@@ -8205,6 +7932,90 @@ def atualizar_status_solicitacao(solicitacao_id: int, novo_status: str):
     con.commit()
     con.close()
 
+
+def gerar_pdf_colaborador_portal(setor: str, ano: int, mes: int, colab: dict, df_escala: pd.DataFrame) -> bytes:
+    """PDF individual do colaborador, otimizado para portal/celular, sem QR e sem validação externa."""
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    width, height = A4
+    margem_x = 36
+    y = height - 42
+
+    nome = str((colab or {}).get('Nome', '-') or '-')
+    chapa = str((colab or {}).get('Chapa', '-') or '-')
+    subgrupo = str((colab or {}).get('Subgrupo', 'SEM SUBGRUPO') or 'SEM SUBGRUPO')
+    entrada_padrao = str((colab or {}).get('Entrada', '06:00') or '06:00')
+
+    c.setTitle(f"Escala_{nome}_{mes:02d}_{ano}")
+    c.setFont("Helvetica-Bold", 16)
+    c.drawString(margem_x, y, "ESCALA INDIVIDUAL DO COLABORADOR")
+    y -= 24
+    c.setFont("Helvetica", 10)
+    c.drawString(margem_x, y, f"Setor: {setor}")
+    y -= 14
+    c.drawString(margem_x, y, f"Nome: {nome}")
+    y -= 14
+    c.drawString(margem_x, y, f"Chapa: {chapa}    Subgrupo: {subgrupo}    Entrada padrão: {entrada_padrao}")
+    y -= 14
+    c.drawString(margem_x, y, f"Competência: {mes:02d}/{ano}")
+    y -= 40
+
+    c.setFont("Helvetica-Bold", 10)
+    c.drawString(margem_x, y, "Dia")
+    c.drawString(margem_x + 42, y, "Data")
+    c.drawString(margem_x + 102, y, "Semana")
+    c.drawString(margem_x + 170, y, "Status")
+    c.drawString(margem_x + 285, y, "Entrada")
+    c.drawString(margem_x + 350, y, "Saída")
+    y -= 8
+    c.line(margem_x, y, width - 36, y)
+    y -= 14
+
+    if isinstance(df_escala, pd.DataFrame):
+        df_show = df_escala.copy()
+    else:
+        df_show = pd.DataFrame()
+    if not df_show.empty and 'Data' in df_show.columns:
+        try:
+            df_show['Data'] = pd.to_datetime(df_show['Data'], errors='coerce').dt.strftime('%d/%m/%Y')
+        except Exception:
+            pass
+
+    for _, row in df_show.iterrows():
+        if y < 72:
+            c.showPage()
+            y = height - 42
+            c.setFont("Helvetica-Bold", 10)
+            c.drawString(margem_x, y, f"Escala individual — {nome} — {mes:02d}/{ano}")
+            y -= 24
+            c.drawString(margem_x, y, "Dia")
+            c.drawString(margem_x + 42, y, "Data")
+            c.drawString(margem_x + 102, y, "Semana")
+            c.drawString(margem_x + 170, y, "Status")
+            c.drawString(margem_x + 285, y, "Entrada")
+            c.drawString(margem_x + 350, y, "Saída")
+            y -= 8
+            c.line(margem_x, y, width - 36, y)
+            y -= 14
+        c.setFont("Helvetica", 9)
+        c.drawString(margem_x, y, str(row.get('Dia', '')))
+        c.drawString(margem_x + 42, y, str(row.get('Data', '')))
+        c.drawString(margem_x + 102, y, str(row.get('Dia da semana', '')))
+        c.drawString(margem_x + 170, y, str(row.get('Status', '')))
+        c.drawString(margem_x + 285, y, str(row.get('Entrada', '')))
+        c.drawString(margem_x + 350, y, str(row.get('Saída', '')))
+        y -= 14
+
+    y -= 6
+    c.line(margem_x, y, width - 36, y)
+    y -= 14
+    c.setFont("Helvetica", 8)
+    c.drawString(margem_x, y, "Documento gerado pelo Portal do Colaborador.")
+
+    c.save()
+    buf.seek(0)
+    return buf.getvalue()
+
 def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
     setor = _norm_setor(auth.get('setor', ''))
     chapa = _norm_chapa(auth.get('chapa', ''))
@@ -8244,13 +8055,14 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
     ass_escala = get_assinatura_status(setor, chapa, ano_vigente, mes_vigente, 'oficial')
     ass_mud = get_assinatura_status(setor, chapa, ano_vigente, mes_vigente, 'historico')
 
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
         '📋 Escala Oficial',
         '🕒 Pré-Escala',
         '📝 Histórico de Mudanças',
         '✍️ Assinaturas',
         '🏖️ Férias',
         '⚙️ Ajustes',
+        '🖨️ Imprimir',
     ])
 
     with tab1:
@@ -8405,6 +8217,57 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
                 st.info('Nenhuma sugestão enviada até agora.')
             else:
                 st.dataframe(df_sol, use_container_width=True, hide_index=True)
+
+
+    with tab7:
+        st.markdown(f"#### Imprimir / baixar — {mes_vigente:02d}/{ano_vigente}")
+        pdf_key = f'portal_pdf_blob_{setor}_{chapa}_{ano_vigente}_{mes_vigente}'
+        hist_key = f'portal_pdf_hist_loaded_{setor}_{chapa}_{ano_vigente}_{mes_vigente}'
+
+        if st.button('📄 Preparar PDF do mês vigente', key=f'prep_portal_pdf_{setor}_{chapa}_{ano_vigente}_{mes_vigente}'):
+            with st.spinner('Preparando PDF...'):
+                st.session_state[pdf_key] = gerar_pdf_colaborador_portal(setor, ano_vigente, mes_vigente, colab, df_oficial)
+
+        if st.session_state.get(pdf_key):
+            st.download_button(
+                '⬇️ Baixar escala em PDF',
+                data=st.session_state[pdf_key],
+                file_name=f"escala_{_slugify_filename(colab.get('Nome','colaborador'))}_{mes_vigente:02d}_{ano_vigente}.pdf",
+                mime='application/pdf',
+                key=f'portal_pdf_{setor}_{chapa}_{ano_vigente}_{mes_vigente}'
+            )
+
+        with st.expander('Meses anteriores para download', expanded=False):
+            if st.button('🕘 Carregar meses anteriores', key=f'load_hist_portal_{setor}_{chapa}_{ano_vigente}_{mes_vigente}'):
+                st.session_state[hist_key] = True
+
+            if st.session_state.get(hist_key, False):
+                historicos = []
+                for back in range(1, 7):
+                    y = ano_vigente
+                    m = mes_vigente - back
+                    while m <= 0:
+                        m += 12
+                        y -= 1
+                    df_hist_mes = get_escala_colaborador_mes(setor, chapa, y, m)
+                    if not df_hist_mes.empty:
+                        historicos.append((y, m, df_hist_mes))
+
+                if historicos:
+                    cols_hist = st.columns(min(3, len(historicos)))
+                    for idx, (y, m, df_hist_mes) in enumerate(historicos):
+                        hist_pdf_key = f'portal_pdf_hist_blob_{setor}_{chapa}_{y}_{m}'
+                        if hist_pdf_key not in st.session_state:
+                            st.session_state[hist_pdf_key] = gerar_pdf_colaborador_portal(setor, y, m, colab, df_hist_mes)
+                        cols_hist[idx % len(cols_hist)].download_button(
+                            f'⬇️ {m:02d}/{y}',
+                            data=st.session_state[hist_pdf_key],
+                            file_name=f"escala_{_slugify_filename(colab.get('Nome','colaborador'))}_{m:02d}_{y}.pdf",
+                            mime='application/pdf',
+                            key=f'portal_pdf_hist_{setor}_{chapa}_{y}_{m}'
+                        )
+                else:
+                    pass
 
 def page_app():
     auth = st.session_state.get("auth") or {}
@@ -9004,7 +8867,7 @@ def page_app():
             c2.caption("Alterar em 🗓️ Competência (sidebar)")
             c3.caption("Ajustes aplicam na competência ativa.")
 
-        sec_aj = st.radio("", ["🧩 Folgas manuais em grade", "🔁 Troca de horários", "📦 Inventário", "📊 Cobertura por dia", "✅ Preferência por subgrupo", "📌 Subgrupos (editável)"], horizontal=True, key="ajustes_nav_fast", label_visibility="collapsed")
+        sec_aj = st.radio("", ["🧩 Folgas manuais em grade", "🔁 Troca de horários", "✅ Preferência por subgrupo", "📌 Subgrupos (editável)"], horizontal=True, key="ajustes_nav_fast", label_visibility="collapsed")
 
         _ajustes_precisam_escala = sec_aj in ("🧩 Folgas manuais em grade", "🔁 Troca de horários")
         hist_db = {}
@@ -9283,119 +9146,6 @@ def page_app():
 
                                     st.success(f"Salvo! Ação: {acao_th}. Aplicados: {applied}. Ignorados (por conflito com Folga/Férias): {skipped}.")
                                     st.rerun()
-
-        if sec_aj == "📊 Cobertura por dia":
-            st.markdown("### 📊 Cobertura por dia")
-            st.caption("Resumo real da escala do mês somando todos os subgrupos. Classificação: Abertura 06:00–10:00 | Intermediário 10:01–12:00 | Fechamento a partir de 12:40.")
-
-            df_cov = _resumo_cobertura_por_dia(setor, ano, mes)
-            if df_cov.empty:
-                st.info("Gere a escala primeiro na aba 🚀 Gerar Escala.")
-            else:
-                dias_opts = df_cov["Dia"].tolist()
-                dia_sel = st.selectbox("Dia para visualizar", dias_opts, index=0, key="cov_dia_sel")
-                row_sel = df_cov[df_cov["Dia"] == int(dia_sel)].iloc[0]
-
-                c1, c2, c3, c4 = st.columns(4)
-                c1.metric("👥 Total trabalhando", int(row_sel["Total trabalhando"]))
-                c2.metric("🌅 Abertura", int(row_sel["Abertura"]))
-                c3.metric("⏰ Intermediário", int(row_sel["Intermediário"]))
-                c4.metric("🌙 Fechamento", int(row_sel["Fechamento"]))
-
-                c5, c6, c7 = st.columns(3)
-                c5.metric("🏖️ Folga", int(row_sel["Folga"]))
-                c6.metric("🌴 Férias", int(row_sel["Férias"]))
-                c7.metric("🩺 Afastamento", int(row_sel["Afastamento"]))
-
-                def _cor_total(v: int) -> str:
-                    if int(v) >= 15:
-                        return "background-color: rgba(46, 204, 113, 0.18);"
-                    if int(v) >= 10:
-                        return "background-color: rgba(241, 196, 15, 0.18);"
-                    return "background-color: rgba(231, 76, 60, 0.18);"
-
-                st.markdown("#### Tabela de cobertura do mês")
-                try:
-                    st.dataframe(
-                        df_cov.style.applymap(_cor_total, subset=["Total trabalhando"]),
-                        use_container_width=True,
-                        hide_index=True,
-                    )
-                except Exception:
-                    st.dataframe(df_cov, use_container_width=True, hide_index=True)
-
-
-        if sec_aj == "📦 Inventário":
-            st.markdown("### 📦 Inventário")
-            st.caption("Escolha um dia do mês e defina a meta de pessoas por faixa. O sistema tenta tirar folgas desse dia e remanejar para outros dias da mesma semana, respeitando travas manuais, férias, afastamentos, evitando folga consecutiva e mais de 5 dias seguidos.")
-
-            df_cov_inv = _resumo_cobertura_por_dia(setor, ano, mes)
-            if df_cov_inv.empty:
-                st.info("Gere a escala primeiro na aba 🚀 Gerar Escala.")
-            else:
-                dias_opts_inv = df_cov_inv["Dia"].tolist()
-                dia_inv = st.selectbox("Dia do inventário", dias_opts_inv, key="inv_dia_sel")
-                row_inv = df_cov_inv[df_cov_inv["Dia"] == int(dia_inv)].iloc[0]
-                sem_ini, sem_fim = _week_range_dias_mes(ano, mes, int(dia_inv))
-
-                k1, k2, k3, k4 = st.columns(4)
-                k1.metric("👥 Total atual", int(row_inv["Total trabalhando"]))
-                k2.metric("🌅 Abertura atual", int(row_inv["Abertura"]))
-                k3.metric("⏰ Intermediário atual", int(row_inv["Intermediário"]))
-                k4.metric("🌙 Fechamento atual", int(row_inv["Fechamento"]))
-
-                st.caption(f"Semana afetada: dias {sem_ini} até {sem_fim}.")
-
-                m1, m2, m3 = st.columns(3)
-                meta_ab = m1.number_input("Meta de Abertura no dia", min_value=0, value=int(row_inv["Abertura"]), step=1, key="inv_meta_ab")
-                meta_im = m2.number_input("Meta de Intermediário no dia", min_value=0, value=int(row_inv["Intermediário"]), step=1, key="inv_meta_im")
-                meta_fe = m3.number_input("Meta de Fechamento no dia", min_value=0, value=int(row_inv["Fechamento"]), step=1, key="inv_meta_fe")
-
-                metas_inv = {"ABERTURA": int(meta_ab), "INTERMEDIÁRIO": int(meta_im), "FECHAMENTO": int(meta_fe)}
-                plano_key = f"inventario_plano::{setor}::{ano}::{mes}::{int(dia_inv)}::{int(meta_ab)}::{int(meta_im)}::{int(meta_fe)}"
-
-                b1, b2 = st.columns([1, 1])
-                if b1.button("🔎 Simular inventário", key="inv_simular_btn"):
-                    st.session_state[plano_key] = _simular_inventario_inteligente(setor, ano, mes, int(dia_inv), metas_inv)
-
-                if b2.button("✅ Aplicar remanejamento", key="inv_aplicar_btn"):
-                    plano_apply = _simular_inventario_inteligente(setor, ano, mes, int(dia_inv), metas_inv)
-                    if not plano_apply.get('ok', False):
-                        st.error(plano_apply.get('motivo') or 'Não foi possível montar o ajuste do inventário.')
-                    else:
-                        qtd_aplicada = _aplicar_inventario_inteligente(setor, ano, mes, int(dia_inv), plano_apply)
-                        if qtd_aplicada <= 0:
-                            st.warning(plano_apply.get('motivo') or 'Nenhum remanejamento foi necessário ou possível para esse dia.')
-                        else:
-                            st.success(f"Inventário aplicado. Ajustes gravados: {qtd_aplicada} colaborador(es).")
-                            st.rerun()
-
-                plano = st.session_state.get(plano_key)
-                if plano:
-                    final = plano.get('final', {})
-                    metas_p = plano.get('metas', metas_inv)
-                    a1, a2, a3, a4 = st.columns(4)
-                    a1.metric("Abertura após ajuste", int(final.get('ABERTURA', 0)), delta=int(final.get('ABERTURA', 0)) - int(row_inv['Abertura']))
-                    a2.metric("Intermediário após ajuste", int(final.get('INTERMEDIÁRIO', 0)), delta=int(final.get('INTERMEDIÁRIO', 0)) - int(row_inv['Intermediário']))
-                    a3.metric("Fechamento após ajuste", int(final.get('FECHAMENTO', 0)), delta=int(final.get('FECHAMENTO', 0)) - int(row_inv['Fechamento']))
-                    a4.metric("Total após ajuste", int(final.get('TOTAL', 0)), delta=int(final.get('TOTAL', 0)) - int(row_inv['Total trabalhando']))
-
-                    faltas = []
-                    for fx in ('ABERTURA', 'INTERMEDIÁRIO', 'FECHAMENTO'):
-                        falta = max(0, int(metas_p.get(fx, 0)) - int(final.get(fx, 0)))
-                        if falta > 0:
-                            faltas.append(f"{fx}: faltaram {falta}")
-                    if faltas:
-                        st.warning("Não foi possível bater toda a meta sem ferir as validações locais. " + " | ".join(faltas))
-                    elif plano.get('movimentos'):
-                        st.success("Simulação pronta. A meta do dia ficou atendida com remanejamento dentro da mesma semana.")
-                    else:
-                        st.info(plano.get('motivo') or 'Nenhum remanejamento necessário.')
-
-                    movs = pd.DataFrame(plano.get('movimentos') or [])
-                    if not movs.empty:
-                        st.markdown("#### Prévia do remanejamento")
-                        st.dataframe(movs, use_container_width=True, hide_index=True)
 
         if sec_aj == "✅ Preferência por subgrupo":
             st.markdown("### ✅ Preferência por subgrupo (Evitar folga se possível)")
