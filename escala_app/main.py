@@ -8558,8 +8558,11 @@ def page_app():
     # =========================
     # ABAS
     # =========================
-    tabs = ["👥 Colaboradores", "🚀 Gerar Escala", "⚙️ Ajustes", "🏖️ Férias", "🖨️ Impressão", "✍️ Assinaturas", "📨 Minhas solicitações"]
     is_admin_area = bool(auth.get("is_admin", False)) and setor == "ADMIN"
+    if is_admin_area:
+        tabs = ["🔒 Admin"]
+    else:
+        tabs = ["👥 Colaboradores", "🚀 Gerar Escala", "⚙️ Ajustes", "🏖️ Férias", "🖨️ Impressão", "✍️ Assinaturas", "📨 Minhas solicitações"]
 
     sec_main = st.radio("Navegação", tabs, horizontal=True, key="main_nav_radio_ultra_fast")
 
