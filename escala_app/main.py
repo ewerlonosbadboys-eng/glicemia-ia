@@ -1108,6 +1108,7 @@ SUPABASE_ASYNC_PUSH_DELAY_SEC = float((os.getenv("SUPABASE_ASYNC_PUSH_DELAY_SEC"
 SUPABASE_AUTO_BOOTSTRAP_AFTER_SCHEMA = (os.getenv("SUPABASE_AUTO_BOOTSTRAP_AFTER_SCHEMA", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
 SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY = (os.getenv("SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
 FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP = (os.getenv("FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
+QUICK_LOGIN_BOOT = (os.getenv("QUICK_LOGIN_BOOT", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
 FAST_BACKUP_DISABLE_ROLLING_ON_COMMIT = (os.getenv("FAST_BACKUP_DISABLE_ROLLING_ON_COMMIT", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
 FAST_SNAPSHOT_THROTTLE_SECONDS = int((os.getenv("FAST_SNAPSHOT_THROTTLE_SECONDS", "300") or "300").strip())
 FAST_SNAPSHOT_SKIP_ON_CLOSE = (os.getenv("FAST_SNAPSHOT_SKIP_ON_CLOSE", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
@@ -3288,6 +3289,73 @@ def _safe_exec(cur, sql: str, params=None):
             cur.execute(sql, params)
     except Exception:
         pass
+
+def db_init_fast_login():
+    """Inicialização mínima para abrir a tela de login rápido sem alterar regras."""
+    con = db_conn()
+    cur = con.cursor()
+
+    _safe_exec(cur, """
+    CREATE TABLE IF NOT EXISTS setores (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome TEXT UNIQUE NOT NULL
+    )
+    """)
+
+    _safe_exec(cur, """
+    CREATE TABLE IF NOT EXISTS usuarios_sistema (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome TEXT NOT NULL,
+        setor TEXT NOT NULL,
+        chapa TEXT NOT NULL,
+        senha_hash TEXT NOT NULL,
+        salt TEXT NOT NULL,
+        is_admin INTEGER NOT NULL DEFAULT 0,
+        is_lider INTEGER NOT NULL DEFAULT 0,
+        criado_em TEXT NOT NULL,
+        UNIQUE(setor, chapa)
+    )
+    """)
+
+    _safe_exec(cur, """
+    CREATE TABLE IF NOT EXISTS colaboradores (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome TEXT NOT NULL,
+        setor TEXT NOT NULL,
+        chapa TEXT NOT NULL,
+        subgrupo TEXT DEFAULT '',
+        entrada TEXT DEFAULT '06:00',
+        folga_sab INTEGER DEFAULT 0,
+        criado_em TEXT NOT NULL,
+        UNIQUE(setor, chapa)
+    )
+    """)
+
+    _safe_exec(cur, """
+    CREATE TABLE IF NOT EXISTS login_recent (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        setor TEXT NOT NULL,
+        chapa TEXT NOT NULL,
+        ts TEXT NOT NULL
+    )
+    """)
+
+    _safe_exec(cur, "INSERT OR IGNORE INTO setores(nome) VALUES (?)", ("GERAL",))
+    _safe_exec(cur, "INSERT OR IGNORE INTO setores(nome) VALUES (?)", ("ADMIN",))
+    _safe_exec(cur, "INSERT OR IGNORE INTO setores(nome) VALUES (?)", ("GESTAO",))
+
+    cur.execute("SELECT 1 FROM usuarios_sistema WHERE setor=? AND chapa=? LIMIT 1", ("ADMIN", "admin"))
+    if cur.fetchone() is None:
+        salt = secrets.token_hex(16)
+        senha_hash = hash_password("123", salt)
+        cur.execute("""
+            INSERT INTO usuarios_sistema(nome, setor, chapa, senha_hash, salt, is_admin, is_lider, criado_em)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, ("Administrador", "ADMIN", "admin", senha_hash, salt, 1, 1, datetime.now().isoformat()))
+
+    con.commit()
+    con.close()
+
 
 def db_init():
     con = db_conn()
@@ -9792,11 +9860,17 @@ def _fast_restore_bundled_latest_before_start() -> None:
 # MAIN
 # =========================================================
 _fast_restore_bundled_latest_before_start()
-db_init()
-if not FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP:
-    auto_backup_if_due()
 
-if st.session_state["auth"] is None:
+if st.session_state["auth"] is None and QUICK_LOGIN_BOOT:
+    db_init_fast_login()
     page_login()
 else:
-    page_app()
+    if not st.session_state.get("_full_boot_done", False):
+        db_init()
+        if not FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP:
+            auto_backup_if_due()
+        st.session_state["_full_boot_done"] = True
+    if st.session_state["auth"] is None:
+        page_login()
+    else:
+        page_app()
