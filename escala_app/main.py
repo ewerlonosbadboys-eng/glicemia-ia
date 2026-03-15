@@ -74,18 +74,6 @@ import re
 import shutil
 from pathlib import Path
 import unicodedata
-
-
-def _slugify_filename(value: str) -> str:
-    value = str(value or '').strip()
-    if not value:
-        return 'arquivo'
-    value = unicodedata.normalize('NFKD', value)
-    value = ''.join(ch for ch in value if not unicodedata.combining(ch))
-    value = value.lower()
-    value = re.sub(r'[^a-z0-9]+', '_', value)
-    value = re.sub(r'_+', '_', value).strip('_')
-    return value or 'arquivo'
 import time
 import json
 import requests
@@ -103,7 +91,6 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, 
 from reportlab.lib.pagesizes import landscape, A4
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib import colors
-from reportlab.pdfgen import canvas
 st.set_page_config(page_title="Escala 5x2 Oficial", layout="wide")
 
 VERSAO_ACESSO_LIDER = "ACESSO_LIDER_FIX_2026_03_14_v2"
@@ -4673,6 +4660,183 @@ def is_first_week_after_return(setor: str, chapa: str, data_obj: date) -> bool:
     retorno = fim + timedelta(days=1)
     return retorno <= data_obj <= (retorno + timedelta(days=6))
 
+
+def get_last_ferias_fim_before(setor: str, chapa: str, data_obj: date) -> date | None:
+    """
+    Retorna o último dia de férias (fim) imediatamente anterior a `data_obj`.
+    Usado para tratar a 1ª semana de retorno:
+    - o último dia de férias conta como 1 folga da semana
+    - nessa 1ª semana o colaborador pode trabalhar até 5 dias seguidos
+    """
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute("""
+        SELECT fim FROM ferias
+        WHERE setor=? AND chapa=? AND date(fim) < date(?)
+        ORDER BY date(fim) DESC
+        LIMIT 1
+    """, (setor, chapa, data_obj.strftime("%Y-%m-%d")))
+    row = cur.fetchone()
+    con.close()
+    if not row:
+        return None
+    try:
+        return datetime.strptime(str(row[0]), "%Y-%m-%d").date()
+    except Exception:
+        return None
+
+
+def get_return_date_in_month(setor: str, chapa: str, ano: int, mes: int) -> date | None:
+    """
+    Retorna a data de retorno ao trabalho (fim das férias + 1)
+    quando essa volta acontece dentro do mês informado.
+    """
+    ini_mes = date(int(ano), int(mes), 1)
+    fim_mes = date(int(ano), int(mes), calendar.monthrange(int(ano), int(mes))[1])
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute("""
+        SELECT fim FROM ferias
+        WHERE setor=? AND chapa=?
+          AND date(fim) < date(?)
+        ORDER BY date(fim) DESC
+        LIMIT 1
+    """, (setor, chapa, (fim_mes + timedelta(days=1)).strftime("%Y-%m-%d")))
+    row = cur.fetchone()
+    con.close()
+    if not row:
+        return None
+    try:
+        fim_fer = datetime.strptime(str(row[0]), "%Y-%m-%d").date()
+    except Exception:
+        return None
+    retorno = fim_fer + timedelta(days=1)
+    if ini_mes <= retorno <= fim_mes:
+        return retorno
+    return None
+
+
+def apply_return_from_vacation_first_week_rules(
+    hist_all: dict,
+    colab_by_chapa: dict,
+    locked_idx: dict,
+    setor: str,
+    ano: int,
+    mes: int,
+) -> set:
+    """
+    Regras especiais SOMENTE para a 1ª semana de volta de férias:
+
+    1) O último dia de férias (AFS / fim das férias) conta como 1 folga da semana.
+       Portanto, na semana de retorno NÃO obrigamos 2 folgas dentro do mês atual.
+       No mês atual, essa semana pode ficar com 0 ou 1 folga, dependendo da necessidade.
+
+    2) Domingo da 1ª semana de retorno:
+       entre os domingos do mês do setor, se o domingo dessa semana estiver entre os
+       menos cobertos, o colaborador volta trabalhando nesse domingo, desde que não
+       esteja travado manualmente e não esteja em férias/afastamento no dia.
+
+    3) Se a semana atual estiver com mais de 1 folga no mês corrente, removemos o excesso
+       (preferindo remover domingo quando ele estiver entre os menos cobertos).
+       Isso preserva a ideia de que o último dia de férias já valeu como 1 folga da semana.
+
+    Importante:
+    - não mexe em férias/afastamento
+    - respeita travas manuais
+    - não tenta “inventar” folga extra nessa semana
+    """
+    if not hist_all:
+        return set()
+
+    any_df = next(iter(hist_all.values()))
+    if any_df is None or len(any_df) == 0:
+        return set()
+
+    # conta cobertura de todos os domingos do mês no setor
+    sunday_idxs = [i for i in range(len(any_df)) if str(any_df.loc[i, "Dia"]) == "dom"]
+    sunday_work_counts = {}
+    for idx in sunday_idxs:
+        total_work = 0
+        for chx, dfx in hist_all.items():
+            try:
+                stt = str(dfx.loc[idx, "Status"] or "")
+            except Exception:
+                stt = ""
+            if stt in WORK_STATUSES:
+                total_work += 1
+        sunday_work_counts[idx] = total_work
+    min_sunday_work = min(sunday_work_counts.values()) if sunday_work_counts else None
+
+    changed = set()
+
+    for ch, df in list(hist_all.items()):
+        retorno = get_return_date_in_month(setor, ch, int(ano), int(mes))
+        if not retorno:
+            continue
+
+        ws = pd.to_datetime(retorno) - pd.to_timedelta(int(pd.to_datetime(retorno).weekday()), unit="D")
+        ws = pd.to_datetime(ws).normalize()
+        we = ws + pd.Timedelta(days=6)
+
+        idxs_week = []
+        for i in range(len(df)):
+            dd = pd.to_datetime(df.loc[i, "Data"], errors="coerce")
+            if pd.isna(dd):
+                continue
+            ddn = dd.normalize()
+            if ws <= ddn <= we:
+                idxs_week.append(i)
+        if not idxs_week:
+            continue
+
+        locked = set((locked_idx or {}).get(ch, set()))
+        ent = str((colab_by_chapa.get(ch, {}) or {}).get("Entrada", "06:00") or "06:00")
+
+        # domingo da semana de retorno
+        dom_idx = None
+        for i in idxs_week:
+            if str(df.loc[i, "Dia"]) == "dom":
+                dom_idx = i
+                break
+
+        # Se este domingo for um dos menos cobertos do setor, força trabalho nele
+        if dom_idx is not None and min_sunday_work is not None:
+            dom_status = str(df.loc[dom_idx, "Status"] or "")
+            if (
+                sunday_work_counts.get(dom_idx, 0) <= min_sunday_work
+                and dom_idx not in locked
+                and dom_status not in ("Férias", "Afastamento")
+                and _is_folga_status(dom_status)
+            ):
+                _set_trabalho(df, dom_idx, ent, locked_status=locked)
+                changed.add(ch)
+
+        current_week_folgas = [i for i in idxs_week if _is_folga_status(str(df.loc[i, "Status"] or ""))]
+
+        # Na 1ª semana de volta, no mês atual deixamos no máximo 1 folga.
+        if len(current_week_folgas) > 1:
+            def _remove_prio(i: int):
+                is_dom = 0 if (dom_idx is not None and i == dom_idx and sunday_work_counts.get(i, 999999) <= min_sunday_work) else 1
+                return (
+                    is_dom,  # remove primeiro o domingo se ele estiver fraco no setor
+                    -int(pd.to_datetime(df.loc[i, "Data"]).day),
+                )
+
+            for i in sorted(current_week_folgas, key=_remove_prio):
+                if len([j for j in idxs_week if _is_folga_status(str(df.loc[j, "Status"] or ""))]) <= 1:
+                    break
+                if i in locked:
+                    continue
+                stt = str(df.loc[i, "Status"] or "")
+                if stt in ("Férias", "Afastamento"):
+                    continue
+                _set_trabalho(df, i, ent, locked_status=locked)
+                changed.add(ch)
+
+        hist_all[ch] = df
+
+    return changed
+
 # =========================================================
 # ESTADO
 # =========================================================
@@ -6592,6 +6756,35 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
     except Exception:
         pass
 
+    # ✅ Regra especial de retorno de férias:
+    # - último dia de férias conta como 1 folga da semana
+    # - na 1ª semana de volta não força a 2ª folga no mês atual
+    # - se o domingo dessa semana for um dos menos cobertos do setor, coloca para trabalhar
+    try:
+        _ret_changed = apply_return_from_vacation_first_week_rules(
+            hist_all, colab_by_chapa, locked_idx, setor, ano, mes
+        )
+        for ch in list(_ret_changed or set()):
+            if ch not in hist_all:
+                continue
+            df = hist_all[ch]
+            ent = colab_by_chapa[ch].get("Entrada", "06:00")
+            locked = locked_idx.get(ch, set())
+            pode_sab = bool(colab_by_chapa[ch].get("Folga_Sab", False))
+            ultima_saida_prev = "" if _past else (estado_prev.get(ch, {}).get("ultima_saida", "") or "")
+            enforce_max_5_consecutive_work(
+                df, ent, pode_sab,
+                initial_consec=(0 if _past else int((estado_prev.get(ch, {}) or {}).get('consec_trab_final', 0))),
+                locked_status=locked
+            )
+            enforce_no_consecutive_folga(df, locked_status=locked)
+            enforce_global_rest_keep_targets(df, ent, locked_status=locked, ultima_saida_prev=ultima_saida_prev)
+            if respeitar_ajustes:
+                _apply_overrides_to_df_inplace(df, setor, ch, ovmap)
+            hist_all[ch] = df
+    except Exception:
+        pass
+
     # Estado do mês
     estado_out = {}
     for ch, df in hist_all.items():
@@ -7933,90 +8126,6 @@ def atualizar_status_solicitacao(solicitacao_id: int, novo_status: str):
     con.commit()
     con.close()
 
-
-def gerar_pdf_colaborador_portal(setor: str, ano: int, mes: int, colab: dict, df_escala: pd.DataFrame) -> bytes:
-    """PDF individual do colaborador, otimizado para portal/celular, sem QR e sem validação externa."""
-    buf = io.BytesIO()
-    c = canvas.Canvas(buf, pagesize=A4)
-    width, height = A4
-    margem_x = 36
-    y = height - 42
-
-    nome = str((colab or {}).get('Nome', '-') or '-')
-    chapa = str((colab or {}).get('Chapa', '-') or '-')
-    subgrupo = str((colab or {}).get('Subgrupo', 'SEM SUBGRUPO') or 'SEM SUBGRUPO')
-    entrada_padrao = str((colab or {}).get('Entrada', '06:00') or '06:00')
-
-    c.setTitle(f"Escala_{nome}_{mes:02d}_{ano}")
-    c.setFont("Helvetica-Bold", 16)
-    c.drawString(margem_x, y, "ESCALA INDIVIDUAL DO COLABORADOR")
-    y -= 24
-    c.setFont("Helvetica", 10)
-    c.drawString(margem_x, y, f"Setor: {setor}")
-    y -= 14
-    c.drawString(margem_x, y, f"Nome: {nome}")
-    y -= 14
-    c.drawString(margem_x, y, f"Chapa: {chapa}    Subgrupo: {subgrupo}    Entrada padrão: {entrada_padrao}")
-    y -= 14
-    c.drawString(margem_x, y, f"Competência: {mes:02d}/{ano}")
-    y -= 40
-
-    c.setFont("Helvetica-Bold", 10)
-    c.drawString(margem_x, y, "Dia")
-    c.drawString(margem_x + 42, y, "Data")
-    c.drawString(margem_x + 102, y, "Semana")
-    c.drawString(margem_x + 170, y, "Status")
-    c.drawString(margem_x + 285, y, "Entrada")
-    c.drawString(margem_x + 350, y, "Saída")
-    y -= 8
-    c.line(margem_x, y, width - 36, y)
-    y -= 14
-
-    if isinstance(df_escala, pd.DataFrame):
-        df_show = df_escala.copy()
-    else:
-        df_show = pd.DataFrame()
-    if not df_show.empty and 'Data' in df_show.columns:
-        try:
-            df_show['Data'] = pd.to_datetime(df_show['Data'], errors='coerce').dt.strftime('%d/%m/%Y')
-        except Exception:
-            pass
-
-    for _, row in df_show.iterrows():
-        if y < 72:
-            c.showPage()
-            y = height - 42
-            c.setFont("Helvetica-Bold", 10)
-            c.drawString(margem_x, y, f"Escala individual — {nome} — {mes:02d}/{ano}")
-            y -= 24
-            c.drawString(margem_x, y, "Dia")
-            c.drawString(margem_x + 42, y, "Data")
-            c.drawString(margem_x + 102, y, "Semana")
-            c.drawString(margem_x + 170, y, "Status")
-            c.drawString(margem_x + 285, y, "Entrada")
-            c.drawString(margem_x + 350, y, "Saída")
-            y -= 8
-            c.line(margem_x, y, width - 36, y)
-            y -= 14
-        c.setFont("Helvetica", 9)
-        c.drawString(margem_x, y, str(row.get('Dia', '')))
-        c.drawString(margem_x + 42, y, str(row.get('Data', '')))
-        c.drawString(margem_x + 102, y, str(row.get('Dia da semana', '')))
-        c.drawString(margem_x + 170, y, str(row.get('Status', '')))
-        c.drawString(margem_x + 285, y, str(row.get('Entrada', '')))
-        c.drawString(margem_x + 350, y, str(row.get('Saída', '')))
-        y -= 14
-
-    y -= 6
-    c.line(margem_x, y, width - 36, y)
-    y -= 14
-    c.setFont("Helvetica", 8)
-    c.drawString(margem_x, y, "Documento gerado pelo Portal do Colaborador.")
-
-    c.save()
-    buf.seek(0)
-    return buf.getvalue()
-
 def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
     setor = _norm_setor(auth.get('setor', ''))
     chapa = _norm_chapa(auth.get('chapa', ''))
@@ -8056,14 +8165,13 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
     ass_escala = get_assinatura_status(setor, chapa, ano_vigente, mes_vigente, 'oficial')
     ass_mud = get_assinatura_status(setor, chapa, ano_vigente, mes_vigente, 'historico')
 
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         '📋 Escala Oficial',
         '🕒 Pré-Escala',
         '📝 Histórico de Mudanças',
         '✍️ Assinaturas',
         '🏖️ Férias',
         '⚙️ Ajustes',
-        '🖨️ Imprimir',
     ])
 
     with tab1:
@@ -8218,57 +8326,6 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
                 st.info('Nenhuma sugestão enviada até agora.')
             else:
                 st.dataframe(df_sol, use_container_width=True, hide_index=True)
-
-
-    with tab7:
-        st.markdown(f"#### Imprimir / baixar — {mes_vigente:02d}/{ano_vigente}")
-        pdf_key = f'portal_pdf_blob_{setor}_{chapa}_{ano_vigente}_{mes_vigente}'
-        hist_key = f'portal_pdf_hist_loaded_{setor}_{chapa}_{ano_vigente}_{mes_vigente}'
-
-        if st.button('📄 Preparar PDF do mês vigente', key=f'prep_portal_pdf_{setor}_{chapa}_{ano_vigente}_{mes_vigente}'):
-            with st.spinner('Preparando PDF...'):
-                st.session_state[pdf_key] = gerar_pdf_colaborador_portal(setor, ano_vigente, mes_vigente, colab, df_oficial)
-
-        if st.session_state.get(pdf_key):
-            st.download_button(
-                '⬇️ Baixar escala em PDF',
-                data=st.session_state[pdf_key],
-                file_name=f"escala_{_slugify_filename(colab.get('Nome','colaborador'))}_{mes_vigente:02d}_{ano_vigente}.pdf",
-                mime='application/pdf',
-                key=f'portal_pdf_{setor}_{chapa}_{ano_vigente}_{mes_vigente}'
-            )
-
-        with st.expander('Meses anteriores para download', expanded=False):
-            if st.button('🕘 Carregar meses anteriores', key=f'load_hist_portal_{setor}_{chapa}_{ano_vigente}_{mes_vigente}'):
-                st.session_state[hist_key] = True
-
-            if st.session_state.get(hist_key, False):
-                historicos = []
-                for back in range(1, 7):
-                    y = ano_vigente
-                    m = mes_vigente - back
-                    while m <= 0:
-                        m += 12
-                        y -= 1
-                    df_hist_mes = get_escala_colaborador_mes(setor, chapa, y, m)
-                    if not df_hist_mes.empty:
-                        historicos.append((y, m, df_hist_mes))
-
-                if historicos:
-                    cols_hist = st.columns(min(3, len(historicos)))
-                    for idx, (y, m, df_hist_mes) in enumerate(historicos):
-                        hist_pdf_key = f'portal_pdf_hist_blob_{setor}_{chapa}_{y}_{m}'
-                        if hist_pdf_key not in st.session_state:
-                            st.session_state[hist_pdf_key] = gerar_pdf_colaborador_portal(setor, y, m, colab, df_hist_mes)
-                        cols_hist[idx % len(cols_hist)].download_button(
-                            f'⬇️ {m:02d}/{y}',
-                            data=st.session_state[hist_pdf_key],
-                            file_name=f"escala_{_slugify_filename(colab.get('Nome','colaborador'))}_{m:02d}_{y}.pdf",
-                            mime='application/pdf',
-                            key=f'portal_pdf_hist_{setor}_{chapa}_{y}_{m}'
-                        )
-                else:
-                    pass
 
 def page_app():
     auth = st.session_state.get("auth") or {}
