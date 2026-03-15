@@ -1,6 +1,3 @@
-# V100 ENTERPRISE — otimizações seguras de I/O, importação PDF em lote e proteção contra dupla aplicação
-# Esta versão preserva as regras já existentes da escala; os ajustes focam em performance e robustez operacional.
-
 # V97 ENTERPRISE — boot resiliente, restore em camadas e login sempre liberado
 # Derivado da V95.2 com reforço no restore local/Supabase/latest_stable e sem bloqueio rígido de login.
 
@@ -80,6 +77,7 @@ import unicodedata
 import time
 import json
 import requests
+import threading
 
 import hashlib
 import secrets
@@ -94,7 +92,7 @@ from reportlab.lib.pagesizes import landscape, A4
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib import colors
 st.set_page_config(page_title="Escala 5x2 Oficial", layout="wide")
-st.sidebar.info('ADMIN_FIX_VISIVEL_2026_03_14')
+st.sidebar.info('ADMIN_FIX_VISIVEL_2026_03_14 | V101_ULTRA')
 VERSAO_ACESSO_LIDER = "ACESSO_LIDER_FIX_2026_03_14_v2"
 
 
@@ -665,60 +663,6 @@ def _rebuild_estado_out(hist_all: dict) -> dict:
     return estado_out
 
 
-def _bulk_upsert_overrides(cur, setor: str, ano: int, mes: int, rows: list[tuple[str, int, str, str]]):
-    if not rows:
-        return
-    payload = []
-    for chapa, dia, campo, valor in rows:
-        payload.append((str(setor).strip().upper(), int(ano), int(mes), str(chapa).strip(), int(dia), _norm_override_campo(campo), str(valor).strip()))
-    cur.executemany(
-        """
-        INSERT INTO overrides(setor, ano, mes, chapa, dia, campo, valor)
-        VALUES(?,?,?,?,?,?,?)
-        ON CONFLICT(setor, ano, mes, chapa, dia, campo)
-        DO UPDATE SET valor=excluded.valor
-        """,
-        payload,
-    )
-
-
-def _bulk_delete_override_campos(cur, setor: str, ano: int, mes: int, rows: list[tuple[str, int, str | None]]):
-    if not rows:
-        return
-    for chapa, dia, campo in rows:
-        if campo:
-            campos = sorted({str(campo).strip(), _norm_override_campo(campo)})
-            placeholders = ",".join(["?"] * len(campos))
-            cur.execute(
-                f"""
-                DELETE FROM overrides
-                WHERE setor=? AND ano=? AND mes=? AND chapa=? AND dia=? AND campo IN ({placeholders})
-                """,
-                (setor, int(ano), int(mes), chapa, int(dia), *campos),
-            )
-        else:
-            cur.execute(
-                """
-                DELETE FROM overrides
-                WHERE setor=? AND ano=? AND mes=? AND chapa=? AND dia=?
-                """,
-                (setor, int(ano), int(mes), chapa, int(dia)),
-            )
-
-
-def _bulk_add_ferias(cur, setor: str, rows: list[tuple[str, date, date]]):
-    if not rows:
-        return
-    payload = [
-        (setor, chapa, inicio.strftime("%Y-%m-%d"), fim.strftime("%Y-%m-%d"))
-        for chapa, inicio, fim in rows
-    ]
-    cur.executemany(
-        "INSERT INTO ferias(setor, chapa, inicio, fim) VALUES (?, ?, ?, ?)",
-        payload,
-    )
-
-
 def _apply_pdf_import_to_db(
     setor_destino: str,
     ano: int,
@@ -729,11 +673,15 @@ def _apply_pdf_import_to_db(
     map_afa_para_folga: bool = False,
     cadastrar_ferias: bool = True,
 ):
+    if limpar_mes_antes:
+        con = db_conn()
+        cur = con.cursor()
+        cur.execute("DELETE FROM overrides WHERE setor=? AND ano=? AND mes=?", (setor_destino, int(ano), int(mes)))
+        con.commit()
+        con.close()
+
     resolvidos_por_nome = 0
     gerados_sem_chapa = []
-    override_upserts = []
-    override_deletes = []
-    ferias_rows = []
 
     for it in items:
         nome = (it.get("nome") or "").strip()
@@ -762,48 +710,29 @@ def _apply_pdf_import_to_db(
             saida = str(saida).strip().upper()
 
             if tok == "FOLG":
-                override_upserts.append((chapa, dia, "Status", "Folga"))
-                override_deletes.append((chapa, dia, "H_Entrada"))
-                override_deletes.append((chapa, dia, "H_Saida"))
+                set_override(setor_destino, ano, mes, chapa, dia, "Status", "Folga")
+                delete_override(setor_destino, ano, mes, chapa, dia, "H_Entrada")
+                delete_override(setor_destino, ano, mes, chapa, dia, "H_Saida")
             elif tok == "FER":
                 ferias_days.append(dia)
-                override_upserts.append((chapa, dia, "Status", "Férias"))
-                override_deletes.append((chapa, dia, "H_Entrada"))
-                override_deletes.append((chapa, dia, "H_Saida"))
+                set_override(setor_destino, ano, mes, chapa, dia, "Status", "Férias")
+                delete_override(setor_destino, ano, mes, chapa, dia, "H_Entrada")
+                delete_override(setor_destino, ano, mes, chapa, dia, "H_Saida")
             elif tok == "AFA":
-                override_upserts.append((chapa, dia, "Status", "Folga" if bool(map_afa_para_folga) else "Afastamento"))
-                override_deletes.append((chapa, dia, "H_Entrada"))
-                override_deletes.append((chapa, dia, "H_Saida"))
+                set_override(setor_destino, ano, mes, chapa, dia, "Status", "Folga" if bool(map_afa_para_folga) else "Afastamento")
+                delete_override(setor_destino, ano, mes, chapa, dia, "H_Entrada")
+                delete_override(setor_destino, ano, mes, chapa, dia, "H_Saida")
             elif re.match(r"^\d{2}:\d{2}$", tok):
-                override_upserts.append((chapa, dia, "Status", "Trabalho"))
-                override_upserts.append((chapa, dia, "H_Entrada", tok))
+                set_override(setor_destino, ano, mes, chapa, dia, "Status", "Trabalho")
+                set_override(setor_destino, ano, mes, chapa, dia, "H_Entrada", tok)
                 if re.match(r"^\d{2}:\d{2}$", saida):
-                    override_upserts.append((chapa, dia, "H_Saida", saida))
+                    set_override(setor_destino, ano, mes, chapa, dia, "H_Saida", saida)
                 else:
-                    override_upserts.append((chapa, dia, "H_Saida", _saida_from_entrada(tok)))
+                    set_override(setor_destino, ano, mes, chapa, dia, "H_Saida", _saida_from_entrada(tok))
 
         if cadastrar_ferias and ferias_days:
             for a, b in _group_consecutive_days(ferias_days):
-                ferias_rows.append((chapa, date(int(ano), int(mes), int(a)), date(int(ano), int(mes), int(b))))
-
-    con = db_conn()
-    cur = con.cursor()
-    try:
-        cur.execute("BEGIN")
-        if limpar_mes_antes:
-            cur.execute("DELETE FROM overrides WHERE setor=? AND ano=? AND mes=?", (setor_destino, int(ano), int(mes)))
-        _bulk_upsert_overrides(cur, setor_destino, ano, mes, override_upserts)
-        _bulk_delete_override_campos(cur, setor_destino, ano, mes, override_deletes)
-        _bulk_add_ferias(cur, setor_destino, ferias_rows)
-        con.commit()
-    except Exception:
-        try:
-            con.rollback()
-        except Exception:
-            pass
-        raise
-    finally:
-        con.close()
+                add_ferias(setor_destino, chapa, date(int(ano), int(mes), int(a)), date(int(ano), int(mes), int(b)))
 
     try:
         st.cache_data.clear()
@@ -816,7 +745,6 @@ def _apply_pdf_import_to_db(
             st.warning("Importação PDF: chapa automática criada para: " + "; ".join(gerados_sem_chapa[:12]) + (" ..." if len(gerados_sem_chapa) > 12 else ""))
     except Exception:
         pass
-
 
 def _build_hist_from_pdf_items(setor: str, ano: int, mes: int, items: list[dict], map_afa_para_folga: bool = False) -> tuple[dict, dict]:
     """Monta a escala do mês exatamente como veio no PDF.
@@ -1173,8 +1101,10 @@ SUPABASE_SCHEMA = (os.getenv("SUPABASE_SCHEMA") or "public").strip() or "public"
 SUPABASE_SYNC_ENABLED = bool(SUPABASE_URL and SUPABASE_KEY)
 SUPABASE_SYNC_DEBOUNCE_SEC = int(os.getenv("SUPABASE_SYNC_DEBOUNCE_SEC", "12") or 12)
 SUPABASE_AUTO_PULL_ON_START = (os.getenv("SUPABASE_AUTO_PULL_ON_START", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
-SUPABASE_AUTO_PUSH_ON_COMMIT = (os.getenv("SUPABASE_AUTO_PUSH_ON_COMMIT", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
+SUPABASE_AUTO_PUSH_ON_COMMIT = (os.getenv("SUPABASE_AUTO_PUSH_ON_COMMIT", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
 SUPABASE_AUTO_PUSH_ON_CLOSE = (os.getenv("SUPABASE_AUTO_PUSH_ON_CLOSE", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
+SUPABASE_ASYNC_PUSH_ENABLED = (os.getenv("SUPABASE_ASYNC_PUSH_ENABLED", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
+SUPABASE_ASYNC_PUSH_DELAY_SEC = float((os.getenv("SUPABASE_ASYNC_PUSH_DELAY_SEC", "2.0") or "2.0").strip())
 SUPABASE_AUTO_BOOTSTRAP_AFTER_SCHEMA = (os.getenv("SUPABASE_AUTO_BOOTSTRAP_AFTER_SCHEMA", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
 SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY = (os.getenv("SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
 FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP = (os.getenv("FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
@@ -1191,6 +1121,11 @@ _SUPABASE_LAST_PUSH_TS = 0.0
 _SUPABASE_LAST_PULL_TS = 0.0
 _SUPABASE_SYNC_IN_PROGRESS = False
 _SUPABASE_LAST_ERROR = ""
+_SUPABASE_ASYNC_THREAD = None
+_SUPABASE_ASYNC_LOCK = threading.Lock()
+_SUPABASE_ASYNC_PENDING = False
+_SUPABASE_ASYNC_FORCE = False
+_SUPABASE_ASYNC_LAST_REQUEST_TS = 0.0
 _SUPABASE_BOOTSTRAP_DONE = False
 _SUPABASE_SYNC_STARTED_AT = 0.0
 SUPABASE_SYNC_LOCK_TIMEOUT_SEC = int((os.getenv("SUPABASE_SYNC_LOCK_TIMEOUT_SEC", "45") or "45").strip())
@@ -1333,18 +1268,12 @@ def _supabase_resolve_remote_table(local_table: str, refresh: bool = False) -> s
 def _app_db_connect(db_path: str | None = None):
     target = str(db_path or DB_PATH)
     factory = SQLiteSyncConnection if str(Path(target).resolve()) == str(Path(DB_PATH).resolve()) else sqlite3.Connection
-    conn = sqlite3.connect(target, check_same_thread=False, factory=factory, timeout=30.0)
+    conn = sqlite3.connect(target, check_same_thread=False, factory=factory)
     try:
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA busy_timeout=30000")
+        conn.execute("PRAGMA busy_timeout=10000")
         conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute("PRAGMA temp_store=MEMORY")
-        conn.execute("PRAGMA cache_size=-65536")
-        try:
-            conn.execute("PRAGMA mmap_size=268435456")
-        except Exception:
-            pass
     except Exception:
         pass
     return conn
@@ -1434,6 +1363,11 @@ def _set_supabase_error(msg: str = "") -> None:
         _SUPABASE_LAST_ERROR = str(msg or "").strip()
     except Exception:
         _SUPABASE_LAST_ERROR = ""
+_SUPABASE_ASYNC_THREAD = None
+_SUPABASE_ASYNC_LOCK = threading.Lock()
+_SUPABASE_ASYNC_PENDING = False
+_SUPABASE_ASYNC_FORCE = False
+_SUPABASE_ASYNC_LAST_REQUEST_TS = 0.0
 
 
 def _set_restore_guard(active: bool, message: str = "") -> None:
@@ -1675,6 +1609,57 @@ def _supabase_upsert_rows(table: str, rows: list[dict], conflict_cols: list[str]
                 attempts += 1
                 continue
             raise RuntimeError(f"Supabase UPSERT {table}: {r.status_code} {r.text[:300]}")
+
+def _supabase_request_push_async(force: bool = False) -> bool:
+    """Agenda push do SQLite para o Supabase em background, sem travar a UI."""
+    global _SUPABASE_ASYNC_PENDING, _SUPABASE_ASYNC_FORCE, _SUPABASE_ASYNC_THREAD, _SUPABASE_ASYNC_LAST_REQUEST_TS
+    if not SUPABASE_SYNC_ENABLED:
+        return False
+    if not SUPABASE_ASYNC_PUSH_ENABLED:
+        return _supabase_push_all_from_sqlite(force=force)
+    try:
+        now = time.time()
+    except Exception:
+        now = 0.0
+    with _SUPABASE_ASYNC_LOCK:
+        _SUPABASE_ASYNC_PENDING = True
+        _SUPABASE_ASYNC_FORCE = bool(_SUPABASE_ASYNC_FORCE or force)
+        _SUPABASE_ASYNC_LAST_REQUEST_TS = now
+        th = _SUPABASE_ASYNC_THREAD
+        if th is not None and th.is_alive():
+            return True
+
+        def _worker():
+            global _SUPABASE_ASYNC_PENDING, _SUPABASE_ASYNC_FORCE, _SUPABASE_ASYNC_THREAD
+            while True:
+                try:
+                    time.sleep(max(0.2, float(SUPABASE_ASYNC_PUSH_DELAY_SEC)))
+                except Exception:
+                    time.sleep(0.5)
+                with _SUPABASE_ASYNC_LOCK:
+                    pending = bool(_SUPABASE_ASYNC_PENDING)
+                    force_now = bool(_SUPABASE_ASYNC_FORCE)
+                    age = time.time() - float(_SUPABASE_ASYNC_LAST_REQUEST_TS or 0.0)
+                    if not pending:
+                        _SUPABASE_ASYNC_THREAD = None
+                        return
+                    if age < max(0.2, float(SUPABASE_ASYNC_PUSH_DELAY_SEC)):
+                        continue
+                    _SUPABASE_ASYNC_PENDING = False
+                    _SUPABASE_ASYNC_FORCE = False
+                try:
+                    _supabase_push_all_from_sqlite(force=force_now)
+                except Exception as e:
+                    _set_supabase_error(e)
+                with _SUPABASE_ASYNC_LOCK:
+                    if not _SUPABASE_ASYNC_PENDING:
+                        _SUPABASE_ASYNC_THREAD = None
+                        return
+
+        _SUPABASE_ASYNC_THREAD = threading.Thread(target=_worker, daemon=True, name='supabase_async_push')
+        _SUPABASE_ASYNC_THREAD.start()
+        return True
+
 
 def _supabase_delete_all_rows(table: str) -> None:
     if not SUPABASE_SYNC_ENABLED:
@@ -1921,7 +1906,7 @@ class SQLiteSyncConnection(sqlite3.Connection):
             pass
         if SUPABASE_AUTO_PUSH_ON_COMMIT:
             try:
-                _supabase_push_all_from_sqlite(force=False)
+                _supabase_request_push_async(force=False)
             except Exception:
                 pass
         return result
@@ -1933,7 +1918,7 @@ class SQLiteSyncConnection(sqlite3.Connection):
             pass
         if SUPABASE_AUTO_PUSH_ON_CLOSE:
             try:
-                _supabase_push_all_from_sqlite(force=True)
+                _supabase_request_push_async(force=True)
             except Exception:
                 pass
         return super().close()
@@ -9437,70 +9422,63 @@ def page_app():
                                     st.write(it.get("tokens", [])[:10], " ...")
 
 
-                            _pdf_apply_sig = hashlib.sha1((str(setor_dest) + "|" + str(ano) + "|" + str(mes) + "|" + str(bool(criar_colabs)) + "|" + str(bool(limpar_mes)) + "|" + str(bool(map_afa)) + "|" + str(bool(cadastrar_ferias)) + "|" + str(len(items)) + "|" + (pdf_bytes.hex()[:128] if 'pdf_bytes' in locals() and pdf_bytes else str(len(extracted or '')))).encode("utf-8")).hexdigest()
-
                             if st.button("✅ Aplicar escala do PDF no sistema (1 clique)", key="btn_apply_pdf"):
 
-                                if st.session_state.get("_last_pdf_apply_sig") == _pdf_apply_sig:
-                                    st.warning("Este mesmo PDF já foi aplicado nesta sessão para esse setor/mês. Nada foi reaplicado para evitar dupla importação acidental.")
+                                _apply_pdf_import_to_db(
+
+                                    setor_destino=setor_dest,
+
+                                    ano=int(ano),
+
+                                    mes=int(mes),
+
+                                    items=items,
+
+                                    criar_colabs=bool(criar_colabs),
+
+                                    limpar_mes_antes=bool(limpar_mes),
+
+                                    map_afa_para_folga=bool(map_afa),
+
+                                    cadastrar_ferias=bool(cadastrar_ferias),
+
+                                )
+
+                                if bool(auto_gerar_pdf):
+
+                                    try:
+
+                                        hist_pdf, estado_pdf = _build_hist_from_pdf_items(
+
+                                            setor_dest, int(ano), int(mes), items,
+
+                                            map_afa_para_folga=bool(map_afa)
+
+                                        )
+
+                                        if hist_pdf:
+
+                                            save_escala_mes_db(setor_dest, int(ano), int(mes), hist_pdf)
+
+                                            save_estado_mes(setor_dest, int(ano), int(mes), estado_pdf)
+
+                                            st.session_state["ano"] = int(ano)
+
+                                            st.session_state["mes"] = int(mes)
+
+                                            st.success("PDF importado com sucesso! Para este mês, o PDF virou a fonte da verdade: folgas, férias e AFA foram salvos exatamente como estão no PDF. As regras do aplicativo voltam a valer normalmente na geração do mês seguinte.")
+
+                                        else:
+
+                                            st.warning("PDF importado, mas não consegui montar a escala final do mês a partir dos itens lidos.")
+
+                                    except Exception as e_auto:
+
+                                        st.warning(f"PDF importado, mas falhou ao salvar a escala final exatamente como veio no PDF: {e_auto}")
+
                                 else:
-                                    st.session_state["_last_pdf_apply_sig"] = _pdf_apply_sig
 
-                                    _apply_pdf_import_to_db(
-
-                                        setor_destino=setor_dest,
-
-                                        ano=int(ano),
-
-                                        mes=int(mes),
-
-                                        items=items,
-
-                                        criar_colabs=bool(criar_colabs),
-
-                                        limpar_mes_antes=bool(limpar_mes),
-
-                                        map_afa_para_folga=bool(map_afa),
-
-                                        cadastrar_ferias=bool(cadastrar_ferias),
-
-                                    )
-
-                                    if bool(auto_gerar_pdf):
-
-                                        try:
-
-                                            hist_pdf, estado_pdf = _build_hist_from_pdf_items(
-
-                                                setor_dest, int(ano), int(mes), items,
-
-                                                map_afa_para_folga=bool(map_afa)
-
-                                            )
-
-                                            if hist_pdf:
-
-                                                save_escala_mes_db(setor_dest, int(ano), int(mes), hist_pdf)
-
-                                                save_estado_mes(setor_dest, int(ano), int(mes), estado_pdf)
-
-                                                st.session_state["ano"] = int(ano)
-
-                                                st.session_state["mes"] = int(mes)
-
-                                                st.success("PDF importado com sucesso! Para este mês, o PDF virou a fonte da verdade: folgas, férias e AFA foram salvos exatamente como estão no PDF. As regras do aplicativo voltam a valer normalmente na geração do mês seguinte.")
-
-                                            else:
-
-                                                st.warning("PDF importado, mas não consegui montar a escala final do mês a partir dos itens lidos.")
-
-                                        except Exception as e_auto:
-
-                                            st.warning(f"PDF importado, mas falhou ao salvar a escala final exatamente como veio no PDF: {e_auto}")
-
-                                    else:
-
-                                        st.success("Importação aplicada com sucesso! Agora clique em 'Gerar agora (respeita ajustes)' para montar a escala do mês com folgas, AFA e férias do PDF.")
+                                    st.success("Importação aplicada com sucesso! Agora clique em 'Gerar agora (respeita ajustes)' para montar a escala do mês com folgas, AFA e férias do PDF.")
 
                 except Exception as e:
 
