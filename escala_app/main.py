@@ -8650,190 +8650,171 @@ def page_app():
             excel_key = f"{setor}|{ano}|{mes}"
             if st.button("📊 Gerar Excel", key="xls_btn"):
                 st.session_state.pop("xls_cached_bytes", None)
-                if excel_key in excel_cache and excel_cache.get(excel_key):
-                    st.session_state["xls_cached_bytes"] = excel_cache[excel_key]
+                colaboradores = load_colaboradores_setor(setor)
+                hist_db = load_escala_mes_db(setor, ano, mes) or {}
+                colab_by = {str(c.get("Chapa", "")): c for c in colaboradores}
+                if not hist_db:
+                    st.info("Gere a escala.")
                 else:
-                    colaboradores = load_colaboradores_setor(setor)
-                    hist_db = load_escala_mes_db(setor, ano, mes) or {}
-                    colab_by = {c["Chapa"]: c for c in colaboradores}
-                    if not hist_db:
-                        st.info("Gere a escala.")
-                    else:
-                        hist_db = apply_overrides_to_hist(setor, ano, mes, hist_db)
-                        output = io.BytesIO()
-                        with pd.ExcelWriter(output, engine="openpyxl") as writer:
-                            wb = writer.book
-                            ws = wb.create_sheet("Escala Mensal", index=0)
+                    hist_db = apply_overrides_to_hist(setor, ano, mes, hist_db)
+                    from openpyxl import Workbook
+                    output = io.BytesIO()
+                    wb = Workbook()
+                    ws = wb.active
+                    ws.title = "Escala Mensal"
 
-                            fill_header = PatternFill(start_color="1F4E78", end_color="1F4E78", patternType="solid")
-                            fill_dom = PatternFill(start_color="C00000", end_color="C00000", patternType="solid")
-                            fill_folga = PatternFill(start_color="FFF2CC", end_color="FFF2CC", patternType="solid")
-                            fill_nome = PatternFill(start_color="D9E1F2", end_color="D9E1F2", patternType="solid")
-                            fill_ferias = PatternFill(start_color="92D050", end_color="92D050", patternType="solid")
-                            fill_group = PatternFill(start_color="BDD7EE", end_color="BDD7EE", patternType="solid")
+                    fill_header = PatternFill(start_color="1F4E78", end_color="1F4E78", patternType="solid")
+                    fill_dom = PatternFill(start_color="C00000", end_color="C00000", patternType="solid")
+                    fill_folga = PatternFill(start_color="FFF2CC", end_color="FFF2CC", patternType="solid")
+                    fill_nome = PatternFill(start_color="D9E1F2", end_color="D9E1F2", patternType="solid")
+                    fill_ferias = PatternFill(start_color="92D050", end_color="92D050", patternType="solid")
+                    fill_group = PatternFill(start_color="BDD7EE", end_color="BDD7EE", patternType="solid")
 
-                            font_header = Font(color="FFFFFF", bold=True)
-                            font_dom = Font(color="FFFFFF", bold=True)
+                    font_header = Font(color="FFFFFF", bold=True)
+                    font_dom = Font(color="FFFFFF", bold=True)
+                    border = Border(left=Side(style="thin"), right=Side(style="thin"), top=Side(style="thin"), bottom=Side(style="thin"))
+                    center = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
-                            border = Border(left=Side(style="thin"), right=Side(style="thin"), top=Side(style="thin"), bottom=Side(style="thin"))
-                            center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+                    ch0 = list(hist_db.keys())[0]
+                    df_ref_xls = hist_db[ch0].copy().reset_index(drop=True)
+                    total_dias = len(df_ref_xls)
 
-                            ch0 = list(hist_db.keys())[0]
-                            df_ref_xls = hist_db[ch0]
-                            total_dias = len(df_ref_xls)
+                    c = ws.cell(1, 1, "COLABORADOR")
+                    c.fill = fill_header
+                    c.font = font_header
+                    c.alignment = center
+                    c.border = border
+                    c = ws.cell(2, 1, "")
+                    c.fill = fill_header
+                    c.alignment = center
+                    c.border = border
 
-                            ws.cell(1, 1, "COLABORADOR").fill = fill_header
-                            ws.cell(1, 1).font = font_header
-                            ws.cell(1, 1).alignment = center
-                            ws.cell(1, 1).border = border
-                            ws.cell(2, 1, "").fill = fill_header
-                            ws.cell(2, 1).alignment = center
-                            ws.cell(2, 1).border = border
-
-                            for i in range(total_dias):
-                                dia_num = df_ref_xls.iloc[i]["Data"].day
-                                dia_sem = df_ref_xls.iloc[i]["Dia"]
-                                cA = ws.cell(1, i + 2, dia_num)
-                                cB = ws.cell(2, i + 2, dia_sem)
-
-                                if dia_sem == "dom":
-                                    cA.fill = fill_dom
-                                    cB.fill = fill_dom
-                                    cA.font = font_dom
-                                    cB.font = font_dom
-                                else:
-                                    cA.fill = fill_header
-                                    cB.fill = fill_header
-                                    cA.font = font_header
-                                    cB.font = font_header
-
-                                cA.alignment = center
-                                cB.alignment = center
-                                cA.border = border
-                                cB.border = border
-                                ws.column_dimensions[get_column_letter(i + 2)].width = 7
-
-                            ws.column_dimensions["A"].width = 36
-
-                            subgrupo_map = {}
-                            for chx in hist_db.keys():
-                                sg = (colab_by.get(chx, {}).get("Subgrupo", "") or "").strip() or "SEM SUBGRUPO"
-                                subgrupo_map.setdefault(sg, []).append(chx)
-
-                            subgrupos_ordenados = sorted(subgrupo_map.keys())
-                            row_idx = 3
-
-                            for sg in subgrupos_ordenados:
-                                ws.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx, end_column=total_dias + 1)
-                                t = ws.cell(row_idx, 1, f"SUBGRUPO: {sg}")
-                                t.fill = fill_group
-                                t.font = Font(bold=True)
-                                t.alignment = Alignment(horizontal="left", vertical="center")
-                                t.border = border
-                                row_idx += 1
-
-                                chapas_sg = sorted(subgrupo_map[sg], key=lambda chx: colab_by.get(chx, {}).get("Nome", chx))
-                                for chx in chapas_sg:
-                                    df_f = hist_db[chx]
-                                    nome = colab_by.get(chx, {}).get("Nome", chx)
-
-                                    c_nome = ws.cell(row_idx, 1, f"{nome}\nCHAPA: {chx}")
-                                    c_nome.fill = fill_nome
-                                    c_nome.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
-                                    c_nome.border = border
-                                    ws.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx + 1, end_column=1)
-
-                                    for i, row in df_f.iterrows():
-                                        dia_sem = row["Dia"]
-                                        status = row["Status"]
-                                        if status == "Férias":
-                                            v1, v2 = "FÉRIAS", ""
-                                        elif status == "Folga":
-                                            v1, v2 = "F", ""
-                                        else:
-                                            v1, v2 = row["H_Entrada"], row["H_Saida"]
-
-                                        cell1 = ws.cell(row_idx, i + 2, v1)
-                                        cell2 = ws.cell(row_idx + 1, i + 2, v2)
-
-                                        cell1.alignment = center
-                                        cell2.alignment = center
-                                        cell1.border = border
-                                        cell2.border = border
-
-                                        if status == "Férias":
-                                            cell1.fill = fill_ferias
-                                            cell2.fill = fill_ferias
-                                        elif status == "Folga":
-                                            if dia_sem == "dom":
-                                                cell1.fill = fill_dom
-                                                cell2.fill = fill_dom
-                                            else:
-                                                cell1.fill = fill_folga
-                                                cell2.fill = fill_folga
-
-                                    row_idx += 2
-                                row_idx += 1
-
-                            # -----------------------------
-                            # Aba extra: Relatório de Férias do mês (quem está de férias no mês selecionado)
-                            # -----------------------------
-                            try:
-                                rows_f = list_ferias(setor) or []
-                                if rows_f:
-                                    df_f = pd.DataFrame(rows_f, columns=["Chapa", "Início", "Fim"]).copy()
-                                    df_f["Início"] = pd.to_datetime(df_f["Início"], errors="coerce").dt.date
-                                    df_f["Fim"] = pd.to_datetime(df_f["Fim"], errors="coerce").dt.date
-                                    df_f = df_f.dropna(subset=["Início", "Fim"])
-
-                                    # Mês/ano atuais
-                                    ini_mes = pd.Timestamp(year=int(ano), month=int(mes), day=1).date()
-                                    fim_mes = (pd.Timestamp(year=int(ano), month=int(mes), day=1) + pd.offsets.MonthEnd(0)).date()
-
-                                    # Overlap com o mês (se tocar o mês, entra no relatório)
-                                    df_f = df_f[(df_f["Fim"] >= ini_mes) & (df_f["Início"] <= fim_mes)].copy()
-
-                                    if not df_f.empty:
-                                        # Nome ao lado
-                                        nome_by = {str(c.get("Chapa","")): str(c.get("Nome","") or "") for c in (colaboradores or [])}
-                                        df_f["Nome"] = df_f["Chapa"].astype(str).map(nome_by).fillna("")
-
-                                        # Datas operacionais que você pediu:
-                                        # - "Sai de férias" = início
-                                        # - "Volta ao trabalho" = dia seguinte ao fim
-                                        df_f["Sai de férias"] = df_f["Início"]
-                                        df_f["Volta ao trabalho"] = df_f["Fim"].apply(lambda d: (pd.Timestamp(d) + pd.Timedelta(days=1)).date())
-
-                                        # Dias de férias dentro do mês (opcional, mas útil)
-                                        def _dias_no_mes(r):
-                                            s = max(r["Início"], ini_mes)
-                                            e = min(r["Fim"], fim_mes)
-                                            return max(0, int((e - s).days + 1))
-                                        df_f["Dias de férias no mês"] = df_f.apply(_dias_no_mes, axis=1)
-
-                                        df_f = df_f[["Chapa", "Nome", "Sai de férias", "Volta ao trabalho", "Início", "Fim", "Dias de férias no mês"]].sort_values(["Nome","Chapa"])
-
-                                        df_f.to_excel(writer, sheet_name="Férias do mês", index=False)
-
-                                        # estilo simples no header
-                                        ws_f = wb["Férias do mês"]
-                                        for cell in ws_f[1]:
-                                            cell.fill = fill_header
-                                            cell.font = cell.font.copy(color="FFFFFF", bold=True)
-                                        ws_f.freeze_panes = "A2"
-                            except Exception:
-                                pass
-
-                            if "Sheet" in wb.sheetnames and len(wb.sheetnames) > 1:
-                                wb.remove(wb["Sheet"])
-
-                        output.seek(0)
-                        excel_bytes = output.getvalue()
-                        if excel_bytes and len(excel_bytes) > 2000:
-                            excel_cache[excel_key] = excel_bytes
-                            st.session_state["xls_cached_bytes"] = excel_bytes
+                    for i in range(total_dias):
+                        data_i = pd.to_datetime(df_ref_xls.iloc[i].get("Data"), errors="coerce")
+                        dia_num = int(data_i.day) if pd.notna(data_i) else (i + 1)
+                        dia_sem = str(df_ref_xls.iloc[i].get("Dia", ""))
+                        cA = ws.cell(1, i + 2, dia_num)
+                        cB = ws.cell(2, i + 2, dia_sem)
+                        if dia_sem == "dom":
+                            cA.fill = fill_dom
+                            cB.fill = fill_dom
+                            cA.font = font_dom
+                            cB.font = font_dom
                         else:
-                            st.error("Excel gerado vazio. Gere a escala do mês e tente novamente.")
+                            cA.fill = fill_header
+                            cB.fill = fill_header
+                            cA.font = font_header
+                            cB.font = font_header
+                        cA.alignment = center
+                        cB.alignment = center
+                        cA.border = border
+                        cB.border = border
+                        ws.column_dimensions[get_column_letter(i + 2)].width = 7
+                    ws.column_dimensions["A"].width = 36
+
+                    subgrupo_map = {}
+                    for chx in hist_db.keys():
+                        ch_str = str(chx)
+                        sg = (colab_by.get(ch_str, {}).get("Subgrupo", "") or "").strip() or "SEM SUBGRUPO"
+                        subgrupo_map.setdefault(sg, []).append(chx)
+
+                    row_idx = 3
+                    total_linhas_gravadas = 0
+                    for sg in sorted(subgrupo_map.keys()):
+                        ws.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx, end_column=total_dias + 1)
+                        t = ws.cell(row_idx, 1, f"SUBGRUPO: {sg}")
+                        t.fill = fill_group
+                        t.font = Font(bold=True)
+                        t.alignment = Alignment(horizontal="left", vertical="center")
+                        t.border = border
+                        row_idx += 1
+
+                        chapas_sg = sorted(subgrupo_map[sg], key=lambda chx: str(colab_by.get(str(chx), {}).get("Nome", chx)))
+                        for chx in chapas_sg:
+                            df_f = hist_db[chx].copy().reset_index(drop=True)
+                            nome = str(colab_by.get(str(chx), {}).get("Nome", chx))
+                            c_nome = ws.cell(row_idx, 1, f"{nome}\nCHAPA: {chx}")
+                            c_nome.fill = fill_nome
+                            c_nome.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+                            c_nome.border = border
+                            ws.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx + 1, end_column=1)
+                            for i, row in df_f.iterrows():
+                                dia_sem = str(row.get("Dia", ""))
+                                status = str(row.get("Status", ""))
+                                if status == "Férias":
+                                    v1, v2 = "FÉRIAS", ""
+                                elif status == "Folga":
+                                    v1, v2 = "F", ""
+                                else:
+                                    v1 = str(row.get("H_Entrada", "") or "")
+                                    v2 = str(row.get("H_Saida", "") or "")
+                                cell1 = ws.cell(row_idx, i + 2, v1)
+                                cell2 = ws.cell(row_idx + 1, i + 2, v2)
+                                cell1.alignment = center
+                                cell2.alignment = center
+                                cell1.border = border
+                                cell2.border = border
+                                if status == "Férias":
+                                    cell1.fill = fill_ferias
+                                    cell2.fill = fill_ferias
+                                elif status == "Folga":
+                                    if dia_sem == "dom":
+                                        cell1.fill = fill_dom
+                                        cell2.fill = fill_dom
+                                    else:
+                                        cell1.fill = fill_folga
+                                        cell2.fill = fill_folga
+                            total_linhas_gravadas += 1
+                            row_idx += 2
+                        row_idx += 1
+
+                    try:
+                        rows_f = list_ferias(setor) or []
+                        if rows_f:
+                            ws_f = wb.create_sheet("Férias do mês")
+                            headers_f = ["Chapa", "Nome", "Sai de férias", "Volta ao trabalho", "Início", "Fim", "Dias de férias no mês"]
+                            for col_idx, head in enumerate(headers_f, start=1):
+                                c = ws_f.cell(1, col_idx, head)
+                                c.fill = fill_header
+                                c.font = font_header
+                                c.border = border
+                                c.alignment = center
+                            df_fer = pd.DataFrame(rows_f, columns=["Chapa", "Início", "Fim"]).copy()
+                            df_fer["Início"] = pd.to_datetime(df_fer["Início"], errors="coerce").dt.date
+                            df_fer["Fim"] = pd.to_datetime(df_fer["Fim"], errors="coerce").dt.date
+                            df_fer = df_fer.dropna(subset=["Início", "Fim"])
+                            ini_mes = pd.Timestamp(year=int(ano), month=int(mes), day=1).date()
+                            fim_mes = (pd.Timestamp(year=int(ano), month=int(mes), day=1) + pd.offsets.MonthEnd(0)).date()
+                            df_fer = df_fer[(df_fer["Fim"] >= ini_mes) & (df_fer["Início"] <= fim_mes)].copy()
+                            if not df_fer.empty:
+                                nome_by = {str(c.get("Chapa", "")): str(c.get("Nome", "") or "") for c in (colaboradores or [])}
+                                df_fer["Nome"] = df_fer["Chapa"].astype(str).map(nome_by).fillna("")
+                                df_fer["Sai de férias"] = df_fer["Início"]
+                                df_fer["Volta ao trabalho"] = df_fer["Fim"].apply(lambda d: (pd.Timestamp(d) + pd.Timedelta(days=1)).date())
+                                def _dias_no_mes(r):
+                                    s = max(r["Início"], ini_mes)
+                                    e = min(r["Fim"], fim_mes)
+                                    return max(0, int((e - s).days + 1))
+                                df_fer["Dias de férias no mês"] = df_fer.apply(_dias_no_mes, axis=1)
+                                df_fer = df_fer[["Chapa", "Nome", "Sai de férias", "Volta ao trabalho", "Início", "Fim", "Dias de férias no mês"]].sort_values(["Nome", "Chapa"])
+                                for row_excel, vals in enumerate(df_fer.itertuples(index=False, name=None), start=2):
+                                    for col_excel, val in enumerate(vals, start=1):
+                                        c = ws_f.cell(row_excel, col_excel, val)
+                                        c.border = border
+                    except Exception:
+                        pass
+
+                    ws.freeze_panes = "B3"
+                    wb.active = wb.sheetnames.index("Escala Mensal")
+                    wb.save(output)
+                    output.seek(0)
+                    excel_bytes = output.getvalue()
+                    if total_linhas_gravadas > 0 and excel_bytes and len(excel_bytes) > 2000:
+                        excel_cache[excel_key] = excel_bytes
+                        st.session_state["xls_cached_bytes"] = excel_bytes
+                        st.success(f"Excel gerado com {total_linhas_gravadas} colaborador(es).")
+                    else:
+                        st.error("Excel gerado vazio. A escala do mês não trouxe linhas para exportação.")
             if st.session_state.get("xls_cached_bytes"):
                 st.download_button(
                     "📥 Baixar Excel",
