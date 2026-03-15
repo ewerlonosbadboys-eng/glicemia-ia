@@ -8211,7 +8211,7 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
             else:
                 st.info('A assinatura da escala do mês vigente fica na aba Assinaturas.')
 
-    with tab2:
+     with tab2:
         st.markdown(f"#### Pré-escala — {prox_mes:02d}/{prox_ano}")
         st.warning('Prévia do próximo mês. Ainda não é oficial, não pode ser assinada e pode ser alterada até a liberação do líder.')
         if df_pre.empty:
@@ -8220,7 +8220,7 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
             st.dataframe(df_pre, use_container_width=True, hide_index=True)
             st.caption('Assinatura bloqueada até o início do mês vigente correspondente.')
 
-       with tab3:
+     with tab3:
         st.markdown(f"### 🖨️ Imprimir / baixar — {mes_vigente:02d}/{ano_vigente}")
     
         pdf_key = f"pdf_colab_{setor}_{chapa}_{ano_vigente}_{mes_vigente}"
@@ -8247,32 +8247,32 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
                 key=f"down_{pdf_key}"
             )
 
-with tab4:
-    st.markdown(f"### 📝 Histórico de mudanças — {mes_vigente:02d}/{ano_vigente}")
+     with tab4:
+            st.markdown(f"### 📝 Histórico de mudanças — {mes_vigente:02d}/{ano_vigente}")
+        
+            with tab5:
+                st.markdown(f"#### Assinaturas — {mes_vigente:02d}/{ano_vigente}")
+                sub1, sub2 = st.tabs(['🗓️ Assinatura da Escala do Mês', '🔁 Assinatura de Mudanças'])
+        
+                with sub1:
+                    a1, a2, a3 = st.columns(3)
+                    a1.metric('Competência', f'{mes_vigente:02d}/{ano_vigente}')
+                    a2.metric('Versão atual', ass_escala.get('versao', 1))
+                    a3.metric('Status', ass_escala.get('status', 'Pendente'))
+                    if ass_escala.get('assinado_em'):
+                        st.caption(f"Assinada em: {ass_escala.get('assinado_em')}")
+                    if df_oficial.empty:
+                        st.info('Sem escala oficial carregada para o mês vigente.')
+                    elif ass_escala.get('status') == 'Assinado':
+                        st.success('Escala do mês vigente já assinada. Botão ocultado.')
+                    else:
+                        st.warning('Assine aqui somente a escala do mês vigente.')
+                        if st.button('✅ Assinar escala do mês', key=f'ass_oficial_{setor}_{chapa}_{ano_vigente}_{mes_vigente}'):
+                            salvar_assinatura_portal(setor, chapa, ano_vigente, mes_vigente, 'oficial')
+                            st.success('Escala do mês assinada com sucesso.')
+                            st.rerun()
 
-    with tab5:
-        st.markdown(f"#### Assinaturas — {mes_vigente:02d}/{ano_vigente}")
-        sub1, sub2 = st.tabs(['🗓️ Assinatura da Escala do Mês', '🔁 Assinatura de Mudanças'])
-
-        with sub1:
-            a1, a2, a3 = st.columns(3)
-            a1.metric('Competência', f'{mes_vigente:02d}/{ano_vigente}')
-            a2.metric('Versão atual', ass_escala.get('versao', 1))
-            a3.metric('Status', ass_escala.get('status', 'Pendente'))
-            if ass_escala.get('assinado_em'):
-                st.caption(f"Assinada em: {ass_escala.get('assinado_em')}")
-            if df_oficial.empty:
-                st.info('Sem escala oficial carregada para o mês vigente.')
-            elif ass_escala.get('status') == 'Assinado':
-                st.success('Escala do mês vigente já assinada. Botão ocultado.')
-            else:
-                st.warning('Assine aqui somente a escala do mês vigente.')
-                if st.button('✅ Assinar escala do mês', key=f'ass_oficial_{setor}_{chapa}_{ano_vigente}_{mes_vigente}'):
-                    salvar_assinatura_portal(setor, chapa, ano_vigente, mes_vigente, 'oficial')
-                    st.success('Escala do mês assinada com sucesso.')
-                    st.rerun()
-
-        with sub2:
+     with sub2:
             b1, b2, b3 = st.columns(3)
             b1.metric('Mudanças registradas', len(hist) if hasattr(hist, '__len__') else 0)
             b2.metric('Versão das mudanças', ass_mud.get('versao', 1))
@@ -8296,7 +8296,7 @@ with tab4:
                         st.success('Mudanças do mês vigente assinadas com sucesso.')
                         st.rerun()
 
-    with tab6:
+     with tab6:
         st.markdown(f"#### Férias — {mes_vigente:02d}/{ano_vigente}")
         rows_fer = [r for r in (list_ferias(setor) or []) if _norm_chapa(r[0]) == chapa]
         if not rows_fer:
@@ -8336,7 +8336,7 @@ with tab4:
             st.dataframe(df_fer, use_container_width=True, hide_index=True)
             st.caption('As férias exibidas aqui são somente do colaborador logado.')
 
-    with tab7:
+     with tab7:
         st.markdown('#### Ajustes')
         suba, subb = st.tabs(['🌴 Sugestão de Folgas', '📨 Minhas solicitações'])
 
