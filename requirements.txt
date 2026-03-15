@@ -13,4 +13,6 @@ PyPDF2
 pdfplumber
 supabase
 postgrest
+qrcode[pil]
+requests
 
