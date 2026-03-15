@@ -1101,7 +1101,7 @@ SUPABASE_SCHEMA = (os.getenv("SUPABASE_SCHEMA") or "public").strip() or "public"
 SUPABASE_SYNC_ENABLED = bool(SUPABASE_URL and SUPABASE_KEY)
 SUPABASE_SYNC_DEBOUNCE_SEC = int(os.getenv("SUPABASE_SYNC_DEBOUNCE_SEC", "12") or 12)
 SUPABASE_AUTO_PULL_ON_START = (os.getenv("SUPABASE_AUTO_PULL_ON_START", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
-SUPABASE_AUTO_PUSH_ON_COMMIT = (os.getenv("SUPABASE_AUTO_PUSH_ON_COMMIT", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
+SUPABASE_AUTO_PUSH_ON_COMMIT = (os.getenv("SUPABASE_AUTO_PUSH_ON_COMMIT", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
 SUPABASE_AUTO_PUSH_ON_CLOSE = (os.getenv("SUPABASE_AUTO_PUSH_ON_CLOSE", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
 SUPABASE_ASYNC_PUSH_ENABLED = (os.getenv("SUPABASE_ASYNC_PUSH_ENABLED", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
 SUPABASE_ASYNC_PUSH_DELAY_SEC = float((os.getenv("SUPABASE_ASYNC_PUSH_DELAY_SEC", "2.0") or "2.0").strip())
@@ -3453,6 +3453,41 @@ def db_init():
     )
     """)
 
+
+    _safe_exec(cur, """
+    CREATE TABLE IF NOT EXISTS rodizio_caixa_cfg (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        setor TEXT NOT NULL,
+        subgrupo_origem TEXT NOT NULL,
+        subgrupo_destino TEXT NOT NULL,
+        qtd_destino INTEGER NOT NULL DEFAULT 12,
+        tolerancia_min INTEGER NOT NULL DEFAULT 20,
+        ativo INTEGER NOT NULL DEFAULT 1,
+        UNIQUE(setor, subgrupo_origem, subgrupo_destino)
+    )
+    """)
+
+    _safe_exec(cur, """
+    CREATE TABLE IF NOT EXISTS rodizio_caixa_hist (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        setor TEXT NOT NULL,
+        ano INTEGER NOT NULL,
+        mes INTEGER NOT NULL,
+        ciclo_ref TEXT NOT NULL,
+        chapa TEXT NOT NULL,
+        nome TEXT NOT NULL,
+        movimento TEXT NOT NULL,
+        subgrupo_origem TEXT NOT NULL,
+        subgrupo_destino TEXT NOT NULL,
+        entrada_antiga TEXT,
+        entrada_nova TEXT,
+        compat_status TEXT NOT NULL DEFAULT 'IGUAL',
+        observacao TEXT,
+        criado_em TEXT NOT NULL,
+        UNIQUE(setor, ano, mes, chapa, movimento)
+    )
+    """)
+
     _safe_exec(cur, """
     CREATE TABLE IF NOT EXISTS overrides (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -4014,6 +4049,240 @@ def load_colaboradores_setor(setor: str):
         "Setor": setor,
     } for r in rows]
 
+
+def _hora_to_min(h: str) -> int | None:
+    h = str(h or '').strip()
+    if not re.match(r'^\d{2}:\d{2}$', h):
+        return None
+    try:
+        hh, mm = h.split(':')
+        return int(hh) * 60 + int(mm)
+    except Exception:
+        return None
+
+
+def _classificar_compat_horario(h1: str, h2: str, tolerancia_min: int = 20) -> str:
+    m1 = _hora_to_min(h1)
+    m2 = _hora_to_min(h2)
+    if m1 is None or m2 is None:
+        return 'DIFERENTE'
+    diff = abs(m1 - m2)
+    if diff == 0:
+        return 'IGUAL'
+    if diff <= int(tolerancia_min):
+        return 'QUASE IGUAL'
+    return 'DIFERENTE'
+
+
+def _mes_ref_str(ano: int, mes: int) -> str:
+    return f"{int(ano):04d}-{int(mes):02d}"
+
+
+@st.cache_data(show_spinner=False, ttl=300)
+def get_rodizio_caixa_cfg(setor: str, subgrupo_origem: str = 'OPERADOR DE CAIXA 01', subgrupo_destino: str = 'OPERADOR DE CAIXA 02') -> dict:
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute("""
+        SELECT subgrupo_origem, subgrupo_destino, qtd_destino, tolerancia_min, ativo
+        FROM rodizio_caixa_cfg
+        WHERE setor=? AND subgrupo_origem=? AND subgrupo_destino=?
+        LIMIT 1
+    """, (setor, subgrupo_origem, subgrupo_destino))
+    row = cur.fetchone()
+    if row is None:
+        cur.execute("""
+            INSERT OR IGNORE INTO rodizio_caixa_cfg(setor, subgrupo_origem, subgrupo_destino, qtd_destino, tolerancia_min, ativo)
+            VALUES (?, ?, ?, 12, 20, 1)
+        """, (setor, subgrupo_origem, subgrupo_destino))
+        con.commit()
+        row = (subgrupo_origem, subgrupo_destino, 12, 20, 1)
+    con.close()
+    return {
+        'subgrupo_origem': str(row[0] or subgrupo_origem),
+        'subgrupo_destino': str(row[1] or subgrupo_destino),
+        'qtd_destino': int(row[2] or 12),
+        'tolerancia_min': int(row[3] or 20),
+        'ativo': bool(row[4]),
+    }
+
+
+def set_rodizio_caixa_cfg(setor: str, subgrupo_origem: str, subgrupo_destino: str, qtd_destino: int = 12, tolerancia_min: int = 20, ativo: bool = True):
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute("""
+        INSERT INTO rodizio_caixa_cfg(setor, subgrupo_origem, subgrupo_destino, qtd_destino, tolerancia_min, ativo)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(setor, subgrupo_origem, subgrupo_destino)
+        DO UPDATE SET qtd_destino=excluded.qtd_destino, tolerancia_min=excluded.tolerancia_min, ativo=excluded.ativo
+    """, (setor, subgrupo_origem, subgrupo_destino, int(qtd_destino), int(tolerancia_min), 1 if ativo else 0))
+    con.commit()
+    con.close()
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+
+
+@st.cache_data(show_spinner=False, ttl=180)
+def list_rodizio_caixa_hist(setor: str, limit: int = 120):
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute("""
+        SELECT ano, mes, ciclo_ref, chapa, nome, movimento, subgrupo_origem, subgrupo_destino,
+               entrada_antiga, entrada_nova, compat_status, observacao, criado_em
+        FROM rodizio_caixa_hist
+        WHERE setor=?
+        ORDER BY ano DESC, mes DESC, nome ASC
+        LIMIT ?
+    """, (setor, int(limit)))
+    rows = cur.fetchall()
+    con.close()
+    return [{
+        'Ano': int(r[0]), 'Mes': int(r[1]), 'Ciclo': str(r[2] or ''), 'Chapa': str(r[3] or ''), 'Nome': str(r[4] or ''),
+        'Movimento': str(r[5] or ''), 'Origem': str(r[6] or ''), 'Destino': str(r[7] or ''),
+        'Entrada antiga': str(r[8] or ''), 'Entrada nova': str(r[9] or ''), 'Compatibilidade': str(r[10] or ''),
+        'Observação': str(r[11] or ''), 'Criado em': str(r[12] or ''),
+    } for r in rows]
+
+
+def _rodizio_rank_origem(setor: str, candidatos_origem: list[dict], subgrupo_destino: str):
+    con = db_conn()
+    cur = con.cursor()
+    last_move = {}
+    try:
+        cur.execute("""
+            SELECT chapa, MAX(ano * 100 + mes)
+            FROM rodizio_caixa_hist
+            WHERE setor=? AND movimento='ENTRA_DESTINO' AND subgrupo_destino=?
+            GROUP BY chapa
+        """, (setor, subgrupo_destino))
+        for ch, ym in cur.fetchall():
+            last_move[str(ch or '').strip()] = int(ym or 0)
+    finally:
+        con.close()
+
+    out = []
+    for c in candidatos_origem:
+        ch = str(c.get('Chapa') or '').strip()
+        out.append((last_move.get(ch, 0), str(c.get('Nome') or '').upper(), c))
+    out.sort(key=lambda x: (x[0], x[1]))
+    return [x[2] for x in out]
+
+
+def simular_rodizio_caixa_mes(setor: str, ano: int, mes: int, subgrupo_origem: str = 'OPERADOR DE CAIXA 01', subgrupo_destino: str = 'OPERADOR DE CAIXA 02', qtd_destino: int = 12, tolerancia_min: int = 20):
+    colaboradores = load_colaboradores_setor(setor)
+    origem = [c for c in colaboradores if (c.get('Subgrupo') or '').strip().upper() == str(subgrupo_origem).strip().upper()]
+    destino = [c for c in colaboradores if (c.get('Subgrupo') or '').strip().upper() == str(subgrupo_destino).strip().upper()]
+
+    nd = min(int(qtd_destino), len(destino))
+    destino_sorted = sorted(destino, key=lambda c: (str(c.get('Entrada') or ''), str(c.get('Nome') or '')))
+    destino_sel = destino_sorted[:nd]
+
+    candidatos = []
+    for c in origem:
+        try:
+            if is_de_ferias(setor, str(c.get('Chapa') or ''), date(int(ano), int(mes), 1)):
+                continue
+        except Exception:
+            pass
+        candidatos.append(c)
+    candidatos = _rodizio_rank_origem(setor, candidatos, subgrupo_destino)
+
+    usados = set()
+    pares = []
+    alertas = []
+    for d in destino_sel:
+        melhor = None
+        melhor_key = None
+        for o in candidatos:
+            ch = str(o.get('Chapa') or '').strip()
+            if not ch or ch in usados:
+                continue
+            compat = _classificar_compat_horario(o.get('Entrada', ''), d.get('Entrada', ''), tolerancia_min=tolerancia_min)
+            score = {'IGUAL': 0, 'QUASE IGUAL': 1, 'DIFERENTE': 2}.get(compat, 9)
+            key = (score, abs((_hora_to_min(o.get('Entrada','')) or 0) - (_hora_to_min(d.get('Entrada','')) or 0)), str(o.get('Nome') or '').upper())
+            if melhor_key is None or key < melhor_key:
+                melhor_key = key
+                melhor = (o, compat)
+        if melhor is None:
+            alertas.append(f"Sem candidato disponível no {subgrupo_origem} para substituir {d.get('Nome','')}.")
+            continue
+        o, compat = melhor
+        usados.add(str(o.get('Chapa') or '').strip())
+        obs = '' if compat != 'DIFERENTE' else 'Horário diferente — avisar liderança.'
+        if compat == 'DIFERENTE':
+            alertas.append(f"Horário diferente: {o.get('Nome','')} ({o.get('Entrada','')}) ↔ {d.get('Nome','')} ({d.get('Entrada','')}).")
+        pares.append({
+            'origem_chapa': str(o.get('Chapa') or ''),
+            'origem_nome': str(o.get('Nome') or ''),
+            'origem_subgrupo': subgrupo_origem,
+            'origem_entrada': str(o.get('Entrada') or ''),
+            'destino_chapa': str(d.get('Chapa') or ''),
+            'destino_nome': str(d.get('Nome') or ''),
+            'destino_subgrupo': subgrupo_destino,
+            'destino_entrada': str(d.get('Entrada') or ''),
+            'compatibilidade': compat,
+            'observacao': obs,
+        })
+
+    proximos = []
+    for o in candidatos:
+        ch = str(o.get('Chapa') or '').strip()
+        if ch not in usados:
+            proximos.append({
+                'Chapa': ch,
+                'Nome': str(o.get('Nome') or ''),
+                'Subgrupo atual': subgrupo_origem,
+                'Entrada atual': str(o.get('Entrada') or ''),
+                'Previsão': 'Próximo rodízio',
+            })
+    return {
+        'pares': pares,
+        'alertas': alertas,
+        'qtd_destino_atual': len(destino),
+        'qtd_troca': len(pares),
+        'proximos': proximos,
+        'subgrupo_origem': subgrupo_origem,
+        'subgrupo_destino': subgrupo_destino,
+        'qtd_destino_cfg': int(qtd_destino),
+        'tolerancia_min': int(tolerancia_min),
+    }
+
+
+def aplicar_rodizio_caixa_mes(setor: str, ano: int, mes: int, simulacao: dict):
+    pares = list((simulacao or {}).get('pares') or [])
+    if not pares:
+        return {'ok': False, 'msg': 'Nenhuma troca simulada para aplicar.'}
+    con = db_conn()
+    cur = con.cursor()
+    ciclo = _mes_ref_str(ano, mes)
+    ts = datetime.now().isoformat()
+    try:
+        cur.execute('BEGIN')
+        for p in pares:
+            cur.execute("UPDATE colaboradores SET subgrupo=?, entrada=? WHERE setor=? AND chapa=?", (simulacao.get('subgrupo_destino', 'OPERADOR DE CAIXA 02'), p['destino_entrada'], setor, p['origem_chapa']))
+            cur.execute("UPDATE colaboradores SET subgrupo=?, entrada=? WHERE setor=? AND chapa=?", (simulacao.get('subgrupo_origem', 'OPERADOR DE CAIXA 01'), p['origem_entrada'], setor, p['destino_chapa']))
+
+            cur.execute("""
+                INSERT OR REPLACE INTO rodizio_caixa_hist(setor, ano, mes, ciclo_ref, chapa, nome, movimento, subgrupo_origem, subgrupo_destino, entrada_antiga, entrada_nova, compat_status, observacao, criado_em)
+                VALUES (?, ?, ?, ?, ?, ?, 'ENTRA_DESTINO', ?, ?, ?, ?, ?, ?, ?)
+            """, (setor, int(ano), int(mes), ciclo, p['origem_chapa'], p['origem_nome'], simulacao.get('subgrupo_origem', 'OPERADOR DE CAIXA 01'), simulacao.get('subgrupo_destino', 'OPERADOR DE CAIXA 02'), p['origem_entrada'], p['destino_entrada'], p['compatibilidade'], p.get('observacao',''), ts))
+            cur.execute("""
+                INSERT OR REPLACE INTO rodizio_caixa_hist(setor, ano, mes, ciclo_ref, chapa, nome, movimento, subgrupo_origem, subgrupo_destino, entrada_antiga, entrada_nova, compat_status, observacao, criado_em)
+                VALUES (?, ?, ?, ?, ?, ?, 'SAI_DESTINO', ?, ?, ?, ?, ?, ?, ?)
+            """, (setor, int(ano), int(mes), ciclo, p['destino_chapa'], p['destino_nome'], simulacao.get('subgrupo_destino', 'OPERADOR DE CAIXA 02'), simulacao.get('subgrupo_origem', 'OPERADOR DE CAIXA 01'), p['destino_entrada'], p['origem_entrada'], p['compatibilidade'], p.get('observacao',''), ts))
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        con.close()
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+    return {'ok': True, 'msg': f'Rodízio aplicado com {len(pares)} troca(s).'}
+
 # =========================================================
 # SUBGRUPOS + REGRAS
 # =========================================================
@@ -4143,23 +4412,6 @@ def add_ferias(setor: str, chapa: str, inicio: date, fim: date):
         st.cache_data.clear()
     except Exception:
         pass
-
-def _ferias_afeta_mes(inicio: date, fim: date, ano: int, mes: int) -> bool:
-    try:
-        ini_mes = date(int(ano), int(mes), 1)
-        fim_mes = date(int(ano), int(mes), calendar.monthrange(int(ano), int(mes))[1])
-        return not (fim < ini_mes or inicio > fim_mes)
-    except Exception:
-        return True
-
-def _readequar_mes_atual(setor: str) -> None:
-    _regenerar_mes_inteiro(
-        setor,
-        int(st.session_state.get("cfg_ano", datetime.now().year)),
-        int(st.session_state.get("cfg_mes", datetime.now().month)),
-        seed=int(st.session_state.get("last_seed", 0)),
-        respeitar_ajustes=True,
-    )
 
 def delete_ferias_row(setor: str, chapa: str, inicio: str, fim: str):
     con = db_conn()
@@ -7858,7 +8110,7 @@ def page_app():
     if sec_main == "👥 Colaboradores":
         sec_col = st.radio(
             "",
-            ["👥 Colaboradores", "➕ Cadastrar colaborador", "🗑️ Excluir colaborador", "✏️ Editar perfil"],
+            (["👥 Colaboradores", "➕ Cadastrar colaborador", "🗑️ Excluir colaborador", "✏️ Editar perfil"] + (["🔄 Rodízio Caixa"] if str(setor).strip().upper() == "FRENTECAIXA" else [])), 
             horizontal=True,
             key="sec_col_radio_real_speed",
             label_visibility="collapsed",
@@ -8036,6 +8288,75 @@ def page_app():
                             st.error(str(e))
 
                 st.markdown("---")
+
+        elif sec_col == "🔄 Rodízio Caixa":
+            st.markdown("## 🔄 Rodízio mensal Caixa 01 ↔ Caixa 02")
+            if str(setor).strip().upper() != "FRENTECAIXA":
+                st.info("Rodízio disponível somente para o setor FRENTECAIXA.")
+            else:
+                cfg = get_rodizio_caixa_cfg(setor)
+                c1, c2, c3, c4 = st.columns([1.4, 1.4, 1, 1])
+                subgrupo_origem = c1.text_input("Subgrupo origem", value=str(cfg.get('subgrupo_origem') or 'OPERADOR DE CAIXA 01'), key='rod_caixa_origem')
+                subgrupo_destino = c2.text_input("Subgrupo destino", value=str(cfg.get('subgrupo_destino') or 'OPERADOR DE CAIXA 02'), key='rod_caixa_destino')
+                qtd_destino = int(c3.number_input("Qtd fixa no destino", min_value=1, max_value=100, value=int(cfg.get('qtd_destino', 12)), step=1, key='rod_caixa_qtd'))
+                tolerancia = int(c4.number_input("Tolerância (min)", min_value=0, max_value=120, value=int(cfg.get('tolerancia_min', 20)), step=5, key='rod_caixa_tol'))
+
+                bcfg1, bcfg2 = st.columns([1, 1])
+                if bcfg1.button("Salvar configuração do rodízio", key='rod_caixa_save_cfg', use_container_width=True):
+                    set_rodizio_caixa_cfg(setor, subgrupo_origem, subgrupo_destino, qtd_destino, tolerancia, True)
+                    st.success("Configuração salva.")
+                    st.rerun()
+
+                ano_r = int(st.session_state.get('cfg_ano', datetime.now().year))
+                mes_r = int(st.session_state.get('cfg_mes', datetime.now().month))
+                sim = simular_rodizio_caixa_mes(setor, ano_r, mes_r, subgrupo_origem, subgrupo_destino, qtd_destino, tolerancia)
+                st.caption(f"Competência ativa: {mes_r:02d}/{ano_r}. O sistema tenta casar horários iguais, depois quase iguais, e alerta quando forem diferentes.")
+                st.info(f"{subgrupo_destino}: {sim.get('qtd_destino_atual', 0)} pessoa(s) hoje. Rodízio planejado: {sim.get('qtd_troca', 0)} troca(s). Quantidade alvo: {qtd_destino}.")
+
+                pares = sim.get('pares') or []
+                if pares:
+                    df_pares = pd.DataFrame([{
+                        'Entra no ' + subgrupo_destino: p['origem_nome'],
+                        'Chapa entra': p['origem_chapa'],
+                        'Horário atual entra': p['origem_entrada'],
+                        'Sai do ' + subgrupo_destino: p['destino_nome'],
+                        'Chapa sai': p['destino_chapa'],
+                        'Horário atual sai': p['destino_entrada'],
+                        'Compatibilidade': p['compatibilidade'],
+                        'Observação': p['observacao'] or '-',
+                    } for p in pares])
+                    st.markdown("### Simulação do mês")
+                    st.dataframe(df_pares, use_container_width=True, height=380)
+                else:
+                    st.warning("Nenhuma troca encontrada para aplicar neste mês.")
+
+                alertas = sim.get('alertas') or []
+                if alertas:
+                    st.markdown("### Alertas para liderança")
+                    for a in alertas:
+                        st.warning(a)
+
+                proximos = sim.get('proximos') or []
+                if proximos:
+                    st.markdown("### Próximos da fila para o próximo mês")
+                    st.dataframe(pd.DataFrame(proximos[:50]), use_container_width=True, height=260)
+
+                b1, b2 = st.columns([1, 1])
+                if b1.button("Aplicar rodízio deste mês", key='rod_caixa_apply', use_container_width=True):
+                    try:
+                        res = aplicar_rodizio_caixa_mes(setor, ano_r, mes_r, sim)
+                        if res.get('ok'):
+                            st.success(res.get('msg', 'Rodízio aplicado.'))
+                            st.rerun()
+                        else:
+                            st.warning(res.get('msg', 'Sem trocas para aplicar.'))
+                    except Exception as e:
+                        st.error(str(e))
+
+                hist = list_rodizio_caixa_hist(setor, limit=120)
+                if hist:
+                    st.markdown("### Relatório de trocas já aplicadas")
+                    st.dataframe(pd.DataFrame(hist), use_container_width=True, height=320)
 
     elif sec_main == "🚀 Gerar Escala":
         st.subheader("🚀 Gerar escala")
@@ -8533,27 +8854,15 @@ def page_app():
                 else:
                     st.warning("⚠️ Este colaborador ainda NÃO tem férias cadastradas.")
 
-                c1, c2 = st.columns(2)
+                c1, c2, c3 = st.columns(3)
                 ini = c1.date_input("Início", value=datetime.now().date(), key="fer_ini")
                 fim = c2.date_input("Fim", value=datetime.now().date(), key="fer_fim")
-                st.caption("Salvamento rápido não recalcula o mês inteiro. Use a readequação só quando precisar.")
-                b1, b2 = st.columns(2)
-                if b1.button("Salvar férias (rápido)", key="fer_add_fast_btn"):
+                if c3.button("Salvar férias (e readequar mês)", key="fer_add_btn"):
                     if fim < ini:
                         st.error("Data final não pode ser menor que a inicial.")
                     else:
                         add_ferias(setor, ch, ini, fim)
-                        if _ferias_afeta_mes(ini, fim, int(st.session_state.get("cfg_ano", datetime.now().year)), int(st.session_state.get("cfg_mes", datetime.now().month))):
-                            st.success("Férias salvas com sucesso! Readequação do mês ficou manual para ficar rápido.")
-                        else:
-                            st.success("Férias salvas com sucesso!")
-                        st.rerun()
-                if b2.button("Salvar férias e readequar mês", key="fer_add_btn"):
-                    if fim < ini:
-                        st.error("Data final não pode ser menor que a inicial.")
-                    else:
-                        add_ferias(setor, ch, ini, fim)
-                        _readequar_mes_atual(setor)
+                        _regenerar_mes_inteiro(setor, int(st.session_state["cfg_ano"]), int(st.session_state["cfg_mes"]), seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
                         st.success("Férias adicionadas e escala readequada!")
                         st.rerun()
 
@@ -8650,15 +8959,10 @@ def page_app():
                     df_f.insert(1, "Nome", df_f["Chapa"].astype(str).map(nome_by).fillna(""))
                     st.dataframe(df_f, use_container_width=True, height=260)
                     rem_idx = st.number_input("Linha para remover (1,2,3...)", min_value=1, max_value=len(df_f), value=1, key="fer_rem_idx")
-                    r = df_f.iloc[int(rem_idx) - 1]
-                    b1, b2 = st.columns(2)
-                    if b1.button("Remover linha (rápido)", key="fer_rem_fast_btn"):
+                    if st.button("Remover linha (e readequar mês)", key="fer_rem_btn"):
+                        r = df_f.iloc[int(rem_idx) - 1]
                         delete_ferias_row(setor, r["Chapa"], r["Início"], r["Fim"])
-                        st.success("Férias removidas com sucesso!")
-                        st.rerun()
-                    if b2.button("Remover linha e readequar mês", key="fer_rem_btn"):
-                        delete_ferias_row(setor, r["Chapa"], r["Início"], r["Fim"])
-                        _readequar_mes_atual(setor)
+                        _regenerar_mes_inteiro(setor, int(st.session_state["cfg_ano"]), int(st.session_state["cfg_mes"]), seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
                         st.success("Férias removidas e escala readequada!")
                         st.rerun()
 
