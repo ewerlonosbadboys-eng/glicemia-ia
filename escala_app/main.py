@@ -9235,6 +9235,8 @@ def page_app():
 
         if _ajustes_precisam_escala:
             _aj_load_key = f"ajustes_loaded::{setor}::{ano}::{mes}::{sec_aj}"
+            if _aj_load_key not in st.session_state:
+                st.session_state[_aj_load_key] = True
             c_load1, c_load2, c_load3 = st.columns([1, 1, 3])
             if c_load1.button("📥 Carregar dados dos ajustes", key=f"btn_{_aj_load_key}"):
                 st.session_state[_aj_load_key] = True
