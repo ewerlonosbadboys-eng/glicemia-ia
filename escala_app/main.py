@@ -8185,14 +8185,14 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
     ass_mud = get_assinatura_status(setor, chapa, ano_vigente, mes_vigente, 'historico')
 
     tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
-    "📋 Escala Oficial",
-    "🕒 Pré-Escala",
-    "🖨️ Imprimir",
-    "📝 Histórico de Mudanças",
-    "✍️ Assinaturas",
-    "🏖️ Férias",
-    "⚙️ Ajustes",
-   ])
+        "📋 Escala Oficial",
+        "🕒 Pré-Escala",
+        "🖨️ Imprimir",
+        "📝 Histórico de Mudanças",
+        "✍️ Assinaturas",
+        "🏖️ Férias",
+        "⚙️ Ajustes",
+    ])
 
     with tab1:
         st.markdown(f"#### Escala oficial — {mes_vigente:02d}/{ano_vigente}")
@@ -8231,7 +8231,7 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
                 ano_vigente,
                 mes_vigente,
                 {"Nome": colab.get("Nome", ""), "Chapa": chapa},
-                df_oficial
+                df_oficial,
             )
             st.success("PDF preparado com sucesso.")
 
@@ -8244,7 +8244,7 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
                 data=pdf_bytes,
                 file_name=nome_pdf,
                 mime="application/pdf",
-                key=f"down_{pdf_key}"
+                key=f"down_{pdf_key}",
             )
 
     with tab4:
@@ -8369,7 +8369,7 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
                 st.info('Nenhuma sugestão enviada até agora.')
             else:
                 st.dataframe(df_sol, use_container_width=True, hide_index=True)
-            
+
 def page_app():
     auth = st.session_state.get("auth") or {}
     setor = auth.get("setor", "GERAL")
