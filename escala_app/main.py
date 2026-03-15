@@ -3744,17 +3744,35 @@ def verify_login(setor: str, chapa: str, senha: str):
     chapa = _norm_chapa(chapa)
     con = db_conn()
     cur = con.cursor()
-    cur.execute(
-        """
-        SELECT nome, senha_hash, salt, is_admin, is_lider, setor, chapa, COALESCE(forcar_troca_senha,0)
-        FROM usuarios_sistema
-        WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?
-        LIMIT 1
-        """,
-        (setor, chapa),
-    )
-    row = cur.fetchone()
-    con.close()
+    try:
+        try:
+            cur.execute(
+                """
+                SELECT nome, senha_hash, salt, is_admin, is_lider, setor, chapa, COALESCE(forcar_troca_senha,0)
+                FROM usuarios_sistema
+                WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?
+                LIMIT 1
+                """,
+                (setor, chapa),
+            )
+        except sqlite3.OperationalError:
+            _ensure_usuarios_sistema_security_columns(cur)
+            try:
+                con.commit()
+            except Exception:
+                pass
+            cur.execute(
+                """
+                SELECT nome, senha_hash, salt, is_admin, is_lider, setor, chapa, 0
+                FROM usuarios_sistema
+                WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?
+                LIMIT 1
+                """,
+                (setor, chapa),
+            )
+        row = cur.fetchone()
+    finally:
+        con.close()
     if not row:
         return None
     nome, senha_hash, salt, is_admin, is_lider, setor_db, chapa_db, forcar_troca_senha = row
@@ -3845,17 +3863,35 @@ def get_usuario_sistema_por_setor_chapa(setor: str, chapa: str):
     chapa = _norm_chapa(chapa)
     con = db_conn()
     cur = con.cursor()
-    cur.execute(
-        """
-        SELECT nome, setor, chapa, is_admin, is_lider, COALESCE(forcar_troca_senha,0)
-        FROM usuarios_sistema
-        WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?
-        LIMIT 1
-        """,
-        (setor, chapa),
-    )
-    row = cur.fetchone()
-    con.close()
+    try:
+        try:
+            cur.execute(
+                """
+                SELECT nome, setor, chapa, is_admin, is_lider, COALESCE(forcar_troca_senha,0)
+                FROM usuarios_sistema
+                WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?
+                LIMIT 1
+                """,
+                (setor, chapa),
+            )
+        except sqlite3.OperationalError:
+            _ensure_usuarios_sistema_security_columns(cur)
+            try:
+                con.commit()
+            except Exception:
+                pass
+            cur.execute(
+                """
+                SELECT nome, setor, chapa, is_admin, is_lider, 0
+                FROM usuarios_sistema
+                WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?
+                LIMIT 1
+                """,
+                (setor, chapa),
+            )
+        row = cur.fetchone()
+    finally:
+        con.close()
     if not row:
         return None
     return {
@@ -3864,6 +3900,7 @@ def get_usuario_sistema_por_setor_chapa(setor: str, chapa: str):
         "chapa": _norm_chapa(row[2]),
         "is_admin": bool(row[3]),
         "is_lider": bool(row[4]),
+        "forcar_troca_senha": bool(row[5]),
     }
 # =========================================================
 # ADMIN
