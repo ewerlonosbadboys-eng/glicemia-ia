@@ -74,6 +74,19 @@ import re
 import shutil
 from pathlib import Path
 import unicodedata
+
+
+def _slugify_filename(value: str) -> str:
+    value = str(value or '').strip()
+    if not value:
+        return 'arquivo'
+    value = unicodedata.normalize('NFKD', value)
+    value = ''.join(ch for ch in value if not unicodedata.combining(ch))
+    value = value.lower()
+    value = re.sub(r'[^a-z0-9]+', '_', value)
+    value = re.sub(r'_+', '_', value).strip('_')
+    return value or 'arquivo'
+
 import time
 import json
 import requests
