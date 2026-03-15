@@ -3451,6 +3451,16 @@ def db_init():
     """)
 
     _safe_exec(cur, """
+    CREATE TABLE IF NOT EXISTS folga_fixa (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        setor TEXT NOT NULL,
+        chapa TEXT NOT NULL,
+        dia_semana TEXT NOT NULL,
+        UNIQUE(setor, chapa, dia_semana)
+    )
+    """)
+
+    _safe_exec(cur, """
     CREATE TABLE IF NOT EXISTS ferias (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         setor TEXT NOT NULL,
@@ -4597,6 +4607,123 @@ def set_subgrupo_regras(setor: str, subgrupo: str, regras: dict):
     ))
     con.commit()
     con.close()
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+
+
+# =========================================================
+# FOLGA FIXA (POR COLABORADOR)
+# =========================================================
+DIA_FOLGA_FIXA_OPCOES = ["SEG", "TER", "QUA", "QUI", "SEX", "SÁB", "DOM"]
+_DIA_FOLGA_FIXA_MAP = {
+    "SEG": "seg", "TER": "ter", "QUA": "qua", "QUI": "qui", "SEX": "sex", "SAB": "sáb", "SÁB": "sáb", "DOM": "dom",
+    "seg": "seg", "ter": "ter", "qua": "qua", "qui": "qui", "sex": "sex", "sáb": "sáb", "sab": "sáb", "dom": "dom",
+}
+_DIA_FOLGA_FIXA_LABEL = {"seg": "SEG", "ter": "TER", "qua": "QUA", "qui": "QUI", "sex": "SEX", "sáb": "SÁB", "dom": "DOM"}
+
+
+def _normalize_dia_folga_fixa(value: str) -> str:
+    return _DIA_FOLGA_FIXA_MAP.get(str(value or "").strip().upper(), "")
+
+
+def _ensure_folga_fixa_table():
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS folga_fixa (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            setor TEXT NOT NULL,
+            chapa TEXT NOT NULL,
+            dia_semana TEXT NOT NULL,
+            UNIQUE(setor, chapa, dia_semana)
+        )
+    """)
+    con.commit()
+    con.close()
+
+
+@st.cache_data(show_spinner=False, ttl=120)
+def list_folga_fixa_setor(setor: str):
+    _ensure_folga_fixa_table()
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute("SELECT chapa, dia_semana FROM folga_fixa WHERE setor=? ORDER BY chapa, dia_semana", (setor,))
+    rows = cur.fetchall()
+    con.close()
+    out = {}
+    for chapa, dia in rows:
+        nd = _normalize_dia_folga_fixa(dia)
+        if nd:
+            out.setdefault(str(chapa), []).append(_DIA_FOLGA_FIXA_LABEL.get(nd, nd.upper()))
+    for ch in list(out.keys()):
+        out[ch] = [d for d in DIA_FOLGA_FIXA_OPCOES if d in set(out[ch])]
+    return out
+
+
+def get_folga_fixa_colaborador(setor: str, chapa: str):
+    data = list_folga_fixa_setor(setor)
+    return list(data.get(str(chapa), []))
+
+
+def replace_folga_fixa_colaborador(setor: str, chapa: str, dias_semana: list[str]):
+    _ensure_folga_fixa_table()
+    dias_norm = []
+    for d in dias_semana or []:
+        nd = _normalize_dia_folga_fixa(d)
+        if nd and nd not in dias_norm:
+            dias_norm.append(nd)
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute("DELETE FROM folga_fixa WHERE setor=? AND chapa=?", (setor, str(chapa)))
+    for d in dias_norm:
+        cur.execute("INSERT OR IGNORE INTO folga_fixa(setor, chapa, dia_semana) VALUES (?, ?, ?)", (setor, str(chapa), d))
+    con.commit()
+    con.close()
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+
+
+def clear_folga_fixa_colaborador(setor: str, ano: int, mes: int, chapa: str):
+    _ensure_folga_fixa_table()
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute("DELETE FROM folga_fixa WHERE setor=? AND chapa=?", (setor, str(chapa)))
+    con.commit()
+    con.close()
+    for d in range(1, calendar.monthrange(int(ano), int(mes))[1] + 1):
+        delete_override(setor, int(ano), int(mes), str(chapa), int(d), "folga_fixa_auto")
+        delete_override(setor, int(ano), int(mes), str(chapa), int(d), "status")
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+
+
+def apply_folga_fixa_overrides_mes(setor: str, ano: int, mes: int, chapa: str | None = None):
+    _ensure_folga_fixa_table()
+    alvo = {str(chapa)} if chapa else None
+    mapa = list_folga_fixa_setor(setor)
+    qtd = calendar.monthrange(int(ano), int(mes))[1]
+    datas = [date(int(ano), int(mes), d) for d in range(1, qtd + 1)]
+
+    chapas = set(mapa.keys()) if alvo is None else set(mapa.keys()) & alvo
+    for ch in chapas:
+        for d in range(1, qtd + 1):
+            try:
+                delete_override(setor, int(ano), int(mes), ch, int(d), "folga_fixa_auto")
+            except Exception:
+                pass
+        dias_fixos = {_normalize_dia_folga_fixa(x) for x in mapa.get(ch, [])}
+        dias_fixos.discard("")
+        for idx, dt in enumerate(datas, start=1):
+            dia_sem = D_PT[dt.strftime('%A')]
+            if dia_sem in dias_fixos:
+                set_override(setor, int(ano), int(mes), ch, int(idx), "status", "Folga")
+                set_override(setor, int(ano), int(mes), ch, int(idx), "folga_fixa_auto", "1")
     try:
         st.cache_data.clear()
     except Exception:
@@ -8870,9 +8997,9 @@ def page_app():
             c2.caption("Alterar em 🗓️ Competência (sidebar)")
             c3.caption("Ajustes aplicam na competência ativa.")
 
-        sec_aj = st.radio("", ["🧩 Folgas manuais em grade", "🔁 Troca de horários", "✅ Preferência por subgrupo", "📌 Subgrupos (editável)"], horizontal=True, key="ajustes_nav_fast", label_visibility="collapsed")
+        sec_aj = st.radio("", ["📌 Folga fixa", "🧩 Folgas manuais em grade", "🔁 Troca de horários", "✅ Preferência por subgrupo", "📌 Subgrupos (editável)"], horizontal=True, key="ajustes_nav_fast", label_visibility="collapsed")
 
-        _ajustes_precisam_escala = sec_aj in ("🧩 Folgas manuais em grade", "🔁 Troca de horários")
+        _ajustes_precisam_escala = sec_aj in ("📌 Folga fixa", "🧩 Folgas manuais em grade", "🔁 Troca de horários")
         hist_db = {}
         colaboradores = []
         colab_by = {}
@@ -8899,7 +9026,49 @@ def page_app():
                     st.info("Gere a escala primeiro na aba 🚀 Gerar Escala.")
                     return
 
-                if sec_aj == "🧩 Folgas manuais em grade":
+                if sec_aj == "📌 Folga fixa":
+                    st.markdown("### 📌 Folga fixa (por colaborador)")
+                    st.caption("Escolha os dias fixos da semana para o colaborador. Ao salvar, o sistema pergunta se deve fazer a correção automática do mês (sim/não).")
+
+                    labels_opts_fx = [f'{c["Nome"]} ({c["Chapa"]})' for c in colaboradores]
+                    inv_label_fx = {f'{c["Nome"]} ({c["Chapa"]})': str(c["Chapa"]) for c in colaboradores}
+                    if not labels_opts_fx:
+                        st.info("Nenhum colaborador encontrado no setor.")
+                    else:
+                        folga_fixa_mapa = list_folga_fixa_setor(setor)
+                        col_fx = st.selectbox("Colaborador:", labels_opts_fx, index=0, key="folga_fixa_colab")
+                        chapa_fx = inv_label_fx[col_fx]
+                        atual_fx = folga_fixa_mapa.get(chapa_fx, [])
+                        dias_fx = st.multiselect(
+                            "Dias fixos de folga:",
+                            options=DIA_FOLGA_FIXA_OPCOES,
+                            default=atual_fx,
+                            key=f"folga_fixa_dias_{chapa_fx}_{ano}_{mes}",
+                        )
+                        auto_corrigir_fx = st.radio(
+                            "Se quebrar alguma regra ao montar o mês, deseja fazer correção automática?",
+                            ["Sim", "Não"],
+                            horizontal=True,
+                            key=f"folga_fixa_corrigir_{chapa_fx}_{ano}_{mes}",
+                        )
+
+                        cfx1, cfx2 = st.columns(2)
+                        if cfx1.button("💾 Salvar folga fixa", key=f"folga_fixa_save_{chapa_fx}_{ano}_{mes}"):
+                            replace_folga_fixa_colaborador(setor, chapa_fx, dias_fx)
+                            apply_folga_fixa_overrides_mes(setor, ano, mes, chapa_fx)
+                            if auto_corrigir_fx == "Sim":
+                                _regenerar_mes_inteiro(setor, ano, mes, seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
+                                st.success("Folga fixa salva e mês readequado com correção automática.")
+                            else:
+                                st.warning("Folga fixa salva sem correção automática. Se precisar, depois clique em gerar/readequar.")
+                            st.rerun()
+                        if cfx2.button("🗑️ Limpar folga fixa do colaborador", key=f"folga_fixa_clear_{chapa_fx}_{ano}_{mes}"):
+                            clear_folga_fixa_colaborador(setor, ano, mes, chapa_fx)
+                            _regenerar_mes_inteiro(setor, ano, mes, seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
+                            st.success("Folga fixa removida e mês readequado.")
+                            st.rerun()
+
+                elif sec_aj == "🧩 Folgas manuais em grade":
                     st.markdown("### 🧩 Folgas manuais em grade (por colaborador)")
                     st.caption("Marque/desmarque as folgas do mês. Isso cria/remove travas (overrides) de Status=Folga. Domingo é editável aqui (manual é soberano).")
                     # --- filtro de colaboradores (para facilitar)
