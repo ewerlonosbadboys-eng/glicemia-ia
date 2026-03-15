@@ -9330,7 +9330,7 @@ def page_app():
 
         sec_aj = st.radio("", ["🧩 Folgas manuais em grade", "🧷 Folga fixa", "🗂️ Inventário", "📝 Histórico", "🔁 Troca de horários", "✅ Preferência por subgrupo", "📌 Subgrupos (editável)"], horizontal=True, key="ajustes_nav_fast", label_visibility="collapsed")
 
-        _ajustes_precisam_escala = sec_aj in ("🧩 Folgas manuais em grade", "🧷 Folga fixa", "📝 Histórico", "🔁 Troca de horários")
+        _ajustes_precisam_escala = sec_aj in ("🧩 Folgas manuais em grade", "🧷 Folga fixa", "🗂️ Inventário", "📝 Histórico", "🔁 Troca de horários")
         hist_db = {}
         colaboradores = []
         colab_by = {}
