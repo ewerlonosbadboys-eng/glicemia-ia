@@ -8209,9 +8209,9 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
         if ass_escala.get('status') == 'Assinado':
             st.success('Escala do mês vigente já assinada. Botão ocultado automaticamente.')
         else:
-            st.info('A assinatura da escala do mês vigente fica na aba Assinaturas.')
+            st.info('A assinatura da escala do mês vigente fica na aba Assinaturas.')    
 
-with tab2:
+    with tab2:
     st.markdown(f"#### Pré-escala — {prox_mes:02d}/{prox_ano}")
     st.warning('Prévia do próximo mês. Ainda não é oficial, não pode ser assinada e pode ser alterada até a liberação do líder.')
     if df_pre.empty:
@@ -8220,7 +8220,7 @@ with tab2:
         st.dataframe(df_pre, use_container_width=True, hide_index=True)
         st.caption('Assinatura bloqueada até o início do mês vigente correspondente.')
 
-with tab3:
+    with tab3:
     st.markdown(f"### 🖨️ Imprimir / baixar — {mes_vigente:02d}/{ano_vigente}")
 
     pdf_key = f"pdf_colab_{setor}_{chapa}_{ano_vigente}_{mes_vigente}"
@@ -8247,7 +8247,7 @@ with tab3:
             key=f"down_{pdf_key}"
         )
 
-with tab4:
+    with tab4:
     st.markdown(f"### 📝 Histórico de mudanças — {mes_vigente:02d}/{ano_vigente}")
 
     if hist.empty:
@@ -8260,7 +8260,7 @@ with tab4:
         st.dataframe(hist_view[keep_cols], use_container_width=True, hide_index=True)
         st.caption('A assinatura dessas mudanças fica concentrada na aba Assinaturas.')
 
-with tab5:
+    with tab5:
     st.markdown(f"#### ✍️ Assinaturas — {mes_vigente:02d}/{ano_vigente}")
     sub1, sub2 = st.tabs(['🗓️ Assinatura da Escala do Mês', '🔁 Assinatura de Mudanças'])
 
@@ -8304,9 +8304,9 @@ with tab5:
                 if st.button('✍️ Assinar mudanças de horários e folgas', key=f'ass_hist_{setor}_{chapa}_{ano_vigente}_{mes_vigente}'):
                     salvar_assinatura_portal(setor, chapa, ano_vigente, mes_vigente, 'historico')
                     st.success('Mudanças do mês vigente assinadas com sucesso.')
-                    st.rerun()
+                    st.rerun()    
 
-with tab6:
+    with tab6:
     st.markdown(f"#### Férias — {mes_vigente:02d}/{ano_vigente}")
     rows_fer = [r for r in (list_ferias(setor) or []) if _norm_chapa(r[0]) == chapa]
     if not rows_fer:
@@ -8346,7 +8346,7 @@ with tab6:
         st.dataframe(df_fer, use_container_width=True, hide_index=True)
         st.caption('As férias exibidas aqui são somente do colaborador logado.')
 
-with tab7:
+    with tab7:
     st.markdown('#### Ajustes')
     suba, subb = st.tabs(['🌴 Sugestão de Folgas', '📨 Minhas solicitações'])
 
