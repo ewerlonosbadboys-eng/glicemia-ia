@@ -95,6 +95,87 @@ st.set_page_config(page_title="Escala 5x2 Oficial", layout="wide")
 
 VERSAO_ACESSO_LIDER = "ACESSO_LIDER_FIX_2026_03_14_v2"
 
+# =========================================================
+# CONTRATO FIXO DO SISTEMA — NÃO ALTERAR SEM AUTORIZAÇÃO
+# =========================================================
+VERSAO_CONTRATO_SISTEMA = "CONTRATO_FIXO_2026_03_15_v1"
+
+REGRAS_INQUEBRAVEIS = {
+    "nao_mudar_paths_base": True,
+    "nao_mudar_logica_central_sem_pedido": True,
+    "nao_rebalancear_folga_manual_automaticamente": True,
+    "nao_mudar_regras_5x2_homologadas": True,
+    "nao_mudar_nomes_tabelas_chaves_sem_migracao": True,
+    "nao_mudar_perfis_sem_pedido_explicito": True,
+    "nao_mudar_restore_backup_supabase_sem_necessidade": True,
+}
+
+def get_contrato_sistema() -> dict:
+    """
+    Fonte única das partes fixas do sistema.
+    Toda manutenção futura deve respeitar este contrato.
+    """
+    return {
+        "versao_contrato": VERSAO_CONTRATO_SISTEMA,
+        "paths_oficiais": {
+            "app_dir": str(APP_DIR),
+            "data_dir": str(DATA_DIR),
+            "backup_dir": str(BACKUP_DIR),
+            "db_path": str(DB_PATH),
+            "root_legacy_db_path": str(ROOT_LEGACY_DB_PATH),
+            "bundled_latest_stable_candidates": [str(p) for p in BUNDLED_LATEST_STABLE_CANDIDATES],
+        },
+        "regras_inquebraveis": dict(REGRAS_INQUEBRAVEIS),
+        "constantes_criticas": {
+            "AUTO_BACKUP_HOUR": int(AUTO_BACKUP_HOUR),
+            "AUTO_BACKUP_INTERVAL_HOURS": int(AUTO_BACKUP_INTERVAL_HOURS),
+            "ROTATING_BACKUP_KEEP": int(ROTATING_BACKUP_KEEP),
+            "ROTATING_BACKUP_PREFIX": str(ROTATING_BACKUP_PREFIX),
+            "VERSAO_ACESSO_LIDER": str(VERSAO_ACESSO_LIDER),
+        },
+    }
+
+def validar_contrato_sistema() -> None:
+    """
+    Validação defensiva: impede que partes centrais fiquem vazias
+    ou sejam trocadas por acidente durante futuras atualizações.
+    """
+    erros = []
+
+    if not str(APP_DIR):
+        erros.append("APP_DIR vazio")
+    if not str(DATA_DIR):
+        erros.append("DATA_DIR vazio")
+    if not str(BACKUP_DIR):
+        erros.append("BACKUP_DIR vazio")
+    if not str(DB_PATH):
+        erros.append("DB_PATH vazio")
+    if not str(ROOT_LEGACY_DB_PATH):
+        erros.append("ROOT_LEGACY_DB_PATH vazio")
+
+    if "escala.db" not in str(DB_PATH).lower():
+        erros.append("DB_PATH não aponta para escala.db")
+    if "backup" not in str(BACKUP_DIR).lower():
+        erros.append("BACKUP_DIR não parece pasta de backup")
+
+    if not isinstance(BUNDLED_LATEST_STABLE_CANDIDATES, list) or not BUNDLED_LATEST_STABLE_CANDIDATES:
+        erros.append("BUNDLED_LATEST_STABLE_CANDIDATES inválido")
+
+    if int(AUTO_BACKUP_HOUR) < 0 or int(AUTO_BACKUP_HOUR) > 23:
+        erros.append("AUTO_BACKUP_HOUR inválido")
+
+    if int(AUTO_BACKUP_INTERVAL_HOURS) <= 0:
+        erros.append("AUTO_BACKUP_INTERVAL_HOURS inválido")
+
+    if int(ROTATING_BACKUP_KEEP) <= 0:
+        erros.append("ROTATING_BACKUP_KEEP inválido")
+
+    if erros:
+        raise RuntimeError("Contrato fixo do sistema violado: " + " | ".join(erros))
+
+def assert_regra_fixa(nome_regra: str) -> bool:
+    return bool(REGRAS_INQUEBRAVEIS.get(nome_regra, False))
+
 
 # =========================================================
 # PDF IMPORT (AUTOMÁTICO) — modelo ESCALA_PONTO_NEW (Savegnago)
@@ -10797,6 +10878,7 @@ def _fast_restore_bundled_latest_before_start() -> None:
 # MAIN
 # =========================================================
 _fast_restore_bundled_latest_before_start()
+validar_contrato_sistema()
 
 if st.session_state["auth"] is None and QUICK_LOGIN_BOOT:
     db_init_fast_login()
