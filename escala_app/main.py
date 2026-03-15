@@ -663,6 +663,76 @@ def _rebuild_estado_out(hist_all: dict) -> dict:
     return estado_out
 
 
+
+
+def _classificar_faixa_horario(h_entrada: str) -> str:
+    s = str(h_entrada or '').strip()
+    if not re.fullmatch(r"\d{2}:\d{2}", s):
+        return ''
+    try:
+        hh, mm = map(int, s.split(':'))
+        mins = hh * 60 + mm
+    except Exception:
+        return ''
+    if 360 <= mins <= 600:   # 06:00 até 10:00
+        return 'ABERTURA'
+    if 601 <= mins <= 720:   # 10:01 até 12:00
+        return 'INTERMEDIÁRIO'
+    if mins >= 760:          # 12:40+
+        return 'FECHAMENTO'
+    return ''
+
+
+def _resumo_cobertura_por_dia(setor: str, ano: int, mes: int) -> pd.DataFrame:
+    hist = get_hist_mes_com_overrides_cached(setor, ano, mes) or {}
+    qtd = calendar.monthrange(int(ano), int(mes))[1]
+    out = []
+    dsem = {0:'Seg',1:'Ter',2:'Qua',3:'Qui',4:'Sex',5:'Sáb',6:'Dom'}
+
+    for dia in range(1, qtd + 1):
+        total = abertura = intermediario = fechamento = folga = ferias = afastamento = 0
+        for _, dfh in hist.items():
+            try:
+                if dfh is None or len(dfh) < dia:
+                    continue
+                row = dfh.iloc[dia - 1]
+                status = str(row.get('Status', '') or '').strip()
+                status_norm = status.upper()
+                if status_norm in ('FOLGA', 'FOLG'):
+                    folga += 1
+                    continue
+                if status_norm in ('FÉRIAS', 'FERIAS', 'FER'):
+                    ferias += 1
+                    continue
+                if status_norm in ('AFASTAMENTO', 'AFA'):
+                    afastamento += 1
+                    continue
+
+                h_entrada = str(row.get('H_Entrada', '') or '').strip()
+                faixa = _classificar_faixa_horario(h_entrada)
+                total += 1
+                if faixa == 'ABERTURA':
+                    abertura += 1
+                elif faixa == 'INTERMEDIÁRIO':
+                    intermediario += 1
+                elif faixa == 'FECHAMENTO':
+                    fechamento += 1
+            except Exception:
+                continue
+
+        data_ref = dt.date(int(ano), int(mes), int(dia))
+        out.append({
+            'Dia': dia,
+            'Dia semana': dsem.get(data_ref.weekday(), ''),
+            'Total trabalhando': total,
+            'Abertura': abertura,
+            'Intermediário': intermediario,
+            'Fechamento': fechamento,
+            'Folga': folga,
+            'Férias': ferias,
+            'Afastamento': afastamento,
+        })
+    return pd.DataFrame(out)
 def _apply_pdf_import_to_db(
     setor_destino: str,
     ano: int,
@@ -8719,7 +8789,7 @@ def page_app():
             c2.caption("Alterar em 🗓️ Competência (sidebar)")
             c3.caption("Ajustes aplicam na competência ativa.")
 
-        sec_aj = st.radio("", ["🧩 Folgas manuais em grade", "🔁 Troca de horários", "✅ Preferência por subgrupo", "📌 Subgrupos (editável)"], horizontal=True, key="ajustes_nav_fast", label_visibility="collapsed")
+        sec_aj = st.radio("", ["🧩 Folgas manuais em grade", "🔁 Troca de horários", "📊 Cobertura por dia", "✅ Preferência por subgrupo", "📌 Subgrupos (editável)"], horizontal=True, key="ajustes_nav_fast", label_visibility="collapsed")
 
         _ajustes_precisam_escala = sec_aj in ("🧩 Folgas manuais em grade", "🔁 Troca de horários")
         hist_db = {}
@@ -8998,6 +9068,55 @@ def page_app():
 
                                     st.success(f"Salvo! Ação: {acao_th}. Aplicados: {applied}. Ignorados (por conflito com Folga/Férias): {skipped}.")
                                     st.rerun()
+
+        if sec_aj == "📊 Cobertura por dia":
+            st.markdown("### 📊 Cobertura por dia")
+            st.caption("Resumo real da escala do mês somando todos os subgrupos. Classificação: Abertura 06:00–10:00 | Intermediário 10:01–12:00 | Fechamento a partir de 12:40.")
+
+            df_cov = _resumo_cobertura_por_dia(setor, ano, mes)
+            if df_cov.empty:
+                st.info("Gere a escala primeiro na aba 🚀 Gerar Escala.")
+            else:
+                dias_opts = df_cov["Dia"].tolist()
+                dia_sel = st.selectbox("Dia para visualizar", dias_opts, index=0, key="cov_dia_sel")
+                row_sel = df_cov[df_cov["Dia"] == int(dia_sel)].iloc[0]
+
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("👥 Total trabalhando", int(row_sel["Total trabalhando"]))
+                c2.metric("🌅 Abertura", int(row_sel["Abertura"]))
+                c3.metric("⏰ Intermediário", int(row_sel["Intermediário"]))
+                c4.metric("🌙 Fechamento", int(row_sel["Fechamento"]))
+
+                c5, c6, c7 = st.columns(3)
+                c5.metric("🏖️ Folga", int(row_sel["Folga"]))
+                c6.metric("🌴 Férias", int(row_sel["Férias"]))
+                c7.metric("🩺 Afastamento", int(row_sel["Afastamento"]))
+
+                def _cor_total(v: int) -> str:
+                    if int(v) >= 15:
+                        return "background-color: rgba(46, 204, 113, 0.18);"
+                    if int(v) >= 10:
+                        return "background-color: rgba(241, 196, 15, 0.18);"
+                    return "background-color: rgba(231, 76, 60, 0.18);"
+
+                st.markdown("#### Tabela de cobertura do mês")
+                try:
+                    st.dataframe(
+                        df_cov.style.applymap(_cor_total, subset=["Total trabalhando"]),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+                except Exception:
+                    st.dataframe(df_cov, use_container_width=True, hide_index=True)
+
+                csv = df_cov.to_csv(index=False).encode("utf-8-sig")
+                st.download_button(
+                    "⬇️ Baixar resumo de cobertura (CSV)",
+                    data=csv,
+                    file_name=f"resumo_cobertura_{setor}_{mes:02d}_{ano}.csv",
+                    mime="text/csv",
+                    key="cov_download_csv",
+                )
 
         if sec_aj == "✅ Preferência por subgrupo":
             st.markdown("### ✅ Preferência por subgrupo (Evitar folga se possível)")
