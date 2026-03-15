@@ -3781,6 +3781,32 @@ def update_password(setor: str, chapa: str, nova_senha: str):
     )
     con.commit()
     con.close()
+
+def get_usuario_sistema_por_setor_chapa(setor: str, chapa: str):
+    setor = _norm_setor(setor)
+    chapa = _norm_chapa(chapa)
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute(
+        """
+        SELECT nome, setor, chapa, is_admin, is_lider
+        FROM usuarios_sistema
+        WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?
+        LIMIT 1
+        """,
+        (setor, chapa),
+    )
+    row = cur.fetchone()
+    con.close()
+    if not row:
+        return None
+    return {
+        "nome": str(row[0] or "").strip(),
+        "setor": _norm_setor(row[1]),
+        "chapa": _norm_chapa(row[2]),
+        "is_admin": bool(row[3]),
+        "is_lider": bool(row[4]),
+    }
 # =========================================================
 # ADMIN
 # =========================================================
@@ -8120,7 +8146,7 @@ def page_app():
     if sec_main == "👥 Colaboradores":
         sec_col = st.radio(
             "",
-            (["👥 Colaboradores", "➕ Cadastrar colaborador", "🗑️ Excluir colaborador", "✏️ Editar perfil"] + (["🔄 Rodízio Caixa"] if str(setor).strip().upper() == "FRENTECAIXA" else [])), 
+            (["👥 Colaboradores", "➕ Cadastrar colaborador", "🗑️ Excluir colaborador", "✏️ Editar perfil", "🔑 Alterar senha colaborador"] + (["🔄 Rodízio Caixa"] if str(setor).strip().upper() == "FRENTECAIXA" else [])), 
             horizontal=True,
             key="sec_col_radio_real_speed",
             label_visibility="collapsed",
@@ -8298,6 +8324,71 @@ def page_app():
                             st.error(str(e))
 
                 st.markdown("---")
+
+        elif sec_col == "🔑 Alterar senha colaborador":
+            colaboradores = load_colaboradores_setor(setor)
+            st.markdown("## 🔑 Alterar senha colaborador")
+            if colaboradores:
+                chapas = [c["Chapa"] for c in colaboradores]
+                nome_by_chapa = {c["Chapa"]: c.get("Nome", "") for c in colaboradores}
+                ch_sel_pwd = st.selectbox(
+                    "Colaborador (Nome — Chapa):",
+                    chapas,
+                    key="pwd_chapa",
+                    format_func=lambda ch: f"{(nome_by_chapa.get(ch, ch) or ch)} — {ch}",
+                )
+                csel_pwd = next(x for x in colaboradores if x["Chapa"] == ch_sel_pwd)
+                user_pwd = get_usuario_sistema_por_setor_chapa(setor, ch_sel_pwd)
+
+                colx1, colx2 = st.columns(2)
+                colx1.text_input("Nome:", value=(csel_pwd.get("Nome") or "").strip(), disabled=True, key="pwd_nome_view")
+                colx2.text_input("Chapa:", value=str(ch_sel_pwd or "").strip(), disabled=True, key="pwd_chapa_view")
+                colx3, colx4 = st.columns(2)
+                colx3.text_input("Setor:", value=str(setor or "").strip(), disabled=True, key="pwd_setor_view")
+                perfil_view = "ADMIN" if (user_pwd and user_pwd.get("is_admin")) else "LÍDER" if (user_pwd and user_pwd.get("is_lider")) else "COLABORADOR" if user_pwd else "SEM ACESSO"
+                colx4.text_input("Perfil:", value=perfil_view, disabled=True, key="pwd_perfil_view")
+
+                nova_senha = st.text_input("Nova senha", type="password", key="pwd_nova")
+                confirma_senha = st.text_input("Confirmar nova senha", type="password", key="pwd_confirma")
+                gerar_tmp = st.checkbox("Gerar senha temporária automática", value=False, key="pwd_auto_temp")
+
+                if st.button("Salvar nova senha", key="pwd_save"):
+                    senha_final = ""
+                    if gerar_tmp:
+                        senha_final = secrets.token_hex(4)
+                    else:
+                        senha_final = (nova_senha or "").strip()
+                        if not senha_final:
+                            st.error("Digite a nova senha ou marque a senha temporária automática.")
+                            st.stop()
+                        if senha_final != (confirma_senha or "").strip():
+                            st.error("A confirmação da senha não confere.")
+                            st.stop()
+                    try:
+                        if not user_pwd:
+                            upsert_usuario_sistema(
+                                nome=(csel_pwd.get("Nome") or "").strip(),
+                                setor=setor,
+                                chapa=ch_sel_pwd,
+                                senha=senha_final,
+                                is_admin=False,
+                                is_lider=False,
+                            )
+                            msg_base = "Acesso criado e senha definida com sucesso."
+                        else:
+                            update_password(setor, ch_sel_pwd, senha_final)
+                            msg_base = "Senha alterada com sucesso."
+                        if gerar_tmp:
+                            st.success(f"{msg_base} Senha temporária: {senha_final}")
+                        else:
+                            st.success(msg_base)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Falha ao alterar senha: {e}")
+            else:
+                st.info("Sem colaboradores para alterar senha.")
+
+            st.markdown("---")
 
         elif sec_col == "🔄 Rodízio Caixa":
             st.markdown("## 🔄 Rodízio mensal Caixa 01 ↔ Caixa 02")
