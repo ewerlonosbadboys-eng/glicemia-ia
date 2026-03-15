@@ -7331,7 +7331,7 @@ def page_login():
 
     elif login_sec == "Esqueci a senha":
         st.subheader("Redefinir senha do colaborador")
-        st.caption("A recuperação usa setor + chapa, que também são a chave para buscar sua escala no portal.")
+        st.caption("Use a senha temporária recebida do líder ou admin para criar sua nova senha.")
         con = db_conn()
         setores_df = pd.concat([
             pd.read_sql_query("SELECT nome AS setor FROM setores", con),
@@ -7343,28 +7343,32 @@ def page_login():
 
         setor = st.selectbox("Setor:", setores, key="fp_setor") if setores else st.text_input("Setor:", key="fp_setor_txt")
         chapa = st.text_input("Chapa:", key="fp_chapa")
+        senha_temp = st.text_input("Senha temporária:", type="password", key="fp_temp")
         nova = st.text_input("Nova senha:", type="password", key="fp_nova")
         nova2 = st.text_input("Confirmar senha:", type="password", key="fp_nova2")
 
         if st.button("Redefinir", key="fp_btn"):
             setor_n = _norm_setor(setor)
             chapa_n = _norm_chapa(chapa)
-            if not setor_n or not chapa_n or not nova:
-                st.error("Preencha setor, chapa e nova senha.")
+            senha_temp_n = (senha_temp or "").strip()
+            if not setor_n or not chapa_n or not senha_temp_n or not nova or not nova2:
+                st.error("Preencha setor, chapa, senha temporária, nova senha e confirmação.")
             elif nova != nova2:
                 st.error("Senhas não conferem.")
             else:
-                row = colaborador_lookup(setor_n, chapa_n)
-                if not row:
-                    st.error("Colaborador não encontrado neste setor.")
+                user = verify_login(setor_n, chapa_n, senha_temp_n)
+                if not user:
+                    st.error("Senha temporária inválida para este setor/chapa.")
+                elif not bool(user.get("forcar_troca_senha", False)):
+                    st.error("Este colaborador não está com redefinição por senha temporária ativa.")
                 else:
-                    nome_db, setor_db, chapa_db = row
-                    if system_user_exists(setor_db, chapa_db):
-                        update_password(setor_db, chapa_db, nova)
-                    else:
-                        create_system_user(nome_db or chapa_db, setor_db, chapa_db, nova, is_lider=0, is_admin=0)
-                    st.success("Senha redefinida com sucesso. Faça login com setor + chapa + senha.")
-                    st.rerun()
+                    try:
+                        update_password(setor_n, chapa_n, nova)
+                        set_force_change_password(setor_n, chapa_n, False)
+                        st.success("Senha redefinida com sucesso. Agora faça login com a nova senha.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Falha ao redefinir senha: {e}")
 
 def _regenerar_mes_inteiro(setor: str, ano: int, mes: int, seed: int = 0, respeitar_ajustes: bool = True):
     """
