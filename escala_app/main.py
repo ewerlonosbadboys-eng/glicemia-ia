@@ -3290,6 +3290,18 @@ def _safe_exec(cur, sql: str, params=None):
     except Exception:
         pass
 
+def _ensure_usuarios_sistema_security_columns(cur):
+    try:
+        cur.execute("ALTER TABLE usuarios_sistema ADD COLUMN forcar_troca_senha INTEGER NOT NULL DEFAULT 0")
+    except Exception:
+        pass
+
+
+def gerar_senha_temporaria_colaborador(tamanho: int = 8) -> str:
+    alfabeto = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    return "".join(secrets.choice(alfabeto) for _ in range(max(6, int(tamanho))))
+
+
 def db_init_fast_login():
     """Inicialização mínima para abrir a tela de login rápido sem alterar regras."""
     con = db_conn()
@@ -3316,6 +3328,7 @@ def db_init_fast_login():
         UNIQUE(setor, chapa)
     )
     """)
+    _ensure_usuarios_sistema_security_columns(cur)
 
     _safe_exec(cur, """
     CREATE TABLE IF NOT EXISTS colaboradores (
@@ -3382,6 +3395,7 @@ def db_init():
         UNIQUE(setor, chapa)
     )
     """)
+    _ensure_usuarios_sistema_security_columns(cur)
 
     _safe_exec(cur, """
     CREATE TABLE IF NOT EXISTS colaboradores (
@@ -3732,7 +3746,7 @@ def verify_login(setor: str, chapa: str, senha: str):
     cur = con.cursor()
     cur.execute(
         """
-        SELECT nome, senha_hash, salt, is_admin, is_lider, setor, chapa
+        SELECT nome, senha_hash, salt, is_admin, is_lider, setor, chapa, COALESCE(forcar_troca_senha,0)
         FROM usuarios_sistema
         WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?
         LIMIT 1
@@ -3743,7 +3757,7 @@ def verify_login(setor: str, chapa: str, senha: str):
     con.close()
     if not row:
         return None
-    nome, senha_hash, salt, is_admin, is_lider, setor_db, chapa_db = row
+    nome, senha_hash, salt, is_admin, is_lider, setor_db, chapa_db, forcar_troca_senha = row
     if verify_password_compat(senha, senha_hash, salt):
         return {
             "nome": nome,
@@ -3751,6 +3765,7 @@ def verify_login(setor: str, chapa: str, senha: str):
             "chapa": _norm_chapa(chapa_db),
             "is_admin": bool(is_admin),
             "is_lider": bool(is_lider),
+            "forcar_troca_senha": bool(forcar_troca_senha),
         }
     return None
 
@@ -3782,6 +3797,49 @@ def update_password(setor: str, chapa: str, nova_senha: str):
     con.commit()
     con.close()
 
+def set_force_change_password(setor: str, chapa: str, ativo: bool = True):
+    setor = _norm_setor(setor)
+    chapa = _norm_chapa(chapa)
+    con = db_conn()
+    cur = con.cursor()
+    try:
+        cur.execute(
+            "UPDATE usuarios_sistema SET forcar_troca_senha=? WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?",
+            (1 if ativo else 0, setor, chapa),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+
+def upsert_usuario_sistema(nome: str, setor: str, chapa: str, senha: str, is_admin: bool = False, is_lider: bool = False, forcar_troca_senha: bool = False):
+    setor = _norm_setor(setor)
+    chapa = _norm_chapa(chapa)
+    nome = (nome or "").strip() or chapa
+    salt = secrets.token_hex(16)
+    senha_hash = hash_password((senha or "").strip(), salt)
+    con = db_conn()
+    cur = con.cursor()
+    try:
+        cur.execute(
+            """
+            INSERT INTO usuarios_sistema(nome, setor, chapa, senha_hash, salt, is_admin, is_lider, criado_em, forcar_troca_senha)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(setor, chapa) DO UPDATE SET
+                nome=excluded.nome,
+                senha_hash=excluded.senha_hash,
+                salt=excluded.salt,
+                is_admin=excluded.is_admin,
+                is_lider=excluded.is_lider,
+                forcar_troca_senha=excluded.forcar_troca_senha
+            """,
+            (nome, setor, chapa, senha_hash, salt, 1 if is_admin else 0, 1 if is_lider else 0, datetime.now().isoformat(), 1 if forcar_troca_senha else 0),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+
 def get_usuario_sistema_por_setor_chapa(setor: str, chapa: str):
     setor = _norm_setor(setor)
     chapa = _norm_chapa(chapa)
@@ -3789,7 +3847,7 @@ def get_usuario_sistema_por_setor_chapa(setor: str, chapa: str):
     cur = con.cursor()
     cur.execute(
         """
-        SELECT nome, setor, chapa, is_admin, is_lider
+        SELECT nome, setor, chapa, is_admin, is_lider, COALESCE(forcar_troca_senha,0)
         FROM usuarios_sistema
         WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?
         LIMIT 1
@@ -7107,6 +7165,12 @@ def gerar_pdf_periodo_panoramico(setor: str, data_ini: date, data_fim: date, his
 # =========================================================
 if "auth" not in st.session_state:
     st.session_state["auth"] = None
+if "auth_force_change" not in st.session_state:
+    st.session_state["auth_force_change"] = False
+if "pwd_temp_last" not in st.session_state:
+    st.session_state["pwd_temp_last"] = ""
+if "pwd_temp_last_chapa" not in st.session_state:
+    st.session_state["pwd_temp_last_chapa"] = ""
 if "cfg_mes" not in st.session_state:
     st.session_state["cfg_mes"] = datetime.now().month
 if "cfg_ano" not in st.session_state:
@@ -7180,6 +7244,7 @@ def page_login():
                     pass
 
                 st.session_state["auth"] = u
+                st.session_state["auth_force_change"] = bool(u.get("forcar_troca_senha", False))
                 st.success("Login efetuado!")
                 st.rerun()
             else:
@@ -8019,6 +8084,35 @@ def page_app():
     auth = st.session_state.get("auth") or {}
     setor = auth.get("setor", "GERAL")
 
+    if st.session_state.get("auth_force_change", False):
+        st.markdown("## 🔐 Troca obrigatória de senha")
+        st.warning("Sua senha temporária precisa ser trocada antes de continuar.")
+        nova1 = st.text_input("Nova senha", type="password", key="force_pwd_1")
+        nova2 = st.text_input("Confirmar nova senha", type="password", key="force_pwd_2")
+        c1, c2 = st.columns([1,1])
+        if c1.button("Salvar nova senha", key="force_pwd_save"):
+            if not (nova1 or "").strip():
+                st.error("Digite a nova senha.")
+                st.stop()
+            if nova1 != nova2:
+                st.error("A confirmação da senha não confere.")
+                st.stop()
+            try:
+                update_password(setor, auth.get("chapa", ""), nova1)
+                set_force_change_password(setor, auth.get("chapa", ""), False)
+                st.session_state["auth_force_change"] = False
+                if st.session_state.get("auth"):
+                    st.session_state["auth"]["forcar_troca_senha"] = False
+                st.success("Senha atualizada com sucesso.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Falha ao atualizar senha: {e}")
+        if c2.button("Sair", key="force_pwd_logout"):
+            st.session_state["auth"] = None
+            st.session_state["auth_force_change"] = False
+            st.rerun()
+        return
+
     # ---- Competência (mês/ano) compartilhada
     ano_cfg = int(st.session_state.get("cfg_ano", datetime.now().year))
     mes_cfg = int(st.session_state.get("cfg_mes", datetime.now().month))
@@ -8352,10 +8446,17 @@ def page_app():
                 confirma_senha = st.text_input("Confirmar nova senha", type="password", key="pwd_confirma")
                 gerar_tmp = st.checkbox("Gerar senha temporária automática", value=False, key="pwd_auto_temp")
 
+                if st.session_state.get("pwd_temp_last") and st.session_state.get("pwd_temp_last_chapa") == ch_sel_pwd:
+                    st.success("🔑 Senha temporária criada com sucesso.")
+                    st.code(st.session_state.get("pwd_temp_last"), language=None)
+                    st.caption("Copie essa senha e envie ao colaborador. No próximo login ele será obrigado a trocar a senha.")
+
                 if st.button("Salvar nova senha", key="pwd_save"):
                     senha_final = ""
+                    forcar_troca = False
                     if gerar_tmp:
-                        senha_final = secrets.token_hex(4)
+                        senha_final = gerar_senha_temporaria_colaborador(8)
+                        forcar_troca = True
                     else:
                         senha_final = (nova_senha or "").strip()
                         if not senha_final:
@@ -8373,14 +8474,20 @@ def page_app():
                                 senha=senha_final,
                                 is_admin=False,
                                 is_lider=False,
+                                forcar_troca_senha=forcar_troca,
                             )
                             msg_base = "Acesso criado e senha definida com sucesso."
                         else:
                             update_password(setor, ch_sel_pwd, senha_final)
+                            set_force_change_password(setor, ch_sel_pwd, forcar_troca)
                             msg_base = "Senha alterada com sucesso."
                         if gerar_tmp:
-                            st.success(f"{msg_base} Senha temporária: {senha_final}")
+                            st.session_state["pwd_temp_last"] = senha_final
+                            st.session_state["pwd_temp_last_chapa"] = ch_sel_pwd
+                            st.success(msg_base)
                         else:
+                            st.session_state["pwd_temp_last"] = ""
+                            st.session_state["pwd_temp_last_chapa"] = ""
                             st.success(msg_base)
                         st.rerun()
                     except Exception as e:
