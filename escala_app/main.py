@@ -9941,7 +9941,7 @@ def page_app():
                     login_hit = df_login_adm[(df_login_adm['setor'].astype(str).str.strip().str.upper() == _norm_setor(setor_func)) & (df_login_adm['chapa'].astype(str).str.strip() == chapa_func)]
                     is_admin_cur = bool(int(login_hit.iloc[0]['is_admin'])) if not login_hit.empty else False
                     is_lider_cur = bool(int(login_hit.iloc[0]['is_lider'])) if not login_hit.empty else False
-                    perfil_cur = get_user_profile_tipo(setor_sel_adm, chapa_sel_adm, is_admin=is_admin_cur, is_lider=is_lider_cur)
+                    perfil_cur = get_user_profile_tipo(setor_func, chapa_func, is_admin=is_admin_cur, is_lider=is_lider_cur)
 
                     st.write(f"Atualizando: **{str(rec_func.get('nome') or '').strip()}** — chapa **{chapa_func}**")
                     af1, af2, af3, af4 = st.columns([1.4, 1.2, 1.2, 1])
