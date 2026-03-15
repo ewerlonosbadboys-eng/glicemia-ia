@@ -81,6 +81,7 @@ import threading
 
 import hashlib
 import secrets
+from urllib.parse import quote as urlquote
 from openpyxl.styles import PatternFill, Alignment, Border, Side, Font
 from openpyxl.utils import get_column_letter
 
@@ -91,9 +92,12 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, 
 from reportlab.lib.pagesizes import landscape, A4
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib import colors
+from reportlab.lib.utils import ImageReader
+from reportlab.pdfgen import canvas
+import qrcode
 st.set_page_config(page_title="Escala 5x2 Oficial", layout="wide")
 
-VERSAO_ACESSO_LIDER = "ACESSO_LIDER_FIX_2026_03_14_v2"
+VERSAO_ACESSO_LIDER = "ACESSO_LIDER_FIX_2026_03_15_v3"
 
 
 # =========================================================
@@ -2663,7 +2667,6 @@ def gerar_pdf_modelo_oficial(setor: str, ano: int, mes: int, hist_db: dict, cola
     - Manual supremo: o PDF reflete exatamente o que está salvo em hist_db.
     """
     from io import BytesIO
-    from reportlab.pdfgen import canvas
     from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
     from reportlab.lib.pagesizes import landscape, A4
     from reportlab.lib.styles import getSampleStyleSheet
@@ -6046,9 +6049,6 @@ def rebalance_folgas_dia(
     past_flag: bool = False,
     max_iters=240
 ):
-    """
-    Rebalance do subgrupo por SEMANA REAL (seg->dom), com proteção anti-loop.
-
     # 🔒 REGRA: se o usuário alterou "Folgas manuais em grade", NÃO rebalancear
     try:
         import streamlit as st
@@ -6056,6 +6056,9 @@ def rebalance_folgas_dia(
             return
     except Exception:
         pass
+
+    """
+    Rebalance do subgrupo por SEMANA REAL (seg->dom), com proteção anti-loop.
 
     Objetivo:
     - reduzir dias leves/zerados e dias muito carregados
@@ -7920,6 +7923,118 @@ def atualizar_status_solicitacao(solicitacao_id: int, novo_status: str):
     con.commit()
     con.close()
 
+def _build_validacao_escala_url(setor: str, chapa: str, ano: int, mes: int, nome: str = "") -> str:
+    base = os.getenv("VALIDACAO_ESCALA_URL", "https://example.com/validar-escala").strip() or "https://example.com/validar-escala"
+    query = f"setor={urlquote(str(setor or ''))}&chapa={urlquote(str(chapa or ''))}&ano={int(ano)}&mes={int(mes)}&nome={urlquote(str(nome or ''))}"
+    sep = '&' if '?' in base else '?'
+    return f"{base}{sep}{query}"
+
+
+def gerar_pdf_colaborador_portal(setor: str, ano: int, mes: int, colab: dict, df_escala: pd.DataFrame) -> bytes:
+    """PDF individual do colaborador, otimizado para portal/celular, com QR de validação."""
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    width, height = A4
+    margem_x = 36
+    y = height - 42
+
+    nome = str((colab or {}).get('Nome', '-') or '-')
+    chapa = str((colab or {}).get('Chapa', '-') or '-')
+    subgrupo = str((colab or {}).get('Subgrupo', 'SEM SUBGRUPO') or 'SEM SUBGRUPO')
+    entrada_padrao = str((colab or {}).get('Entrada', '06:00') or '06:00')
+    valid_url = _build_validacao_escala_url(setor, chapa, ano, mes, nome)
+
+    c.setTitle(f"Escala_{nome}_{mes:02d}_{ano}")
+    c.setFont("Helvetica-Bold", 16)
+    c.drawString(margem_x, y, "ESCALA INDIVIDUAL DO COLABORADOR")
+    y -= 24
+    c.setFont("Helvetica", 10)
+    c.drawString(margem_x, y, f"Setor: {setor}")
+    y -= 14
+    c.drawString(margem_x, y, f"Nome: {nome}")
+    y -= 14
+    c.drawString(margem_x, y, f"Chapa: {chapa}    Subgrupo: {subgrupo}    Entrada padrão: {entrada_padrao}")
+    y -= 14
+    c.drawString(margem_x, y, f"Competência: {mes:02d}/{ano}")
+
+    try:
+        qr_img = qrcode.make(valid_url)
+        qr_buf = io.BytesIO()
+        qr_img.save(qr_buf, format='PNG')
+        qr_buf.seek(0)
+        c.drawImage(ImageReader(qr_buf), width - 120, height - 125, width=72, height=72, preserveAspectRatio=True, mask='auto')
+        c.setFont("Helvetica", 8)
+        c.drawRightString(width - 36, height - 132, "Validação da escala")
+    except Exception:
+        pass
+
+    y -= 26
+    c.setFont("Helvetica-Bold", 10)
+    c.drawString(margem_x, y, "Dia")
+    c.drawString(margem_x + 42, y, "Data")
+    c.drawString(margem_x + 102, y, "Semana")
+    c.drawString(margem_x + 170, y, "Status")
+    c.drawString(margem_x + 285, y, "Entrada")
+    c.drawString(margem_x + 350, y, "Saída")
+    y -= 8
+    c.line(margem_x, y, width - 36, y)
+    y -= 14
+
+    df_show = (df_escala or pd.DataFrame()).copy()
+    if not df_show.empty and 'Data' in df_show.columns:
+        try:
+            df_show['Data'] = pd.to_datetime(df_show['Data'], errors='coerce').dt.strftime('%d/%m/%Y')
+        except Exception:
+            pass
+
+    for _, row in df_show.iterrows():
+        if y < 72:
+            c.showPage()
+            y = height - 42
+            c.setFont("Helvetica-Bold", 10)
+            c.drawString(margem_x, y, f"Escala individual — {nome} — {mes:02d}/{ano}")
+            y -= 24
+            c.setFont("Helvetica-Bold", 10)
+            c.drawString(margem_x, y, "Dia")
+            c.drawString(margem_x + 42, y, "Data")
+            c.drawString(margem_x + 102, y, "Semana")
+            c.drawString(margem_x + 170, y, "Status")
+            c.drawString(margem_x + 285, y, "Entrada")
+            c.drawString(margem_x + 350, y, "Saída")
+            y -= 8
+            c.line(margem_x, y, width - 36, y)
+            y -= 14
+            c.setFont("Helvetica", 9)
+
+        c.setFont("Helvetica", 9)
+        c.drawString(margem_x, y, str(row.get('Dia', '')))
+        c.drawString(margem_x + 42, y, str(row.get('Data', '')))
+        c.drawString(margem_x + 102, y, str(row.get('Dia da semana', '')))
+        c.drawString(margem_x + 170, y, str(row.get('Status', '')))
+        c.drawString(margem_x + 285, y, str(row.get('Entrada', '')))
+        c.drawString(margem_x + 350, y, str(row.get('Saída', '')))
+        y -= 14
+
+    y -= 6
+    c.line(margem_x, y, width - 36, y)
+    y -= 14
+    c.setFont("Helvetica", 8)
+    c.drawString(margem_x, y, f"Código de validação: {hashlib.sha1(f'{setor}|{chapa}|{ano}|{mes}'.encode('utf-8')).hexdigest()[:12].upper()}")
+    y -= 11
+    c.drawString(margem_x, y, "Documento gerado pelo Portal do Colaborador.")
+    y -= 11
+    c.drawString(margem_x, y, valid_url[:110])
+
+    c.save()
+    buf.seek(0)
+    return buf.getvalue()
+
+
+def _build_whatsapp_share_link(nome: str, setor: str, ano: int, mes: int) -> str:
+    msg = f"Olá! Segue minha escala de {mes:02d}/{ano}. Colaborador: {nome} | Setor: {setor}."
+    return f"https://wa.me/?text={urlquote(msg)}"
+
+
 def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
     setor = _norm_setor(auth.get('setor', ''))
     chapa = _norm_chapa(auth.get('chapa', ''))
@@ -7959,13 +8074,14 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
     ass_escala = get_assinatura_status(setor, chapa, ano_vigente, mes_vigente, 'oficial')
     ass_mud = get_assinatura_status(setor, chapa, ano_vigente, mes_vigente, 'historico')
 
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
         '📋 Escala Oficial',
         '🕒 Pré-Escala',
         '📝 Histórico de Mudanças',
         '✍️ Assinaturas',
         '🏖️ Férias',
         '⚙️ Ajustes',
+        '🖨️ Imprimir',
     ])
 
     with tab1:
@@ -8120,6 +8236,52 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
                 st.info('Nenhuma sugestão enviada até agora.')
             else:
                 st.dataframe(df_sol, use_container_width=True, hide_index=True)
+
+    with tab7:
+        st.markdown(f"#### Imprimir / baixar — {mes_vigente:02d}/{ano_vigente}")
+        if df_oficial.empty:
+            st.info('Ainda não há escala oficial para gerar o PDF individual.')
+        else:
+            pdf_individual = gerar_pdf_colaborador_portal(setor, ano_vigente, mes_vigente, colab, df_oficial)
+            st.download_button(
+                '⬇️ Baixar escala em PDF',
+                data=pdf_individual,
+                file_name=f"escala_{_slugify_filename(colab.get('Nome','colaborador'))}_{mes_vigente:02d}_{ano_vigente}.pdf",
+                mime='application/pdf',
+                key=f'portal_pdf_{setor}_{chapa}_{ano_vigente}_{mes_vigente}'
+            )
+            st.caption('Esse PDF pode ser salvo no celular, impresso e compartilhado.')
+
+            valid_url = _build_validacao_escala_url(setor, chapa, ano_vigente, mes_vigente, colab.get('Nome',''))
+            wa_link = _build_whatsapp_share_link(colab.get('Nome',''), setor, ano_vigente, mes_vigente)
+            st.link_button('📲 Enviar mensagem pelo WhatsApp', wa_link, use_container_width=True)
+            st.link_button('🔎 Abrir validação da escala', valid_url, use_container_width=True)
+
+            historicos = []
+            for back in range(1, 7):
+                y = ano_vigente
+                m = mes_vigente - back
+                while m <= 0:
+                    m += 12
+                    y -= 1
+                df_hist_mes = get_escala_colaborador_mes(setor, chapa, y, m)
+                if not df_hist_mes.empty:
+                    historicos.append((y, m, df_hist_mes))
+
+            if historicos:
+                st.markdown('##### Meses anteriores para download')
+                cols_hist = st.columns(min(3, len(historicos)))
+                for idx, (y, m, df_hist_mes) in enumerate(historicos):
+                    pdf_hist = gerar_pdf_colaborador_portal(setor, y, m, colab, df_hist_mes)
+                    cols_hist[idx % len(cols_hist)].download_button(
+                        f'⬇️ {m:02d}/{y}',
+                        data=pdf_hist,
+                        file_name=f"escala_{_slugify_filename(colab.get('Nome','colaborador'))}_{m:02d}_{y}.pdf",
+                        mime='application/pdf',
+                        key=f'portal_pdf_hist_{setor}_{chapa}_{y}_{m}'
+                    )
+            else:
+                st.caption('Nenhum mês anterior encontrado para esta chapa.')
 
 def page_app():
     auth = st.session_state.get("auth") or {}
@@ -8815,9 +8977,10 @@ def page_app():
                         key="grid_editor"
                     )
 
-                    auto_readequar = st.checkbox("🔄 Readequar escala ao salvar", value=True, key="grid_auto_regen")
+                    auto_readequar = st.checkbox("🔄 Readequar escala ao salvar", value=False, key="grid_auto_regen")
 
                     if st.button("💾 Salvar folgas manuais (e readequar mês)", key="grid_save"):
+                        st.session_state["manual_folga_lock"] = True
                         set_folga = 0
                         set_trab = 0
                         for _, r in edited.iterrows():
@@ -8844,6 +9007,8 @@ def page_app():
 
                         if auto_readequar:
                             _regenerar_mes_inteiro(setor, ano, mes, seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
+                        else:
+                            st.session_state["manual_folga_lock"] = True
 
                         st.success(f"Salvo! Folgas travadas: {set_folga} | Trabalhos travados: {set_trab}.")
                         st.rerun()
