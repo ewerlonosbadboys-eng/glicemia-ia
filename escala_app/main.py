@@ -9340,8 +9340,7 @@ def page_app():
                         for chx in chapas_sg:
                             df_f = hist_db[chx].copy().reset_index(drop=True)
                             nome = str(colab_by.get(str(chx), {}).get("Nome", chx))
-                            c_nome = ws.cell(row_idx, 1, f"{nome}
-CHAPA: {chx}")
+                            c_nome = ws.cell(row=row_idx, column=1, value=f"{nome}\nCHAPA: {chx}")
                             c_nome.fill = fill_nome
                             c_nome.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
                             c_nome.border = border
