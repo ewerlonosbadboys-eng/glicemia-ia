@@ -74,6 +74,18 @@ import re
 import shutil
 from pathlib import Path
 import unicodedata
+
+
+def _slugify_filename(value: str) -> str:
+    value = str(value or '').strip()
+    if not value:
+        return 'arquivo'
+    value = unicodedata.normalize('NFKD', value)
+    value = ''.join(ch for ch in value if not unicodedata.combining(ch))
+    value = value.lower()
+    value = re.sub(r'[^a-z0-9]+', '_', value)
+    value = re.sub(r'_+', '_', value).strip('_')
+    return value or 'arquivo'
 import time
 import json
 import requests
@@ -91,8 +103,9 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, 
 from reportlab.lib.pagesizes import landscape, A4
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib import colors
+from reportlab.pdfgen import canvas
 st.set_page_config(page_title="Escala 5x2 Oficial", layout="wide")
-st.sidebar.info('ADMIN_FIX_VISIVEL_2026_03_14 | V101_ULTRA')
+
 VERSAO_ACESSO_LIDER = "ACESSO_LIDER_FIX_2026_03_14_v2"
 
 
@@ -1108,6 +1121,7 @@ SUPABASE_ASYNC_PUSH_DELAY_SEC = float((os.getenv("SUPABASE_ASYNC_PUSH_DELAY_SEC"
 SUPABASE_AUTO_BOOTSTRAP_AFTER_SCHEMA = (os.getenv("SUPABASE_AUTO_BOOTSTRAP_AFTER_SCHEMA", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
 SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY = (os.getenv("SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
 FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP = (os.getenv("FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
+QUICK_LOGIN_BOOT = (os.getenv("QUICK_LOGIN_BOOT", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
 FAST_BACKUP_DISABLE_ROLLING_ON_COMMIT = (os.getenv("FAST_BACKUP_DISABLE_ROLLING_ON_COMMIT", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
 FAST_SNAPSHOT_THROTTLE_SECONDS = int((os.getenv("FAST_SNAPSHOT_THROTTLE_SECONDS", "300") or "300").strip())
 FAST_SNAPSHOT_SKIP_ON_CLOSE = (os.getenv("FAST_SNAPSHOT_SKIP_ON_CLOSE", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
@@ -3289,6 +3303,86 @@ def _safe_exec(cur, sql: str, params=None):
     except Exception:
         pass
 
+def _ensure_usuarios_sistema_security_columns(cur):
+    try:
+        cur.execute("ALTER TABLE usuarios_sistema ADD COLUMN forcar_troca_senha INTEGER NOT NULL DEFAULT 0")
+    except Exception:
+        pass
+
+
+def gerar_senha_temporaria_colaborador(tamanho: int = 8) -> str:
+    alfabeto = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    return "".join(secrets.choice(alfabeto) for _ in range(max(6, int(tamanho))))
+
+
+def db_init_fast_login():
+    """Inicialização mínima para abrir a tela de login rápido sem alterar regras."""
+    con = db_conn()
+    cur = con.cursor()
+
+    _safe_exec(cur, """
+    CREATE TABLE IF NOT EXISTS setores (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome TEXT UNIQUE NOT NULL
+    )
+    """)
+
+    _safe_exec(cur, """
+    CREATE TABLE IF NOT EXISTS usuarios_sistema (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome TEXT NOT NULL,
+        setor TEXT NOT NULL,
+        chapa TEXT NOT NULL,
+        senha_hash TEXT NOT NULL,
+        salt TEXT NOT NULL,
+        is_admin INTEGER NOT NULL DEFAULT 0,
+        is_lider INTEGER NOT NULL DEFAULT 0,
+        criado_em TEXT NOT NULL,
+        UNIQUE(setor, chapa)
+    )
+    """)
+    _ensure_usuarios_sistema_security_columns(cur)
+
+    _safe_exec(cur, """
+    CREATE TABLE IF NOT EXISTS colaboradores (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome TEXT NOT NULL,
+        setor TEXT NOT NULL,
+        chapa TEXT NOT NULL,
+        subgrupo TEXT DEFAULT '',
+        entrada TEXT DEFAULT '06:00',
+        folga_sab INTEGER DEFAULT 0,
+        criado_em TEXT NOT NULL,
+        UNIQUE(setor, chapa)
+    )
+    """)
+
+    _safe_exec(cur, """
+    CREATE TABLE IF NOT EXISTS login_recent (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        setor TEXT NOT NULL,
+        chapa TEXT NOT NULL,
+        ts TEXT NOT NULL
+    )
+    """)
+
+    _safe_exec(cur, "INSERT OR IGNORE INTO setores(nome) VALUES (?)", ("GERAL",))
+    _safe_exec(cur, "INSERT OR IGNORE INTO setores(nome) VALUES (?)", ("ADMIN",))
+    _safe_exec(cur, "INSERT OR IGNORE INTO setores(nome) VALUES (?)", ("GESTAO",))
+
+    cur.execute("SELECT 1 FROM usuarios_sistema WHERE setor=? AND chapa=? LIMIT 1", ("ADMIN", "admin"))
+    if cur.fetchone() is None:
+        salt = secrets.token_hex(16)
+        senha_hash = hash_password("123", salt)
+        cur.execute("""
+            INSERT INTO usuarios_sistema(nome, setor, chapa, senha_hash, salt, is_admin, is_lider, criado_em)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, ("Administrador", "ADMIN", "admin", senha_hash, salt, 1, 1, datetime.now().isoformat()))
+
+    con.commit()
+    con.close()
+
+
 def db_init():
     con = db_conn()
     cur = con.cursor()
@@ -3314,6 +3408,7 @@ def db_init():
         UNIQUE(setor, chapa)
     )
     """)
+    _ensure_usuarios_sistema_security_columns(cur)
 
     _safe_exec(cur, """
     CREATE TABLE IF NOT EXISTS colaboradores (
@@ -3662,20 +3757,38 @@ def verify_login(setor: str, chapa: str, senha: str):
     chapa = _norm_chapa(chapa)
     con = db_conn()
     cur = con.cursor()
-    cur.execute(
-        """
-        SELECT nome, senha_hash, salt, is_admin, is_lider, setor, chapa
-        FROM usuarios_sistema
-        WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?
-        LIMIT 1
-        """,
-        (setor, chapa),
-    )
-    row = cur.fetchone()
-    con.close()
+    try:
+        try:
+            cur.execute(
+                """
+                SELECT nome, senha_hash, salt, is_admin, is_lider, setor, chapa, COALESCE(forcar_troca_senha,0)
+                FROM usuarios_sistema
+                WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?
+                LIMIT 1
+                """,
+                (setor, chapa),
+            )
+        except sqlite3.OperationalError:
+            _ensure_usuarios_sistema_security_columns(cur)
+            try:
+                con.commit()
+            except Exception:
+                pass
+            cur.execute(
+                """
+                SELECT nome, senha_hash, salt, is_admin, is_lider, setor, chapa, 0
+                FROM usuarios_sistema
+                WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?
+                LIMIT 1
+                """,
+                (setor, chapa),
+            )
+        row = cur.fetchone()
+    finally:
+        con.close()
     if not row:
         return None
-    nome, senha_hash, salt, is_admin, is_lider, setor_db, chapa_db = row
+    nome, senha_hash, salt, is_admin, is_lider, setor_db, chapa_db, forcar_troca_senha = row
     if verify_password_compat(senha, senha_hash, salt):
         return {
             "nome": nome,
@@ -3683,6 +3796,7 @@ def verify_login(setor: str, chapa: str, senha: str):
             "chapa": _norm_chapa(chapa_db),
             "is_admin": bool(is_admin),
             "is_lider": bool(is_lider),
+            "forcar_troca_senha": bool(forcar_troca_senha),
         }
     return None
 
@@ -3713,6 +3827,94 @@ def update_password(setor: str, chapa: str, nova_senha: str):
     )
     con.commit()
     con.close()
+
+def set_force_change_password(setor: str, chapa: str, ativo: bool = True):
+    setor = _norm_setor(setor)
+    chapa = _norm_chapa(chapa)
+    con = db_conn()
+    cur = con.cursor()
+    try:
+        cur.execute(
+            "UPDATE usuarios_sistema SET forcar_troca_senha=? WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?",
+            (1 if ativo else 0, setor, chapa),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+
+def upsert_usuario_sistema(nome: str, setor: str, chapa: str, senha: str, is_admin: bool = False, is_lider: bool = False, forcar_troca_senha: bool = False):
+    setor = _norm_setor(setor)
+    chapa = _norm_chapa(chapa)
+    nome = (nome or "").strip() or chapa
+    salt = secrets.token_hex(16)
+    senha_hash = hash_password((senha or "").strip(), salt)
+    con = db_conn()
+    cur = con.cursor()
+    try:
+        cur.execute(
+            """
+            INSERT INTO usuarios_sistema(nome, setor, chapa, senha_hash, salt, is_admin, is_lider, criado_em, forcar_troca_senha)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(setor, chapa) DO UPDATE SET
+                nome=excluded.nome,
+                senha_hash=excluded.senha_hash,
+                salt=excluded.salt,
+                is_admin=excluded.is_admin,
+                is_lider=excluded.is_lider,
+                forcar_troca_senha=excluded.forcar_troca_senha
+            """,
+            (nome, setor, chapa, senha_hash, salt, 1 if is_admin else 0, 1 if is_lider else 0, datetime.now().isoformat(), 1 if forcar_troca_senha else 0),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+
+def get_usuario_sistema_por_setor_chapa(setor: str, chapa: str):
+    setor = _norm_setor(setor)
+    chapa = _norm_chapa(chapa)
+    con = db_conn()
+    cur = con.cursor()
+    try:
+        try:
+            cur.execute(
+                """
+                SELECT nome, setor, chapa, is_admin, is_lider, COALESCE(forcar_troca_senha,0)
+                FROM usuarios_sistema
+                WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?
+                LIMIT 1
+                """,
+                (setor, chapa),
+            )
+        except sqlite3.OperationalError:
+            _ensure_usuarios_sistema_security_columns(cur)
+            try:
+                con.commit()
+            except Exception:
+                pass
+            cur.execute(
+                """
+                SELECT nome, setor, chapa, is_admin, is_lider, 0
+                FROM usuarios_sistema
+                WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?
+                LIMIT 1
+                """,
+                (setor, chapa),
+            )
+        row = cur.fetchone()
+    finally:
+        con.close()
+    if not row:
+        return None
+    return {
+        "nome": str(row[0] or "").strip(),
+        "setor": _norm_setor(row[1]),
+        "chapa": _norm_chapa(row[2]),
+        "is_admin": bool(row[3]),
+        "is_lider": bool(row[4]),
+        "forcar_troca_senha": bool(row[5]),
+    }
 # =========================================================
 # ADMIN
 # =========================================================
@@ -7013,6 +7215,12 @@ def gerar_pdf_periodo_panoramico(setor: str, data_ini: date, data_fim: date, his
 # =========================================================
 if "auth" not in st.session_state:
     st.session_state["auth"] = None
+if "auth_force_change" not in st.session_state:
+    st.session_state["auth_force_change"] = False
+if "pwd_temp_last" not in st.session_state:
+    st.session_state["pwd_temp_last"] = ""
+if "pwd_temp_last_chapa" not in st.session_state:
+    st.session_state["pwd_temp_last_chapa"] = ""
 if "cfg_mes" not in st.session_state:
     st.session_state["cfg_mes"] = datetime.now().month
 if "cfg_ano" not in st.session_state:
@@ -7049,60 +7257,18 @@ def page_login():
         finally:
             con.close()
 
-    st.title("🔐 Login por Setor (Colaborador / Líder / Admin)")
+    st.title("ESCALA 5x2 DO FUTURO")
 
     if _RESTORE_GUARD_ACTIVE:
         st.warning(_RESTORE_GUARD_MESSAGE or "Base não restaurada automaticamente. O app liberou uma base mínima temporária para permitir o login.")
         st.info("Publique o latest_stable.db junto do projeto ou confirme que o Supabase tem os dados completos para recuperar a base real.")
 
-    login_sec = st.radio("", ["Entrar", "Cadastro do Colaborador", "Esqueci a senha"], horizontal=True, key="login_nav_fast", label_visibility="collapsed")
+    login_sec = st.radio("", ["Entrar", "Esqueci a senha"], horizontal=True, key="login_nav_fast", label_visibility="collapsed")
 
     if login_sec == "Entrar":
         setores = _cache_login_setores()
-        rec2 = _cache_login_recent()
-
-        st.caption("🔎 Buscar acesso / escala por setor, chapa ou nome — pode digitar em minúsculo (ex.: flv).")
-        kw = st.text_input("Buscar acesso:", value=st.session_state.get("lg_kw", ""), key="lg_kw").strip()
-
-        # opções recentes
-        recentes_opts = []
-        for _, r in rec2.iterrows():
-            s = str(r.get("setor","")).strip()
-            c = str(r.get("chapa","")).strip()
-            n = str(r.get("nome","") or "").strip()
-            label = f"{s} | {c}" + (f" — {n}" if n else "")
-            recentes_opts.append((label, s, c))
-
-        # filtro por keyword
-        if kw:
-            kwu = kw.upper()
-            recentes_opts_f = [t for t in recentes_opts if kwu in t[0].upper()]
-            setores_f = [s for s in setores if kwu in s.upper()]
-        else:
-            recentes_opts_f = recentes_opts
-            setores_f = setores
-
-        colA, colB = st.columns([1.4, 1.0])
-        with colA:
-            if recentes_opts_f:
-                recentes_labels = ["-- selecione --"] + [t[0] for t in recentes_opts_f]
-                pick = st.selectbox(
-                    "Recentes (clique para preencher):",
-                    recentes_labels,
-                    index=0,
-                    key="lg_recent_pick"
-                )
-                if pick != "-- selecione --":
-                    chosen = next((t for t in recentes_opts_f if t[0] == pick), None)
-                    if chosen:
-                        st.session_state["lg_setor_txt"] = chosen[1]
-                        st.session_state["lg_chapa"] = chosen[2]
-
-        with colB:
-            lembrar = st.checkbox("✅ Salvar setor/chapa neste dispositivo", value=True, key="lg_remember")
-
         setor_base = _norm_setor(st.session_state.get("lg_setor_txt", ""))
-        opcoes_setor = setores_f[:] if setores_f else setores[:]
+        opcoes_setor = setores[:] if setores else []
         if setor_base and setor_base not in opcoes_setor:
             opcoes_setor = [setor_base] + opcoes_setor
         if not opcoes_setor:
@@ -7128,20 +7294,7 @@ def page_login():
                     pass
 
                 st.session_state["auth"] = u
-
-                # salva recente
-                if lembrar:
-                    try:
-                        con = db_conn()
-                        con.execute(
-                            "INSERT INTO login_recent(setor, chapa, ts) VALUES(?,?,?)",
-                            (setor_norm, chapa.strip(), dt.datetime.now().isoformat(timespec="seconds"))
-                        )
-                        con.commit()
-                        con.close()
-                    except Exception:
-                        pass
-
+                st.session_state["auth_force_change"] = bool(u.get("forcar_troca_senha", False))
                 st.success("Login efetuado!")
                 st.rerun()
             else:
@@ -7149,8 +7302,6 @@ def page_login():
                     st.error("Este colaborador existe, mas o login do sistema foi apagado ou ainda não foi criado. Peça para o ADMIN recuperar o usuário na aba Admin.")
                 else:
                     st.error("Usuário ou senha inválidos.")
-
-        st.caption("Admin padrão: setor ADMIN | chapa admin | senha 123. Criação de setor/líder/admin permanece na aba Admin.")
 
     elif login_sec == "Cadastro do Colaborador":
         st.subheader("Primeiro acesso do colaborador")
@@ -7193,7 +7344,7 @@ def page_login():
 
     elif login_sec == "Esqueci a senha":
         st.subheader("Redefinir senha do colaborador")
-        st.caption("A recuperação usa setor + chapa, que também são a chave para buscar sua escala no portal.")
+        st.caption("Use a senha temporária recebida do líder ou admin para criar sua nova senha.")
         con = db_conn()
         setores_df = pd.concat([
             pd.read_sql_query("SELECT nome AS setor FROM setores", con),
@@ -7205,28 +7356,32 @@ def page_login():
 
         setor = st.selectbox("Setor:", setores, key="fp_setor") if setores else st.text_input("Setor:", key="fp_setor_txt")
         chapa = st.text_input("Chapa:", key="fp_chapa")
+        senha_temp = st.text_input("Senha temporária:", type="password", key="fp_temp")
         nova = st.text_input("Nova senha:", type="password", key="fp_nova")
         nova2 = st.text_input("Confirmar senha:", type="password", key="fp_nova2")
 
         if st.button("Redefinir", key="fp_btn"):
             setor_n = _norm_setor(setor)
             chapa_n = _norm_chapa(chapa)
-            if not setor_n or not chapa_n or not nova:
-                st.error("Preencha setor, chapa e nova senha.")
+            senha_temp_n = (senha_temp or "").strip()
+            if not setor_n or not chapa_n or not senha_temp_n or not nova or not nova2:
+                st.error("Preencha setor, chapa, senha temporária, nova senha e confirmação.")
             elif nova != nova2:
                 st.error("Senhas não conferem.")
             else:
-                row = colaborador_lookup(setor_n, chapa_n)
-                if not row:
-                    st.error("Colaborador não encontrado neste setor.")
+                user = verify_login(setor_n, chapa_n, senha_temp_n)
+                if not user:
+                    st.error("Senha temporária inválida para este setor/chapa.")
+                elif not bool(user.get("forcar_troca_senha", False)):
+                    st.error("Este colaborador não está com redefinição por senha temporária ativa.")
                 else:
-                    nome_db, setor_db, chapa_db = row
-                    if system_user_exists(setor_db, chapa_db):
-                        update_password(setor_db, chapa_db, nova)
-                    else:
-                        create_system_user(nome_db or chapa_db, setor_db, chapa_db, nova, is_lider=0, is_admin=0)
-                    st.success("Senha redefinida com sucesso. Faça login com setor + chapa + senha.")
-                    st.rerun()
+                    try:
+                        update_password(setor_n, chapa_n, nova)
+                        set_force_change_password(setor_n, chapa_n, False)
+                        st.success("Senha redefinida com sucesso. Agora faça login com a nova senha.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Falha ao redefinir senha: {e}")
 
 def _regenerar_mes_inteiro(setor: str, ano: int, mes: int, seed: int = 0, respeitar_ajustes: bool = True):
     """
@@ -7778,6 +7933,90 @@ def atualizar_status_solicitacao(solicitacao_id: int, novo_status: str):
     con.commit()
     con.close()
 
+
+def gerar_pdf_colaborador_portal(setor: str, ano: int, mes: int, colab: dict, df_escala: pd.DataFrame) -> bytes:
+    """PDF individual do colaborador, otimizado para portal/celular, sem QR e sem validação externa."""
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    width, height = A4
+    margem_x = 36
+    y = height - 42
+
+    nome = str((colab or {}).get('Nome', '-') or '-')
+    chapa = str((colab or {}).get('Chapa', '-') or '-')
+    subgrupo = str((colab or {}).get('Subgrupo', 'SEM SUBGRUPO') or 'SEM SUBGRUPO')
+    entrada_padrao = str((colab or {}).get('Entrada', '06:00') or '06:00')
+
+    c.setTitle(f"Escala_{nome}_{mes:02d}_{ano}")
+    c.setFont("Helvetica-Bold", 16)
+    c.drawString(margem_x, y, "ESCALA INDIVIDUAL DO COLABORADOR")
+    y -= 24
+    c.setFont("Helvetica", 10)
+    c.drawString(margem_x, y, f"Setor: {setor}")
+    y -= 14
+    c.drawString(margem_x, y, f"Nome: {nome}")
+    y -= 14
+    c.drawString(margem_x, y, f"Chapa: {chapa}    Subgrupo: {subgrupo}    Entrada padrão: {entrada_padrao}")
+    y -= 14
+    c.drawString(margem_x, y, f"Competência: {mes:02d}/{ano}")
+    y -= 40
+
+    c.setFont("Helvetica-Bold", 10)
+    c.drawString(margem_x, y, "Dia")
+    c.drawString(margem_x + 42, y, "Data")
+    c.drawString(margem_x + 102, y, "Semana")
+    c.drawString(margem_x + 170, y, "Status")
+    c.drawString(margem_x + 285, y, "Entrada")
+    c.drawString(margem_x + 350, y, "Saída")
+    y -= 8
+    c.line(margem_x, y, width - 36, y)
+    y -= 14
+
+    if isinstance(df_escala, pd.DataFrame):
+        df_show = df_escala.copy()
+    else:
+        df_show = pd.DataFrame()
+    if not df_show.empty and 'Data' in df_show.columns:
+        try:
+            df_show['Data'] = pd.to_datetime(df_show['Data'], errors='coerce').dt.strftime('%d/%m/%Y')
+        except Exception:
+            pass
+
+    for _, row in df_show.iterrows():
+        if y < 72:
+            c.showPage()
+            y = height - 42
+            c.setFont("Helvetica-Bold", 10)
+            c.drawString(margem_x, y, f"Escala individual — {nome} — {mes:02d}/{ano}")
+            y -= 24
+            c.drawString(margem_x, y, "Dia")
+            c.drawString(margem_x + 42, y, "Data")
+            c.drawString(margem_x + 102, y, "Semana")
+            c.drawString(margem_x + 170, y, "Status")
+            c.drawString(margem_x + 285, y, "Entrada")
+            c.drawString(margem_x + 350, y, "Saída")
+            y -= 8
+            c.line(margem_x, y, width - 36, y)
+            y -= 14
+        c.setFont("Helvetica", 9)
+        c.drawString(margem_x, y, str(row.get('Dia', '')))
+        c.drawString(margem_x + 42, y, str(row.get('Data', '')))
+        c.drawString(margem_x + 102, y, str(row.get('Dia da semana', '')))
+        c.drawString(margem_x + 170, y, str(row.get('Status', '')))
+        c.drawString(margem_x + 285, y, str(row.get('Entrada', '')))
+        c.drawString(margem_x + 350, y, str(row.get('Saída', '')))
+        y -= 14
+
+    y -= 6
+    c.line(margem_x, y, width - 36, y)
+    y -= 14
+    c.setFont("Helvetica", 8)
+    c.drawString(margem_x, y, "Documento gerado pelo Portal do Colaborador.")
+
+    c.save()
+    buf.seek(0)
+    return buf.getvalue()
+
 def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
     setor = _norm_setor(auth.get('setor', ''))
     chapa = _norm_chapa(auth.get('chapa', ''))
@@ -7817,13 +8056,14 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
     ass_escala = get_assinatura_status(setor, chapa, ano_vigente, mes_vigente, 'oficial')
     ass_mud = get_assinatura_status(setor, chapa, ano_vigente, mes_vigente, 'historico')
 
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
         '📋 Escala Oficial',
         '🕒 Pré-Escala',
         '📝 Histórico de Mudanças',
         '✍️ Assinaturas',
         '🏖️ Férias',
         '⚙️ Ajustes',
+        '🖨️ Imprimir',
     ])
 
     with tab1:
@@ -7979,9 +8219,89 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
             else:
                 st.dataframe(df_sol, use_container_width=True, hide_index=True)
 
+
+    with tab7:
+        st.markdown(f"#### Imprimir / baixar — {mes_vigente:02d}/{ano_vigente}")
+        pdf_key = f'portal_pdf_blob_{setor}_{chapa}_{ano_vigente}_{mes_vigente}'
+        hist_key = f'portal_pdf_hist_loaded_{setor}_{chapa}_{ano_vigente}_{mes_vigente}'
+
+        if st.button('📄 Preparar PDF do mês vigente', key=f'prep_portal_pdf_{setor}_{chapa}_{ano_vigente}_{mes_vigente}'):
+            with st.spinner('Preparando PDF...'):
+                st.session_state[pdf_key] = gerar_pdf_colaborador_portal(setor, ano_vigente, mes_vigente, colab, df_oficial)
+
+        if st.session_state.get(pdf_key):
+            st.download_button(
+                '⬇️ Baixar escala em PDF',
+                data=st.session_state[pdf_key],
+                file_name=f"escala_{_slugify_filename(colab.get('Nome','colaborador'))}_{mes_vigente:02d}_{ano_vigente}.pdf",
+                mime='application/pdf',
+                key=f'portal_pdf_{setor}_{chapa}_{ano_vigente}_{mes_vigente}'
+            )
+
+        with st.expander('Meses anteriores para download', expanded=False):
+            if st.button('🕘 Carregar meses anteriores', key=f'load_hist_portal_{setor}_{chapa}_{ano_vigente}_{mes_vigente}'):
+                st.session_state[hist_key] = True
+
+            if st.session_state.get(hist_key, False):
+                historicos = []
+                for back in range(1, 7):
+                    y = ano_vigente
+                    m = mes_vigente - back
+                    while m <= 0:
+                        m += 12
+                        y -= 1
+                    df_hist_mes = get_escala_colaborador_mes(setor, chapa, y, m)
+                    if not df_hist_mes.empty:
+                        historicos.append((y, m, df_hist_mes))
+
+                if historicos:
+                    cols_hist = st.columns(min(3, len(historicos)))
+                    for idx, (y, m, df_hist_mes) in enumerate(historicos):
+                        hist_pdf_key = f'portal_pdf_hist_blob_{setor}_{chapa}_{y}_{m}'
+                        if hist_pdf_key not in st.session_state:
+                            st.session_state[hist_pdf_key] = gerar_pdf_colaborador_portal(setor, y, m, colab, df_hist_mes)
+                        cols_hist[idx % len(cols_hist)].download_button(
+                            f'⬇️ {m:02d}/{y}',
+                            data=st.session_state[hist_pdf_key],
+                            file_name=f"escala_{_slugify_filename(colab.get('Nome','colaborador'))}_{m:02d}_{y}.pdf",
+                            mime='application/pdf',
+                            key=f'portal_pdf_hist_{setor}_{chapa}_{y}_{m}'
+                        )
+                else:
+                    pass
+
 def page_app():
     auth = st.session_state.get("auth") or {}
     setor = auth.get("setor", "GERAL")
+
+    if st.session_state.get("auth_force_change", False):
+        st.markdown("## 🔐 Troca obrigatória de senha")
+        st.warning("Sua senha temporária precisa ser trocada antes de continuar.")
+        nova1 = st.text_input("Nova senha", type="password", key="force_pwd_1")
+        nova2 = st.text_input("Confirmar nova senha", type="password", key="force_pwd_2")
+        c1, c2 = st.columns([1,1])
+        if c1.button("Salvar nova senha", key="force_pwd_save"):
+            if not (nova1 or "").strip():
+                st.error("Digite a nova senha.")
+                st.stop()
+            if nova1 != nova2:
+                st.error("A confirmação da senha não confere.")
+                st.stop()
+            try:
+                update_password(setor, auth.get("chapa", ""), nova1)
+                set_force_change_password(setor, auth.get("chapa", ""), False)
+                st.session_state["auth_force_change"] = False
+                if st.session_state.get("auth"):
+                    st.session_state["auth"]["forcar_troca_senha"] = False
+                st.success("Senha atualizada com sucesso.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Falha ao atualizar senha: {e}")
+        if c2.button("Sair", key="force_pwd_logout"):
+            st.session_state["auth"] = None
+            st.session_state["auth_force_change"] = False
+            st.rerun()
+        return
 
     # ---- Competência (mês/ano) compartilhada
     ano_cfg = int(st.session_state.get("cfg_ano", datetime.now().year))
@@ -8110,7 +8430,7 @@ def page_app():
     if sec_main == "👥 Colaboradores":
         sec_col = st.radio(
             "",
-            (["👥 Colaboradores", "➕ Cadastrar colaborador", "🗑️ Excluir colaborador", "✏️ Editar perfil"] + (["🔄 Rodízio Caixa"] if str(setor).strip().upper() == "FRENTECAIXA" else [])), 
+            (["👥 Colaboradores", "➕ Cadastrar colaborador", "🗑️ Excluir colaborador", "✏️ Editar perfil", "🔑 Alterar senha colaborador"] + (["🔄 Rodízio Caixa"] if str(setor).strip().upper() == "FRENTECAIXA" else [])), 
             horizontal=True,
             key="sec_col_radio_real_speed",
             label_visibility="collapsed",
@@ -8288,6 +8608,87 @@ def page_app():
                             st.error(str(e))
 
                 st.markdown("---")
+
+        elif sec_col == "🔑 Alterar senha colaborador":
+            colaboradores = load_colaboradores_setor(setor)
+            st.markdown("## 🔑 Alterar senha colaborador")
+            if colaboradores:
+                chapas = [c["Chapa"] for c in colaboradores]
+                nome_by_chapa = {c["Chapa"]: c.get("Nome", "") for c in colaboradores}
+                ch_sel_pwd = st.selectbox(
+                    "Colaborador (Nome — Chapa):",
+                    chapas,
+                    key="pwd_chapa",
+                    format_func=lambda ch: f"{(nome_by_chapa.get(ch, ch) or ch)} — {ch}",
+                )
+                csel_pwd = next(x for x in colaboradores if x["Chapa"] == ch_sel_pwd)
+                user_pwd = get_usuario_sistema_por_setor_chapa(setor, ch_sel_pwd)
+
+                colx1, colx2 = st.columns(2)
+                colx1.text_input("Nome:", value=(csel_pwd.get("Nome") or "").strip(), disabled=True, key="pwd_nome_view")
+                colx2.text_input("Chapa:", value=str(ch_sel_pwd or "").strip(), disabled=True, key="pwd_chapa_view")
+                colx3, colx4 = st.columns(2)
+                colx3.text_input("Setor:", value=str(setor or "").strip(), disabled=True, key="pwd_setor_view")
+                perfil_view = "ADMIN" if (user_pwd and user_pwd.get("is_admin")) else "LÍDER" if (user_pwd and user_pwd.get("is_lider")) else "COLABORADOR" if user_pwd else "SEM ACESSO"
+                colx4.text_input("Perfil:", value=perfil_view, disabled=True, key="pwd_perfil_view")
+
+                nova_senha = st.text_input("Nova senha", type="password", key="pwd_nova")
+                confirma_senha = st.text_input("Confirmar nova senha", type="password", key="pwd_confirma")
+                gerar_tmp = st.checkbox("Gerar senha temporária automática", value=False, key="pwd_auto_temp")
+
+                if st.session_state.get("pwd_temp_last") and st.session_state.get("pwd_temp_last_chapa") == ch_sel_pwd:
+                    st.success("🔑 Senha temporária criada com sucesso.")
+                    st.code(st.session_state.get("pwd_temp_last"), language=None)
+                    st.caption("Copie essa senha e envie ao colaborador. No próximo login ele será obrigado a trocar a senha.")
+
+                if st.button("Salvar nova senha", key="pwd_save"):
+                    senha_final = ""
+                    forcar_troca = False
+                    if gerar_tmp:
+                        senha_final = gerar_senha_temporaria_colaborador(8)
+                        forcar_troca = True
+                    else:
+                        senha_final = (nova_senha or "").strip()
+                        if not senha_final:
+                            st.error("Digite a nova senha ou marque a senha temporária automática.")
+                            st.stop()
+                        if senha_final != (confirma_senha or "").strip():
+                            st.error("A confirmação da senha não confere.")
+                            st.stop()
+                    try:
+                        if not user_pwd:
+                            upsert_usuario_sistema(
+                                nome=(csel_pwd.get("Nome") or "").strip(),
+                                setor=setor,
+                                chapa=ch_sel_pwd,
+                                senha=senha_final,
+                                is_admin=False,
+                                is_lider=False,
+                                forcar_troca_senha=forcar_troca,
+                            )
+                            msg_base = "Acesso criado e senha definida com sucesso."
+                        else:
+                            update_password(setor, ch_sel_pwd, senha_final)
+                            set_force_change_password(setor, ch_sel_pwd, forcar_troca)
+                            msg_base = "Senha alterada com sucesso."
+                        if gerar_tmp:
+                            st.session_state["pwd_temp_last"] = senha_final
+                            st.session_state["pwd_temp_last_chapa"] = ch_sel_pwd
+                            st.success(msg_base)
+                            st.success("🔑 Senha temporária criada com sucesso.")
+                            st.code(senha_final, language=None)
+                            st.caption("Copie essa senha e envie ao colaborador. No próximo login ele será obrigado a trocar a senha.")
+                        else:
+                            st.session_state["pwd_temp_last"] = ""
+                            st.session_state["pwd_temp_last_chapa"] = ""
+                            st.success(msg_base)
+                            st.rerun()
+                    except Exception as e:
+                        st.error(f"Falha ao alterar senha: {e}")
+            else:
+                st.info("Sem colaboradores para alterar senha.")
+
+            st.markdown("---")
 
         elif sec_col == "🔄 Rodízio Caixa":
             st.markdown("## 🔄 Rodízio mensal Caixa 01 ↔ Caixa 02")
@@ -9058,6 +9459,23 @@ def page_app():
 
                     row_idx = 3
                     total_linhas_gravadas = 0
+                    resumo_cobertura = {
+                        "abertura": [0] * total_dias,
+                        "intermediario": [0] * total_dias,
+                        "fechamento": [0] * total_dias,
+                        "total_trabalhando": [0] * total_dias,
+                    }
+
+                    def _minutos_hora_excel(v):
+                        s = str(v or "").strip()
+                        if not s or ":" not in s:
+                            return None
+                        try:
+                            hh, mm = s.split(":", 1)
+                            return int(hh) * 60 + int(mm)
+                        except Exception:
+                            return None
+
                     for sg in sorted(subgrupo_map.keys()):
                         ws.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx, end_column=total_dias + 1)
                         t = ws.cell(row_idx, 1, f"SUBGRUPO: {sg}")
@@ -9071,7 +9489,7 @@ def page_app():
                         for chx in chapas_sg:
                             df_f = hist_db[chx].copy().reset_index(drop=True)
                             nome = str(colab_by.get(str(chx), {}).get("Nome", chx))
-                            c_nome = ws.cell(row_idx, 1, f"{nome}\nCHAPA: {chx}")
+                            c_nome = ws.cell(row=row_idx, column=1, value=f"{nome}\nCHAPA: {chx}")
                             c_nome.fill = fill_nome
                             c_nome.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
                             c_nome.border = border
@@ -9102,8 +9520,47 @@ def page_app():
                                     else:
                                         cell1.fill = fill_folga
                                         cell2.fill = fill_folga
+                                else:
+                                    ent_min = _minutos_hora_excel(v1)
+                                    if ent_min is not None:
+                                        resumo_cobertura["total_trabalhando"][i] += 1
+                                        if 360 <= ent_min <= 600:
+                                            resumo_cobertura["abertura"][i] += 1
+                                        elif 601 <= ent_min <= 720:
+                                            resumo_cobertura["intermediario"][i] += 1
+                                        elif ent_min >= 760:
+                                            resumo_cobertura["fechamento"][i] += 1
                             total_linhas_gravadas += 1
                             row_idx += 2
+                        row_idx += 1
+
+                    row_idx += 1
+                    ws.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx, end_column=total_dias + 1)
+                    t_res = ws.cell(row_idx, 1, "RESUMO DE COBERTURA — TODOS OS SUBGRUPOS")
+                    t_res.fill = fill_header
+                    t_res.font = font_header
+                    t_res.alignment = Alignment(horizontal="left", vertical="center")
+                    t_res.border = border
+                    row_idx += 1
+
+                    resumo_rows = [
+                        ("ABERTURA (06:00 até 10:00)", resumo_cobertura["abertura"]),
+                        ("INTERMEDIÁRIO (10:01 até 12:00)", resumo_cobertura["intermediario"]),
+                        ("FECHAMENTO (a partir de 12:40)", resumo_cobertura["fechamento"]),
+                        ("TOTAL TRABALHANDO", resumo_cobertura["total_trabalhando"]),
+                    ]
+                    for titulo_resumo, valores_resumo in resumo_rows:
+                        c0 = ws.cell(row_idx, 1, titulo_resumo)
+                        c0.fill = fill_group
+                        c0.font = Font(bold=True)
+                        c0.alignment = Alignment(horizontal="left", vertical="center")
+                        c0.border = border
+                        for i, valor_resumo in enumerate(valores_resumo):
+                            c1 = ws.cell(row_idx, i + 2, int(valor_resumo))
+                            c1.alignment = center
+                            c1.border = border
+                            if str(df_ref_xls.iloc[i].get("Dia", "")) == "dom":
+                                c1.fill = fill_folga
                         row_idx += 1
 
                     try:
@@ -9850,11 +10307,17 @@ def _fast_restore_bundled_latest_before_start() -> None:
 # MAIN
 # =========================================================
 _fast_restore_bundled_latest_before_start()
-db_init()
-if not FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP:
-    auto_backup_if_due()
 
-if st.session_state["auth"] is None:
+if st.session_state["auth"] is None and QUICK_LOGIN_BOOT:
+    db_init_fast_login()
     page_login()
 else:
-    page_app()
+    if not st.session_state.get("_full_boot_done", False):
+        db_init()
+        if not FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP:
+            auto_backup_if_due()
+        st.session_state["_full_boot_done"] = True
+    if st.session_state["auth"] is None:
+        page_login()
+    else:
+        page_app()
