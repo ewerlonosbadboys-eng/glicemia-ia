@@ -8476,6 +8476,27 @@ def list_assinaturas_setor(setor: str, ano: int, mes: int) -> pd.DataFrame:
     con.close()
     return q
 
+
+def list_assinaturas_setor_todas(setor: str) -> pd.DataFrame:
+    setor = _norm_setor(setor)
+    con = db_conn()
+    q = pd.read_sql_query(
+        """
+        SELECT p.setor AS Setor, p.chapa AS Chapa, COALESCE(c.nome, p.chapa) AS Nome,
+               COALESCE(c.subgrupo, 'SEM SUBGRUPO') AS Subgrupo,
+               p.ano AS Ano, p.mes AS Mes, p.tipo AS Tipo, p.versao_ref AS 'Versão', p.assinado_em AS Assinado_em
+        FROM portal_assinaturas p
+        LEFT JOIN colaboradores c
+          ON UPPER(TRIM(c.setor)) = UPPER(TRIM(p.setor))
+         AND TRIM(c.chapa) = TRIM(p.chapa)
+        WHERE UPPER(TRIM(p.setor)) = ?
+        ORDER BY p.ano DESC, p.mes DESC, p.tipo, COALESCE(c.nome, p.chapa)
+        """,
+        con, params=(setor,)
+    )
+    con.close()
+    return q
+
 def list_solicitacoes_setor(setor: str) -> pd.DataFrame:
     setor = _norm_setor(setor)
     con = db_conn()
@@ -10378,10 +10399,57 @@ def page_app():
     elif sec_main == "✍️ Assinaturas":
         ano = int(st.session_state["cfg_ano"])
         mes = int(st.session_state["cfg_mes"])
-        st.subheader(f"✍️ Assinaturas do setor — {setor} — {mes:02d}/{ano}")
-        df_ass = list_assinaturas_setor(setor, ano, mes)
+        hoje_ass = datetime.now()
+        ano_vig_ass = int(hoje_ass.year)
+        mes_vig_ass = int(hoje_ass.month)
+
+        st.subheader(f"✍️ Assinaturas do setor — {setor}")
+
+        df_ass_sel = list_assinaturas_setor(setor, ano, mes)
+        df_ass_vig = list_assinaturas_setor(setor, ano_vig_ass, mes_vig_ass)
+        df_ass_all = list_assinaturas_setor_todas(setor)
+
+        c_ass1, c_ass2, c_ass3 = st.columns(3)
+        c_ass1.metric("Competência selecionada", f"{mes:02d}/{ano}", delta=f"{len(df_ass_sel)} assinatura(s)")
+        c_ass2.metric("Mês vigente", f"{mes_vig_ass:02d}/{ano_vig_ass}", delta=f"{len(df_ass_vig)} assinatura(s)")
+        c_ass3.metric("Total do setor", len(df_ass_all))
+
+        escopo_opts = [
+            f"Competência selecionada ({mes:02d}/{ano})",
+            f"Mês vigente ({mes_vig_ass:02d}/{ano_vig_ass})",
+            "Todas do setor",
+        ]
+        if not df_ass_sel.empty:
+            escopo_default = 0
+        elif not df_ass_vig.empty:
+            escopo_default = 1
+        else:
+            escopo_default = 2
+
+        escopo_ass = st.radio(
+            "Visualizar",
+            escopo_opts,
+            index=escopo_default,
+            horizontal=True,
+            key="ass_setor_escopo",
+        )
+
+        if escopo_ass == escopo_opts[0]:
+            df_ass = df_ass_sel.copy()
+            st.caption(f"Mostrando a competência selecionada na lateral: {mes:02d}/{ano}.")
+            if df_ass.empty and not df_ass_vig.empty and (ano != ano_vig_ass or mes != mes_vig_ass):
+                st.warning(
+                    f"Não há assinaturas em {mes:02d}/{ano}. Existem assinatura(s) no mês vigente {mes_vig_ass:02d}/{ano_vig_ass}."
+                )
+        elif escopo_ass == escopo_opts[1]:
+            df_ass = df_ass_vig.copy()
+            st.caption(f"Mostrando o mês vigente do portal do colaborador: {mes_vig_ass:02d}/{ano_vig_ass}.")
+        else:
+            df_ass = df_ass_all.copy()
+            st.caption("Mostrando todas as assinaturas do setor, sem apagar nem alterar a lógica existente.")
+
         if df_ass.empty:
-            st.info("Nenhuma assinatura encontrada para esta competência.")
+            st.info("Nenhuma assinatura encontrada para o filtro selecionado.")
         else:
             m1, m2, m3 = st.columns(3)
             m1.metric("Assinaturas", len(df_ass))
@@ -10393,6 +10461,24 @@ def page_app():
             df_view = df_ass.copy()
             if tipo_sel != "Todos":
                 df_view = df_view[df_view['Tipo'].astype(str) == str(tipo_sel)].copy()
+
+            comp_opts = ["Todas"] + sorted(
+                {f"{int(a):04d}-{int(m):02d}" for a, m in zip(df_view['Ano'].fillna(0), df_view['Mes'].fillna(0))}
+            ) if {'Ano', 'Mes'}.issubset(df_view.columns) else ["Todas"]
+            comp_sel = st.selectbox("Filtrar competência", comp_opts, key="ass_setor_competencia")
+            if comp_sel != "Todas" and {'Ano', 'Mes'}.issubset(df_view.columns):
+                ano_sel, mes_sel = comp_sel.split('-')
+                df_view = df_view[
+                    (df_view['Ano'].astype(int) == int(ano_sel)) &
+                    (df_view['Mes'].astype(int) == int(mes_sel))
+                ].copy()
+
+            if 'Tipo' in df_view.columns:
+                tipo_map = {
+                    'oficial': 'Assinatura da Escala do Mês',
+                    'historico': 'Assinatura de Mudanças',
+                }
+                df_view['Tipo'] = df_view['Tipo'].astype(str).map(lambda x: tipo_map.get(str(x).strip().lower(), x))
 
             if 'Assinado_em' in df_view.columns:
                 try:
