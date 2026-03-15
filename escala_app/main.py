@@ -7484,11 +7484,12 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
     ass_escala = get_assinatura_status(setor, chapa, ano_vigente, mes_vigente, 'oficial')
     ass_mud = get_assinatura_status(setor, chapa, ano_vigente, mes_vigente, 'historico')
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         '📋 Escala Oficial',
         '🕒 Pré-Escala',
         '📝 Histórico de Mudanças',
         '✍️ Assinaturas',
+        '🏖️ Férias',
         '⚙️ Ajustes',
     ])
 
@@ -7582,6 +7583,46 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
                         st.rerun()
 
     with tab5:
+        st.markdown(f"#### Férias — {mes_vigente:02d}/{ano_vigente}")
+        rows_fer = [r for r in (list_ferias(setor) or []) if _norm_chapa(r[0]) == chapa]
+        if not rows_fer:
+            st.info('Nenhuma férias cadastrada para este colaborador.')
+        else:
+            dados_fer = []
+            for _ch, ini, fim in rows_fer:
+                try:
+                    dt_ini = pd.to_datetime(str(ini)).date()
+                    dt_fim = pd.to_datetime(str(fim)).date()
+                    qtd = (dt_fim - dt_ini).days + 1
+                except Exception:
+                    dt_ini = str(ini)
+                    dt_fim = str(fim)
+                    qtd = None
+                dados_fer.append({
+                    'Chapa': _ch,
+                    'Início': dt_ini.strftime('%d/%m/%Y') if hasattr(dt_ini, 'strftime') else dt_ini,
+                    'Fim': dt_fim.strftime('%d/%m/%Y') if hasattr(dt_fim, 'strftime') else dt_fim,
+                    'Dias': qtd if qtd is not None else '-',
+                })
+            df_fer = pd.DataFrame(dados_fer)
+            fer_ativa = False
+            hoje_date = hoje.date()
+            for r in rows_fer:
+                try:
+                    ini_d = pd.to_datetime(str(r[1])).date()
+                    fim_d = pd.to_datetime(str(r[2])).date()
+                    if ini_d <= hoje_date <= fim_d:
+                        fer_ativa = True
+                        break
+                except Exception:
+                    pass
+            cfa, cfb = st.columns(2)
+            cfa.metric('Períodos cadastrados', len(df_fer))
+            cfb.metric('Situação atual', 'Em férias' if fer_ativa else 'Programadas / encerradas')
+            st.dataframe(df_fer, use_container_width=True, hide_index=True)
+            st.caption('As férias exibidas aqui são somente do colaborador logado.')
+
+    with tab6:
         st.markdown('#### Ajustes')
         suba, subb = st.tabs(['🌴 Sugestão de Folgas', '📨 Minhas solicitações'])
 
