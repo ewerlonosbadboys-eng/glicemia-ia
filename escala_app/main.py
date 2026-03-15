@@ -10408,11 +10408,34 @@ def page_app():
         df_ass_sel = list_assinaturas_setor(setor, ano, mes)
         df_ass_vig = list_assinaturas_setor(setor, ano_vig_ass, mes_vig_ass)
         df_ass_all = list_assinaturas_setor_todas(setor)
+        colaboradores_setor = load_colaboradores_setor(setor) or []
+        total_colabs_setor = len({str((c or {}).get("Chapa", "")).strip() for c in colaboradores_setor if str((c or {}).get("Chapa", "")).strip()})
+
+        def _filtrar_assinatura_escala_mes(df_src: pd.DataFrame) -> pd.DataFrame:
+            if df_src is None or df_src.empty:
+                return pd.DataFrame(columns=getattr(df_src, 'columns', []))
+            if 'Tipo' not in df_src.columns:
+                return df_src.copy()
+            tipo_norm = df_src['Tipo'].astype(str).str.strip().str.lower()
+            df_oficial = df_src[tipo_norm.isin(['oficial', 'assinatura da escala do mês'])].copy()
+            return df_oficial if not df_oficial.empty else df_src.copy()
+
+        df_ass_sel_escala = _filtrar_assinatura_escala_mes(df_ass_sel)
+        df_ass_vig_escala = _filtrar_assinatura_escala_mes(df_ass_vig)
+        chapas_ass_sel = {str(x).strip() for x in df_ass_sel_escala.get('Chapa', pd.Series(dtype=str)).astype(str).tolist() if str(x).strip()}
+        chapas_ass_vig = {str(x).strip() for x in df_ass_vig_escala.get('Chapa', pd.Series(dtype=str)).astype(str).tolist() if str(x).strip()}
+        faltam_sel = max(0, total_colabs_setor - len(chapas_ass_sel))
+        faltam_vig = max(0, total_colabs_setor - len(chapas_ass_vig))
 
         c_ass1, c_ass2, c_ass3 = st.columns(3)
         c_ass1.metric("Competência selecionada", f"{mes:02d}/{ano}", delta=f"{len(df_ass_sel)} assinatura(s)")
         c_ass2.metric("Mês vigente", f"{mes_vig_ass:02d}/{ano_vig_ass}", delta=f"{len(df_ass_vig)} assinatura(s)")
         c_ass3.metric("Total do setor", len(df_ass_all))
+
+        c_ass4, c_ass5, c_ass6 = st.columns(3)
+        c_ass4.metric("Colaboradores do setor", total_colabs_setor)
+        c_ass5.metric("Assinaram escala do mês vigente", len(chapas_ass_vig))
+        c_ass6.metric("Faltam assinar mês vigente", faltam_vig)
 
         escopo_opts = [
             f"Competência selecionada ({mes:02d}/{ano})",
@@ -10486,6 +10509,55 @@ def page_app():
                 except Exception:
                     pass
             st.dataframe(df_view, use_container_width=True, hide_index=True)
+
+            faltantes_vig = [
+                c for c in colaboradores_setor
+                if str((c or {}).get('Chapa', '')).strip() and str((c or {}).get('Chapa', '')).strip() not in chapas_ass_vig
+            ]
+            faltantes_sel = [
+                c for c in colaboradores_setor
+                if str((c or {}).get('Chapa', '')).strip() and str((c or {}).get('Chapa', '')).strip() not in chapas_ass_sel
+            ]
+
+            with st.expander('📋 Conferência de quem ainda falta assinar', expanded=False):
+                st.caption('Sem apagar nada da lógica existente: aqui o sistema compara os colaboradores cadastrados no setor com as assinaturas já registradas.')
+                t1, t2 = st.columns(2)
+                with t1:
+                    st.markdown(f"**Competência selecionada ({mes:02d}/{ano})**")
+                    st.write(f"Faltam assinar: **{faltam_sel}**")
+                    if faltantes_sel:
+                        st.dataframe(
+                            pd.DataFrame([
+                                {
+                                    'Chapa': str((c or {}).get('Chapa', '')).strip(),
+                                    'Nome': str((c or {}).get('Nome', '')).strip(),
+                                    'Subgrupo': str((c or {}).get('Subgrupo', '')).strip(),
+                                }
+                                for c in faltantes_sel
+                            ]),
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+                    else:
+                        st.success('Todos os colaboradores do setor já assinaram a escala desta competência.')
+                with t2:
+                    st.markdown(f"**Mês vigente ({mes_vig_ass:02d}/{ano_vig_ass})**")
+                    st.write(f"Faltam assinar: **{faltam_vig}**")
+                    if faltantes_vig:
+                        st.dataframe(
+                            pd.DataFrame([
+                                {
+                                    'Chapa': str((c or {}).get('Chapa', '')).strip(),
+                                    'Nome': str((c or {}).get('Nome', '')).strip(),
+                                    'Subgrupo': str((c or {}).get('Subgrupo', '')).strip(),
+                                }
+                                for c in faltantes_vig
+                            ]),
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+                    else:
+                        st.success('Todos os colaboradores do setor já assinaram a escala do mês vigente.')
 
     # ------------------------------------------------------
     # ABA 7: Minhas solicitações (líder/admin)
