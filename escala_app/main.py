@@ -5485,6 +5485,61 @@ def build_historico_folgas_diario(setor: str, ano: int, mes: int, hist_db: dict 
     return pd.DataFrame(rows)
 
 
+def build_cobertura_dia(setor: str, ano: int, mes: int, dia: int, hist_db: dict | None = None) -> dict:
+    hist_db = hist_db or get_hist_mes_com_overrides_cached(setor, ano, mes)
+    dia = int(dia)
+    idx = dia - 1
+    folga = ferias = afast = trabalho = 0
+    abertura = intermediario = fechamento = 0
+    pessoas_folga = []
+    pessoas_ferias = []
+    pessoas_afast = []
+    pessoas_trabalho = []
+    for ch, df in (hist_db or {}).items():
+        if df is None or idx < 0 or idx >= len(df):
+            continue
+        try:
+            nome = str(df.loc[idx, 'Nome'])
+        except Exception:
+            nome = str(ch)
+        stt = str(df.loc[idx, 'Status'])
+        if stt == 'Folga':
+            folga += 1
+            pessoas_folga.append(nome)
+        elif stt == 'Férias':
+            ferias += 1
+            pessoas_ferias.append(nome)
+        elif stt == 'Afastamento':
+            afast += 1
+            pessoas_afast.append(nome)
+        elif stt in WORK_STATUSES:
+            trabalho += 1
+            pessoas_trabalho.append(nome)
+            turno = _classificar_turno_por_entrada(str(df.loc[idx, 'H_Entrada'] or ''))
+            if turno == 'Abertura':
+                abertura += 1
+            elif turno == 'Intermediário':
+                intermediario += 1
+            elif turno == 'Fechamento':
+                fechamento += 1
+    return {
+        'Dia': dia,
+        'Data': date(int(ano), int(mes), dia).strftime('%d/%m/%Y'),
+        'Semana': WEEKDAY_LABELS_LONG.get(date(int(ano), int(mes), dia).weekday(), ''),
+        'Folga': int(folga),
+        'Férias': int(ferias),
+        'Afastamento': int(afast),
+        'Trabalho': int(trabalho),
+        'Abertura': int(abertura),
+        'Intermediário': int(intermediario),
+        'Fechamento': int(fechamento),
+        'Pessoas de folga': ', '.join(sorted([n for n in pessoas_folga if n])),
+        'Pessoas de férias': ', '.join(sorted([n for n in pessoas_ferias if n])),
+        'Pessoas afastadas': ', '.join(sorted([n for n in pessoas_afast if n])),
+        'Pessoas trabalhando': ', '.join(sorted([n for n in pessoas_trabalho if n])),
+    }
+
+
 def build_inventario_comparativo(setor: str, ano: int, mes: int, hist_db: dict | None = None) -> pd.DataFrame:
     hist_db = hist_db or get_hist_mes_com_overrides_cached(setor, ano, mes)
     inv = get_inventario_mes(setor, ano, mes)
@@ -9328,9 +9383,9 @@ def page_app():
             c2.caption("Alterar em 🗓️ Competência (sidebar)")
             c3.caption("Ajustes aplicam na competência ativa.")
 
-        sec_aj = st.radio("", ["🧩 Folgas manuais em grade", "🧷 Folga fixa", "🗂️ Inventário", "📝 Histórico", "🔁 Troca de horários", "✅ Preferência por subgrupo", "📌 Subgrupos (editável)"], horizontal=True, key="ajustes_nav_fast", label_visibility="collapsed")
+        sec_aj = st.radio("", ["🧩 Folgas manuais em grade", "🧷 Folga fixa", "📊 Cobertura por dia", "📝 Histórico", "🔁 Troca de horários", "✅ Preferência por subgrupo", "📌 Subgrupos (editável)"], horizontal=True, key="ajustes_nav_fast", label_visibility="collapsed")
 
-        _ajustes_precisam_escala = sec_aj in ("🧩 Folgas manuais em grade", "🧷 Folga fixa", "🗂️ Inventário", "📝 Histórico", "🔁 Troca de horários")
+        _ajustes_precisam_escala = sec_aj in ("🧩 Folgas manuais em grade", "🧷 Folga fixa", "📊 Cobertura por dia", "📝 Histórico", "🔁 Troca de horários")
         hist_db = {}
         colaboradores = []
         colab_by = {}
@@ -9518,22 +9573,50 @@ def page_app():
                     else:
                         st.info("Nenhuma folga fixa cadastrada ainda.")
 
-                elif sec_aj == "🗂️ Inventário":
-                    st.markdown("### 🗂️ Inventário")
-                    st.caption("Escolha o dia e informe quantas pessoas você quer em abertura, intermediário e fechamento. A tabela mensal continua abaixo para conferência rápida.")
+                elif sec_aj == "📊 Cobertura por dia":
+                    st.markdown("### 📊 Cobertura por dia")
+                    st.caption("Escolha o dia, veja a cobertura real desse dia e informe quantas pessoas você quer em abertura, intermediário e fechamento.")
                     qtd_inv = calendar.monthrange(int(ano), int(mes))[1]
                     inv_atual = get_inventario_mes(setor, ano, mes)
                     inv_map = {int(r["Dia"]): r for _, r in inv_atual.iterrows()} if not inv_atual.empty else {}
 
                     dia_inv = st.selectbox(
-                        "Dia do inventário:",
+                        "Selecione o dia:",
                         options=list(range(1, qtd_inv + 1)),
                         key=f"inventario_dia_foco::{setor}::{ano}::{mes}",
                     )
                     base_inv = inv_map.get(int(dia_inv), {})
                     data_inv = date(int(ano), int(mes), int(dia_inv))
-                    st.info("Aqui você define quantas pessoas quer no dia do balanço em cada faixa: abertura, intermediário e fechamento.")
+                    st.info("Aqui você acompanha a cobertura do dia e define quantas pessoas quer no dia do balanço em cada faixa: abertura, intermediário e fechamento.")
                     st.caption(f"Data escolhida: {data_inv.strftime('%d/%m/%Y')} — {WEEKDAY_LABELS_LONG[data_inv.weekday()]}")
+
+                    hist_inv = hist_db or get_hist_mes_com_overrides_cached(setor, ano, mes)
+                    cob_dia = build_cobertura_dia(setor, ano, mes, int(dia_inv), hist_inv) if hist_inv else {
+                        "Folga": 0, "Férias": 0, "Afastamento": 0, "Trabalho": 0,
+                        "Abertura": 0, "Intermediário": 0, "Fechamento": 0,
+                        "Pessoas de folga": "", "Pessoas de férias": "", "Pessoas afastadas": "", "Pessoas trabalhando": ""
+                    }
+
+                    st.markdown("#### Cobertura real do dia selecionado")
+                    mc1, mc2, mc3, mc4 = st.columns(4)
+                    mc1.metric("Folga", int(cob_dia.get("Folga", 0)))
+                    mc2.metric("Férias", int(cob_dia.get("Férias", 0)))
+                    mc3.metric("Afastadas", int(cob_dia.get("Afastamento", 0)))
+                    mc4.metric("Trabalhando", int(cob_dia.get("Trabalho", 0)))
+                    mt1, mt2, mt3 = st.columns(3)
+                    mt1.metric("Abertura", int(cob_dia.get("Abertura", 0)))
+                    mt2.metric("Intermediário", int(cob_dia.get("Intermediário", 0)))
+                    mt3.metric("Fechamento", int(cob_dia.get("Fechamento", 0)))
+
+                    with st.expander("Ver nomes do dia selecionado"):
+                        nomes_folga = str(cob_dia.get('Pessoas de folga', '') or '').strip()
+                        nomes_ferias = str(cob_dia.get('Pessoas de férias', '') or '').strip()
+                        nomes_afast = str(cob_dia.get('Pessoas afastadas', '') or '').strip()
+                        nomes_trab = str(cob_dia.get('Pessoas trabalhando', '') or '').strip()
+                        st.write(f"**Folga ({int(cob_dia.get('Folga', 0))}):** {nomes_folga if nomes_folga else '-'}")
+                        st.write(f"**Férias ({int(cob_dia.get('Férias', 0))}):** {nomes_ferias if nomes_ferias else '-'}")
+                        st.write(f"**Afastadas ({int(cob_dia.get('Afastamento', 0))}):** {nomes_afast if nomes_afast else '-'}")
+                        st.write(f"**Trabalhando ({int(cob_dia.get('Trabalho', 0))}):** {nomes_trab if nomes_trab else '-'}")
 
                     ci1, ci2, ci3 = st.columns(3)
                     meta_ab = ci1.number_input(
@@ -9561,7 +9644,7 @@ def page_app():
                     csave1, csave2 = st.columns([1, 3])
                     if csave1.button("💾 Salvar dia selecionado", key=f"inventario_salvar_dia::{setor}::{ano}::{mes}::{dia_inv}"):
                         upsert_inventario_dia(setor, ano, mes, int(dia_inv), int(meta_ab), int(meta_in), int(meta_fe))
-                        st.success(f"Inventário salvo para o dia {int(dia_inv):02d}/{int(mes):02d}/{int(ano)}.")
+                        st.success(f"Cobertura do dia salva para {int(dia_inv):02d}/{int(mes):02d}/{int(ano)}.")
                         st.rerun()
                     csave2.caption("Use esta área para cadastrar a necessidade do dia. Isso entra na geração da escala quando houver inventário configurado.")
 
@@ -9577,12 +9660,12 @@ def page_app():
                             "Fechamento": int(base["Fechamento"]) if base != {} else 0,
                         })
                     df_inv_view = pd.DataFrame(rows_inv)
-                    st.markdown("#### Inventário do mês")
+                    st.markdown("#### Cobertura planejada do mês")
                     st.dataframe(df_inv_view, use_container_width=True, hide_index=True)
 
                     comp_inv = build_inventario_comparativo(setor, ano, mes, hist_db if hist_db else None)
                     if not comp_inv.empty:
-                        st.markdown("#### Comparativo meta x escala atual")
+                        st.markdown("#### Comparativo da cobertura planejada x escala atual")
                         st.dataframe(comp_inv, use_container_width=True, hide_index=True)
                     else:
                         st.info("Cadastre as metas do mês para acompanhar o comparativo depois.")
