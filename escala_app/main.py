@@ -92,7 +92,7 @@ from reportlab.lib.pagesizes import landscape, A4
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib import colors
 st.set_page_config(page_title="Escala 5x2 Oficial", layout="wide")
-st.sidebar.info('ADMIN_FIX_VISIVEL_2026_03_14 | V101_ULTRA')
+
 VERSAO_ACESSO_LIDER = "ACESSO_LIDER_FIX_2026_03_14_v2"
 
 
@@ -7049,60 +7049,18 @@ def page_login():
         finally:
             con.close()
 
-    st.title("🔐 Login por Setor (Colaborador / Líder / Admin)")
+    st.title("ESCALA 5x2 DO FUTURO")
 
     if _RESTORE_GUARD_ACTIVE:
         st.warning(_RESTORE_GUARD_MESSAGE or "Base não restaurada automaticamente. O app liberou uma base mínima temporária para permitir o login.")
         st.info("Publique o latest_stable.db junto do projeto ou confirme que o Supabase tem os dados completos para recuperar a base real.")
 
-    login_sec = st.radio("", ["Entrar", "Cadastro do Colaborador", "Esqueci a senha"], horizontal=True, key="login_nav_fast", label_visibility="collapsed")
+    login_sec = st.radio("", ["Entrar", "Esqueci a senha"], horizontal=True, key="login_nav_fast", label_visibility="collapsed")
 
     if login_sec == "Entrar":
         setores = _cache_login_setores()
-        rec2 = _cache_login_recent()
-
-        st.caption("🔎 Buscar acesso / escala por setor, chapa ou nome — pode digitar em minúsculo (ex.: flv).")
-        kw = st.text_input("Buscar acesso:", value=st.session_state.get("lg_kw", ""), key="lg_kw").strip()
-
-        # opções recentes
-        recentes_opts = []
-        for _, r in rec2.iterrows():
-            s = str(r.get("setor","")).strip()
-            c = str(r.get("chapa","")).strip()
-            n = str(r.get("nome","") or "").strip()
-            label = f"{s} | {c}" + (f" — {n}" if n else "")
-            recentes_opts.append((label, s, c))
-
-        # filtro por keyword
-        if kw:
-            kwu = kw.upper()
-            recentes_opts_f = [t for t in recentes_opts if kwu in t[0].upper()]
-            setores_f = [s for s in setores if kwu in s.upper()]
-        else:
-            recentes_opts_f = recentes_opts
-            setores_f = setores
-
-        colA, colB = st.columns([1.4, 1.0])
-        with colA:
-            if recentes_opts_f:
-                recentes_labels = ["-- selecione --"] + [t[0] for t in recentes_opts_f]
-                pick = st.selectbox(
-                    "Recentes (clique para preencher):",
-                    recentes_labels,
-                    index=0,
-                    key="lg_recent_pick"
-                )
-                if pick != "-- selecione --":
-                    chosen = next((t for t in recentes_opts_f if t[0] == pick), None)
-                    if chosen:
-                        st.session_state["lg_setor_txt"] = chosen[1]
-                        st.session_state["lg_chapa"] = chosen[2]
-
-        with colB:
-            lembrar = st.checkbox("✅ Salvar setor/chapa neste dispositivo", value=True, key="lg_remember")
-
         setor_base = _norm_setor(st.session_state.get("lg_setor_txt", ""))
-        opcoes_setor = setores_f[:] if setores_f else setores[:]
+        opcoes_setor = setores[:] if setores else []
         if setor_base and setor_base not in opcoes_setor:
             opcoes_setor = [setor_base] + opcoes_setor
         if not opcoes_setor:
@@ -7128,20 +7086,6 @@ def page_login():
                     pass
 
                 st.session_state["auth"] = u
-
-                # salva recente
-                if lembrar:
-                    try:
-                        con = db_conn()
-                        con.execute(
-                            "INSERT INTO login_recent(setor, chapa, ts) VALUES(?,?,?)",
-                            (setor_norm, chapa.strip(), dt.datetime.now().isoformat(timespec="seconds"))
-                        )
-                        con.commit()
-                        con.close()
-                    except Exception:
-                        pass
-
                 st.success("Login efetuado!")
                 st.rerun()
             else:
@@ -7149,8 +7093,6 @@ def page_login():
                     st.error("Este colaborador existe, mas o login do sistema foi apagado ou ainda não foi criado. Peça para o ADMIN recuperar o usuário na aba Admin.")
                 else:
                     st.error("Usuário ou senha inválidos.")
-
-        st.caption("Admin padrão: setor ADMIN | chapa admin | senha 123. Criação de setor/líder/admin permanece na aba Admin.")
 
     elif login_sec == "Cadastro do Colaborador":
         st.subheader("Primeiro acesso do colaborador")
