@@ -7999,7 +7999,10 @@ def gerar_pdf_colaborador_portal(setor: str, ano: int, mes: int, colab: dict, df
     c.line(margem_x, y, width - 36, y)
     y -= 14
 
-    df_show = (df_escala or pd.DataFrame()).copy()
+    if isinstance(df_escala, pd.DataFrame):
+        df_show = df_escala.copy()
+    else:
+        df_show = pd.DataFrame()
     if not df_show.empty and 'Data' in df_show.columns:
         try:
             df_show['Data'] = pd.to_datetime(df_show['Data'], errors='coerce').dt.strftime('%d/%m/%Y')
