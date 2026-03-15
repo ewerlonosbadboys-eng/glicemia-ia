@@ -9383,9 +9383,14 @@ def page_app():
             c2.caption("Alterar em 🗓️ Competência (sidebar)")
             c3.caption("Ajustes aplicam na competência ativa.")
 
-        sec_aj = st.radio("", ["🧩 Folgas manuais em grade", "🧷 Folga fixa", "📊 Cobertura por dia", "📝 Histórico", "🔁 Troca de horários", "✅ Preferência por subgrupo", "📌 Subgrupos (editável)"], horizontal=True, key="ajustes_nav_fast", label_visibility="collapsed")
+        _ajustes_opcoes = ["🧩 Folgas manuais em grade", "🧷 Folga fixa", "📊 Cobertura por dia", "📝 Histórico", "🔁 Troca de horários", "✅ Preferência por subgrupo", "📌 Subgrupos (editável)"]
+        if "ajustes_nav_fast_v2" not in st.session_state:
+            st.session_state["ajustes_nav_fast_v2"] = "🧩 Folgas manuais em grade"
+        sec_aj = st.radio("", _ajustes_opcoes, horizontal=True, key="ajustes_nav_fast_v2", label_visibility="collapsed")
+        if sec_aj == "🗂️ Inventário":
+            sec_aj = "📊 Cobertura por dia"
 
-        _ajustes_precisam_escala = sec_aj in ("🧩 Folgas manuais em grade", "🧷 Folga fixa", "📊 Cobertura por dia", "📝 Histórico", "🔁 Troca de horários")
+        _ajustes_precisam_escala = sec_aj in ("🧩 Folgas manuais em grade", "🧷 Folga fixa", "📊 Cobertura por dia", "🗂️ Inventário", "📝 Histórico", "🔁 Troca de horários")
         hist_db = {}
         colaboradores = []
         colab_by = {}
