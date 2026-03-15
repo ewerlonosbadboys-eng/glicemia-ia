@@ -1,3 +1,6 @@
+# V100 ENTERPRISE — otimizações seguras de I/O, importação PDF em lote e proteção contra dupla aplicação
+# Esta versão preserva as regras já existentes da escala; os ajustes focam em performance e robustez operacional.
+
 # V97 ENTERPRISE — boot resiliente, restore em camadas e login sempre liberado
 # Derivado da V95.2 com reforço no restore local/Supabase/latest_stable e sem bloqueio rígido de login.
 
@@ -662,6 +665,60 @@ def _rebuild_estado_out(hist_all: dict) -> dict:
     return estado_out
 
 
+def _bulk_upsert_overrides(cur, setor: str, ano: int, mes: int, rows: list[tuple[str, int, str, str]]):
+    if not rows:
+        return
+    payload = []
+    for chapa, dia, campo, valor in rows:
+        payload.append((str(setor).strip().upper(), int(ano), int(mes), str(chapa).strip(), int(dia), _norm_override_campo(campo), str(valor).strip()))
+    cur.executemany(
+        """
+        INSERT INTO overrides(setor, ano, mes, chapa, dia, campo, valor)
+        VALUES(?,?,?,?,?,?,?)
+        ON CONFLICT(setor, ano, mes, chapa, dia, campo)
+        DO UPDATE SET valor=excluded.valor
+        """,
+        payload,
+    )
+
+
+def _bulk_delete_override_campos(cur, setor: str, ano: int, mes: int, rows: list[tuple[str, int, str | None]]):
+    if not rows:
+        return
+    for chapa, dia, campo in rows:
+        if campo:
+            campos = sorted({str(campo).strip(), _norm_override_campo(campo)})
+            placeholders = ",".join(["?"] * len(campos))
+            cur.execute(
+                f"""
+                DELETE FROM overrides
+                WHERE setor=? AND ano=? AND mes=? AND chapa=? AND dia=? AND campo IN ({placeholders})
+                """,
+                (setor, int(ano), int(mes), chapa, int(dia), *campos),
+            )
+        else:
+            cur.execute(
+                """
+                DELETE FROM overrides
+                WHERE setor=? AND ano=? AND mes=? AND chapa=? AND dia=?
+                """,
+                (setor, int(ano), int(mes), chapa, int(dia)),
+            )
+
+
+def _bulk_add_ferias(cur, setor: str, rows: list[tuple[str, date, date]]):
+    if not rows:
+        return
+    payload = [
+        (setor, chapa, inicio.strftime("%Y-%m-%d"), fim.strftime("%Y-%m-%d"))
+        for chapa, inicio, fim in rows
+    ]
+    cur.executemany(
+        "INSERT INTO ferias(setor, chapa, inicio, fim) VALUES (?, ?, ?, ?)",
+        payload,
+    )
+
+
 def _apply_pdf_import_to_db(
     setor_destino: str,
     ano: int,
@@ -672,15 +729,11 @@ def _apply_pdf_import_to_db(
     map_afa_para_folga: bool = False,
     cadastrar_ferias: bool = True,
 ):
-    if limpar_mes_antes:
-        con = db_conn()
-        cur = con.cursor()
-        cur.execute("DELETE FROM overrides WHERE setor=? AND ano=? AND mes=?", (setor_destino, int(ano), int(mes)))
-        con.commit()
-        con.close()
-
     resolvidos_por_nome = 0
     gerados_sem_chapa = []
+    override_upserts = []
+    override_deletes = []
+    ferias_rows = []
 
     for it in items:
         nome = (it.get("nome") or "").strip()
@@ -709,29 +762,48 @@ def _apply_pdf_import_to_db(
             saida = str(saida).strip().upper()
 
             if tok == "FOLG":
-                set_override(setor_destino, ano, mes, chapa, dia, "Status", "Folga")
-                delete_override(setor_destino, ano, mes, chapa, dia, "H_Entrada")
-                delete_override(setor_destino, ano, mes, chapa, dia, "H_Saida")
+                override_upserts.append((chapa, dia, "Status", "Folga"))
+                override_deletes.append((chapa, dia, "H_Entrada"))
+                override_deletes.append((chapa, dia, "H_Saida"))
             elif tok == "FER":
                 ferias_days.append(dia)
-                set_override(setor_destino, ano, mes, chapa, dia, "Status", "Férias")
-                delete_override(setor_destino, ano, mes, chapa, dia, "H_Entrada")
-                delete_override(setor_destino, ano, mes, chapa, dia, "H_Saida")
+                override_upserts.append((chapa, dia, "Status", "Férias"))
+                override_deletes.append((chapa, dia, "H_Entrada"))
+                override_deletes.append((chapa, dia, "H_Saida"))
             elif tok == "AFA":
-                set_override(setor_destino, ano, mes, chapa, dia, "Status", "Folga" if bool(map_afa_para_folga) else "Afastamento")
-                delete_override(setor_destino, ano, mes, chapa, dia, "H_Entrada")
-                delete_override(setor_destino, ano, mes, chapa, dia, "H_Saida")
+                override_upserts.append((chapa, dia, "Status", "Folga" if bool(map_afa_para_folga) else "Afastamento"))
+                override_deletes.append((chapa, dia, "H_Entrada"))
+                override_deletes.append((chapa, dia, "H_Saida"))
             elif re.match(r"^\d{2}:\d{2}$", tok):
-                set_override(setor_destino, ano, mes, chapa, dia, "Status", "Trabalho")
-                set_override(setor_destino, ano, mes, chapa, dia, "H_Entrada", tok)
+                override_upserts.append((chapa, dia, "Status", "Trabalho"))
+                override_upserts.append((chapa, dia, "H_Entrada", tok))
                 if re.match(r"^\d{2}:\d{2}$", saida):
-                    set_override(setor_destino, ano, mes, chapa, dia, "H_Saida", saida)
+                    override_upserts.append((chapa, dia, "H_Saida", saida))
                 else:
-                    set_override(setor_destino, ano, mes, chapa, dia, "H_Saida", _saida_from_entrada(tok))
+                    override_upserts.append((chapa, dia, "H_Saida", _saida_from_entrada(tok)))
 
         if cadastrar_ferias and ferias_days:
             for a, b in _group_consecutive_days(ferias_days):
-                add_ferias(setor_destino, chapa, date(int(ano), int(mes), int(a)), date(int(ano), int(mes), int(b)))
+                ferias_rows.append((chapa, date(int(ano), int(mes), int(a)), date(int(ano), int(mes), int(b))))
+
+    con = db_conn()
+    cur = con.cursor()
+    try:
+        cur.execute("BEGIN")
+        if limpar_mes_antes:
+            cur.execute("DELETE FROM overrides WHERE setor=? AND ano=? AND mes=?", (setor_destino, int(ano), int(mes)))
+        _bulk_upsert_overrides(cur, setor_destino, ano, mes, override_upserts)
+        _bulk_delete_override_campos(cur, setor_destino, ano, mes, override_deletes)
+        _bulk_add_ferias(cur, setor_destino, ferias_rows)
+        con.commit()
+    except Exception:
+        try:
+            con.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        con.close()
 
     try:
         st.cache_data.clear()
@@ -744,6 +816,7 @@ def _apply_pdf_import_to_db(
             st.warning("Importação PDF: chapa automática criada para: " + "; ".join(gerados_sem_chapa[:12]) + (" ..." if len(gerados_sem_chapa) > 12 else ""))
     except Exception:
         pass
+
 
 def _build_hist_from_pdf_items(setor: str, ano: int, mes: int, items: list[dict], map_afa_para_folga: bool = False) -> tuple[dict, dict]:
     """Monta a escala do mês exatamente como veio no PDF.
@@ -1260,12 +1333,18 @@ def _supabase_resolve_remote_table(local_table: str, refresh: bool = False) -> s
 def _app_db_connect(db_path: str | None = None):
     target = str(db_path or DB_PATH)
     factory = SQLiteSyncConnection if str(Path(target).resolve()) == str(Path(DB_PATH).resolve()) else sqlite3.Connection
-    conn = sqlite3.connect(target, check_same_thread=False, factory=factory)
+    conn = sqlite3.connect(target, check_same_thread=False, factory=factory, timeout=30.0)
     try:
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA busy_timeout=10000")
+        conn.execute("PRAGMA busy_timeout=30000")
         conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA temp_store=MEMORY")
+        conn.execute("PRAGMA cache_size=-65536")
+        try:
+            conn.execute("PRAGMA mmap_size=268435456")
+        except Exception:
+            pass
     except Exception:
         pass
     return conn
@@ -1837,7 +1916,7 @@ class SQLiteSyncConnection(sqlite3.Connection):
     def commit(self):
         result = super().commit()
         try:
-            _save_latest_stable_snapshot_safely()
+            _maybe_save_latest_stable_snapshot_fast("commit")
         except Exception:
             pass
         if SUPABASE_AUTO_PUSH_ON_COMMIT:
@@ -1849,7 +1928,7 @@ class SQLiteSyncConnection(sqlite3.Connection):
 
     def close(self):
         try:
-            _save_latest_stable_snapshot_safely()
+            _maybe_save_latest_stable_snapshot_fast("close")
         except Exception:
             pass
         if SUPABASE_AUTO_PUSH_ON_CLOSE:
@@ -9358,63 +9437,70 @@ def page_app():
                                     st.write(it.get("tokens", [])[:10], " ...")
 
 
+                            _pdf_apply_sig = hashlib.sha1((str(setor_dest) + "|" + str(ano) + "|" + str(mes) + "|" + str(bool(criar_colabs)) + "|" + str(bool(limpar_mes)) + "|" + str(bool(map_afa)) + "|" + str(bool(cadastrar_ferias)) + "|" + str(len(items)) + "|" + (pdf_bytes.hex()[:128] if 'pdf_bytes' in locals() and pdf_bytes else str(len(extracted or '')))).encode("utf-8")).hexdigest()
+
                             if st.button("✅ Aplicar escala do PDF no sistema (1 clique)", key="btn_apply_pdf"):
 
-                                _apply_pdf_import_to_db(
-
-                                    setor_destino=setor_dest,
-
-                                    ano=int(ano),
-
-                                    mes=int(mes),
-
-                                    items=items,
-
-                                    criar_colabs=bool(criar_colabs),
-
-                                    limpar_mes_antes=bool(limpar_mes),
-
-                                    map_afa_para_folga=bool(map_afa),
-
-                                    cadastrar_ferias=bool(cadastrar_ferias),
-
-                                )
-
-                                if bool(auto_gerar_pdf):
-
-                                    try:
-
-                                        hist_pdf, estado_pdf = _build_hist_from_pdf_items(
-
-                                            setor_dest, int(ano), int(mes), items,
-
-                                            map_afa_para_folga=bool(map_afa)
-
-                                        )
-
-                                        if hist_pdf:
-
-                                            save_escala_mes_db(setor_dest, int(ano), int(mes), hist_pdf)
-
-                                            save_estado_mes(setor_dest, int(ano), int(mes), estado_pdf)
-
-                                            st.session_state["ano"] = int(ano)
-
-                                            st.session_state["mes"] = int(mes)
-
-                                            st.success("PDF importado com sucesso! Para este mês, o PDF virou a fonte da verdade: folgas, férias e AFA foram salvos exatamente como estão no PDF. As regras do aplicativo voltam a valer normalmente na geração do mês seguinte.")
-
-                                        else:
-
-                                            st.warning("PDF importado, mas não consegui montar a escala final do mês a partir dos itens lidos.")
-
-                                    except Exception as e_auto:
-
-                                        st.warning(f"PDF importado, mas falhou ao salvar a escala final exatamente como veio no PDF: {e_auto}")
-
+                                if st.session_state.get("_last_pdf_apply_sig") == _pdf_apply_sig:
+                                    st.warning("Este mesmo PDF já foi aplicado nesta sessão para esse setor/mês. Nada foi reaplicado para evitar dupla importação acidental.")
                                 else:
+                                    st.session_state["_last_pdf_apply_sig"] = _pdf_apply_sig
 
-                                    st.success("Importação aplicada com sucesso! Agora clique em 'Gerar agora (respeita ajustes)' para montar a escala do mês com folgas, AFA e férias do PDF.")
+                                    _apply_pdf_import_to_db(
+
+                                        setor_destino=setor_dest,
+
+                                        ano=int(ano),
+
+                                        mes=int(mes),
+
+                                        items=items,
+
+                                        criar_colabs=bool(criar_colabs),
+
+                                        limpar_mes_antes=bool(limpar_mes),
+
+                                        map_afa_para_folga=bool(map_afa),
+
+                                        cadastrar_ferias=bool(cadastrar_ferias),
+
+                                    )
+
+                                    if bool(auto_gerar_pdf):
+
+                                        try:
+
+                                            hist_pdf, estado_pdf = _build_hist_from_pdf_items(
+
+                                                setor_dest, int(ano), int(mes), items,
+
+                                                map_afa_para_folga=bool(map_afa)
+
+                                            )
+
+                                            if hist_pdf:
+
+                                                save_escala_mes_db(setor_dest, int(ano), int(mes), hist_pdf)
+
+                                                save_estado_mes(setor_dest, int(ano), int(mes), estado_pdf)
+
+                                                st.session_state["ano"] = int(ano)
+
+                                                st.session_state["mes"] = int(mes)
+
+                                                st.success("PDF importado com sucesso! Para este mês, o PDF virou a fonte da verdade: folgas, férias e AFA foram salvos exatamente como estão no PDF. As regras do aplicativo voltam a valer normalmente na geração do mês seguinte.")
+
+                                            else:
+
+                                                st.warning("PDF importado, mas não consegui montar a escala final do mês a partir dos itens lidos.")
+
+                                        except Exception as e_auto:
+
+                                            st.warning(f"PDF importado, mas falhou ao salvar a escala final exatamente como veio no PDF: {e_auto}")
+
+                                    else:
+
+                                        st.success("Importação aplicada com sucesso! Agora clique em 'Gerar agora (respeita ajustes)' para montar a escala do mês com folgas, AFA e férias do PDF.")
 
                 except Exception as e:
 
