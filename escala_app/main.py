@@ -8184,14 +8184,15 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
     ass_escala = get_assinatura_status(setor, chapa, ano_vigente, mes_vigente, 'oficial')
     ass_mud = get_assinatura_status(setor, chapa, ano_vigente, mes_vigente, 'historico')
 
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-        '📋 Escala Oficial',
-        '🕒 Pré-Escala',
-        '📝 Histórico de Mudanças',
-        '✍️ Assinaturas',
-        '🏖️ Férias',
-        '⚙️ Ajustes',
-    ])
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+    "📋 Escala Oficial",
+    "🕒 Pré-Escala",
+    "🖨️ Imprimir",
+    "📝 Histórico de Mudanças",
+    "✍️ Assinaturas",
+    "🏖️ Férias",
+    "⚙️ Ajustes",
+   ])
 
     with tab1:
         st.markdown(f"#### Escala oficial — {mes_vigente:02d}/{ano_vigente}")
@@ -8219,24 +8220,37 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
             st.dataframe(df_pre, use_container_width=True, hide_index=True)
             st.caption('Assinatura bloqueada até o início do mês vigente correspondente.')
 
-    with tab3:
-        st.markdown(f"#### Histórico de mudanças — {mes_vigente:02d}/{ano_vigente}")
-        m1, m2 = st.columns(2)
-        m1.metric('Mudanças registradas no mês vigente', len(hist) if hasattr(hist, '__len__') else 0)
-        m2.metric('Status do aceite das mudanças', ass_mud.get('status', 'Pendente'))
-        if ass_mud.get('assinado_em'):
-            st.caption(f"Último aceite das mudanças: {ass_mud.get('assinado_em')}")
-        if hist.empty:
-            st.info('Nenhuma mudança registrada no mês vigente para esta chapa.')
-        else:
-            hist_view = hist.copy()
-            keep_cols = [c for c in ['Dia', 'Campo', 'Valor anterior', 'Novo valor', 'Motivo', 'Alterado em'] if c in hist_view.columns]
-            if not keep_cols:
-                keep_cols = list(hist_view.columns)
-            st.dataframe(hist_view[keep_cols], use_container_width=True, hide_index=True)
-            st.caption('A assinatura dessas mudanças fica concentrada na aba Assinaturas.')
+   with tab3:
+    st.markdown(f"### 🖨️ Imprimir / baixar — {mes_vigente:02d}/{ano_vigente}")
 
-    with tab4:
+    pdf_key = f"pdf_colab_{setor}_{chapa}_{ano_vigente}_{mes_vigente}"
+
+    if st.button("📄 Preparar PDF do mês vigente", key=f"prep_{pdf_key}"):
+        st.session_state[pdf_key] = gerar_pdf_colaborador_portal(
+            setor,
+            ano_vigente,
+            mes_vigente,
+            {"Nome": colab.get("Nome", ""), "Chapa": chapa},
+            df_oficial
+        )
+        st.success("PDF preparado com sucesso.")
+
+    pdf_bytes = st.session_state.get(pdf_key)
+
+    if pdf_bytes:
+        nome_pdf = f"escala_{colab.get('Nome','colaborador')}_{mes_vigente:02d}_{ano_vigente}.pdf"
+        st.download_button(
+            "⬇️ Baixar escala em PDF",
+            data=pdf_bytes,
+            file_name=nome_pdf,
+            mime="application/pdf",
+            key=f"down_{pdf_key}"
+        )
+
+with tab4:
+    st.markdown(f"### 📝 Histórico de mudanças — {mes_vigente:02d}/{ano_vigente}")
+
+    with tab5:
         st.markdown(f"#### Assinaturas — {mes_vigente:02d}/{ano_vigente}")
         sub1, sub2 = st.tabs(['🗓️ Assinatura da Escala do Mês', '🔁 Assinatura de Mudanças'])
 
@@ -8282,7 +8296,7 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
                         st.success('Mudanças do mês vigente assinadas com sucesso.')
                         st.rerun()
 
-    with tab5:
+    with tab6:
         st.markdown(f"#### Férias — {mes_vigente:02d}/{ano_vigente}")
         rows_fer = [r for r in (list_ferias(setor) or []) if _norm_chapa(r[0]) == chapa]
         if not rows_fer:
@@ -8322,7 +8336,7 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
             st.dataframe(df_fer, use_container_width=True, hide_index=True)
             st.caption('As férias exibidas aqui são somente do colaborador logado.')
 
-    with tab6:
+    with tab7:
         st.markdown('#### Ajustes')
         suba, subb = st.tabs(['🌴 Sugestão de Folgas', '📨 Minhas solicitações'])
 
