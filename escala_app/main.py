@@ -10419,10 +10419,10 @@ def page_app():
                                         if 360 <= ent_min <= 600:
                                             resumo_cobertura["abertura"][i] += 1
                                             resumo_sg["abertura"][i] += 1
-                                        elif 601 <= ent_min <= 720:
+                                        elif 601 <= ent_min <= 739:
                                             resumo_cobertura["intermediario"][i] += 1
                                             resumo_sg["intermediario"][i] += 1
-                                        elif ent_min >= 760:
+                                        elif ent_min >= 740:
                                             resumo_cobertura["fechamento"][i] += 1
                                             resumo_sg["fechamento"][i] += 1
                             total_linhas_gravadas += 1
@@ -10460,7 +10460,7 @@ def page_app():
 
                     resumo_rows = [
                         ("ABERTURA (06:00 até 10:00)", resumo_cobertura["abertura"]),
-                        ("INTERMEDIÁRIO (10:01 até 12:00)", resumo_cobertura["intermediario"]),
+                        ("INTERMEDIÁRIO (10:01 até 12:19)", resumo_cobertura["intermediario"]),
                         ("FECHAMENTO (a partir de 12:20)", resumo_cobertura["fechamento"]),
                         ("TOTAL TRABALHANDO", resumo_cobertura["total_trabalhando"]),
                     ]
