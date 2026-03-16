@@ -2605,7 +2605,7 @@ HORARIOS_ENTRADA_PRESET = sorted({
     "09:00","09:10","09:20","09:30","09:40","09:50",
     "10:00","10:10","10:20","10:30","10:40","10:50",
     "11:00","11:10","11:20","11:30","11:40","11:50",
-    "12:00","12:10","12:20","12:30","12:40","12:45","12:50",
+    "12:00","12:10","12:20","12:30","12:20","12:45","12:50",
     # Tarde
     "13:00","13:10","13:20","13:30","13:40","13:50",
     "14:00","14:10","14:20","14:30","14:40","14:50",
@@ -10461,7 +10461,7 @@ def page_app():
                     resumo_rows = [
                         ("ABERTURA (06:00 até 10:00)", resumo_cobertura["abertura"]),
                         ("INTERMEDIÁRIO (10:01 até 12:00)", resumo_cobertura["intermediario"]),
-                        ("FECHAMENTO (a partir de 12:40)", resumo_cobertura["fechamento"]),
+                        ("FECHAMENTO (a partir de 12:20)", resumo_cobertura["fechamento"]),
                         ("TOTAL TRABALHANDO", resumo_cobertura["total_trabalhando"]),
                     ]
                     for titulo_resumo, valores_resumo in resumo_rows:
