@@ -396,7 +396,7 @@ def enforce_max_two_folgas_per_week(hist_all: dict, chapas: list, df_ref_cur: pd
     nome_por_chapa = {}
 
     try:
-        for c in load_colaboradores(setor):
+        for c in load_colaboradores_setor(setor):
             ch = str(c.get("Chapa", "") or "").strip()
             nm = str(c.get("Nome", "") or "").strip()
             ent = str(c.get("Entrada", "") or "").strip()
@@ -5335,7 +5335,7 @@ def list_folga_fixa(setor: str, chapa: str | None = None) -> pd.DataFrame:
 
     nomes = {}
     try:
-        for c in load_colaboradores(setor):
+        for c in load_colaboradores_setor(setor):
             nomes[str(c.get('Chapa', '') or '').strip()] = str(c.get('Nome', '') or '').strip()
     except Exception:
         nomes = {}
@@ -5670,7 +5670,7 @@ def build_cobertura_diaria_geral(setor: str, ano: int, mes: int, hist_db: dict |
 
 def build_cobertura_por_subgrupo_no_dia(setor: str, ano: int, mes: int, dia: int, hist_db: dict | None = None) -> pd.DataFrame:
     hist_db = hist_db or get_hist_mes_com_overrides_cached(setor, ano, mes)
-    colaboradores = load_colaboradores(setor)
+    colaboradores = load_colaboradores_setor(setor)
     colab_by = {str((c or {}).get('Chapa', '')).strip(): (c or {}) for c in (colaboradores or [])}
     resumo = {}
     idx = int(dia) - 1
