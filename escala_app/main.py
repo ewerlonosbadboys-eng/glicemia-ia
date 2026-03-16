@@ -9195,6 +9195,11 @@ def page_app():
             else:
                 cfg = get_rodizio_caixa_cfg(setor)
                 c1, c2, c3, c4 = st.columns([1.4, 1.4, 1, 1])
+                if st.session_state.pop('_rod_caixa_reset_pending', False):
+                    st.session_state['rod_caixa_origem'] = 'OPERADOR DE CAIXA 01'
+                    st.session_state['rod_caixa_destino'] = 'OPERADOR DE CAIXA 02'
+                    st.session_state['rod_caixa_qtd'] = 12
+                    st.session_state['rod_caixa_tol'] = 20
                 if 'rod_caixa_origem' not in st.session_state:
                     st.session_state['rod_caixa_origem'] = str(cfg.get('subgrupo_origem') or 'OPERADOR DE CAIXA 01')
                 if 'rod_caixa_destino' not in st.session_state:
@@ -9215,11 +9220,8 @@ def page_app():
                     st.success("Configuração salva.")
                     st.rerun()
                 if bcfg2.button("Voltar do zero", key='rod_caixa_reset_cfg', use_container_width=True):
-                    st.session_state['rod_caixa_origem'] = 'OPERADOR DE CAIXA 01'
-                    st.session_state['rod_caixa_destino'] = 'OPERADOR DE CAIXA 02'
-                    st.session_state['rod_caixa_qtd'] = 12
-                    st.session_state['rod_caixa_tol'] = 20
                     set_rodizio_caixa_cfg(setor, 'OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02', 12, 20, True)
+                    st.session_state['_rod_caixa_reset_pending'] = True
                     st.success('Configuração resetada para o padrão.')
                     st.rerun()
 
@@ -9231,13 +9233,6 @@ def page_app():
 
                 pares = sim.get('pares') or []
                 if pares:
-                    domingos_entram_destino = sum(1 for p in pares if int(p.get('origem_domingos', 0) or 0) > 0)
-                    domingos_saem_destino = sum(1 for p in pares if int(p.get('destino_domingos', 0) or 0) > 0)
-                    st.caption(
-                        f"Regra adicional de domingos: entram no {subgrupo_destino} {domingos_entram_destino} pessoa(s) com domingo trabalhado; "
-                        f"saem do {subgrupo_destino} {domingos_saem_destino} pessoa(s) com domingo trabalhado."
-                    )
-
                     df_pares = pd.DataFrame([{
                         'Entra no ' + subgrupo_destino: p['origem_nome'],
                         'Chapa entra': p['origem_chapa'],
@@ -9251,24 +9246,8 @@ def page_app():
                         'Compatibilidade': p['compatibilidade'],
                         'Observação': p['observacao'] or '-',
                     } for p in pares])
-                    st.markdown(f"### Quem entra no {subgrupo_destino} e quem sai dele")
+                    st.markdown("### Simulação do mês")
                     st.dataframe(df_pares, use_container_width=True, height=380)
-
-                    df_pares_inverso = pd.DataFrame([{
-                        'Entra no ' + subgrupo_origem: p['destino_nome'],
-                        'Chapa entra': p['destino_chapa'],
-                        'Horário atual entra': p['destino_entrada'],
-                        'Domingos entra': int(p.get('destino_domingos', 0) or 0),
-                        'Sai do ' + subgrupo_origem: p['origem_nome'],
-                        'Chapa sai': p['origem_chapa'],
-                        'Horário atual sai': p['origem_entrada'],
-                        'Domingos sai': int(p.get('origem_domingos', 0) or 0),
-                        'Dif. domingos': int(p.get('diff_domingos', 0) or 0),
-                        'Compatibilidade': p['compatibilidade'],
-                        'Observação': p['observacao'] or '-',
-                    } for p in pares])
-                    st.markdown(f"### Quem sai do {subgrupo_destino} para entrar no {subgrupo_origem}")
-                    st.dataframe(df_pares_inverso, use_container_width=True, height=380)
                 else:
                     st.warning("Nenhuma troca encontrada para aplicar neste mês.")
 
