@@ -396,7 +396,7 @@ def enforce_max_two_folgas_per_week(hist_all: dict, chapas: list, df_ref_cur: pd
     nome_por_chapa = {}
 
     try:
-        for c in load_colaboradores_setor(setor):
+        for c in load_colaboradores(setor):
             ch = str(c.get("Chapa", "") or "").strip()
             nm = str(c.get("Nome", "") or "").strip()
             ent = str(c.get("Entrada", "") or "").strip()
@@ -5335,7 +5335,7 @@ def list_folga_fixa(setor: str, chapa: str | None = None) -> pd.DataFrame:
 
     nomes = {}
     try:
-        for c in load_colaboradores_setor(setor):
+        for c in load_colaboradores(setor):
             nomes[str(c.get('Chapa', '') or '').strip()] = str(c.get('Nome', '') or '').strip()
     except Exception:
         nomes = {}
@@ -5670,7 +5670,7 @@ def build_cobertura_diaria_geral(setor: str, ano: int, mes: int, hist_db: dict |
 
 def build_cobertura_por_subgrupo_no_dia(setor: str, ano: int, mes: int, dia: int, hist_db: dict | None = None) -> pd.DataFrame:
     hist_db = hist_db or get_hist_mes_com_overrides_cached(setor, ano, mes)
-    colaboradores = load_colaboradores_setor(setor)
+    colaboradores = load_colaboradores(setor)
     colab_by = {str((c or {}).get('Chapa', '')).strip(): (c or {}) for c in (colaboradores or [])}
     resumo = {}
     idx = int(dia) - 1
@@ -9563,9 +9563,9 @@ def page_app():
             c2.caption("Alterar em 🗓️ Competência (sidebar)")
             c3.caption("Ajustes aplicam na competência ativa.")
 
-        sec_aj = st.radio("", ["🧩 Folgas manuais em grade", "🧷 Folga fixa", "🗂️ Inventário", "📝 Histórico", "🔁 Troca de horários", "✅ Preferência por subgrupo", "📌 Subgrupos (editável)"], horizontal=True, key="ajustes_nav_fast", label_visibility="collapsed")
+        sec_aj = st.radio("", ["🧩 Folgas manuais em grade", "🧷 Folga fixa", "🗂️ Inventário", "📊 Contagens por dia", "📝 Histórico", "🔁 Troca de horários", "✅ Preferência por subgrupo", "📌 Subgrupos (editável)"], horizontal=True, key="ajustes_nav_fast", label_visibility="collapsed")
 
-        _ajustes_precisam_escala = sec_aj in ("🧩 Folgas manuais em grade", "🧷 Folga fixa", "🗂️ Inventário", "📝 Histórico", "🔁 Troca de horários")
+        _ajustes_precisam_escala = sec_aj in ("🧩 Folgas manuais em grade", "🧷 Folga fixa", "🗂️ Inventário", "📊 Contagens por dia", "📝 Histórico", "🔁 Troca de horários")
         hist_db = {}
         colaboradores = []
         colab_by = {}
@@ -9800,32 +9800,6 @@ def page_app():
                         st.rerun()
                     csave2.caption("Use esta área para cadastrar a necessidade do dia. Isso entra na geração da escala quando houver inventário configurado.")
 
-                    hist_view_inv = hist_db or get_hist_mes_com_overrides_cached(setor, ano, mes)
-                    if hist_view_inv:
-                        df_cov_geral = build_cobertura_diaria_geral(setor, ano, mes, hist_view_inv)
-                        row_cov = df_cov_geral[df_cov_geral["Dia"] == int(dia_inv)]
-                        if not row_cov.empty:
-                            row_cov = row_cov.iloc[0]
-                            st.markdown("#### Contagens do dia selecionado")
-                            m1, m2, m3, m4 = st.columns(4)
-                            m1.metric("Abertura", int(row_cov["Abertura"]))
-                            m2.metric("Intermediário", int(row_cov["Intermediário"]))
-                            m3.metric("Fechamento", int(row_cov["Fechamento"]))
-                            m4.metric("Total trabalhando", int(row_cov["Total trabalhando"]))
-                            m5, m6, m7 = st.columns(3)
-                            m5.metric("Folga", int(row_cov["Folga"]))
-                            m6.metric("Férias", int(row_cov["Férias"]))
-                            m7.metric("Afastamento", int(row_cov["Afastamento"]))
-
-                        df_cov_sub = build_cobertura_por_subgrupo_no_dia(setor, ano, mes, int(dia_inv), hist_view_inv)
-                        st.markdown("#### Contagens por dia — visão Excel (geral)")
-                        st.dataframe(df_cov_geral, use_container_width=True, hide_index=True)
-                        if not df_cov_sub.empty:
-                            st.markdown("#### Contagens por subgrupo no dia selecionado")
-                            st.dataframe(df_cov_sub, use_container_width=True, hide_index=True)
-                    else:
-                        st.info("Gere a escala para visualizar as contagens por dia e por subgrupo.")
-
                     rows_inv = []
                     for dia in range(1, qtd_inv + 1):
                         base = inv_map.get(dia, {})
@@ -9847,6 +9821,44 @@ def page_app():
                         st.dataframe(comp_inv, use_container_width=True, hide_index=True)
                     else:
                         st.info("Cadastre as metas do mês para acompanhar o comparativo depois.")
+
+                elif sec_aj == "📊 Contagens por dia":
+                    st.markdown("### 📊 Contagens por dia")
+                    st.caption("Mostra as contagens do dia escolhido, a visão Excel do mês e as contagens por subgrupo.")
+                    qtd_cov = calendar.monthrange(int(ano), int(mes))[1]
+                    dia_cov = st.selectbox(
+                        "Dia para análise:",
+                        options=list(range(1, qtd_cov + 1)),
+                        key=f"contagens_dia_foco::{setor}::{ano}::{mes}",
+                    )
+                    data_cov = date(int(ano), int(mes), int(dia_cov))
+                    st.caption(f"Data escolhida: {data_cov.strftime('%d/%m/%Y')} — {WEEKDAY_LABELS_LONG[data_cov.weekday()]}")
+
+                    hist_view_inv = hist_db or get_hist_mes_com_overrides_cached(setor, ano, mes)
+                    if hist_view_inv:
+                        df_cov_geral = build_cobertura_diaria_geral(setor, ano, mes, hist_view_inv)
+                        row_cov = df_cov_geral[df_cov_geral["Dia"] == int(dia_cov)]
+                        if not row_cov.empty:
+                            row_cov = row_cov.iloc[0]
+                            st.markdown("#### Contagens do dia selecionado")
+                            m1, m2, m3, m4 = st.columns(4)
+                            m1.metric("Abertura", int(row_cov["Abertura"]))
+                            m2.metric("Intermediário", int(row_cov["Intermediário"]))
+                            m3.metric("Fechamento", int(row_cov["Fechamento"]))
+                            m4.metric("Total trabalhando", int(row_cov["Total trabalhando"]))
+                            m5, m6, m7 = st.columns(3)
+                            m5.metric("Folga", int(row_cov["Folga"]))
+                            m6.metric("Férias", int(row_cov["Férias"]))
+                            m7.metric("Afastamento", int(row_cov["Afastamento"]))
+
+                        df_cov_sub = build_cobertura_por_subgrupo_no_dia(setor, ano, mes, int(dia_cov), hist_view_inv)
+                        st.markdown("#### Contagens por dia — visão Excel (geral)")
+                        st.dataframe(df_cov_geral, use_container_width=True, hide_index=True)
+                        if not df_cov_sub.empty:
+                            st.markdown("#### Contagens por subgrupo no dia selecionado")
+                            st.dataframe(df_cov_sub, use_container_width=True, hide_index=True)
+                    else:
+                        st.info("Gere a escala para visualizar as contagens por dia e por subgrupo.")
 
                 elif sec_aj == "📝 Histórico":
                     st.markdown("### 📝 Histórico")
