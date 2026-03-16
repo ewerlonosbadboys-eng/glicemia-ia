@@ -4468,6 +4468,29 @@ def _rodizio_rank_origem(setor: str, candidatos_origem: list[dict], subgrupo_des
     return [x[2] for x in out]
 
 
+def _rodizio_domingos_trabalhados_map(setor: str, ano: int, mes: int) -> dict[str, int]:
+    hist_db = get_hist_mes_com_overrides_cached(setor, int(ano), int(mes)) or {}
+    out: dict[str, int] = {}
+    for chapa, df in (hist_db or {}).items():
+        total = 0
+        try:
+            if df is None or df.empty:
+                out[str(chapa)] = 0
+                continue
+            for _, row in df.iterrows():
+                dt = pd.to_datetime(row.get('Data'), errors='coerce')
+                if pd.isna(dt):
+                    continue
+                if int(dt.weekday()) != 6:
+                    continue
+                if str(row.get('Status') or '').strip() in WORK_STATUSES:
+                    total += 1
+        except Exception:
+            total = 0
+        out[str(chapa)] = int(total)
+    return out
+
+
 def simular_rodizio_caixa_mes(setor: str, ano: int, mes: int, subgrupo_origem: str = 'OPERADOR DE CAIXA 01', subgrupo_destino: str = 'OPERADOR DE CAIXA 02', qtd_destino: int = 12, tolerancia_min: int = 20):
     colaboradores = load_colaboradores_setor(setor)
     origem = [c for c in colaboradores if (c.get('Subgrupo') or '').strip().upper() == str(subgrupo_origem).strip().upper()]
@@ -4486,6 +4509,7 @@ def simular_rodizio_caixa_mes(setor: str, ano: int, mes: int, subgrupo_origem: s
             pass
         candidatos.append(c)
     candidatos = _rodizio_rank_origem(setor, candidatos, subgrupo_destino)
+    domingos_map = _rodizio_domingos_trabalhados_map(setor, ano, mes)
 
     usados = set()
     pares = []
@@ -4493,35 +4517,49 @@ def simular_rodizio_caixa_mes(setor: str, ano: int, mes: int, subgrupo_origem: s
     for d in destino_sel:
         melhor = None
         melhor_key = None
+        domingos_dest = int(domingos_map.get(str(d.get('Chapa') or '').strip(), 0) or 0)
         for o in candidatos:
             ch = str(o.get('Chapa') or '').strip()
             if not ch or ch in usados:
                 continue
             compat = _classificar_compat_horario(o.get('Entrada', ''), d.get('Entrada', ''), tolerancia_min=tolerancia_min)
             score = {'IGUAL': 0, 'QUASE IGUAL': 1, 'DIFERENTE': 2}.get(compat, 9)
-            key = (score, abs((_hora_to_min(o.get('Entrada','')) or 0) - (_hora_to_min(d.get('Entrada','')) or 0)), str(o.get('Nome') or '').upper())
+            domingos_orig = int(domingos_map.get(ch, 0) or 0)
+            sunday_diff = abs(domingos_orig - domingos_dest)
+            key = (
+                score,
+                sunday_diff,
+                abs((_hora_to_min(o.get('Entrada','')) or 0) - (_hora_to_min(d.get('Entrada','')) or 0)),
+                str(o.get('Nome') or '').upper(),
+            )
             if melhor_key is None or key < melhor_key:
                 melhor_key = key
-                melhor = (o, compat)
+                melhor = (o, compat, domingos_orig, domingos_dest, sunday_diff)
         if melhor is None:
             alertas.append(f"Sem candidato disponível no {subgrupo_origem} para substituir {d.get('Nome','')}.")
             continue
-        o, compat = melhor
+        o, compat, domingos_orig, domingos_dest, sunday_diff = melhor
         usados.add(str(o.get('Chapa') or '').strip())
-        obs = '' if compat != 'DIFERENTE' else 'Horário diferente — avisar liderança.'
+        obs_parts = []
         if compat == 'DIFERENTE':
+            obs_parts.append('Horário diferente — avisar liderança.')
             alertas.append(f"Horário diferente: {o.get('Nome','')} ({o.get('Entrada','')}) ↔ {d.get('Nome','')} ({d.get('Entrada','')}).")
+        if sunday_diff > 0:
+            obs_parts.append(f'Domingos: entra {domingos_orig} / sai {domingos_dest}')
         pares.append({
             'origem_chapa': str(o.get('Chapa') or ''),
             'origem_nome': str(o.get('Nome') or ''),
             'origem_subgrupo': subgrupo_origem,
             'origem_entrada': str(o.get('Entrada') or ''),
+            'origem_domingos': int(domingos_orig),
             'destino_chapa': str(d.get('Chapa') or ''),
             'destino_nome': str(d.get('Nome') or ''),
             'destino_subgrupo': subgrupo_destino,
             'destino_entrada': str(d.get('Entrada') or ''),
+            'destino_domingos': int(domingos_dest),
+            'diff_domingos': int(sunday_diff),
             'compatibilidade': compat,
-            'observacao': obs,
+            'observacao': ' | '.join(obs_parts),
         })
 
     proximos = []
@@ -5483,61 +5521,6 @@ def build_historico_folgas_diario(setor: str, ano: int, mes: int, hist_db: dict 
             'Pessoas de folga': ', '.join(sorted([n for n in nomes_folga if n]))
         })
     return pd.DataFrame(rows)
-
-
-def build_cobertura_dia(setor: str, ano: int, mes: int, dia: int, hist_db: dict | None = None) -> dict:
-    hist_db = hist_db or get_hist_mes_com_overrides_cached(setor, ano, mes)
-    dia = int(dia)
-    idx = dia - 1
-    folga = ferias = afast = trabalho = 0
-    abertura = intermediario = fechamento = 0
-    pessoas_folga = []
-    pessoas_ferias = []
-    pessoas_afast = []
-    pessoas_trabalho = []
-    for ch, df in (hist_db or {}).items():
-        if df is None or idx < 0 or idx >= len(df):
-            continue
-        try:
-            nome = str(df.loc[idx, 'Nome'])
-        except Exception:
-            nome = str(ch)
-        stt = str(df.loc[idx, 'Status'])
-        if stt == 'Folga':
-            folga += 1
-            pessoas_folga.append(nome)
-        elif stt == 'Férias':
-            ferias += 1
-            pessoas_ferias.append(nome)
-        elif stt == 'Afastamento':
-            afast += 1
-            pessoas_afast.append(nome)
-        elif stt in WORK_STATUSES:
-            trabalho += 1
-            pessoas_trabalho.append(nome)
-            turno = _classificar_turno_por_entrada(str(df.loc[idx, 'H_Entrada'] or ''))
-            if turno == 'Abertura':
-                abertura += 1
-            elif turno == 'Intermediário':
-                intermediario += 1
-            elif turno == 'Fechamento':
-                fechamento += 1
-    return {
-        'Dia': dia,
-        'Data': date(int(ano), int(mes), dia).strftime('%d/%m/%Y'),
-        'Semana': WEEKDAY_LABELS_LONG.get(date(int(ano), int(mes), dia).weekday(), ''),
-        'Folga': int(folga),
-        'Férias': int(ferias),
-        'Afastamento': int(afast),
-        'Trabalho': int(trabalho),
-        'Abertura': int(abertura),
-        'Intermediário': int(intermediario),
-        'Fechamento': int(fechamento),
-        'Pessoas de folga': ', '.join(sorted([n for n in pessoas_folga if n])),
-        'Pessoas de férias': ', '.join(sorted([n for n in pessoas_ferias if n])),
-        'Pessoas afastadas': ', '.join(sorted([n for n in pessoas_afast if n])),
-        'Pessoas trabalhando': ', '.join(sorted([n for n in pessoas_trabalho if n])),
-    }
 
 
 def build_inventario_comparativo(setor: str, ano: int, mes: int, hist_db: dict | None = None) -> pd.DataFrame:
@@ -9212,15 +9195,32 @@ def page_app():
             else:
                 cfg = get_rodizio_caixa_cfg(setor)
                 c1, c2, c3, c4 = st.columns([1.4, 1.4, 1, 1])
-                subgrupo_origem = c1.text_input("Subgrupo origem", value=str(cfg.get('subgrupo_origem') or 'OPERADOR DE CAIXA 01'), key='rod_caixa_origem')
-                subgrupo_destino = c2.text_input("Subgrupo destino", value=str(cfg.get('subgrupo_destino') or 'OPERADOR DE CAIXA 02'), key='rod_caixa_destino')
-                qtd_destino = int(c3.number_input("Qtd fixa no destino", min_value=1, max_value=100, value=int(cfg.get('qtd_destino', 12)), step=1, key='rod_caixa_qtd'))
-                tolerancia = int(c4.number_input("Tolerância (min)", min_value=0, max_value=120, value=int(cfg.get('tolerancia_min', 20)), step=5, key='rod_caixa_tol'))
+                if 'rod_caixa_origem' not in st.session_state:
+                    st.session_state['rod_caixa_origem'] = str(cfg.get('subgrupo_origem') or 'OPERADOR DE CAIXA 01')
+                if 'rod_caixa_destino' not in st.session_state:
+                    st.session_state['rod_caixa_destino'] = str(cfg.get('subgrupo_destino') or 'OPERADOR DE CAIXA 02')
+                if 'rod_caixa_qtd' not in st.session_state:
+                    st.session_state['rod_caixa_qtd'] = int(cfg.get('qtd_destino', 12))
+                if 'rod_caixa_tol' not in st.session_state:
+                    st.session_state['rod_caixa_tol'] = int(cfg.get('tolerancia_min', 20))
 
-                bcfg1, bcfg2 = st.columns([1, 1])
+                subgrupo_origem = c1.text_input("Subgrupo origem", key='rod_caixa_origem')
+                subgrupo_destino = c2.text_input("Subgrupo destino", key='rod_caixa_destino')
+                qtd_destino = int(c3.number_input("Qtd fixa no destino", min_value=1, max_value=100, step=1, key='rod_caixa_qtd'))
+                tolerancia = int(c4.number_input("Tolerância (min)", min_value=0, max_value=120, step=5, key='rod_caixa_tol'))
+
+                bcfg1, bcfg2, _bcfg3 = st.columns([1, 1, 4])
                 if bcfg1.button("Salvar configuração do rodízio", key='rod_caixa_save_cfg', use_container_width=True):
                     set_rodizio_caixa_cfg(setor, subgrupo_origem, subgrupo_destino, qtd_destino, tolerancia, True)
                     st.success("Configuração salva.")
+                    st.rerun()
+                if bcfg2.button("Voltar do zero", key='rod_caixa_reset_cfg', use_container_width=True):
+                    st.session_state['rod_caixa_origem'] = 'OPERADOR DE CAIXA 01'
+                    st.session_state['rod_caixa_destino'] = 'OPERADOR DE CAIXA 02'
+                    st.session_state['rod_caixa_qtd'] = 12
+                    st.session_state['rod_caixa_tol'] = 20
+                    set_rodizio_caixa_cfg(setor, 'OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02', 12, 20, True)
+                    st.success('Configuração resetada para o padrão.')
                     st.rerun()
 
                 ano_r = int(st.session_state.get('cfg_ano', datetime.now().year))
@@ -9235,9 +9235,12 @@ def page_app():
                         'Entra no ' + subgrupo_destino: p['origem_nome'],
                         'Chapa entra': p['origem_chapa'],
                         'Horário atual entra': p['origem_entrada'],
+                        'Domingos entra': int(p.get('origem_domingos', 0) or 0),
                         'Sai do ' + subgrupo_destino: p['destino_nome'],
                         'Chapa sai': p['destino_chapa'],
                         'Horário atual sai': p['destino_entrada'],
+                        'Domingos sai': int(p.get('destino_domingos', 0) or 0),
+                        'Dif. domingos': int(p.get('diff_domingos', 0) or 0),
                         'Compatibilidade': p['compatibilidade'],
                         'Observação': p['observacao'] or '-',
                     } for p in pares])
@@ -9383,14 +9386,9 @@ def page_app():
             c2.caption("Alterar em 🗓️ Competência (sidebar)")
             c3.caption("Ajustes aplicam na competência ativa.")
 
-        _ajustes_opcoes = ["🧩 Folgas manuais em grade", "🧷 Folga fixa", "📊 Cobertura por dia", "📝 Histórico", "🔁 Troca de horários", "✅ Preferência por subgrupo", "📌 Subgrupos (editável)"]
-        if "ajustes_nav_fast_v2" not in st.session_state:
-            st.session_state["ajustes_nav_fast_v2"] = "🧩 Folgas manuais em grade"
-        sec_aj = st.radio("", _ajustes_opcoes, horizontal=True, key="ajustes_nav_fast_v2", label_visibility="collapsed")
-        if sec_aj == "🗂️ Inventário":
-            sec_aj = "📊 Cobertura por dia"
+        sec_aj = st.radio("", ["🧩 Folgas manuais em grade", "🧷 Folga fixa", "🗂️ Inventário", "📝 Histórico", "🔁 Troca de horários", "✅ Preferência por subgrupo", "📌 Subgrupos (editável)"], horizontal=True, key="ajustes_nav_fast", label_visibility="collapsed")
 
-        _ajustes_precisam_escala = sec_aj in ("🧩 Folgas manuais em grade", "🧷 Folga fixa", "📊 Cobertura por dia", "🗂️ Inventário", "📝 Histórico", "🔁 Troca de horários")
+        _ajustes_precisam_escala = sec_aj in ("🧩 Folgas manuais em grade", "🧷 Folga fixa", "🗂️ Inventário", "📝 Histórico", "🔁 Troca de horários")
         hist_db = {}
         colaboradores = []
         colab_by = {}
@@ -9578,50 +9576,22 @@ def page_app():
                     else:
                         st.info("Nenhuma folga fixa cadastrada ainda.")
 
-                elif sec_aj == "📊 Cobertura por dia":
-                    st.markdown("### 📊 Cobertura por dia")
-                    st.caption("Escolha o dia, veja a cobertura real desse dia e informe quantas pessoas você quer em abertura, intermediário e fechamento.")
+                elif sec_aj == "🗂️ Inventário":
+                    st.markdown("### 🗂️ Inventário")
+                    st.caption("Escolha o dia e informe quantas pessoas você quer em abertura, intermediário e fechamento. A tabela mensal continua abaixo para conferência rápida.")
                     qtd_inv = calendar.monthrange(int(ano), int(mes))[1]
                     inv_atual = get_inventario_mes(setor, ano, mes)
                     inv_map = {int(r["Dia"]): r for _, r in inv_atual.iterrows()} if not inv_atual.empty else {}
 
                     dia_inv = st.selectbox(
-                        "Selecione o dia:",
+                        "Dia do inventário:",
                         options=list(range(1, qtd_inv + 1)),
                         key=f"inventario_dia_foco::{setor}::{ano}::{mes}",
                     )
                     base_inv = inv_map.get(int(dia_inv), {})
                     data_inv = date(int(ano), int(mes), int(dia_inv))
-                    st.info("Aqui você acompanha a cobertura do dia e define quantas pessoas quer no dia do balanço em cada faixa: abertura, intermediário e fechamento.")
+                    st.info("Aqui você define quantas pessoas quer no dia do balanço em cada faixa: abertura, intermediário e fechamento.")
                     st.caption(f"Data escolhida: {data_inv.strftime('%d/%m/%Y')} — {WEEKDAY_LABELS_LONG[data_inv.weekday()]}")
-
-                    hist_inv = hist_db or get_hist_mes_com_overrides_cached(setor, ano, mes)
-                    cob_dia = build_cobertura_dia(setor, ano, mes, int(dia_inv), hist_inv) if hist_inv else {
-                        "Folga": 0, "Férias": 0, "Afastamento": 0, "Trabalho": 0,
-                        "Abertura": 0, "Intermediário": 0, "Fechamento": 0,
-                        "Pessoas de folga": "", "Pessoas de férias": "", "Pessoas afastadas": "", "Pessoas trabalhando": ""
-                    }
-
-                    st.markdown("#### Cobertura real do dia selecionado")
-                    mc1, mc2, mc3, mc4 = st.columns(4)
-                    mc1.metric("Folga", int(cob_dia.get("Folga", 0)))
-                    mc2.metric("Férias", int(cob_dia.get("Férias", 0)))
-                    mc3.metric("Afastadas", int(cob_dia.get("Afastamento", 0)))
-                    mc4.metric("Trabalhando", int(cob_dia.get("Trabalho", 0)))
-                    mt1, mt2, mt3 = st.columns(3)
-                    mt1.metric("Abertura", int(cob_dia.get("Abertura", 0)))
-                    mt2.metric("Intermediário", int(cob_dia.get("Intermediário", 0)))
-                    mt3.metric("Fechamento", int(cob_dia.get("Fechamento", 0)))
-
-                    with st.expander("Ver nomes do dia selecionado"):
-                        nomes_folga = str(cob_dia.get('Pessoas de folga', '') or '').strip()
-                        nomes_ferias = str(cob_dia.get('Pessoas de férias', '') or '').strip()
-                        nomes_afast = str(cob_dia.get('Pessoas afastadas', '') or '').strip()
-                        nomes_trab = str(cob_dia.get('Pessoas trabalhando', '') or '').strip()
-                        st.write(f"**Folga ({int(cob_dia.get('Folga', 0))}):** {nomes_folga if nomes_folga else '-'}")
-                        st.write(f"**Férias ({int(cob_dia.get('Férias', 0))}):** {nomes_ferias if nomes_ferias else '-'}")
-                        st.write(f"**Afastadas ({int(cob_dia.get('Afastamento', 0))}):** {nomes_afast if nomes_afast else '-'}")
-                        st.write(f"**Trabalhando ({int(cob_dia.get('Trabalho', 0))}):** {nomes_trab if nomes_trab else '-'}")
 
                     ci1, ci2, ci3 = st.columns(3)
                     meta_ab = ci1.number_input(
@@ -9649,7 +9619,7 @@ def page_app():
                     csave1, csave2 = st.columns([1, 3])
                     if csave1.button("💾 Salvar dia selecionado", key=f"inventario_salvar_dia::{setor}::{ano}::{mes}::{dia_inv}"):
                         upsert_inventario_dia(setor, ano, mes, int(dia_inv), int(meta_ab), int(meta_in), int(meta_fe))
-                        st.success(f"Cobertura do dia salva para {int(dia_inv):02d}/{int(mes):02d}/{int(ano)}.")
+                        st.success(f"Inventário salvo para o dia {int(dia_inv):02d}/{int(mes):02d}/{int(ano)}.")
                         st.rerun()
                     csave2.caption("Use esta área para cadastrar a necessidade do dia. Isso entra na geração da escala quando houver inventário configurado.")
 
@@ -9665,12 +9635,12 @@ def page_app():
                             "Fechamento": int(base["Fechamento"]) if base != {} else 0,
                         })
                     df_inv_view = pd.DataFrame(rows_inv)
-                    st.markdown("#### Cobertura planejada do mês")
+                    st.markdown("#### Inventário do mês")
                     st.dataframe(df_inv_view, use_container_width=True, hide_index=True)
 
                     comp_inv = build_inventario_comparativo(setor, ano, mes, hist_db if hist_db else None)
                     if not comp_inv.empty:
-                        st.markdown("#### Comparativo da cobertura planejada x escala atual")
+                        st.markdown("#### Comparativo meta x escala atual")
                         st.dataframe(comp_inv, use_container_width=True, hide_index=True)
                     else:
                         st.info("Cadastre as metas do mês para acompanhar o comparativo depois.")
