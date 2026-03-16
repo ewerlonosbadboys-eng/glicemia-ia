@@ -5229,11 +5229,13 @@ def _classificar_turno_por_entrada(h_entrada: str) -> str:
     total = hh * 60 + mm
     if total == 99 * 60 + 99:
         return ""
-    if total <= 8 * 60:
+    if 6 * 60 <= total <= 10 * 60:
         return "Abertura"
-    if total <= 13 * 60 + 59:
+    if 10 * 60 + 1 <= total <= 12 * 60 + 19:
         return "Intermediário"
-    return "Fechamento"
+    if total >= 12 * 60 + 20:
+        return "Fechamento"
+    return ""
 
 
 
