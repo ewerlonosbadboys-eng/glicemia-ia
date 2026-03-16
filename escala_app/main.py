@@ -5391,6 +5391,71 @@ def _dias_mes_por_weekdays(ano: int, mes: int, weekdays: list[int]) -> list[int]
     return out
 
 
+def _folga_fixa_days_map(setor: str, ano: int, mes: int) -> dict[str, list[int]]:
+    """Retorna os dias do mês que devem ficar travados como folga fixa por colaborador.
+
+    A folga fixa não apaga nenhuma regra do sistema. Ela só entra como trava prioritária
+    quando a geração é feita em 'respeita ajustes'.
+    """
+    out: dict[str, list[int]] = {}
+    try:
+        df = list_folga_fixa(setor)
+    except Exception:
+        df = pd.DataFrame()
+    if df is None or df.empty:
+        return out
+
+    max_day = calendar.monthrange(int(ano), int(mes))[1]
+    for _, r in df.iterrows():
+        try:
+            if int(r.get('Ativo', 1) or 1) == 0:
+                continue
+        except Exception:
+            pass
+        ch = _norm_chapa(r.get('Chapa', ''))
+        if not ch:
+            continue
+        try:
+            wd = int(r.get('DiaSemana'))
+        except Exception:
+            continue
+        dias = [d for d in range(1, max_day + 1) if date(int(ano), int(mes), d).weekday() == wd]
+        if dias:
+            out.setdefault(ch, []).extend(dias)
+
+    return {ch: sorted(set(int(d) for d in dias if 1 <= int(d) <= max_day)) for ch, dias in out.items()}
+
+
+def _merge_folga_fixa_into_ovmap(setor: str, ano: int, mes: int, ovmap: dict | None) -> dict:
+    """Injeta a folga fixa no mapa de overrides para a geração respeitando ajustes.
+
+    Prioridade: férias continuam soberanas. Se já existir override manual de status, ele é mantido.
+    A folga fixa só ocupa o dia quando não há outro status manual definido.
+    """
+    merged = {}
+    try:
+        for ch, dias in (ovmap or {}).items():
+            merged[str(ch)] = {int(d): dict(payload or {}) for d, payload in (dias or {}).items()}
+    except Exception:
+        merged = {}
+
+    ff_map = _folga_fixa_days_map(setor, int(ano), int(mes))
+    if not ff_map:
+        return merged
+
+    for ch, dias in ff_map.items():
+        for dia in dias:
+            data_obj = date(int(ano), int(mes), int(dia))
+            if is_de_ferias(setor, ch, data_obj):
+                continue
+            payload = merged.setdefault(str(ch), {}).setdefault(int(dia), {})
+            status_existente = str(payload.get('status') or '').strip()
+            if status_existente:
+                continue
+            payload['status'] = 'Folga'
+    return merged
+
+
 def _week_chunks_for_month(ano: int, mes: int) -> list[list[int]]:
     dias = _dias_mes(int(ano), int(mes))
     ref = pd.DataFrame({'Data': dias, 'Dia': [D_PT[d.day_name()] for d in dias]})
@@ -5759,7 +5824,8 @@ def apply_overrides_to_hist(setor: str, ano: int, mes: int, hist_db: dict[str, p
     - Se encontrar "Férias" no banco mas NÃO estiver na tabela, vira "Trabalho".
     """
     ov = load_overrides(setor, ano, mes)
-    if (ov is None or ov.empty) and not hist_db:
+    ff_map = _folga_fixa_days_map(setor, int(ano), int(mes))
+    if (ov is None or ov.empty) and not hist_db and not ff_map:
         return hist_db
 
     # aplica overrides (se houver)
@@ -5796,6 +5862,27 @@ def apply_overrides_to_hist(setor: str, ano: int, mes: int, hist_db: dict[str, p
             elif campo == "h_saida":
                 df.loc[idx, "H_Saida"] = valor
 
+            hist_db[ch] = df
+
+    # aplica folga fixa também na leitura do histórico, para manter a visualização
+    # consistente com a geração quando a competência é aberta novamente.
+    if hist_db and ff_map:
+        for ch, dias_fixos in ff_map.items():
+            if ch not in hist_db:
+                continue
+            df = hist_db[ch].copy()
+            for dia in sorted(set(int(x) for x in dias_fixos if int(x) > 0)):
+                idx = int(dia) - 1
+                if idx < 0 or idx >= len(df):
+                    continue
+                data_obj = pd.to_datetime(df.loc[idx, 'Data']).date()
+                if is_de_ferias(setor, ch, data_obj):
+                    continue
+                if str(df.loc[idx, 'Status']) == 'Afastamento':
+                    continue
+                df.loc[idx, 'Status'] = 'Folga'
+                df.loc[idx, 'H_Entrada'] = ''
+                df.loc[idx, 'H_Saida'] = ''
             hist_db[ch] = df
 
     # ✅ SANITIZA: força férias SOMENTE pela tabela ferias
@@ -6908,6 +6995,8 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
     estado_prev = {} if _past else load_estado_prev(setor, ano, mes)
 
     ovmap = _ov_map(setor, int(ano), int(mes)) if respeitar_ajustes else {}
+    if respeitar_ajustes:
+        ovmap = _merge_folga_fixa_into_ovmap(setor, int(ano), int(mes), ovmap)
 
     grupos = {}
     for c in colaboradores:
@@ -9195,11 +9284,6 @@ def page_app():
             else:
                 cfg = get_rodizio_caixa_cfg(setor)
                 c1, c2, c3, c4 = st.columns([1.4, 1.4, 1, 1])
-                if st.session_state.pop('_rod_caixa_reset_pending', False):
-                    st.session_state['rod_caixa_origem'] = 'OPERADOR DE CAIXA 01'
-                    st.session_state['rod_caixa_destino'] = 'OPERADOR DE CAIXA 02'
-                    st.session_state['rod_caixa_qtd'] = 12
-                    st.session_state['rod_caixa_tol'] = 20
                 if 'rod_caixa_origem' not in st.session_state:
                     st.session_state['rod_caixa_origem'] = str(cfg.get('subgrupo_origem') or 'OPERADOR DE CAIXA 01')
                 if 'rod_caixa_destino' not in st.session_state:
@@ -9220,8 +9304,11 @@ def page_app():
                     st.success("Configuração salva.")
                     st.rerun()
                 if bcfg2.button("Voltar do zero", key='rod_caixa_reset_cfg', use_container_width=True):
+                    st.session_state['rod_caixa_origem'] = 'OPERADOR DE CAIXA 01'
+                    st.session_state['rod_caixa_destino'] = 'OPERADOR DE CAIXA 02'
+                    st.session_state['rod_caixa_qtd'] = 12
+                    st.session_state['rod_caixa_tol'] = 20
                     set_rodizio_caixa_cfg(setor, 'OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02', 12, 20, True)
-                    st.session_state['_rod_caixa_reset_pending'] = True
                     st.success('Configuração resetada para o padrão.')
                     st.rerun()
 
