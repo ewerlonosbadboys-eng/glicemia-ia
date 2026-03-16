@@ -5627,6 +5627,94 @@ def build_inventario_comparativo(setor: str, ano: int, mes: int, hist_db: dict |
     return pd.DataFrame(rows)
 
 
+def build_cobertura_diaria_geral(setor: str, ano: int, mes: int, hist_db: dict | None = None) -> pd.DataFrame:
+    hist_db = hist_db or get_hist_mes_com_overrides_cached(setor, ano, mes)
+    dias = _dias_mes(int(ano), int(mes))
+    rows = []
+    for d in range(1, calendar.monthrange(int(ano), int(mes))[1] + 1):
+        ab = inter = fech = total = folga = ferias = afast = 0
+        for _, df in (hist_db or {}).items():
+            if df is None or d - 1 >= len(df):
+                continue
+            stt = str(df.loc[d - 1, 'Status'])
+            if stt in WORK_STATUSES:
+                total += 1
+                turno = _classificar_turno_por_entrada(str(df.loc[d - 1, 'H_Entrada'] or ''))
+                if turno == 'Abertura':
+                    ab += 1
+                elif turno == 'Intermediário':
+                    inter += 1
+                elif turno == 'Fechamento':
+                    fech += 1
+            elif stt == 'Folga':
+                folga += 1
+            elif stt == 'Férias':
+                ferias += 1
+            elif stt == 'Afastamento':
+                afast += 1
+        dt_ = date(int(ano), int(mes), int(d))
+        rows.append({
+            'Dia': int(d),
+            'Data': dt_.strftime('%d/%m/%Y'),
+            'Semana': WEEKDAY_LABELS_LONG.get(dt_.weekday(), ''),
+            'Abertura': int(ab),
+            'Intermediário': int(inter),
+            'Fechamento': int(fech),
+            'Total trabalhando': int(total),
+            'Folga': int(folga),
+            'Férias': int(ferias),
+            'Afastamento': int(afast),
+        })
+    return pd.DataFrame(rows)
+
+
+def build_cobertura_por_subgrupo_no_dia(setor: str, ano: int, mes: int, dia: int, hist_db: dict | None = None) -> pd.DataFrame:
+    hist_db = hist_db or get_hist_mes_com_overrides_cached(setor, ano, mes)
+    colaboradores = load_colaboradores(setor)
+    colab_by = {str((c or {}).get('Chapa', '')).strip(): (c or {}) for c in (colaboradores or [])}
+    resumo = {}
+    idx = int(dia) - 1
+
+    for ch, df in (hist_db or {}).items():
+        if df is None or idx < 0 or idx >= len(df):
+            continue
+        ch_str = str(ch).strip()
+        sg = (colab_by.get(ch_str, {}).get('Subgrupo', '') or '').strip() or 'SEM SUBGRUPO'
+        item = resumo.setdefault(sg, {
+            'Subgrupo': sg,
+            'Abertura': 0,
+            'Intermediário': 0,
+            'Fechamento': 0,
+            'Total trabalhando': 0,
+            'Folga': 0,
+            'Férias': 0,
+            'Afastamento': 0,
+        })
+        stt = str(df.loc[idx, 'Status'])
+        if stt in WORK_STATUSES:
+            item['Total trabalhando'] += 1
+            turno = _classificar_turno_por_entrada(str(df.loc[idx, 'H_Entrada'] or ''))
+            if turno == 'Abertura':
+                item['Abertura'] += 1
+            elif turno == 'Intermediário':
+                item['Intermediário'] += 1
+            elif turno == 'Fechamento':
+                item['Fechamento'] += 1
+        elif stt == 'Folga':
+            item['Folga'] += 1
+        elif stt == 'Férias':
+            item['Férias'] += 1
+        elif stt == 'Afastamento':
+            item['Afastamento'] += 1
+
+    if not resumo:
+        return pd.DataFrame(columns=['Subgrupo', 'Abertura', 'Intermediário', 'Fechamento', 'Total trabalhando', 'Folga', 'Férias', 'Afastamento'])
+
+    out = pd.DataFrame(list(resumo.values()))
+    out = out.sort_values(['Subgrupo']).reset_index(drop=True)
+    return out
+
+
 def _ov_map(setor: str, ano: int, mes: int):
     df = load_overrides(setor, ano, mes)
     ov = {}
@@ -9712,6 +9800,32 @@ def page_app():
                         st.rerun()
                     csave2.caption("Use esta área para cadastrar a necessidade do dia. Isso entra na geração da escala quando houver inventário configurado.")
 
+                    hist_view_inv = hist_db or get_hist_mes_com_overrides_cached(setor, ano, mes)
+                    if hist_view_inv:
+                        df_cov_geral = build_cobertura_diaria_geral(setor, ano, mes, hist_view_inv)
+                        row_cov = df_cov_geral[df_cov_geral["Dia"] == int(dia_inv)]
+                        if not row_cov.empty:
+                            row_cov = row_cov.iloc[0]
+                            st.markdown("#### Contagens do dia selecionado")
+                            m1, m2, m3, m4 = st.columns(4)
+                            m1.metric("Abertura", int(row_cov["Abertura"]))
+                            m2.metric("Intermediário", int(row_cov["Intermediário"]))
+                            m3.metric("Fechamento", int(row_cov["Fechamento"]))
+                            m4.metric("Total trabalhando", int(row_cov["Total trabalhando"]))
+                            m5, m6, m7 = st.columns(3)
+                            m5.metric("Folga", int(row_cov["Folga"]))
+                            m6.metric("Férias", int(row_cov["Férias"]))
+                            m7.metric("Afastamento", int(row_cov["Afastamento"]))
+
+                        df_cov_sub = build_cobertura_por_subgrupo_no_dia(setor, ano, mes, int(dia_inv), hist_view_inv)
+                        st.markdown("#### Contagens por dia — visão Excel (geral)")
+                        st.dataframe(df_cov_geral, use_container_width=True, hide_index=True)
+                        if not df_cov_sub.empty:
+                            st.markdown("#### Contagens por subgrupo no dia selecionado")
+                            st.dataframe(df_cov_sub, use_container_width=True, hide_index=True)
+                    else:
+                        st.info("Gere a escala para visualizar as contagens por dia e por subgrupo.")
+
                     rows_inv = []
                     for dia in range(1, qtd_inv + 1):
                         base = inv_map.get(dia, {})
@@ -10244,6 +10358,13 @@ def page_app():
                         row_idx += 1
 
                         chapas_sg = sorted(subgrupo_map[sg], key=lambda chx: str(colab_by.get(str(chx), {}).get("Nome", chx)))
+                        resumo_sg = {
+                            "abertura": [0] * total_dias,
+                            "intermediario": [0] * total_dias,
+                            "fechamento": [0] * total_dias,
+                            "total_trabalhando": [0] * total_dias,
+                        }
+
                         for chx in chapas_sg:
                             df_f = hist_db[chx].copy().reset_index(drop=True)
                             nome = str(colab_by.get(str(chx), {}).get("Nome", chx))
@@ -10282,14 +10403,38 @@ def page_app():
                                     ent_min = _minutos_hora_excel(v1)
                                     if ent_min is not None:
                                         resumo_cobertura["total_trabalhando"][i] += 1
+                                        resumo_sg["total_trabalhando"][i] += 1
                                         if 360 <= ent_min <= 600:
                                             resumo_cobertura["abertura"][i] += 1
+                                            resumo_sg["abertura"][i] += 1
                                         elif 601 <= ent_min <= 720:
                                             resumo_cobertura["intermediario"][i] += 1
+                                            resumo_sg["intermediario"][i] += 1
                                         elif ent_min >= 760:
                                             resumo_cobertura["fechamento"][i] += 1
+                                            resumo_sg["fechamento"][i] += 1
                             total_linhas_gravadas += 1
                             row_idx += 2
+
+                        resumo_rows_sg = [
+                            (f"ABERTURA — {sg}", resumo_sg["abertura"]),
+                            (f"INTERMEDIÁRIO — {sg}", resumo_sg["intermediario"]),
+                            (f"FECHAMENTO — {sg}", resumo_sg["fechamento"]),
+                            (f"TOTAL TRABALHANDO — {sg}", resumo_sg["total_trabalhando"]),
+                        ]
+                        for titulo_resumo, valores_resumo in resumo_rows_sg:
+                            c0 = ws.cell(row_idx, 1, titulo_resumo)
+                            c0.fill = fill_group
+                            c0.font = Font(bold=True)
+                            c0.alignment = Alignment(horizontal="left", vertical="center")
+                            c0.border = border
+                            for i, valor_resumo in enumerate(valores_resumo):
+                                c1 = ws.cell(row_idx, i + 2, int(valor_resumo))
+                                c1.alignment = center
+                                c1.border = border
+                                if str(df_ref_xls.iloc[i].get("Dia", "")) == "dom":
+                                    c1.fill = fill_folga
+                            row_idx += 1
                         row_idx += 1
 
                     row_idx += 1
