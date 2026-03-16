@@ -396,7 +396,7 @@ def enforce_max_two_folgas_per_week(hist_all: dict, chapas: list, df_ref_cur: pd
     nome_por_chapa = {}
 
     try:
-        for c in load_colaboradores(setor):
+        for c in load_colaboradores_setor(setor):
             ch = str(c.get("Chapa", "") or "").strip()
             nm = str(c.get("Nome", "") or "").strip()
             ent = str(c.get("Entrada", "") or "").strip()
@@ -4468,6 +4468,29 @@ def _rodizio_rank_origem(setor: str, candidatos_origem: list[dict], subgrupo_des
     return [x[2] for x in out]
 
 
+def _rodizio_domingos_trabalhados_map(setor: str, ano: int, mes: int) -> dict[str, int]:
+    hist_db = get_hist_mes_com_overrides_cached(setor, int(ano), int(mes)) or {}
+    out: dict[str, int] = {}
+    for chapa, df in (hist_db or {}).items():
+        total = 0
+        try:
+            if df is None or df.empty:
+                out[str(chapa)] = 0
+                continue
+            for _, row in df.iterrows():
+                dt = pd.to_datetime(row.get('Data'), errors='coerce')
+                if pd.isna(dt):
+                    continue
+                if int(dt.weekday()) != 6:
+                    continue
+                if str(row.get('Status') or '').strip() in WORK_STATUSES:
+                    total += 1
+        except Exception:
+            total = 0
+        out[str(chapa)] = int(total)
+    return out
+
+
 def simular_rodizio_caixa_mes(setor: str, ano: int, mes: int, subgrupo_origem: str = 'OPERADOR DE CAIXA 01', subgrupo_destino: str = 'OPERADOR DE CAIXA 02', qtd_destino: int = 12, tolerancia_min: int = 20):
     colaboradores = load_colaboradores_setor(setor)
     origem = [c for c in colaboradores if (c.get('Subgrupo') or '').strip().upper() == str(subgrupo_origem).strip().upper()]
@@ -4486,6 +4509,7 @@ def simular_rodizio_caixa_mes(setor: str, ano: int, mes: int, subgrupo_origem: s
             pass
         candidatos.append(c)
     candidatos = _rodizio_rank_origem(setor, candidatos, subgrupo_destino)
+    domingos_map = _rodizio_domingos_trabalhados_map(setor, ano, mes)
 
     usados = set()
     pares = []
@@ -4493,35 +4517,49 @@ def simular_rodizio_caixa_mes(setor: str, ano: int, mes: int, subgrupo_origem: s
     for d in destino_sel:
         melhor = None
         melhor_key = None
+        domingos_dest = int(domingos_map.get(str(d.get('Chapa') or '').strip(), 0) or 0)
         for o in candidatos:
             ch = str(o.get('Chapa') or '').strip()
             if not ch or ch in usados:
                 continue
             compat = _classificar_compat_horario(o.get('Entrada', ''), d.get('Entrada', ''), tolerancia_min=tolerancia_min)
             score = {'IGUAL': 0, 'QUASE IGUAL': 1, 'DIFERENTE': 2}.get(compat, 9)
-            key = (score, abs((_hora_to_min(o.get('Entrada','')) or 0) - (_hora_to_min(d.get('Entrada','')) or 0)), str(o.get('Nome') or '').upper())
+            domingos_orig = int(domingos_map.get(ch, 0) or 0)
+            sunday_diff = abs(domingos_orig - domingos_dest)
+            key = (
+                score,
+                sunday_diff,
+                abs((_hora_to_min(o.get('Entrada','')) or 0) - (_hora_to_min(d.get('Entrada','')) or 0)),
+                str(o.get('Nome') or '').upper(),
+            )
             if melhor_key is None or key < melhor_key:
                 melhor_key = key
-                melhor = (o, compat)
+                melhor = (o, compat, domingos_orig, domingos_dest, sunday_diff)
         if melhor is None:
             alertas.append(f"Sem candidato disponível no {subgrupo_origem} para substituir {d.get('Nome','')}.")
             continue
-        o, compat = melhor
+        o, compat, domingos_orig, domingos_dest, sunday_diff = melhor
         usados.add(str(o.get('Chapa') or '').strip())
-        obs = '' if compat != 'DIFERENTE' else 'Horário diferente — avisar liderança.'
+        obs_parts = []
         if compat == 'DIFERENTE':
+            obs_parts.append('Horário diferente — avisar liderança.')
             alertas.append(f"Horário diferente: {o.get('Nome','')} ({o.get('Entrada','')}) ↔ {d.get('Nome','')} ({d.get('Entrada','')}).")
+        if sunday_diff > 0:
+            obs_parts.append(f'Domingos: entra {domingos_orig} / sai {domingos_dest}')
         pares.append({
             'origem_chapa': str(o.get('Chapa') or ''),
             'origem_nome': str(o.get('Nome') or ''),
             'origem_subgrupo': subgrupo_origem,
             'origem_entrada': str(o.get('Entrada') or ''),
+            'origem_domingos': int(domingos_orig),
             'destino_chapa': str(d.get('Chapa') or ''),
             'destino_nome': str(d.get('Nome') or ''),
             'destino_subgrupo': subgrupo_destino,
             'destino_entrada': str(d.get('Entrada') or ''),
+            'destino_domingos': int(domingos_dest),
+            'diff_domingos': int(sunday_diff),
             'compatibilidade': compat,
-            'observacao': obs,
+            'observacao': ' | '.join(obs_parts),
         })
 
     proximos = []
@@ -5297,7 +5335,7 @@ def list_folga_fixa(setor: str, chapa: str | None = None) -> pd.DataFrame:
 
     nomes = {}
     try:
-        for c in load_colaboradores(setor):
+        for c in load_colaboradores_setor(setor):
             nomes[str(c.get('Chapa', '') or '').strip()] = str(c.get('Nome', '') or '').strip()
     except Exception:
         nomes = {}
@@ -5351,6 +5389,71 @@ def _dias_mes_por_weekdays(ano: int, mes: int, weekdays: list[int]) -> list[int]
         if date(int(ano), int(mes), d).weekday() in sel:
             out.append(d)
     return out
+
+
+def _folga_fixa_days_map(setor: str, ano: int, mes: int) -> dict[str, list[int]]:
+    """Retorna os dias do mês que devem ficar travados como folga fixa por colaborador.
+
+    A folga fixa não apaga nenhuma regra do sistema. Ela só entra como trava prioritária
+    quando a geração é feita em 'respeita ajustes'.
+    """
+    out: dict[str, list[int]] = {}
+    try:
+        df = list_folga_fixa(setor)
+    except Exception:
+        df = pd.DataFrame()
+    if df is None or df.empty:
+        return out
+
+    max_day = calendar.monthrange(int(ano), int(mes))[1]
+    for _, r in df.iterrows():
+        try:
+            if int(r.get('Ativo', 1) or 1) == 0:
+                continue
+        except Exception:
+            pass
+        ch = _norm_chapa(r.get('Chapa', ''))
+        if not ch:
+            continue
+        try:
+            wd = int(r.get('DiaSemana'))
+        except Exception:
+            continue
+        dias = [d for d in range(1, max_day + 1) if date(int(ano), int(mes), d).weekday() == wd]
+        if dias:
+            out.setdefault(ch, []).extend(dias)
+
+    return {ch: sorted(set(int(d) for d in dias if 1 <= int(d) <= max_day)) for ch, dias in out.items()}
+
+
+def _merge_folga_fixa_into_ovmap(setor: str, ano: int, mes: int, ovmap: dict | None) -> dict:
+    """Injeta a folga fixa no mapa de overrides para a geração respeitando ajustes.
+
+    Prioridade: férias continuam soberanas. Se já existir override manual de status, ele é mantido.
+    A folga fixa só ocupa o dia quando não há outro status manual definido.
+    """
+    merged = {}
+    try:
+        for ch, dias in (ovmap or {}).items():
+            merged[str(ch)] = {int(d): dict(payload or {}) for d, payload in (dias or {}).items()}
+    except Exception:
+        merged = {}
+
+    ff_map = _folga_fixa_days_map(setor, int(ano), int(mes))
+    if not ff_map:
+        return merged
+
+    for ch, dias in ff_map.items():
+        for dia in dias:
+            data_obj = date(int(ano), int(mes), int(dia))
+            if is_de_ferias(setor, ch, data_obj):
+                continue
+            payload = merged.setdefault(str(ch), {}).setdefault(int(dia), {})
+            status_existente = str(payload.get('status') or '').strip()
+            if status_existente:
+                continue
+            payload['status'] = 'Folga'
+    return merged
 
 
 def _week_chunks_for_month(ano: int, mes: int) -> list[list[int]]:
@@ -5522,6 +5625,94 @@ def build_inventario_comparativo(setor: str, ano: int, mes: int, hist_db: dict |
             'Dif fechamento': fech - meta_fe,
         })
     return pd.DataFrame(rows)
+
+
+def build_cobertura_diaria_geral(setor: str, ano: int, mes: int, hist_db: dict | None = None) -> pd.DataFrame:
+    hist_db = hist_db or get_hist_mes_com_overrides_cached(setor, ano, mes)
+    dias = _dias_mes(int(ano), int(mes))
+    rows = []
+    for d in range(1, calendar.monthrange(int(ano), int(mes))[1] + 1):
+        ab = inter = fech = total = folga = ferias = afast = 0
+        for _, df in (hist_db or {}).items():
+            if df is None or d - 1 >= len(df):
+                continue
+            stt = str(df.loc[d - 1, 'Status'])
+            if stt in WORK_STATUSES:
+                total += 1
+                turno = _classificar_turno_por_entrada(str(df.loc[d - 1, 'H_Entrada'] or ''))
+                if turno == 'Abertura':
+                    ab += 1
+                elif turno == 'Intermediário':
+                    inter += 1
+                elif turno == 'Fechamento':
+                    fech += 1
+            elif stt == 'Folga':
+                folga += 1
+            elif stt == 'Férias':
+                ferias += 1
+            elif stt == 'Afastamento':
+                afast += 1
+        dt_ = date(int(ano), int(mes), int(d))
+        rows.append({
+            'Dia': int(d),
+            'Data': dt_.strftime('%d/%m/%Y'),
+            'Semana': WEEKDAY_LABELS_LONG.get(dt_.weekday(), ''),
+            'Abertura': int(ab),
+            'Intermediário': int(inter),
+            'Fechamento': int(fech),
+            'Total trabalhando': int(total),
+            'Folga': int(folga),
+            'Férias': int(ferias),
+            'Afastamento': int(afast),
+        })
+    return pd.DataFrame(rows)
+
+
+def build_cobertura_por_subgrupo_no_dia(setor: str, ano: int, mes: int, dia: int, hist_db: dict | None = None) -> pd.DataFrame:
+    hist_db = hist_db or get_hist_mes_com_overrides_cached(setor, ano, mes)
+    colaboradores = load_colaboradores_setor(setor)
+    colab_by = {str((c or {}).get('Chapa', '')).strip(): (c or {}) for c in (colaboradores or [])}
+    resumo = {}
+    idx = int(dia) - 1
+
+    for ch, df in (hist_db or {}).items():
+        if df is None or idx < 0 or idx >= len(df):
+            continue
+        ch_str = str(ch).strip()
+        sg = (colab_by.get(ch_str, {}).get('Subgrupo', '') or '').strip() or 'SEM SUBGRUPO'
+        item = resumo.setdefault(sg, {
+            'Subgrupo': sg,
+            'Abertura': 0,
+            'Intermediário': 0,
+            'Fechamento': 0,
+            'Total trabalhando': 0,
+            'Folga': 0,
+            'Férias': 0,
+            'Afastamento': 0,
+        })
+        stt = str(df.loc[idx, 'Status'])
+        if stt in WORK_STATUSES:
+            item['Total trabalhando'] += 1
+            turno = _classificar_turno_por_entrada(str(df.loc[idx, 'H_Entrada'] or ''))
+            if turno == 'Abertura':
+                item['Abertura'] += 1
+            elif turno == 'Intermediário':
+                item['Intermediário'] += 1
+            elif turno == 'Fechamento':
+                item['Fechamento'] += 1
+        elif stt == 'Folga':
+            item['Folga'] += 1
+        elif stt == 'Férias':
+            item['Férias'] += 1
+        elif stt == 'Afastamento':
+            item['Afastamento'] += 1
+
+    if not resumo:
+        return pd.DataFrame(columns=['Subgrupo', 'Abertura', 'Intermediário', 'Fechamento', 'Total trabalhando', 'Folga', 'Férias', 'Afastamento'])
+
+    out = pd.DataFrame(list(resumo.values()))
+    out = out.sort_values(['Subgrupo']).reset_index(drop=True)
+    return out
 
 
 def _ov_map(setor: str, ano: int, mes: int):
@@ -5721,7 +5912,8 @@ def apply_overrides_to_hist(setor: str, ano: int, mes: int, hist_db: dict[str, p
     - Se encontrar "Férias" no banco mas NÃO estiver na tabela, vira "Trabalho".
     """
     ov = load_overrides(setor, ano, mes)
-    if (ov is None or ov.empty) and not hist_db:
+    ff_map = _folga_fixa_days_map(setor, int(ano), int(mes))
+    if (ov is None or ov.empty) and not hist_db and not ff_map:
         return hist_db
 
     # aplica overrides (se houver)
@@ -5758,6 +5950,27 @@ def apply_overrides_to_hist(setor: str, ano: int, mes: int, hist_db: dict[str, p
             elif campo == "h_saida":
                 df.loc[idx, "H_Saida"] = valor
 
+            hist_db[ch] = df
+
+    # aplica folga fixa também na leitura do histórico, para manter a visualização
+    # consistente com a geração quando a competência é aberta novamente.
+    if hist_db and ff_map:
+        for ch, dias_fixos in ff_map.items():
+            if ch not in hist_db:
+                continue
+            df = hist_db[ch].copy()
+            for dia in sorted(set(int(x) for x in dias_fixos if int(x) > 0)):
+                idx = int(dia) - 1
+                if idx < 0 or idx >= len(df):
+                    continue
+                data_obj = pd.to_datetime(df.loc[idx, 'Data']).date()
+                if is_de_ferias(setor, ch, data_obj):
+                    continue
+                if str(df.loc[idx, 'Status']) == 'Afastamento':
+                    continue
+                df.loc[idx, 'Status'] = 'Folga'
+                df.loc[idx, 'H_Entrada'] = ''
+                df.loc[idx, 'H_Saida'] = ''
             hist_db[ch] = df
 
     # ✅ SANITIZA: força férias SOMENTE pela tabela ferias
@@ -6870,6 +7083,8 @@ def gerar_escala_setor_por_subgrupo(setor: str, colaboradores: list[dict], ano: 
     estado_prev = {} if _past else load_estado_prev(setor, ano, mes)
 
     ovmap = _ov_map(setor, int(ano), int(mes)) if respeitar_ajustes else {}
+    if respeitar_ajustes:
+        ovmap = _merge_folga_fixa_into_ovmap(setor, int(ano), int(mes), ovmap)
 
     grupos = {}
     for c in colaboradores:
@@ -9157,15 +9372,32 @@ def page_app():
             else:
                 cfg = get_rodizio_caixa_cfg(setor)
                 c1, c2, c3, c4 = st.columns([1.4, 1.4, 1, 1])
-                subgrupo_origem = c1.text_input("Subgrupo origem", value=str(cfg.get('subgrupo_origem') or 'OPERADOR DE CAIXA 01'), key='rod_caixa_origem')
-                subgrupo_destino = c2.text_input("Subgrupo destino", value=str(cfg.get('subgrupo_destino') or 'OPERADOR DE CAIXA 02'), key='rod_caixa_destino')
-                qtd_destino = int(c3.number_input("Qtd fixa no destino", min_value=1, max_value=100, value=int(cfg.get('qtd_destino', 12)), step=1, key='rod_caixa_qtd'))
-                tolerancia = int(c4.number_input("Tolerância (min)", min_value=0, max_value=120, value=int(cfg.get('tolerancia_min', 20)), step=5, key='rod_caixa_tol'))
+                if 'rod_caixa_origem' not in st.session_state:
+                    st.session_state['rod_caixa_origem'] = str(cfg.get('subgrupo_origem') or 'OPERADOR DE CAIXA 01')
+                if 'rod_caixa_destino' not in st.session_state:
+                    st.session_state['rod_caixa_destino'] = str(cfg.get('subgrupo_destino') or 'OPERADOR DE CAIXA 02')
+                if 'rod_caixa_qtd' not in st.session_state:
+                    st.session_state['rod_caixa_qtd'] = int(cfg.get('qtd_destino', 12))
+                if 'rod_caixa_tol' not in st.session_state:
+                    st.session_state['rod_caixa_tol'] = int(cfg.get('tolerancia_min', 20))
 
-                bcfg1, bcfg2 = st.columns([1, 1])
+                subgrupo_origem = c1.text_input("Subgrupo origem", key='rod_caixa_origem')
+                subgrupo_destino = c2.text_input("Subgrupo destino", key='rod_caixa_destino')
+                qtd_destino = int(c3.number_input("Qtd fixa no destino", min_value=1, max_value=100, step=1, key='rod_caixa_qtd'))
+                tolerancia = int(c4.number_input("Tolerância (min)", min_value=0, max_value=120, step=5, key='rod_caixa_tol'))
+
+                bcfg1, bcfg2, _bcfg3 = st.columns([1, 1, 4])
                 if bcfg1.button("Salvar configuração do rodízio", key='rod_caixa_save_cfg', use_container_width=True):
                     set_rodizio_caixa_cfg(setor, subgrupo_origem, subgrupo_destino, qtd_destino, tolerancia, True)
                     st.success("Configuração salva.")
+                    st.rerun()
+                if bcfg2.button("Voltar do zero", key='rod_caixa_reset_cfg', use_container_width=True):
+                    st.session_state['rod_caixa_origem'] = 'OPERADOR DE CAIXA 01'
+                    st.session_state['rod_caixa_destino'] = 'OPERADOR DE CAIXA 02'
+                    st.session_state['rod_caixa_qtd'] = 12
+                    st.session_state['rod_caixa_tol'] = 20
+                    set_rodizio_caixa_cfg(setor, 'OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02', 12, 20, True)
+                    st.success('Configuração resetada para o padrão.')
                     st.rerun()
 
                 ano_r = int(st.session_state.get('cfg_ano', datetime.now().year))
@@ -9180,9 +9412,12 @@ def page_app():
                         'Entra no ' + subgrupo_destino: p['origem_nome'],
                         'Chapa entra': p['origem_chapa'],
                         'Horário atual entra': p['origem_entrada'],
+                        'Domingos entra': int(p.get('origem_domingos', 0) or 0),
                         'Sai do ' + subgrupo_destino: p['destino_nome'],
                         'Chapa sai': p['destino_chapa'],
                         'Horário atual sai': p['destino_entrada'],
+                        'Domingos sai': int(p.get('destino_domingos', 0) or 0),
+                        'Dif. domingos': int(p.get('diff_domingos', 0) or 0),
                         'Compatibilidade': p['compatibilidade'],
                         'Observação': p['observacao'] or '-',
                     } for p in pares])
@@ -9328,9 +9563,9 @@ def page_app():
             c2.caption("Alterar em 🗓️ Competência (sidebar)")
             c3.caption("Ajustes aplicam na competência ativa.")
 
-        sec_aj = st.radio("", ["🧩 Folgas manuais em grade", "🧷 Folga fixa", "🗂️ Inventário", "📝 Histórico", "🔁 Troca de horários", "✅ Preferência por subgrupo", "📌 Subgrupos (editável)"], horizontal=True, key="ajustes_nav_fast", label_visibility="collapsed")
+        sec_aj = st.radio("", ["🧩 Folgas manuais em grade", "🧷 Folga fixa", "🗂️ Inventário", "📊 Contagens por dia", "📝 Histórico", "🔁 Troca de horários", "✅ Preferência por subgrupo", "📌 Subgrupos (editável)"], horizontal=True, key="ajustes_nav_fast", label_visibility="collapsed")
 
-        _ajustes_precisam_escala = sec_aj in ("🧩 Folgas manuais em grade", "🧷 Folga fixa", "🗂️ Inventário", "📝 Histórico", "🔁 Troca de horários")
+        _ajustes_precisam_escala = sec_aj in ("🧩 Folgas manuais em grade", "🧷 Folga fixa", "🗂️ Inventário", "📊 Contagens por dia", "📝 Histórico", "🔁 Troca de horários")
         hist_db = {}
         colaboradores = []
         colab_by = {}
@@ -9586,6 +9821,44 @@ def page_app():
                         st.dataframe(comp_inv, use_container_width=True, hide_index=True)
                     else:
                         st.info("Cadastre as metas do mês para acompanhar o comparativo depois.")
+
+                elif sec_aj == "📊 Contagens por dia":
+                    st.markdown("### 📊 Contagens por dia")
+                    st.caption("Mostra as contagens do dia escolhido, a visão Excel do mês e as contagens por subgrupo.")
+                    qtd_cov = calendar.monthrange(int(ano), int(mes))[1]
+                    dia_cov = st.selectbox(
+                        "Dia para análise:",
+                        options=list(range(1, qtd_cov + 1)),
+                        key=f"contagens_dia_foco::{setor}::{ano}::{mes}",
+                    )
+                    data_cov = date(int(ano), int(mes), int(dia_cov))
+                    st.caption(f"Data escolhida: {data_cov.strftime('%d/%m/%Y')} — {WEEKDAY_LABELS_LONG[data_cov.weekday()]}")
+
+                    hist_view_inv = hist_db or get_hist_mes_com_overrides_cached(setor, ano, mes)
+                    if hist_view_inv:
+                        df_cov_geral = build_cobertura_diaria_geral(setor, ano, mes, hist_view_inv)
+                        row_cov = df_cov_geral[df_cov_geral["Dia"] == int(dia_cov)]
+                        if not row_cov.empty:
+                            row_cov = row_cov.iloc[0]
+                            st.markdown("#### Contagens do dia selecionado")
+                            m1, m2, m3, m4 = st.columns(4)
+                            m1.metric("Abertura", int(row_cov["Abertura"]))
+                            m2.metric("Intermediário", int(row_cov["Intermediário"]))
+                            m3.metric("Fechamento", int(row_cov["Fechamento"]))
+                            m4.metric("Total trabalhando", int(row_cov["Total trabalhando"]))
+                            m5, m6, m7 = st.columns(3)
+                            m5.metric("Folga", int(row_cov["Folga"]))
+                            m6.metric("Férias", int(row_cov["Férias"]))
+                            m7.metric("Afastamento", int(row_cov["Afastamento"]))
+
+                        df_cov_sub = build_cobertura_por_subgrupo_no_dia(setor, ano, mes, int(dia_cov), hist_view_inv)
+                        st.markdown("#### Contagens por dia — visão Excel (geral)")
+                        st.dataframe(df_cov_geral, use_container_width=True, hide_index=True)
+                        if not df_cov_sub.empty:
+                            st.markdown("#### Contagens por subgrupo no dia selecionado")
+                            st.dataframe(df_cov_sub, use_container_width=True, hide_index=True)
+                    else:
+                        st.info("Gere a escala para visualizar as contagens por dia e por subgrupo.")
 
                 elif sec_aj == "📝 Histórico":
                     st.markdown("### 📝 Histórico")
@@ -10097,6 +10370,13 @@ def page_app():
                         row_idx += 1
 
                         chapas_sg = sorted(subgrupo_map[sg], key=lambda chx: str(colab_by.get(str(chx), {}).get("Nome", chx)))
+                        resumo_sg = {
+                            "abertura": [0] * total_dias,
+                            "intermediario": [0] * total_dias,
+                            "fechamento": [0] * total_dias,
+                            "total_trabalhando": [0] * total_dias,
+                        }
+
                         for chx in chapas_sg:
                             df_f = hist_db[chx].copy().reset_index(drop=True)
                             nome = str(colab_by.get(str(chx), {}).get("Nome", chx))
@@ -10135,14 +10415,38 @@ def page_app():
                                     ent_min = _minutos_hora_excel(v1)
                                     if ent_min is not None:
                                         resumo_cobertura["total_trabalhando"][i] += 1
+                                        resumo_sg["total_trabalhando"][i] += 1
                                         if 360 <= ent_min <= 600:
                                             resumo_cobertura["abertura"][i] += 1
-                                        elif 601 <= ent_min <= 739:
+                                            resumo_sg["abertura"][i] += 1
+                                        elif 601 <= ent_min <= 720:
                                             resumo_cobertura["intermediario"][i] += 1
-                                        elif ent_min >= 740:
+                                            resumo_sg["intermediario"][i] += 1
+                                        elif ent_min >= 760:
                                             resumo_cobertura["fechamento"][i] += 1
+                                            resumo_sg["fechamento"][i] += 1
                             total_linhas_gravadas += 1
                             row_idx += 2
+
+                        resumo_rows_sg = [
+                            (f"ABERTURA — {sg}", resumo_sg["abertura"]),
+                            (f"INTERMEDIÁRIO — {sg}", resumo_sg["intermediario"]),
+                            (f"FECHAMENTO — {sg}", resumo_sg["fechamento"]),
+                            (f"TOTAL TRABALHANDO — {sg}", resumo_sg["total_trabalhando"]),
+                        ]
+                        for titulo_resumo, valores_resumo in resumo_rows_sg:
+                            c0 = ws.cell(row_idx, 1, titulo_resumo)
+                            c0.fill = fill_group
+                            c0.font = Font(bold=True)
+                            c0.alignment = Alignment(horizontal="left", vertical="center")
+                            c0.border = border
+                            for i, valor_resumo in enumerate(valores_resumo):
+                                c1 = ws.cell(row_idx, i + 2, int(valor_resumo))
+                                c1.alignment = center
+                                c1.border = border
+                                if str(df_ref_xls.iloc[i].get("Dia", "")) == "dom":
+                                    c1.fill = fill_folga
+                            row_idx += 1
                         row_idx += 1
 
                     row_idx += 1
@@ -10156,8 +10460,8 @@ def page_app():
 
                     resumo_rows = [
                         ("ABERTURA (06:00 até 10:00)", resumo_cobertura["abertura"]),
-                        ("INTERMEDIÁRIO (10:01 até 12:19)", resumo_cobertura["intermediario"]),
-                        ("FECHAMENTO (a partir de 12:20)", resumo_cobertura["fechamento"]),
+                        ("INTERMEDIÁRIO (10:01 até 12:00)", resumo_cobertura["intermediario"]),
+                        ("FECHAMENTO (a partir de 12:40)", resumo_cobertura["fechamento"]),
                         ("TOTAL TRABALHANDO", resumo_cobertura["total_trabalhando"]),
                     ]
                     for titulo_resumo, valores_resumo in resumo_rows:
