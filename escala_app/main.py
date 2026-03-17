@@ -9804,13 +9804,33 @@ def page_app():
                 st.info(f"{subgrupo_destino}: {sim.get('qtd_destino_atual', 0)} pessoa(s) hoje. Rodízio planejado: {sim.get('qtd_troca', 0)} troca(s). Quantidade obrigatória: {sim.get('qtd_destino_obrigatoria', 14)}.")
                 st.caption("Na sugestão do mês, o sistema prioriza: 1) horário fixo da cota, 2) domingo mais parecido, 3) quem está há mais tempo sem ir para o Caixa 02.")
 
-                slots = sim.get('slots') or []
+                slots = list(sim.get('slots') or [])
+                qtd_obrigatoria = int(sim.get('qtd_destino_obrigatoria', 14) or 14)
+
+                # mantém a visualização estável e sem cortar os slots já montados
+                slots = sorted(
+                    slots,
+                    key=lambda x: (
+                        str(x.get('horario_ref') or ''),
+                        int(x.get('diff_horario_ref_min', 0) or 0),
+                        str(x.get('origem_nome') or '').upper(),
+                        str(x.get('origem_chapa') or ''),
+                    )
+                )[:qtd_obrigatoria]
+
                 aprovados_atuais = st.session_state.get(aprov_key, {})
                 aprovados_validos = sum(1 for s in slots if aprovados_atuais.get(s.get('slot_key')) == s.get('origem_chapa'))
                 top1, top2, top3 = st.columns(3)
                 top1.metric('Sugestões montadas', len(slots))
                 top2.metric('Aprovadas', aprovados_validos)
                 top3.metric('Pendentes', max(0, len(slots) - aprovados_validos))
+
+                st.caption(f"Total de sugestões geradas: {len(slots)} / {qtd_obrigatoria}")
+                if len(slots) < qtd_obrigatoria:
+                    st.warning(
+                        f"O motor montou {len(slots)} sugestão(ões) nesta simulação. "
+                        f"A tela não está cortando; faltaram {qtd_obrigatoria - len(slots)} no retorno da simulação."
+                    )
 
                 a1, a2 = st.columns([1, 1])
                 if a1.button('Limpar aprovações e negativas', key='rod_caixa_clear_aprov', use_container_width=True):
