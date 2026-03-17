@@ -236,6 +236,21 @@ def ensure_competencia_runtime_tables() -> None:
                 UNIQUE(setor, ano, mes, chapa)
             )
         """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS colaborador_competencia_snapshot (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                setor TEXT NOT NULL,
+                ano INTEGER NOT NULL,
+                mes INTEGER NOT NULL,
+                chapa TEXT NOT NULL,
+                nome TEXT,
+                subgrupo TEXT,
+                entrada TEXT,
+                folga_sab INTEGER DEFAULT 0,
+                atualizado_em TEXT NOT NULL,
+                UNIQUE(setor, ano, mes, chapa)
+            )
+        """)
         con.commit()
     finally:
         con.close()
@@ -277,9 +292,187 @@ def set_status_competencia(setor: str, ano: int, mes: int, status: str) -> None:
     finally:
         con.close()
 
+    if novo == 'FECHADA':
+        try:
+            rebuild_colaborador_competencia_snapshot(setor, int(ano), int(mes))
+        except Exception:
+            pass
+
 
 def competencia_fechada(setor: str, ano: int, mes: int) -> bool:
     return get_status_competencia(setor, int(ano), int(mes)) == 'FECHADA'
+
+
+def _snapshot_primeira_entrada(df_hist: pd.DataFrame, entrada_base: str = '06:00') -> str:
+    try:
+        if df_hist is None or df_hist.empty:
+            return str(entrada_base or '06:00').strip() or '06:00'
+        cols = list(df_hist.columns)
+        col_ent = 'H_Entrada' if 'H_Entrada' in cols else ('Entrada' if 'Entrada' in cols else None)
+        col_status = 'Status' if 'Status' in cols else None
+        if not col_ent:
+            return str(entrada_base or '06:00').strip() or '06:00'
+        if col_status:
+            serie = df_hist.loc[df_hist[col_status].isin(WORK_STATUSES), col_ent]
+        else:
+            serie = df_hist[col_ent]
+        vals = [str(v or '').strip() for v in serie.tolist() if str(v or '').strip()]
+        if vals:
+            return vals[0]
+        serie2 = [str(v or '').strip() for v in df_hist[col_ent].tolist() if str(v or '').strip()]
+        return serie2[0] if serie2 else (str(entrada_base or '06:00').strip() or '06:00')
+    except Exception:
+        return str(entrada_base or '06:00').strip() or '06:00'
+
+
+def rebuild_colaborador_competencia_snapshot(setor: str, ano: int, mes: int) -> None:
+    ensure_competencia_runtime_tables()
+    setor = _norm_setor(setor)
+    ano = int(ano)
+    mes = int(mes)
+
+    try:
+        colaboradores = load_colaboradores_setor(setor) or []
+    except Exception:
+        colaboradores = []
+
+    try:
+        hist_db = get_hist_mes_com_overrides_cached(setor, ano, mes) or {}
+    except Exception:
+        hist_db = {}
+
+    snap_rows = {}
+    agora = datetime.now().isoformat()
+
+    for c in colaboradores:
+        ch = _norm_chapa(c.get('Chapa', ''))
+        if not ch:
+            continue
+        nome = str(c.get('Nome', '') or '').strip()
+        subgrupo = str(c.get('Subgrupo', '') or '').strip() or 'SEM SUBGRUPO'
+        entrada = str(c.get('Entrada', '') or '').strip() or '06:00'
+        folga_sab = 1 if bool(c.get('Folga_Sab', False)) else 0
+
+        df_hist = hist_db.get(ch)
+        if df_hist is not None and not df_hist.empty:
+            entrada = _snapshot_primeira_entrada(df_hist, entrada)
+            try:
+                if 'Subgrupo' in df_hist.columns:
+                    vals = [str(v or '').strip() for v in df_hist['Subgrupo'].tolist() if str(v or '').strip()]
+                    if vals:
+                        subgrupo = vals[-1]
+            except Exception:
+                pass
+
+        try:
+            subgrupo = get_subgrupo_competencia_ou_base(setor, ch, ano, mes, subgrupo)
+        except Exception:
+            subgrupo = str(subgrupo or '').strip() or 'SEM SUBGRUPO'
+
+        snap_rows[ch] = {
+            'nome': nome,
+            'subgrupo': subgrupo,
+            'entrada': entrada,
+            'folga_sab': folga_sab,
+            'atualizado_em': agora,
+        }
+
+    for ch, df_hist in (hist_db or {}).items():
+        ch = _norm_chapa(ch)
+        if not ch or ch in snap_rows:
+            continue
+        base = get_colaborador_record(setor, ch) or {}
+        nome = str(base.get('Nome', '') or '').strip()
+        subgrupo = str(base.get('Subgrupo', '') or '').strip() or 'SEM SUBGRUPO'
+        entrada = str(base.get('Entrada', '') or '').strip() or '06:00'
+        folga_sab = 1 if bool(base.get('Folga_Sab', False)) else 0
+        if df_hist is not None and not df_hist.empty:
+            entrada = _snapshot_primeira_entrada(df_hist, entrada)
+            try:
+                if 'Subgrupo' in df_hist.columns:
+                    vals = [str(v or '').strip() for v in df_hist['Subgrupo'].tolist() if str(v or '').strip()]
+                    if vals:
+                        subgrupo = vals[-1]
+            except Exception:
+                pass
+        try:
+            subgrupo = get_subgrupo_competencia_ou_base(setor, ch, ano, mes, subgrupo)
+        except Exception:
+            subgrupo = str(subgrupo or '').strip() or 'SEM SUBGRUPO'
+        snap_rows[ch] = {
+            'nome': nome,
+            'subgrupo': subgrupo,
+            'entrada': entrada,
+            'folga_sab': folga_sab,
+            'atualizado_em': agora,
+        }
+
+    con = db_conn()
+    cur = con.cursor()
+    try:
+        for ch, info in snap_rows.items():
+            cur.execute("""
+                INSERT INTO colaborador_competencia_snapshot(
+                    setor, ano, mes, chapa, nome, subgrupo, entrada, folga_sab, atualizado_em
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(setor, ano, mes, chapa) DO UPDATE SET
+                    nome=excluded.nome,
+                    subgrupo=excluded.subgrupo,
+                    entrada=excluded.entrada,
+                    folga_sab=excluded.folga_sab,
+                    atualizado_em=excluded.atualizado_em
+            """, (
+                setor, ano, mes, ch,
+                str(info.get('nome', '') or '').strip(),
+                str(info.get('subgrupo', '') or '').strip() or 'SEM SUBGRUPO',
+                str(info.get('entrada', '') or '').strip() or '06:00',
+                int(info.get('folga_sab', 0) or 0),
+                str(info.get('atualizado_em', agora) or agora),
+            ))
+        con.commit()
+    finally:
+        con.close()
+
+
+def get_colaborador_competencia_snapshot(setor: str, chapa: str, ano: int, mes: int):
+    ensure_competencia_runtime_tables()
+    setor = _norm_setor(setor)
+    chapa = _norm_chapa(chapa)
+    ano = int(ano)
+    mes = int(mes)
+
+    if not competencia_fechada(setor, ano, mes):
+        return None
+
+    try:
+        rebuild_colaborador_competencia_snapshot(setor, ano, mes)
+    except Exception:
+        pass
+
+    con = db_conn()
+    cur = con.cursor()
+    try:
+        cur.execute("""
+            SELECT nome, chapa, subgrupo, entrada, folga_sab
+            FROM colaborador_competencia_snapshot
+            WHERE UPPER(TRIM(setor))=? AND ano=? AND mes=? AND TRIM(chapa)=?
+            LIMIT 1
+        """, (setor, ano, mes, chapa))
+        row = cur.fetchone()
+    finally:
+        con.close()
+
+    if not row:
+        return None
+
+    return {
+        'Nome': row[0],
+        'Chapa': row[1],
+        'Subgrupo': (row[2] or '').strip() or 'SEM SUBGRUPO',
+        'Entrada': (row[3] or '').strip() or '06:00',
+        'Folga_Sab': bool(row[4]),
+        'Setor': setor,
+    }
 
 
 def salvar_retificacao_competencia(setor: str, ano: int, mes: int, chapa: str, dia: int,
@@ -6806,17 +6999,14 @@ def get_hist_mes_com_overrides_cached(setor: str, ano: int, mes: int):
 
 def apply_overrides_to_hist(setor: str, ano: int, mes: int, hist_db: dict[str, pd.DataFrame]):
     """
-    Aplica overrides no histórico carregado do banco.
+    Aplica overrides e retificações no histórico carregado do banco.
     REGRA GERAL:
     - "Férias" só existe se estiver na tabela ferias.
     - Se encontrar "Férias" no banco mas NÃO estiver na tabela, vira "Trabalho".
+    - Retificações de competência fechada precisam aparecer no portal e em todas as leituras.
     """
     ov = load_overrides(setor, ano, mes)
     ff_map = _folga_fixa_days_map(setor, int(ano), int(mes))
-    if (ov is None or ov.empty) and not hist_db and not ff_map:
-        hist_db = _apply_retificacoes_to_hist(setor, ano, mes, hist_db)
-    hist_db = _apply_subgrupo_competencia_to_hist(setor, ano, mes, hist_db)
-    return hist_db
 
     # aplica overrides (se houver)
     if ov is not None and not ov.empty and hist_db:
@@ -6833,10 +7023,13 @@ def apply_overrides_to_hist(setor: str, ano: int, mes: int, hist_db: dict[str, p
             if idx < 0 or idx >= len(df):
                 continue
 
-            data_obj = pd.to_datetime(df.loc[idx, "Data"]).date()
+            try:
+                data_obj = pd.to_datetime(df.loc[idx, "Data"]).date()
+            except Exception:
+                data_obj = None
 
             if campo == "status":
-                if valor == "Férias" and not is_de_ferias(setor, ch, data_obj):
+                if valor == "Férias" and data_obj is not None and not is_de_ferias(setor, ch, data_obj):
                     pass
                 else:
                     df.loc[idx, "Status"] = valor
@@ -6854,37 +7047,47 @@ def apply_overrides_to_hist(setor: str, ano: int, mes: int, hist_db: dict[str, p
 
             hist_db[ch] = df
 
-    # aplica folga fixa também na leitura do histórico, para manter a visualização
-    # consistente com a geração quando a competência é aberta novamente.
+    # aplica folga fixa também na leitura do histórico
     if hist_db and ff_map:
         for ch, dias_fixos in ff_map.items():
             if ch not in hist_db:
                 continue
+
             df = hist_db[ch].copy()
             for dia in sorted(set(int(x) for x in dias_fixos if int(x) > 0)):
                 idx = int(dia) - 1
                 if idx < 0 or idx >= len(df):
                     continue
-                data_obj = pd.to_datetime(df.loc[idx, 'Data']).date()
+                try:
+                    data_obj = pd.to_datetime(df.loc[idx, "Data"]).date()
+                except Exception:
+                    continue
                 if is_de_ferias(setor, ch, data_obj):
-                    continue
-                if str(df.loc[idx, 'Status']) == 'Afastamento':
-                    continue
-                df.loc[idx, 'Status'] = 'Folga'
-                df.loc[idx, 'H_Entrada'] = ''
-                df.loc[idx, 'H_Saida'] = ''
+                    df.loc[idx, "Status"] = "Férias"
+                    df.loc[idx, "H_Entrada"] = ""
+                    df.loc[idx, "H_Saida"] = ""
+                else:
+                    df.loc[idx, "Status"] = "Folga"
+                    df.loc[idx, "H_Entrada"] = ""
+                    df.loc[idx, "H_Saida"] = ""
             hist_db[ch] = df
 
-    # ✅ SANITIZA: força férias SOMENTE pela tabela ferias
+    # saneamento final de férias vindas do banco
     if hist_db:
-        colaboradores = load_colaboradores_setor(setor)
-        colab_by = {c["Chapa"]: c for c in colaboradores}
-
         for ch, df in list(hist_db.items()):
-            ent_pad = colab_by.get(ch, {}).get("Entrada", "06:00")
+            if df is None or df.empty:
+                continue
             df2 = df.copy()
+            try:
+                ent_pad = get_colaborador_record(setor, ch).get("Entrada", "06:00")
+            except Exception:
+                ent_pad = "06:00"
+
             for i in range(len(df2)):
-                data_obj = pd.to_datetime(df2.loc[i, "Data"]).date()
+                try:
+                    data_obj = pd.to_datetime(df2.loc[i, "Data"]).date()
+                except Exception:
+                    continue
                 in_ferias = is_de_ferias(setor, ch, data_obj)
 
                 if in_ferias:
@@ -6899,7 +7102,9 @@ def apply_overrides_to_hist(setor: str, ano: int, mes: int, hist_db: dict[str, p
 
             hist_db[ch] = df2
 
+    # por último, aplica retificações e espelho mensal de subgrupo
     hist_db = _apply_retificacoes_to_hist(setor, ano, mes, hist_db)
+    hist_db = _apply_subgrupo_competencia_to_hist(setor, ano, mes, hist_db)
     return hist_db
 
 # =========================================================
@@ -9411,6 +9616,11 @@ def get_subgrupo_competencia_ou_base(setor: str, chapa: str, ano: int, mes: int,
     setor = _norm_setor(setor)
     chapa = _norm_chapa(chapa)
     base_subgrupo = str(base_subgrupo or '').strip()
+
+    snap = get_colaborador_competencia_snapshot(setor, chapa, int(ano), int(mes))
+    if snap and str(snap.get('Subgrupo') or '').strip():
+        return str(snap.get('Subgrupo') or '').strip()
+
     con = db_conn()
     cur = con.cursor()
     try:
@@ -9788,7 +9998,7 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
     setor = _norm_setor(auth.get('setor', ''))
     chapa = _norm_chapa(auth.get('chapa', ''))
     nome = auth.get('nome', '-')
-    colab = get_colaborador_record(setor, chapa) or {
+    colab = get_colaborador_competencia_snapshot(setor, chapa, int(ano_cfg or datetime.now().year), int(mes_cfg or datetime.now().month)) or get_colaborador_record(setor, chapa) or {
         'Nome': nome,
         'Chapa': chapa,
         'Subgrupo': 'SEM SUBGRUPO',
@@ -10044,8 +10254,10 @@ def page_app():
         st.caption("Acesso por setor (usuário / líder / admin)")
         st.caption(VERSAO_ACESSO_LIDER)
 
-        _colab_sb = get_colaborador_record(setor, auth.get('chapa',''))
-        _subgrupo_auth = (_colab_sb or {}).get('Subgrupo', 'SEM SUBGRUPO')
+        _ano_sb = int(st.session_state.get('cfg_ano') or datetime.now().year)
+        _mes_sb = int(st.session_state.get('cfg_mes') or datetime.now().month)
+        _colab_sb = get_colaborador_competencia_snapshot(setor, auth.get('chapa',''), _ano_sb, _mes_sb) or get_colaborador_record(setor, auth.get('chapa',''))
+        _subgrupo_auth = get_subgrupo_competencia_ou_base(setor, auth.get('chapa',''), _ano_sb, _mes_sb, (_colab_sb or {}).get('Subgrupo', 'SEM SUBGRUPO'))
         _lideranca_ok = bool(auth.get('is_lider', False)) or colaborador_eh_lideranca(setor, auth.get('chapa',''))
         _perfil_gestao = bool(auth.get('is_admin', False)) or _lideranca_ok
 
