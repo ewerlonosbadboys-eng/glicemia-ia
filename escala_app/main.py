@@ -4464,6 +4464,67 @@ def _rodizio_frentecaixa_existe_no_mes(setor: str, ano: int, mes: int) -> bool:
     return bool(row)
 
 
+def _sincronizar_rodizio_frentecaixa_no_cadastro(setor: str, ano: int, mes: int) -> int:
+    """Exclusivo FRENTECAIXA:
+    garante que o cadastro-base de colaboradores fique alinhado com o
+    rodízio já aplicado na competência antes de gerar/visualizar o mês.
+    """
+    setor_norm = str(setor or '').strip().upper()
+    if setor_norm != 'FRENTECAIXA':
+        return 0
+
+    con = db_conn()
+    cur = con.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT chapa, subgrupo_destino, entrada_nova
+            FROM rodizio_caixa_hist
+            WHERE UPPER(TRIM(setor)) = UPPER(TRIM(?))
+              AND ano = ?
+              AND mes = ?
+            ORDER BY rowid ASC
+            """,
+            (setor, int(ano), int(mes))
+        )
+        rows = cur.fetchall()
+        if not rows:
+            return 0
+
+        ult = {}
+        for chapa, subgrupo_destino, entrada_nova in rows:
+            ch = str(chapa or '').strip()
+            if not ch:
+                continue
+            ult[ch] = (str(subgrupo_destino or '').strip(), str(entrada_nova or '').strip())
+
+        atualizados = 0
+        for ch, (subg, ent) in ult.items():
+            cur.execute(
+                """
+                UPDATE colaboradores
+                   SET subgrupo = CASE WHEN ?<>'' THEN ? ELSE subgrupo END,
+                       entrada  = CASE WHEN ?<>'' THEN ? ELSE entrada END
+                 WHERE UPPER(TRIM(setor)) = UPPER(TRIM(?))
+                   AND TRIM(chapa) = TRIM(?)
+                """,
+                (subg, subg, ent, ent, setor, ch)
+            )
+            atualizados += int(cur.rowcount or 0)
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        con.close()
+
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+    return int(atualizados)
+
+
 def _mes_ref_str(ano: int, mes: int) -> str:
     return f"{int(ano):04d}-{int(mes):02d}"
 
@@ -8651,6 +8712,16 @@ def _regenerar_mes_inteiro(setor: str, ano: int, mes: int, seed: int = 0, respei
     - Se respeitar_ajustes=True, TODAS as folgas/alterações manuais (overrides) são reaplicadas
       no final e gravadas novamente no banco (escala_mes). Isso evita “sumir” folga manual ao gerar.
     """
+    if _rodizio_frentecaixa_existe_no_mes(setor, int(ano), int(mes)):
+        try:
+            _sincronizar_rodizio_frentecaixa_no_cadastro(setor, int(ano), int(mes))
+        except Exception:
+            pass
+    if _rodizio_frentecaixa_existe_no_mes(setor, int(ano), int(mes)):
+        try:
+            _sincronizar_rodizio_frentecaixa_no_cadastro(setor, int(ano), int(mes))
+        except Exception:
+            pass
     colaboradores = load_colaboradores_setor(setor)
     colaboradores = _colaboradores_com_rodizio_aplicado_frentecaixa(setor, int(ano), int(mes), colaboradores)
     if not colaboradores:
@@ -8949,6 +9020,11 @@ def _ensure_preview_cache(setor: str, ano: int, mes: int, colaboradores: list):
     keys = _preview_cache_keys(setor, ano, mes)
     if keys["hist"] in st.session_state and keys["cal"] in st.session_state:
         return st.session_state[keys["hist"]], st.session_state[keys["cal"]]
+    if _rodizio_frentecaixa_existe_no_mes(setor, int(ano), int(mes)):
+        try:
+            _sincronizar_rodizio_frentecaixa_no_cadastro(setor, int(ano), int(mes))
+        except Exception:
+            pass
     colaboradores = _colaboradores_com_rodizio_aplicado_frentecaixa(setor, int(ano), int(mes), colaboradores or [])
     hist_db = get_hist_mes_com_overrides_cached(setor, int(ano), int(mes))
     colab_by = {c["Chapa"]: c for c in (colaboradores or [])}
