@@ -5069,103 +5069,10 @@ def simular_rodizio_caixa_mes(
         'negados_chapas': sorted(list(negados_set)),
     }
 
-def _atualizar_colaborador_subgrupo_entrada(cur, setor: str, chapa: str, nome: str, novo_subgrupo: str, nova_entrada: str) -> int:
-    setor = str(setor or '').strip()
-    chapa = str(chapa or '').strip()
-    nome = str(nome or '').strip()
-    novo_subgrupo = str(novo_subgrupo or '').strip()
-    nova_entrada = str(nova_entrada or '').strip()
-    total = 0
-
-    if setor and chapa:
-        cur.execute(
-            """
-            UPDATE colaboradores
-               SET subgrupo=?, entrada=?
-             WHERE UPPER(TRIM(setor)) = UPPER(TRIM(?))
-               AND TRIM(chapa) = ?
-            """,
-            (novo_subgrupo, nova_entrada, setor, chapa)
-        )
-        total += int(cur.rowcount or 0)
-
-    if total == 0 and chapa:
-        cur.execute(
-            """
-            UPDATE colaboradores
-               SET subgrupo=?, entrada=?
-             WHERE TRIM(chapa) = ?
-            """,
-            (novo_subgrupo, nova_entrada, chapa)
-        )
-        total += int(cur.rowcount or 0)
-
-    if total == 0 and setor and nome:
-        cur.execute(
-            """
-            UPDATE colaboradores
-               SET subgrupo=?, entrada=?
-             WHERE UPPER(TRIM(setor)) = UPPER(TRIM(?))
-               AND UPPER(TRIM(nome)) = UPPER(TRIM(?))
-            """,
-            (novo_subgrupo, nova_entrada, setor, nome)
-        )
-        total += int(cur.rowcount or 0)
-
-    return total
-
-
-def _rodizio_caixa_trocas_aprovadas(simulacao: dict) -> list[dict]:
-    slots = list((simulacao or {}).get('slots') or [])
-    aprovados_por_slot = dict((simulacao or {}).get('aprovados_por_slot') or {})
-    trocas = []
-
-    for s in slots:
-        slot_key = str(s.get('slot_key') or '').strip()
-        chapa_escolhida = str(aprovados_por_slot.get(slot_key) or s.get('origem_chapa') or '').strip()
-        if not chapa_escolhida:
-            continue
-
-        origem_info = None
-        if chapa_escolhida == str(s.get('origem_chapa') or '').strip():
-            origem_info = {
-                'chapa': str(s.get('origem_chapa') or '').strip(),
-                'nome': str(s.get('origem_nome') or '').strip(),
-                'entrada': str(s.get('origem_entrada') or '').strip(),
-            }
-        else:
-            for alt in list(s.get('alternativas_opcoes') or []):
-                if str(alt.get('chapa') or '').strip() == chapa_escolhida:
-                    origem_info = {
-                        'chapa': str(alt.get('chapa') or '').strip(),
-                        'nome': str(alt.get('nome') or '').strip(),
-                        'entrada': str(alt.get('entrada') or '').strip(),
-                    }
-                    break
-
-        if not origem_info or not origem_info.get('chapa'):
-            continue
-
-        trocas.append({
-            'slot_key': slot_key,
-            'origem_chapa': origem_info['chapa'],
-            'origem_nome': origem_info['nome'],
-            'origem_entrada': origem_info['entrada'],
-            'destino_chapa': str(s.get('destino_chapa') or '').strip(),
-            'destino_nome': str(s.get('destino_nome') or '').strip(),
-            'destino_entrada': str(s.get('destino_entrada') or '').strip(),
-            'compatibilidade': str(s.get('compatibilidade') or ''),
-            'observacao': str(s.get('observacao') or ''),
-        })
-
-    return trocas
-
-
 def aplicar_rodizio_caixa_mes(setor: str, ano: int, mes: int, simulacao: dict):
     pares = list((simulacao or {}).get('pares') or [])
-    trocas_aprovadas = _rodizio_caixa_trocas_aprovadas(simulacao)
-    if not trocas_aprovadas:
-        return {'ok': False, 'msg': 'Nenhuma troca aprovada para aplicar.'}
+    if not pares:
+        return {'ok': False, 'msg': 'Nenhuma troca simulada para aplicar.'}
 
     subgrupo_origem = str((simulacao or {}).get('subgrupo_origem') or 'OPERADOR DE CAIXA 01')
     subgrupo_destino = str((simulacao or {}).get('subgrupo_destino') or 'OPERADOR DE CAIXA 02')
@@ -5173,43 +5080,51 @@ def aplicar_rodizio_caixa_mes(setor: str, ano: int, mes: int, simulacao: dict):
         return {'ok': False, 'msg': 'Este rodízio já foi aplicado nesta competência. Para manter a regra fixa, não é permitido reaplicar no mesmo mês.'}
 
     qtd_obrigatoria = int((simulacao or {}).get('qtd_destino_obrigatoria') or _rodizio_caixa_qtd_total())
-    if len(trocas_aprovadas) < qtd_obrigatoria:
-        return {'ok': False, 'msg': f'Rodízio incompleto: {len(trocas_aprovadas)} troca(s) aprovada(s), mas a regra fixa exige {qtd_obrigatoria} no mês.'}
+    if len(pares) < qtd_obrigatoria:
+        return {'ok': False, 'msg': f'Rodízio incompleto: {len(pares)} troca(s) simulada(s), mas a regra fixa exige {qtd_obrigatoria} no mês.'}
 
     chapas_afetadas = set()
     con = db_conn()
     cur = con.cursor()
     ciclo = _mes_ref_str(ano, mes)
     ts = datetime.now().isoformat()
-    total_updates = 0
     try:
         cur.execute('BEGIN')
-        for p in trocas_aprovadas:
+        for p in pares:
             ch_origem = str(p.get('origem_chapa') or '').strip()
-            nm_origem = str(p.get('origem_nome') or '').strip()
             ch_destino = str(p.get('destino_chapa') or '').strip()
-            nm_destino = str(p.get('destino_nome') or '').strip()
             ent_origem = str(p.get('origem_entrada') or '').strip()
             ent_destino = str(p.get('destino_entrada') or '').strip()
 
             if ch_origem:
                 chapas_afetadas.add(ch_origem)
-                total_updates += _atualizar_colaborador_subgrupo_entrada(cur, setor, ch_origem, nm_origem, subgrupo_destino, ent_destino)
+                cur.execute(
+                    "UPDATE colaboradores SET subgrupo=?, entrada=? WHERE setor=? AND chapa=?",
+                    (simulacao.get('subgrupo_destino', 'OPERADOR DE CAIXA 02'), ent_destino, setor, ch_origem)
+                )
             if ch_destino:
                 chapas_afetadas.add(ch_destino)
-                total_updates += _atualizar_colaborador_subgrupo_entrada(cur, setor, ch_destino, nm_destino, subgrupo_origem, ent_origem)
+                cur.execute(
+                    "UPDATE colaboradores SET subgrupo=?, entrada=? WHERE setor=? AND chapa=?",
+                    (simulacao.get('subgrupo_origem', 'OPERADOR DE CAIXA 01'), ent_origem, setor, ch_destino)
+                )
 
             cur.execute("""
                 INSERT OR REPLACE INTO rodizio_caixa_hist(setor, ano, mes, ciclo_ref, chapa, nome, movimento, subgrupo_origem, subgrupo_destino, entrada_antiga, entrada_nova, compat_status, observacao, criado_em)
                 VALUES (?, ?, ?, ?, ?, ?, 'ENTRA_DESTINO', ?, ?, ?, ?, ?, ?, ?)
-            """, (setor, int(ano), int(mes), ciclo, ch_origem, nm_origem, subgrupo_origem, subgrupo_destino, ent_origem, ent_destino, p['compatibilidade'], p.get('observacao',''), ts))
+            """, (setor, int(ano), int(mes), ciclo, ch_origem, p['origem_nome'], simulacao.get('subgrupo_origem', 'OPERADOR DE CAIXA 01'), simulacao.get('subgrupo_destino', 'OPERADOR DE CAIXA 02'), ent_origem, ent_destino, p['compatibilidade'], p.get('observacao',''), ts))
             cur.execute("""
                 INSERT OR REPLACE INTO rodizio_caixa_hist(setor, ano, mes, ciclo_ref, chapa, nome, movimento, subgrupo_origem, subgrupo_destino, entrada_antiga, entrada_nova, compat_status, observacao, criado_em)
                 VALUES (?, ?, ?, ?, ?, ?, 'SAI_DESTINO', ?, ?, ?, ?, ?, ?, ?)
-            """, (setor, int(ano), int(mes), ciclo, ch_destino, nm_destino, subgrupo_destino, subgrupo_origem, ent_destino, ent_origem, p['compatibilidade'], p.get('observacao',''), ts))
+            """, (setor, int(ano), int(mes), ciclo, ch_destino, p['destino_nome'], simulacao.get('subgrupo_destino', 'OPERADOR DE CAIXA 02'), simulacao.get('subgrupo_origem', 'OPERADOR DE CAIXA 01'), ent_destino, ent_origem, p['compatibilidade'], p.get('observacao',''), ts))
 
+        # IMPORTANTE:
+        # limpa a competência alvo já salva para obrigar a próxima geração/leitura
+        # a respeitar o cadastro atualizado pós-rodízio, sem apagar outras regras do sistema.
         cur.execute("DELETE FROM escala_mes WHERE setor=? AND ano=? AND mes=?", (setor, int(ano), int(mes)))
 
+        # remove apenas overrides de horário/status dos colaboradores afetados nesta competência,
+        # para não manter desenho antigo do mês depois da troca de subgrupo/entrada.
         if chapas_afetadas:
             marks = ",".join(["?"] * len(chapas_afetadas))
             params = [setor, int(ano), int(mes), *sorted(chapas_afetadas)]
@@ -5238,7 +5153,7 @@ def aplicar_rodizio_caixa_mes(setor: str, ano: int, mes: int, simulacao: dict):
     return {
         'ok': True,
         'msg': (
-            f'Rodízio aplicado com {len(trocas_aprovadas)} troca(s) aprovada(s) e {total_updates} atualização(ões) na base. '
+            f'Rodízio aplicado com {len(pares)} troca(s). '
             f'A competência {int(mes):02d}/{int(ano)} foi limpa para regenerar já com o rodízio refletido.'
         )
     }
@@ -5259,9 +5174,11 @@ def sincronizar_subgrupos_base_rodizio_caixa(setor: str, ano: int, mes: int, sub
             SELECT chapa, nome, movimento, subgrupo_origem, subgrupo_destino, entrada_antiga, entrada_nova
             FROM rodizio_caixa_hist
             WHERE setor=? AND ano=? AND mes=?
+              AND ((movimento='ENTRA_DESTINO' AND subgrupo_origem=? AND subgrupo_destino=?)
+                   OR (movimento='SAI_DESTINO' AND subgrupo_origem=? AND subgrupo_destino=?))
             ORDER BY criado_em ASC, chapa ASC
             """,
-            (setor, int(ano), int(mes))
+            (setor, int(ano), int(mes), subgrupo_origem, subgrupo_destino, subgrupo_destino, subgrupo_origem)
         )
         rows = cur.fetchall() or []
         if not rows:
@@ -5270,33 +5187,32 @@ def sincronizar_subgrupos_base_rodizio_caixa(setor: str, ano: int, mes: int, sub
         atualizacoes = {}
         for chapa, nome, movimento, sg_origem_hist, sg_destino_hist, entrada_antiga, entrada_nova in rows:
             ch = str(chapa or '').strip()
-            nm = str(nome or '').strip()
             if not ch:
                 continue
             mov = str(movimento or '').strip().upper()
             if mov == 'ENTRA_DESTINO':
-                novo_subgrupo = str(sg_destino_hist or subgrupo_destino).strip() or subgrupo_destino
-                nova_entrada = str(entrada_nova or '').strip()
+                novo_subgrupo = str(subgrupo_destino)
             elif mov == 'SAI_DESTINO':
-                novo_subgrupo = str(sg_destino_hist or subgrupo_origem).strip() or subgrupo_origem
-                nova_entrada = str(entrada_nova or '').strip()
+                novo_subgrupo = str(subgrupo_origem)
             else:
                 continue
             atualizacoes[ch] = {
-                'nome': nm,
+                'nome': str(nome or '').strip(),
                 'novo_subgrupo': novo_subgrupo,
-                'nova_entrada': nova_entrada,
+                'nova_entrada': str(entrada_nova or '').strip(),
             }
 
         if not atualizacoes:
             return {'ok': False, 'msg': 'O histórico foi localizado, mas não houve chapas válidas para sincronizar.'}
 
         chapas_afetadas = sorted(atualizacoes.keys())
-        total_updates = 0
         cur.execute('BEGIN')
         for ch in chapas_afetadas:
             info = atualizacoes[ch]
-            total_updates += _atualizar_colaborador_subgrupo_entrada(cur, setor, ch, info['nome'], info['novo_subgrupo'], info['nova_entrada'])
+            cur.execute(
+                "UPDATE colaboradores SET subgrupo=?, entrada=? WHERE setor=? AND chapa=?",
+                (info['novo_subgrupo'], info['nova_entrada'], setor, ch)
+            )
 
         marks = ','.join(['?'] * len(chapas_afetadas))
         params_base = [setor, int(ano), int(mes), *chapas_afetadas]
@@ -5327,9 +5243,8 @@ def sincronizar_subgrupos_base_rodizio_caixa(setor: str, ano: int, mes: int, sub
 
     return {
         'ok': True,
-        'msg': f'Subgrupos base sincronizados manualmente para {len(chapas_afetadas)} colaborador(es) em {int(mes):02d}/{int(ano)}. Atualizações gravadas: {total_updates}. Gere a escala novamente para refletir a troca.'
+        'msg': f'Subgrupos base sincronizados manualmente para {len(chapas_afetadas)} colaborador(es) em {int(mes):02d}/{int(ano)}. Gere a escala novamente para refletir a troca.'
     }
-
 
 # =========================================================
 # SUBGRUPOS + REGRAS
