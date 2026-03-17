@@ -4608,6 +4608,7 @@ def _rodizio_match_domingos(orig_info: dict | None, dest_info: dict | None) -> d
 
 
 
+
 def simular_rodizio_caixa_mes(
     setor: str,
     ano: int,
@@ -4646,29 +4647,35 @@ def simular_rodizio_caixa_mes(
     negados_set = {str(x).strip() for x in (negados_chapas or []) if str(x).strip()}
 
     candidatos_por_horario: dict[str, list[dict]] = {}
-    for h_cfg, _q in _rodizio_caixa_cotas_ordenadas():
-        fila = [c for c in candidatos if str(c.get('Entrada') or '').strip() == h_cfg]
-        fila = _rodizio_rank_origem(setor, fila, subgrupo_destino)
-        candidatos_por_horario[h_cfg] = fila
+    destinos_por_horario: dict[str, list[dict]] = {}
 
-    def _pool_horario_proximo(horario_ref: str, usados_local: set[str], negados_local: set[str], max_diff_min: int = 60) -> list[dict]:
+    for h_cfg, _q in _rodizio_caixa_cotas_ordenadas():
+        fila_origem = [c for c in candidatos if str(c.get('Entrada') or '').strip() == h_cfg]
+        fila_origem = _rodizio_rank_origem(setor, fila_origem, subgrupo_destino)
+        candidatos_por_horario[h_cfg] = fila_origem
+
+        fila_destino = [c for c in destino_sel if str(c.get('Entrada') or '').strip() == h_cfg]
+        fila_destino = sorted(fila_destino, key=lambda c: (str(c.get('Nome') or '').upper(), str(c.get('Chapa') or '')))
+        destinos_por_horario[h_cfg] = fila_destino
+
+    def _pool_horario_proximo(base_lista: list[dict], horario_ref: str, usados_local: set[str], bloqueados_local: set[str], max_diff_min: int = 60) -> list[dict]:
         ref_min = _hora_to_min(horario_ref)
         if ref_min is None:
             return []
-        base = []
+        candidatos_base = []
         seen = set()
-        for cand in candidatos:
+        for cand in base_lista:
             ch = str(cand.get('Chapa') or '').strip()
             ent = str(cand.get('Entrada') or '').strip()
             ent_min = _hora_to_min(ent)
-            if not ch or ch in usados_local or ch in negados_local or ent_min is None:
+            if not ch or ch in usados_local or ch in bloqueados_local or ent_min is None:
                 continue
             diff = abs(int(ent_min) - int(ref_min))
             if diff <= int(max_diff_min):
-                base.append((diff, str(cand.get('Nome') or '').upper(), ch, cand))
-        base.sort(key=lambda x: (x[0], x[1], x[2]))
+                candidatos_base.append((0 if ent == horario_ref else 1, diff, str(cand.get('Nome') or '').upper(), ch, cand))
+        candidatos_base.sort(key=lambda x: (x[0], x[1], x[2], x[3]))
         out = []
-        for diff, _nome, ch, cand in base:
+        for _prio, diff, _nome, ch, cand in candidatos_base:
             if ch in seen:
                 continue
             seen.add(ch)
@@ -4677,46 +4684,61 @@ def simular_rodizio_caixa_mes(
             out.append(item)
         return out
 
-    usados = set()
+    usados_origem = set()
+    usados_destino = set()
     pares = []
     slots = []
     alertas = []
     cotas_resumo = []
 
     for horario_ref, qtd_horario in _rodizio_caixa_cotas_ordenadas():
-        destinos_horario = [d for d in destino_sel if str(d.get('Entrada') or '').strip() == horario_ref]
-        destinos_horario = sorted(destinos_horario, key=lambda c: (str(c.get('Nome') or '').upper(), str(c.get('Chapa') or '')))
-        fila_horario = list(candidatos_por_horario.get(horario_ref, []))
+        fila_horario_origem = list(candidatos_por_horario.get(horario_ref, []))
+        fila_horario_destino = list(destinos_por_horario.get(horario_ref, []))
 
-        disponiveis_exatos_inicio = [c for c in fila_horario if str(c.get('Chapa') or '').strip() not in negados_set]
-        disponiveis_pool_inicio = _pool_horario_proximo(horario_ref, set(), negados_set, 60)
+        disponiveis_exatos_origem = [c for c in fila_horario_origem if str(c.get('Chapa') or '').strip() not in negados_set]
+        disponiveis_exatos_destino = list(fila_horario_destino)
 
-        if len(destinos_horario) < int(qtd_horario):
-            alertas.append(f"Destino {subgrupo_destino}: horário {horario_ref} tem {len(destinos_horario)} pessoa(s) para saída e a regra pede {int(qtd_horario)}.")
-        if len(disponiveis_exatos_inicio) < int(qtd_horario):
-            faltam = max(0, int(qtd_horario) - len(disponiveis_exatos_inicio))
-            exemplos = [str(c.get('Entrada') or '').strip() for c in disponiveis_pool_inicio if str(c.get('Entrada') or '').strip() != horario_ref][:8]
+        pool_origem_inicio = _pool_horario_proximo(candidatos, horario_ref, set(), negados_set, 60)
+        pool_destino_inicio = _pool_horario_proximo(destino_sel, horario_ref, set(), set(), 60)
+
+        if len(disponiveis_exatos_origem) < int(qtd_horario):
+            faltam = max(0, int(qtd_horario) - len(disponiveis_exatos_origem))
+            exemplos = [str(c.get('Entrada') or '').strip() for c in pool_origem_inicio if str(c.get('Entrada') or '').strip() != horario_ref][:8]
             sug = ', '.join(exemplos) if exemplos else 'sem candidato em até 1 hora'
             alertas.append(
-                f"Origem {subgrupo_origem}: horário {horario_ref} tem {len(disponiveis_exatos_inicio)} candidato(s) exato(s) e a regra pede {int(qtd_horario)}. "
+                f"Origem {subgrupo_origem}: horário {horario_ref} tem {len(disponiveis_exatos_origem)} candidato(s) exato(s) e a regra pede {int(qtd_horario)}. "
                 f"Sugestão: completar {faltam} vaga(s) com horário até 1 hora a menos/mais ({sug})."
             )
 
-        qtd_slots = min(int(qtd_horario), len(destinos_horario), len(disponiveis_pool_inicio))
+        if len(disponiveis_exatos_destino) < int(qtd_horario):
+            faltam_dest = max(0, int(qtd_horario) - len(disponiveis_exatos_destino))
+            exemplos_dest = [str(c.get('Entrada') or '').strip() for c in pool_destino_inicio if str(c.get('Entrada') or '').strip() != horario_ref][:8]
+            sug_dest = ', '.join(exemplos_dest) if exemplos_dest else 'sem pessoa no destino em até 1 hora'
+            alertas.append(
+                f"Destino {subgrupo_destino}: horário {horario_ref} tem {len(disponiveis_exatos_destino)} pessoa(s) exata(s) para saída e a regra pede {int(qtd_horario)}. "
+                f"Sugestão: completar {faltam_dest} vaga(s) com saída até 1 hora a menos/mais ({sug_dest})."
+            )
+
+        qtd_slots = min(int(qtd_horario), len(pool_origem_inicio), len(pool_destino_inicio))
         cotas_resumo.append({
             'Horário': horario_ref,
             'Regra': int(qtd_horario),
-            'Disponível origem': len(disponiveis_exatos_inicio),
-            'Disponível destino': len(destinos_horario),
+            'Disponível origem': len(disponiveis_exatos_origem),
+            'Disponível destino': len(disponiveis_exatos_destino),
             'Selecionados': int(qtd_slots),
         })
 
         for idx in range(qtd_slots):
-            d = destinos_horario[idx]
+            pool_destino = _pool_horario_proximo(destino_sel, horario_ref, usados_destino, set(), 60)
+            if not pool_destino:
+                continue
+
+            d = pool_destino[0]
+            dest_fallback = (str(d.get('Entrada') or '').strip() != horario_ref)
             slot_key = f"{horario_ref}|{idx}|{str(d.get('Chapa') or '').strip()}"
             locked_chapa = aprovados_por_slot.get(slot_key, '').strip()
 
-            disponiveis_pool = _pool_horario_proximo(horario_ref, usados, negados_set, 60)
+            disponiveis_pool = _pool_horario_proximo(candidatos, horario_ref, usados_origem, negados_set, 60)
             if not disponiveis_pool:
                 continue
 
@@ -4759,8 +4781,10 @@ def simular_rodizio_caixa_mes(
                 escolha_fallback = (str(chosen.get('Entrada') or '').strip() != horario_ref)
 
             ch = str(chosen.get('Chapa') or '').strip()
-            usados.add(ch)
+            usados_origem.add(ch)
             dest_ch_final = str(d.get('Chapa') or '').strip()
+            usados_destino.add(dest_ch_final)
+
             domingos_orig = int(domingos_map.get(ch, 0) or 0)
             domingos_dest = int(domingos_map.get(dest_ch_final, 0) or 0)
             sunday_diff = abs(domingos_orig - domingos_dest)
@@ -4770,29 +4794,39 @@ def simular_rodizio_caixa_mes(
             compat = _classificar_compat_horario(chosen.get('Entrada', ''), d.get('Entrada', ''), tolerancia_min=tolerancia_min)
             last_move_ym = int(last_move_map.get(ch, 0) or 0)
             diff_horario_ref = abs(int((_hora_to_min(str(chosen.get('Entrada') or '').strip()) or 0)) - int((_hora_to_min(horario_ref) or 0)))
+            diff_dest_ref = abs(int((_hora_to_min(str(d.get('Entrada') or '').strip()) or 0)) - int((_hora_to_min(horario_ref) or 0)))
 
             obs_parts = [f'Regra fixa do horário {horario_ref}']
             if escolha_fallback:
                 obs_parts.append(
-                    f"Sugestão por horário próximo: origem {str(chosen.get('Entrada') or '').strip()} com diferença de {diff_horario_ref} min da regra"
+                    f"Sugestão origem por horário próximo: {str(chosen.get('Entrada') or '').strip()} ({diff_horario_ref} min da regra)"
                 )
             else:
-                obs_parts.append("Selecionado no horário exato da regra")
+                obs_parts.append("Origem selecionada no horário exato da regra")
+
+            if dest_fallback:
+                obs_parts.append(
+                    f"Saída do destino por horário próximo: {str(d.get('Entrada') or '').strip()} ({diff_dest_ref} min da regra)"
+                )
+            else:
+                obs_parts.append("Saída do destino no horário exato da regra")
+
             if int(match_info.get('trab_iguais_qtd', 0) or 0) > 0 or int(match_info.get('folga_iguais_qtd', 0) or 0) > 0:
                 obs_parts.append(
                     f"Domingos parecidos por data: trabalha igual {int(match_info.get('trab_iguais_qtd', 0) or 0)} | folga igual {int(match_info.get('folga_iguais_qtd', 0) or 0)}"
                 )
             else:
                 obs_parts.append(f"Sem domingo igual por data; mantido o principal do horário {horario_ref}")
+
             obs_parts.append(f'Quantidade de domingos: entra {domingos_orig} / sai {domingos_dest}')
             obs_parts.append(f'Último mês no destino: {_rodizio_format_ym(last_move_ym)}')
 
             alternativas_mesmo_horario = sum(
-                1 for cand in fila_horario
-                if str(cand.get('Chapa') or '').strip() not in usados and str(cand.get('Chapa') or '').strip() not in negados_set
+                1 for cand in fila_horario_origem
+                if str(cand.get('Chapa') or '').strip() not in usados_origem and str(cand.get('Chapa') or '').strip() not in negados_set
             )
             alternativas_ate_1h = sum(
-                1 for cand in _pool_horario_proximo(horario_ref, usados, negados_set, 60)
+                1 for cand in _pool_horario_proximo(candidatos, horario_ref, usados_origem, negados_set, 60)
             )
 
             row = {
@@ -4822,7 +4856,9 @@ def simular_rodizio_caixa_mes(
                 'alternativas_mesmo_horario': int(alternativas_mesmo_horario),
                 'alternativas_ate_1h': int(alternativas_ate_1h),
                 'fallback_horario_proximo': bool(escolha_fallback),
+                'fallback_destino_horario_proximo': bool(dest_fallback),
                 'diff_horario_ref_min': int(diff_horario_ref),
+                'diff_destino_ref_min': int(diff_dest_ref),
                 'aprovado_manual': bool(aprovados_por_slot.get(slot_key) == ch),
             }
             slots.append(dict(row))
@@ -4830,10 +4866,10 @@ def simular_rodizio_caixa_mes(
 
     proximos = []
     for horario_ref, _qtd in _rodizio_caixa_cotas_ordenadas():
-        fila_pool = _pool_horario_proximo(horario_ref, usados, negados_set, 60)
+        fila_pool = _pool_horario_proximo(candidatos, horario_ref, usados_origem, negados_set, 60)
         for o in fila_pool:
             ch = str(o.get('Chapa') or '').strip()
-            if ch in usados or ch in negados_set:
+            if ch in usados_origem or ch in negados_set:
                 continue
             ult = int(last_move_map.get(ch, 0) or 0)
             diff = abs(int((_hora_to_min(str(o.get('Entrada') or '').strip()) or 0)) - int((_hora_to_min(horario_ref) or 0)))
@@ -4851,7 +4887,7 @@ def simular_rodizio_caixa_mes(
     if len(pares) < qtd_obrigatoria:
         alertas.append(
             f"Rodízio incompleto no mês: foram montadas {len(pares)} troca(s), mas a regra fixa exige {qtd_obrigatoria}. "
-            f"O sistema sugeriu completar com horário até 1 hora a menos/mais quando faltou pessoa no horário exato."
+            f"O sistema sugeriu completar com horário até 1 hora a menos/mais tanto na origem quanto na saída do destino quando faltou pessoa no horário exato."
         )
 
     return {
