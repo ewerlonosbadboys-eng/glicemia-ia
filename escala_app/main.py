@@ -8801,6 +8801,78 @@ def page_login():
                     except Exception as e:
                         st.error(f"Falha ao redefinir senha: {e}")
 
+def _readequar_mes_ferias_otimizado(setor: str, ano: int, mes: int, chapa: str, seed: int = 0, respeitar_ajustes: bool = True):
+    """
+    Readequação rápida para férias: ajusta somente o colaborador afetado na competência atual.
+    Mantém as regras já homologadas e usa regeneração completa apenas como fallback.
+    """
+    try:
+        chapa = str(chapa or '').strip()
+        if not chapa:
+            return _regenerar_mes_inteiro(setor, int(ano), int(mes), seed=int(seed), respeitar_ajustes=bool(respeitar_ajustes))
+
+        hist_db = load_escala_mes_db(setor, int(ano), int(mes)) or {}
+        if not hist_db or chapa not in hist_db:
+            return _regenerar_mes_inteiro(setor, int(ano), int(mes), seed=int(seed), respeitar_ajustes=bool(respeitar_ajustes))
+
+        df = hist_db.get(chapa)
+        if df is None or getattr(df, 'empty', True):
+            return _regenerar_mes_inteiro(setor, int(ano), int(mes), seed=int(seed), respeitar_ajustes=bool(respeitar_ajustes))
+
+        colaboradores = load_colaboradores_setor(setor) or []
+        colab = next((c for c in colaboradores if str(c.get('Chapa', '')).strip() == chapa), {}) or {}
+        ent_pad = str(colab.get('Entrada', '') or '06:00').strip() or '06:00'
+
+        df2 = df.copy().reset_index(drop=True)
+        if 'Data' in df2.columns:
+            df2['Data'] = pd.to_datetime(df2['Data'], errors='coerce')
+
+        mudou = False
+        for i in range(len(df2)):
+            try:
+                data_obj = pd.to_datetime(df2.loc[i, 'Data']).date()
+            except Exception:
+                continue
+
+            em_ferias = is_de_ferias(setor, chapa, data_obj)
+            status_atual = str(df2.loc[i, 'Status'] or '')
+
+            if em_ferias:
+                if status_atual != 'Férias' or str(df2.loc[i, 'H_Entrada'] or '') or str(df2.loc[i, 'H_Saida'] or ''):
+                    df2.loc[i, 'Status'] = 'Férias'
+                    df2.loc[i, 'H_Entrada'] = ''
+                    df2.loc[i, 'H_Saida'] = ''
+                    mudou = True
+            else:
+                if status_atual == 'Férias':
+                    df2.loc[i, 'Status'] = 'Trabalho'
+                    df2.loc[i, 'H_Entrada'] = ent_pad
+                    df2.loc[i, 'H_Saida'] = _saida_from_entrada(ent_pad)
+                    mudou = True
+
+        hist_db[chapa] = df2
+
+        if bool(respeitar_ajustes):
+            hist_db = apply_overrides_to_hist(setor, int(ano), int(mes), hist_db)
+
+        save_escala_mes_db(setor, int(ano), int(mes), hist_db)
+        try:
+            estado_out = _rebuild_estado_out(hist_db)
+            save_estado_mes(setor, int(ano), int(mes), estado_out)
+        except Exception:
+            pass
+
+        try:
+            st.cache_data.clear()
+        except Exception:
+            pass
+
+        return True
+
+    except Exception:
+        return _regenerar_mes_inteiro(setor, int(ano), int(mes), seed=int(seed), respeitar_ajustes=bool(respeitar_ajustes))
+
+
 def _regenerar_mes_inteiro(setor: str, ano: int, mes: int, seed: int = 0, respeitar_ajustes: bool = True):
     """
     Regera a escala do mês inteiro para TODO o setor.
@@ -10947,10 +11019,11 @@ def page_app():
                     else:
                         add_ferias(setor, ch, ini, fim)
                         with st.spinner("Readequando escala do mês..."):
-                            _regenerar_mes_inteiro(
+                            _readequar_mes_ferias_otimizado(
                                 setor,
                                 int(st.session_state["cfg_ano"]),
                                 int(st.session_state["cfg_mes"]),
+                                str(ch),
                                 seed=int(st.session_state.get("last_seed", 0)),
                                 respeitar_ajustes=True,
                             )
@@ -11068,10 +11141,11 @@ def page_app():
                         r = df_f.iloc[int(rem_idx) - 1]
                         delete_ferias_row(setor, r["Chapa"], r["Início"], r["Fim"])
                         with st.spinner("Readequando escala do mês..."):
-                            _regenerar_mes_inteiro(
+                            _readequar_mes_ferias_otimizado(
                                 setor,
                                 int(st.session_state["cfg_ano"]),
                                 int(st.session_state["cfg_mes"]),
+                                str(ch),
                                 seed=int(st.session_state.get("last_seed", 0)),
                                 respeitar_ajustes=True,
                             )
