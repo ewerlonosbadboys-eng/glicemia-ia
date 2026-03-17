@@ -4373,15 +4373,15 @@ def _classificar_compat_horario(h1: str, h2: str, tolerancia_min: int = 20) -> s
     return 'DIFERENTE'
 
 
-def _colaboradores_com_rodizio_frentecaixa(setor: str, ano: int, mes: int, colaboradores: list[dict]) -> list[dict]:
-    """Aplica somente para FRENTECAIXA o subgrupo/entrada do rodízio já gravado
-    na competência, sem mexer nos outros setores nem nas regras globais."""
+def _colaboradores_com_rodizio_aplicado_frentecaixa(setor: str, ano: int, mes: int, colaboradores: list[dict]) -> list[dict]:
+    """Exclusivo para FRENTECAIXA:
+    antes da geração/preview do mês, força o cadastro carregado a respeitar
+    o rodízio já aplicado na competência, e só depois os ajustes normais do mês
+    seguem sendo reaplicados pelo fluxo padrão.
+    """
     setor_norm = str(setor or '').strip().upper()
-    if setor_norm != 'FRENTECAIXA':
-        return [dict(c) for c in (colaboradores or [])]
-
     base = [dict(c) for c in (colaboradores or [])]
-    if not base:
+    if setor_norm != 'FRENTECAIXA' or not base:
         return base
 
     con = db_conn()
@@ -4389,12 +4389,12 @@ def _colaboradores_com_rodizio_frentecaixa(setor: str, ano: int, mes: int, colab
     try:
         cur.execute(
             """
-            SELECT chapa, movimento, subgrupo_destino, entrada_nova, criado_em
+            SELECT chapa, movimento, subgrupo_destino, entrada_nova
             FROM rodizio_caixa_hist
             WHERE UPPER(TRIM(setor)) = UPPER(TRIM(?))
               AND ano = ?
               AND mes = ?
-            ORDER BY datetime(COALESCE(criado_em,'')) ASC, rowid ASC
+            ORDER BY rowid ASC
             """,
             (setor, int(ano), int(mes))
         )
@@ -4408,22 +4408,18 @@ def _colaboradores_com_rodizio_frentecaixa(setor: str, ano: int, mes: int, colab
         return base
 
     mapa = {}
-    for chapa, movimento, subgrupo_destino, entrada_nova, _criado_em in rows:
+    for chapa, movimento, subgrupo_destino, entrada_nova in rows:
         ch = str(chapa or '').strip()
         if not ch:
             continue
-        # histórico já guarda o "destino final" de cada movimento
         mapa[ch] = {
+            "Movimento": str(movimento or '').strip(),
             "Subgrupo": str(subgrupo_destino or '').strip(),
             "Entrada": str(entrada_nova or '').strip(),
-            "Movimento": str(movimento or '').strip(),
         }
 
     if not mapa:
         return base
-
-    saidas_destino = {ch for ch, info in mapa.items() if str(info.get("Movimento") or "").strip() == "SAI_DESTINO"}
-    entradas_destino = {ch for ch, info in mapa.items() if str(info.get("Movimento") or "").strip() == "ENTRA_DESTINO"}
 
     out = []
     for c in base:
@@ -4437,12 +4433,35 @@ def _colaboradores_com_rodizio_frentecaixa(setor: str, ano: int, mes: int, colab
                 item["Subgrupo"] = novo_sg
             if nova_ent:
                 item["Entrada"] = nova_ent
-            if ch in entradas_destino:
-                item["_RodizioMes"] = "ENTRA_DESTINO"
-            elif ch in saidas_destino:
-                item["_RodizioMes"] = "SAI_DESTINO"
+            item["_RodizioCompetencia"] = str(info.get("Movimento") or '').strip()
         out.append(item)
     return out
+
+
+def _rodizio_frentecaixa_existe_no_mes(setor: str, ano: int, mes: int) -> bool:
+    setor_norm = str(setor or '').strip().upper()
+    if setor_norm != 'FRENTECAIXA':
+        return False
+    con = db_conn()
+    cur = con.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT 1
+            FROM rodizio_caixa_hist
+            WHERE UPPER(TRIM(setor)) = UPPER(TRIM(?))
+              AND ano = ?
+              AND mes = ?
+            LIMIT 1
+            """,
+            (setor, int(ano), int(mes))
+        )
+        row = cur.fetchone()
+    except Exception:
+        row = None
+    finally:
+        con.close()
+    return bool(row)
 
 
 def _mes_ref_str(ano: int, mes: int) -> str:
@@ -8633,9 +8652,19 @@ def _regenerar_mes_inteiro(setor: str, ano: int, mes: int, seed: int = 0, respei
       no final e gravadas novamente no banco (escala_mes). Isso evita “sumir” folga manual ao gerar.
     """
     colaboradores = load_colaboradores_setor(setor)
-    colaboradores = _colaboradores_com_rodizio_frentecaixa(setor, int(ano), int(mes), colaboradores)
+    colaboradores = _colaboradores_com_rodizio_aplicado_frentecaixa(setor, int(ano), int(mes), colaboradores)
     if not colaboradores:
         return False
+
+    if _rodizio_frentecaixa_existe_no_mes(setor, int(ano), int(mes)):
+        try:
+            con_fix = db_conn()
+            cur_fix = con_fix.cursor()
+            cur_fix.execute("DELETE FROM escala_mes WHERE setor=? AND ano=? AND mes=?", (setor, int(ano), int(mes)))
+            con_fix.commit()
+            con_fix.close()
+        except Exception:
+            pass
 
     random.seed(int(seed))
     # ===== CONTEXTO SEMANA CONTÍNUA (mês anterior) =====
@@ -8920,8 +8949,8 @@ def _ensure_preview_cache(setor: str, ano: int, mes: int, colaboradores: list):
     keys = _preview_cache_keys(setor, ano, mes)
     if keys["hist"] in st.session_state and keys["cal"] in st.session_state:
         return st.session_state[keys["hist"]], st.session_state[keys["cal"]]
+    colaboradores = _colaboradores_com_rodizio_aplicado_frentecaixa(setor, int(ano), int(mes), colaboradores or [])
     hist_db = get_hist_mes_com_overrides_cached(setor, int(ano), int(mes))
-    colaboradores = _colaboradores_com_rodizio_frentecaixa(setor, int(ano), int(mes), colaboradores or [])
     colab_by = {c["Chapa"]: c for c in (colaboradores or [])}
     cal = calendario_rh_df(hist_db, colab_by) if hist_db else pd.DataFrame()
     st.session_state[keys["hist"]] = hist_db
@@ -10028,7 +10057,7 @@ def page_app():
 
 
         colaboradores = load_colaboradores_setor(setor)
-        colaboradores = _colaboradores_com_rodizio_frentecaixa(setor, int(ano), int(mes), colaboradores)
+        colaboradores = _colaboradores_com_rodizio_aplicado_frentecaixa(setor, int(ano), int(mes), colaboradores)
         if not colaboradores:
             st.warning("Cadastre colaboradores.")
         else:
