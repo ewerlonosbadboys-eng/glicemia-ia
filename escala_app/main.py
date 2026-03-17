@@ -4373,6 +4373,73 @@ def _classificar_compat_horario(h1: str, h2: str, tolerancia_min: int = 20) -> s
     return 'DIFERENTE'
 
 
+def _aplicar_rodizio_caixa_competencia_nos_colaboradores(setor: str, ano: int, mes: int, colaboradores: list[dict]) -> list[dict]:
+    """
+    Regra EXCLUSIVA do setor FRENTECAIXA:
+    se existir rodízio Caixa aplicado na competência, força a geração do mês
+    a respeitar o subgrupo/entrada salvos no histórico do rodízio, mesmo que a
+    escala do mês tenha sido montada antes.
+    Não altera outros setores e não mexe em regras globais já homologadas.
+    """
+    setor_norm = str(setor or '').strip().upper()
+    if setor_norm != 'FRENTECAIXA':
+        return list(colaboradores or [])
+
+    base = [dict(c) for c in (colaboradores or [])]
+    if not base:
+        return base
+
+    con = db_conn()
+    cur = con.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT chapa, subgrupo_destino, entrada_nova, criado_em
+            FROM rodizio_caixa_hist
+            WHERE UPPER(TRIM(setor)) = UPPER(TRIM(?))
+              AND ano = ?
+              AND mes = ?
+            ORDER BY datetime(COALESCE(criado_em,'')) ASC, rowid ASC
+            """,
+            (setor, int(ano), int(mes))
+        )
+        rows = cur.fetchall()
+    except Exception:
+        rows = []
+    finally:
+        con.close()
+
+    if not rows:
+        return base
+
+    mapa = {}
+    for chapa, subgrupo_destino, entrada_nova, _criado_em in rows:
+        ch = str(chapa or '').strip()
+        if not ch:
+            continue
+        mapa[ch] = {
+            'Subgrupo': str(subgrupo_destino or '').strip(),
+            'Entrada': str(entrada_nova or '').strip(),
+        }
+
+    if not mapa:
+        return base
+
+    out = []
+    for c in base:
+        item = dict(c)
+        ch = str(item.get('Chapa') or '').strip()
+        if ch in mapa:
+            novo_sg = str(mapa[ch].get('Subgrupo') or '').strip()
+            nova_ent = str(mapa[ch].get('Entrada') or '').strip()
+            if novo_sg:
+                item['Subgrupo'] = novo_sg
+            if nova_ent:
+                item['Entrada'] = nova_ent
+        out.append(item)
+    return out
+
+
 def _mes_ref_str(ano: int, mes: int) -> str:
     return f"{int(ano):04d}-{int(mes):02d}"
 
@@ -8561,6 +8628,7 @@ def _regenerar_mes_inteiro(setor: str, ano: int, mes: int, seed: int = 0, respei
       no final e gravadas novamente no banco (escala_mes). Isso evita “sumir” folga manual ao gerar.
     """
     colaboradores = load_colaboradores_setor(setor)
+    colaboradores = _aplicar_rodizio_caixa_competencia_nos_colaboradores(setor, int(ano), int(mes), colaboradores)
     if not colaboradores:
         return False
 
@@ -9816,31 +9884,10 @@ def page_app():
                 if a1.button('Limpar aprovações e negativas', key='rod_caixa_clear_aprov', use_container_width=True):
                     st.session_state[aprov_key] = {}
                     st.session_state[neg_key] = []
-                    st.session_state.pop(state_base + "::aplicado", None)
                     st.rerun()
                 if a2.button('Aprovar todas as sugestões atuais', key='rod_caixa_aprov_all', use_container_width=True):
                     st.session_state[aprov_key] = {str(s.get('slot_key')): str(s.get('origem_chapa')) for s in slots}
-                    st.session_state.pop(state_base + "::aplicado", None)
                     st.rerun()
-
-                aplic_key = state_base + "::aplicado"
-                qtd_obrigatoria = int(sim.get('qtd_destino_obrigatoria', 14) or 14)
-                pronto_aplicar = bool(slots) and int(aprovados_validos) >= int(qtd_obrigatoria) and int(max(0, len(slots) - aprovados_validos)) == 0
-
-                if pronto_aplicar:
-                    st.success(f"Todas as {qtd_obrigatoria} sugestões foram aprovadas. Agora falta aplicar o rodízio no mês {mes_r:02d}/{ano_r}.")
-                    if st.button('🚀 Aplicar rodízio agora', key='rod_caixa_apply_now', use_container_width=True):
-                        res_apply = aplicar_rodizio_caixa_mes(setor, ano_r, mes_r, sim)
-                        if res_apply.get('ok'):
-                            st.session_state[aplic_key] = True
-                            st.success(res_apply.get('msg', 'Rodízio aplicado com sucesso.'))
-                            st.rerun()
-                        else:
-                            st.error(res_apply.get('msg', 'Não foi possível aplicar o rodízio.'))
-                elif st.session_state.get(aplic_key):
-                    st.success(f"Rodízio já aplicado na competência {mes_r:02d}/{ano_r}. Gere a escala novamente para refletir a troca.")
-                elif slots:
-                    st.info(f"Para aplicar de verdade no mês {mes_r:02d}/{ano_r}, todas as {qtd_obrigatoria} sugestões precisam estar aprovadas e depois você deve clicar em 'Aplicar rodízio agora'.")
 
                 if slots:
                     st.markdown('### Aprovação das 14 pessoas sugeridas')
