@@ -4373,17 +4373,12 @@ def _classificar_compat_horario(h1: str, h2: str, tolerancia_min: int = 20) -> s
     return 'DIFERENTE'
 
 
-def _aplicar_rodizio_caixa_competencia_nos_colaboradores(setor: str, ano: int, mes: int, colaboradores: list[dict]) -> list[dict]:
-    """
-    Regra EXCLUSIVA do setor FRENTECAIXA:
-    se existir rodízio Caixa aplicado na competência, força a geração do mês
-    a respeitar o subgrupo/entrada salvos no histórico do rodízio, mesmo que a
-    escala do mês tenha sido montada antes.
-    Não altera outros setores e não mexe em regras globais já homologadas.
-    """
+def _colaboradores_com_rodizio_frentecaixa(setor: str, ano: int, mes: int, colaboradores: list[dict]) -> list[dict]:
+    """Aplica somente para FRENTECAIXA o subgrupo/entrada do rodízio já gravado
+    na competência, sem mexer nos outros setores nem nas regras globais."""
     setor_norm = str(setor or '').strip().upper()
     if setor_norm != 'FRENTECAIXA':
-        return list(colaboradores or [])
+        return [dict(c) for c in (colaboradores or [])]
 
     base = [dict(c) for c in (colaboradores or [])]
     if not base:
@@ -4394,7 +4389,7 @@ def _aplicar_rodizio_caixa_competencia_nos_colaboradores(setor: str, ano: int, m
     try:
         cur.execute(
             """
-            SELECT chapa, subgrupo_destino, entrada_nova, criado_em
+            SELECT chapa, movimento, subgrupo_destino, entrada_nova, criado_em
             FROM rodizio_caixa_hist
             WHERE UPPER(TRIM(setor)) = UPPER(TRIM(?))
               AND ano = ?
@@ -4413,29 +4408,39 @@ def _aplicar_rodizio_caixa_competencia_nos_colaboradores(setor: str, ano: int, m
         return base
 
     mapa = {}
-    for chapa, subgrupo_destino, entrada_nova, _criado_em in rows:
+    for chapa, movimento, subgrupo_destino, entrada_nova, _criado_em in rows:
         ch = str(chapa or '').strip()
         if not ch:
             continue
+        # histórico já guarda o "destino final" de cada movimento
         mapa[ch] = {
-            'Subgrupo': str(subgrupo_destino or '').strip(),
-            'Entrada': str(entrada_nova or '').strip(),
+            "Subgrupo": str(subgrupo_destino or '').strip(),
+            "Entrada": str(entrada_nova or '').strip(),
+            "Movimento": str(movimento or '').strip(),
         }
 
     if not mapa:
         return base
 
+    saidas_destino = {ch for ch, info in mapa.items() if str(info.get("Movimento") or "").strip() == "SAI_DESTINO"}
+    entradas_destino = {ch for ch, info in mapa.items() if str(info.get("Movimento") or "").strip() == "ENTRA_DESTINO"}
+
     out = []
     for c in base:
         item = dict(c)
-        ch = str(item.get('Chapa') or '').strip()
-        if ch in mapa:
-            novo_sg = str(mapa[ch].get('Subgrupo') or '').strip()
-            nova_ent = str(mapa[ch].get('Entrada') or '').strip()
+        ch = str(item.get("Chapa") or '').strip()
+        info = mapa.get(ch)
+        if info:
+            novo_sg = str(info.get("Subgrupo") or '').strip()
+            nova_ent = str(info.get("Entrada") or '').strip()
             if novo_sg:
-                item['Subgrupo'] = novo_sg
+                item["Subgrupo"] = novo_sg
             if nova_ent:
-                item['Entrada'] = nova_ent
+                item["Entrada"] = nova_ent
+            if ch in entradas_destino:
+                item["_RodizioMes"] = "ENTRA_DESTINO"
+            elif ch in saidas_destino:
+                item["_RodizioMes"] = "SAI_DESTINO"
         out.append(item)
     return out
 
@@ -8628,7 +8633,7 @@ def _regenerar_mes_inteiro(setor: str, ano: int, mes: int, seed: int = 0, respei
       no final e gravadas novamente no banco (escala_mes). Isso evita “sumir” folga manual ao gerar.
     """
     colaboradores = load_colaboradores_setor(setor)
-    colaboradores = _aplicar_rodizio_caixa_competencia_nos_colaboradores(setor, int(ano), int(mes), colaboradores)
+    colaboradores = _colaboradores_com_rodizio_frentecaixa(setor, int(ano), int(mes), colaboradores)
     if not colaboradores:
         return False
 
@@ -8916,6 +8921,7 @@ def _ensure_preview_cache(setor: str, ano: int, mes: int, colaboradores: list):
     if keys["hist"] in st.session_state and keys["cal"] in st.session_state:
         return st.session_state[keys["hist"]], st.session_state[keys["cal"]]
     hist_db = get_hist_mes_com_overrides_cached(setor, int(ano), int(mes))
+    colaboradores = _colaboradores_com_rodizio_frentecaixa(setor, int(ano), int(mes), colaboradores or [])
     colab_by = {c["Chapa"]: c for c in (colaboradores or [])}
     cal = calendario_rh_df(hist_db, colab_by) if hist_db else pd.DataFrame()
     st.session_state[keys["hist"]] = hist_db
@@ -10022,6 +10028,7 @@ def page_app():
 
 
         colaboradores = load_colaboradores_setor(setor)
+        colaboradores = _colaboradores_com_rodizio_frentecaixa(setor, int(ano), int(mes), colaboradores)
         if not colaboradores:
             st.warning("Cadastre colaboradores.")
         else:
