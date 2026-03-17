@@ -325,6 +325,46 @@ def _snapshot_primeira_entrada(df_hist: pd.DataFrame, entrada_base: str = '06:00
         return str(entrada_base or '06:00').strip() or '06:00'
 
 
+
+def _lookup_subgrupo_competencia_or_base_no_snapshot(setor: str, chapa: str, ano: int, mes: int, base_subgrupo: str = "") -> str:
+    setor = _norm_setor(setor)
+    chapa = _norm_chapa(chapa)
+    base_subgrupo = str(base_subgrupo or '').strip()
+
+    con = db_conn()
+    cur = con.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT subgrupo
+            FROM subgrupo_competencia
+            WHERE UPPER(TRIM(setor))=? AND ano=? AND mes=? AND TRIM(chapa)=?
+            LIMIT 1
+            """,
+            (setor, int(ano), int(mes), chapa),
+        )
+        row = cur.fetchone()
+        if row and str(row[0] or '').strip():
+            return str(row[0]).strip()
+
+        if base_subgrupo:
+            return base_subgrupo
+
+        cur.execute(
+            """
+            SELECT subgrupo
+            FROM colaboradores
+            WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?
+            LIMIT 1
+            """,
+            (setor, chapa),
+        )
+        row2 = cur.fetchone()
+        return str((row2[0] if row2 else '') or '').strip() or 'SEM SUBGRUPO'
+    finally:
+        con.close()
+
+
 def rebuild_colaborador_competencia_snapshot(setor: str, ano: int, mes: int) -> None:
     ensure_competencia_runtime_tables()
     setor = _norm_setor(setor)
@@ -365,7 +405,7 @@ def rebuild_colaborador_competencia_snapshot(setor: str, ano: int, mes: int) -> 
                 pass
 
         try:
-            subgrupo = get_subgrupo_competencia_ou_base(setor, ch, ano, mes, subgrupo)
+            subgrupo = _lookup_subgrupo_competencia_or_base_no_snapshot(setor, ch, ano, mes, subgrupo)
         except Exception:
             subgrupo = str(subgrupo or '').strip() or 'SEM SUBGRUPO'
 
@@ -386,6 +426,7 @@ def rebuild_colaborador_competencia_snapshot(setor: str, ano: int, mes: int) -> 
         subgrupo = str(base.get('Subgrupo', '') or '').strip() or 'SEM SUBGRUPO'
         entrada = str(base.get('Entrada', '') or '').strip() or '06:00'
         folga_sab = 1 if bool(base.get('Folga_Sab', False)) else 0
+
         if df_hist is not None and not df_hist.empty:
             entrada = _snapshot_primeira_entrada(df_hist, entrada)
             try:
@@ -395,10 +436,12 @@ def rebuild_colaborador_competencia_snapshot(setor: str, ano: int, mes: int) -> 
                         subgrupo = vals[-1]
             except Exception:
                 pass
+
         try:
-            subgrupo = get_subgrupo_competencia_ou_base(setor, ch, ano, mes, subgrupo)
+            subgrupo = _lookup_subgrupo_competencia_or_base_no_snapshot(setor, ch, ano, mes, subgrupo)
         except Exception:
             subgrupo = str(subgrupo or '').strip() or 'SEM SUBGRUPO'
+
         snap_rows[ch] = {
             'nome': nome,
             'subgrupo': subgrupo,
@@ -444,11 +487,6 @@ def get_colaborador_competencia_snapshot(setor: str, chapa: str, ano: int, mes: 
     if not competencia_fechada(setor, ano, mes):
         return None
 
-    try:
-        rebuild_colaborador_competencia_snapshot(setor, ano, mes)
-    except Exception:
-        pass
-
     con = db_conn()
     cur = con.cursor()
     try:
@@ -463,13 +501,32 @@ def get_colaborador_competencia_snapshot(setor: str, chapa: str, ano: int, mes: 
         con.close()
 
     if not row:
+        try:
+            rebuild_colaborador_competencia_snapshot(setor, ano, mes)
+        except Exception:
+            pass
+
+        con = db_conn()
+        cur = con.cursor()
+        try:
+            cur.execute("""
+                SELECT nome, chapa, subgrupo, entrada, folga_sab
+                FROM colaborador_competencia_snapshot
+                WHERE UPPER(TRIM(setor))=? AND ano=? AND mes=? AND TRIM(chapa)=?
+                LIMIT 1
+            """, (setor, ano, mes, chapa))
+            row = cur.fetchone()
+        finally:
+            con.close()
+
+    if not row:
         return None
 
     return {
         'Nome': row[0],
         'Chapa': row[1],
-        'Subgrupo': (row[2] or '').strip() or 'SEM SUBGRUPO',
-        'Entrada': (row[3] or '').strip() or '06:00',
+        'Subgrupo': row[2],
+        'Entrada': row[3],
         'Folga_Sab': bool(row[4]),
         'Setor': setor,
     }
