@@ -10740,13 +10740,41 @@ def page_app():
         if status_comp == 'FECHADA' and sec_aj != '✏️ Retificar folga, horário e subgrupo':
             st.error('🔒 Competência fechada: nesta área a visualização é apenas leitura. Use a subaba de retificação para correções pontuais.')
 
-        # Renderização direta da subaba de retificação.
-        # Isso evita que ela fique vazia por causa dos fluxos pesados das outras subabas.
+        # Renderização isolada e garantida da subaba de retificação.
+        # Fica fora dos fluxos pesados das outras subabas e fora do carregamento sob demanda.
         if sec_aj == '✏️ Retificar folga, horário e subgrupo':
-            render_retificacao_competencia_ui(setor, ano, mes, auth=auth)
-            st.stop()
+            _ret_box = st.container(border=True)
+            with _ret_box:
+                render_retificacao_competencia_ui(setor, ano, mes, auth=auth)
+        else:
+            _ajustes_precisam_escala = sec_aj in ("🧩 Folgas manuais em grade", "📊 Contagens por dia", "🔁 Troca de horários")
+            hist_db = {}
+            colaboradores = []
+            colab_by = {}
 
-        _ajustes_precisam_escala = sec_aj in ("🧩 Folgas manuais em grade", "📊 Contagens por dia", "🔁 Troca de horários")
+            if _ajustes_precisam_escala:
+                _aj_load_key = f"ajustes_loaded::{setor}::{ano}::{mes}::{sec_aj}"
+                if _aj_load_key not in st.session_state:
+                    st.session_state[_aj_load_key] = False
+                c_load1, c_load2, c_load3 = st.columns([1, 1, 3])
+                if c_load1.button("📥 Carregar dados dos ajustes", key=f"btn_{_aj_load_key}"):
+                    st.session_state[_aj_load_key] = True
+                if c_load2.button("🧹 Limpar cache desta tela", key=f"clear_{_aj_load_key}"):
+                    st.session_state.pop(_aj_load_key, None)
+                    st.rerun()
+                c_load3.caption("Para deixar leve, a grade só carrega quando você clicar no botão.")
+
+                if not st.session_state.get(_aj_load_key, False):
+                    st.info("Esta aba carrega sob demanda. Clique em 📥 Carregar dados dos ajustes para abrir a grade.")
+                else:
+                    with st.spinner("Carregando dados dos ajustes..."):
+                        hist_db = get_hist_mes_com_overrides_cached(setor, ano, mes)
+                        colaboradores = load_colaboradores_setor(setor)
+                        colab_by = {c["Chapa"]: c for c in colaboradores}
+
+                    if not hist_db:
+                        st.info("Gere a escala primeiro na aba 🚀 Gerar Escala.")
+                        return
         hist_db = {}
         colaboradores = []
         colab_by = {}
