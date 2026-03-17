@@ -9491,19 +9491,44 @@ def get_escala_colaborador_mes(setor: str, chapa: str, ano: int, mes: int) -> pd
     df_hist = hist_db.get(chapa)
     if df_hist is not None and not df_hist.empty:
         out = df_hist.copy().reset_index(drop=True)
+
+        # O histórico pode já vir com a coluna "Dia" contendo o dia da semana.
+        # Renomeia antes de recriar a coluna numérica do dia do mês.
+        if 'Dia' in out.columns:
+            out = out.rename(columns={'Dia': 'Dia da semana'})
+        elif 'dia_sem' in out.columns:
+            out = out.rename(columns={'dia_sem': 'Dia da semana'})
+        elif 'Dia da semana' not in out.columns:
+            out['Dia da semana'] = ''
+
         out.insert(0, 'Dia', list(range(1, len(out) + 1)))
-        out = out.rename(columns={
-            'Data': 'Data',
-            'Dia': 'Dia da semana',
-            'Status': 'Status',
-            'H_Entrada': 'Entrada',
-            'H_Saida': 'Saída',
-        })
+
+        if 'Data' in out.columns:
+            try:
+                out['Data'] = pd.to_datetime(out['Data'], errors='coerce')
+            except Exception:
+                pass
+        else:
+            out['Data'] = pd.NaT
+
+        if 'Status' not in out.columns:
+            out['Status'] = ''
+
+        if 'H_Entrada' in out.columns and 'Entrada' not in out.columns:
+            out = out.rename(columns={'H_Entrada': 'Entrada'})
+        if 'H_Saida' in out.columns and 'Saída' not in out.columns:
+            out = out.rename(columns={'H_Saida': 'Saída'})
+
+        if 'Entrada' not in out.columns:
+            out['Entrada'] = ''
+        if 'Saída' not in out.columns:
+            out['Saída'] = ''
+
         keep = ['Dia', 'Data', 'Dia da semana', 'Status', 'Entrada', 'Saída']
         for c in keep:
             if c not in out.columns:
                 out[c] = ''
-        return out[keep]
+        return out[keep].copy()
     con = db_conn()
     try:
         df = pd.read_sql_query(
