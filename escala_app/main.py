@@ -8873,6 +8873,81 @@ def _readequar_mes_ferias_otimizado(setor: str, ano: int, mes: int, chapa: str, 
         return _regenerar_mes_inteiro(setor, int(ano), int(mes), seed=int(seed), respeitar_ajustes=bool(respeitar_ajustes))
 
 
+
+
+def _readequar_folgas_grade_otimizado(setor: str, ano: int, mes: int, chapas_alvo: list[str], seed: int = 0, respeitar_ajustes: bool = True):
+    """
+    Readequação rápida para folgas manuais em grade.
+    Atualiza somente os colaboradores alterados, preservando as regras já homologadas.
+    Usa regeneração completa apenas como fallback de segurança.
+    """
+    try:
+        chapas_validas = []
+        for ch in (chapas_alvo or []):
+            ch = str(ch or '').strip()
+            if ch and ch not in chapas_validas:
+                chapas_validas.append(ch)
+
+        if not chapas_validas:
+            return True
+
+        hist_db = load_escala_mes_db(setor, int(ano), int(mes)) or {}
+        if not hist_db:
+            return _regenerar_mes_inteiro(setor, int(ano), int(mes), seed=int(seed), respeitar_ajustes=bool(respeitar_ajustes))
+
+        colaboradores = load_colaboradores_setor(setor) or []
+        colab_by = {str(c.get('Chapa', '')).strip(): c for c in colaboradores}
+
+        subset = {}
+        for chapa in chapas_validas:
+            df = hist_db.get(chapa)
+            if df is None or getattr(df, 'empty', True):
+                continue
+            df2 = df.copy().reset_index(drop=True)
+            if 'Data' in df2.columns:
+                df2['Data'] = pd.to_datetime(df2['Data'], errors='coerce')
+            subset[chapa] = df2
+
+        if not subset:
+            return _regenerar_mes_inteiro(setor, int(ano), int(mes), seed=int(seed), respeitar_ajustes=bool(respeitar_ajustes))
+
+        if bool(respeitar_ajustes):
+            subset = apply_overrides_to_hist(setor, int(ano), int(mes), subset)
+
+        # Garantia mínima local: completa horários vazios só para dias de trabalho dos alvos
+        for chapa, df2 in list(subset.items()):
+            ent_pad = str((colab_by.get(chapa, {}) or {}).get('Entrada', '') or '06:00').strip() or '06:00'
+            for i in range(len(df2)):
+                stt = str(df2.loc[i, 'Status'] or '')
+                if stt == 'Trabalho':
+                    ent = str(df2.loc[i, 'H_Entrada'] or '').strip()
+                    sai = str(df2.loc[i, 'H_Saida'] or '').strip()
+                    if not ent:
+                        df2.loc[i, 'H_Entrada'] = ent_pad
+                        df2.loc[i, 'H_Saida'] = _saida_from_entrada(ent_pad)
+                    elif not sai:
+                        df2.loc[i, 'H_Saida'] = _saida_from_entrada(ent)
+                elif stt in ('Folga', 'Férias', 'Afastamento'):
+                    df2.loc[i, 'H_Entrada'] = ''
+                    df2.loc[i, 'H_Saida'] = ''
+            hist_db[chapa] = df2
+
+        save_escala_mes_db(setor, int(ano), int(mes), hist_db)
+        try:
+            estado_out = _rebuild_estado_out(hist_db)
+            save_estado_mes(setor, int(ano), int(mes), estado_out)
+        except Exception:
+            pass
+
+        try:
+            st.cache_data.clear()
+        except Exception:
+            pass
+
+        return True
+    except Exception:
+        return _regenerar_mes_inteiro(setor, int(ano), int(mes), seed=int(seed), respeitar_ajustes=bool(respeitar_ajustes))
+
 def _regenerar_mes_inteiro(setor: str, ano: int, mes: int, seed: int = 0, respeitar_ajustes: bool = True):
     """
     Regera a escala do mês inteiro para TODO o setor.
@@ -10523,8 +10598,11 @@ def page_app():
                     if st.button("💾 Salvar folgas manuais (e readequar mês)", key="grid_save"):
                         set_folga = 0
                         set_trab = 0
+                        chapas_editadas = []
                         for _, r in edited.iterrows():
                             chg = str(r["Chapa"])
+                            if chg not in chapas_editadas:
+                                chapas_editadas.append(chg)
                             dfh = hist_db.get(chg)
                             ent_pad_local = colab_by.get(chg, {}).get("Entrada", "06:00")
                             for d in dias:
@@ -10546,7 +10624,14 @@ def page_app():
                                     set_trab += 1
 
                         if auto_readequar:
-                            _regenerar_mes_inteiro(setor, ano, mes, seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
+                            _readequar_folgas_grade_otimizado(
+                                setor,
+                                int(ano),
+                                int(mes),
+                                chapas_editadas,
+                                seed=int(st.session_state.get("last_seed", 0)),
+                                respeitar_ajustes=True,
+                            )
 
                         st.success(f"Salvo! Folgas travadas: {set_folga} | Trabalhos travados: {set_trab}.")
                         st.rerun()
