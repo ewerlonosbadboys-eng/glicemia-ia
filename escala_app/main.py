@@ -4552,6 +4552,61 @@ def _rodizio_domingos_trabalhados_map(setor: str, ano: int, mes: int) -> dict[st
     return out
 
 
+def _rodizio_domingos_detalhe_map(setor: str, ano: int, mes: int) -> dict[str, dict]:
+    hist_db = get_hist_mes_com_overrides_cached(setor, int(ano), int(mes)) or {}
+    out: dict[str, dict] = {}
+    for chapa, df in (hist_db or {}).items():
+        trab = []
+        folga = []
+        try:
+            if df is None or df.empty:
+                out[str(chapa)] = {'trab': tuple(), 'folga': tuple()}
+                continue
+            for _, row in df.iterrows():
+                dt = pd.to_datetime(row.get('Data'), errors='coerce')
+                if pd.isna(dt) or int(dt.weekday()) != 6:
+                    continue
+                dia_label = f"{int(dt.day):02d}"
+                status = str(row.get('Status') or '').strip()
+                if status in WORK_STATUSES:
+                    trab.append(dia_label)
+                elif status == 'Folga':
+                    folga.append(dia_label)
+        except Exception:
+            trab = []
+            folga = []
+        out[str(chapa)] = {'trab': tuple(trab), 'folga': tuple(folga)}
+    return out
+
+
+def _rodizio_domingos_label(info: dict | None) -> str:
+    info = info or {}
+    trab = list(info.get('trab') or [])
+    folga = list(info.get('folga') or [])
+    partes = []
+    partes.append('Trabalha: ' + (', '.join(trab) if trab else '-'))
+    partes.append('Folga: ' + (', '.join(folga) if folga else '-'))
+    return ' | '.join(partes)
+
+
+def _rodizio_match_domingos(orig_info: dict | None, dest_info: dict | None) -> dict:
+    orig_info = orig_info or {}
+    dest_info = dest_info or {}
+    trab_o = set(orig_info.get('trab') or [])
+    trab_d = set(dest_info.get('trab') or [])
+    folga_o = set(orig_info.get('folga') or [])
+    folga_d = set(dest_info.get('folga') or [])
+    trab_eq = sorted(trab_o & trab_d)
+    folga_eq = sorted(folga_o & folga_d)
+    return {
+        'trab_iguais_qtd': int(len(trab_eq)),
+        'folga_iguais_qtd': int(len(folga_eq)),
+        'trab_iguais': trab_eq,
+        'folga_iguais': folga_eq,
+        'score': int(len(trab_eq) * 100 + len(folga_eq) * 10),
+    }
+
+
 def simular_rodizio_caixa_mes(
     setor: str,
     ano: int,
@@ -4584,6 +4639,7 @@ def simular_rodizio_caixa_mes(
         candidatos.append(c)
 
     domingos_map = _rodizio_domingos_trabalhados_map(setor, ano, mes)
+    domingos_detalhe_map = _rodizio_domingos_detalhe_map(setor, ano, mes)
     last_move_map = _rodizio_last_move_map(setor, subgrupo_destino)
     aprovados_por_slot = {str(k): str(v) for k, v in (aprovados_por_slot or {}).items() if str(v or '').strip()}
     negados_set = {str(x).strip() for x in (negados_chapas or []) if str(x).strip()}
@@ -4638,28 +4694,47 @@ def simular_rodizio_caixa_mes(
             if chosen is None:
                 dest_ch = str(d.get('Chapa') or '').strip()
                 domingos_dest = int(domingos_map.get(dest_ch, 0) or 0)
+                dest_dom_info = domingos_detalhe_map.get(dest_ch, {'trab': tuple(), 'folga': tuple()})
                 scored = []
                 for pos, cand in enumerate(disponiveis):
                     ch = str(cand.get('Chapa') or '').strip()
                     domingos_orig = int(domingos_map.get(ch, 0) or 0)
                     sunday_diff = abs(domingos_orig - domingos_dest)
+                    match_info = _rodizio_match_domingos(domingos_detalhe_map.get(ch), dest_dom_info)
                     last_move = int(last_move_map.get(ch, 0) or 0)
-                    scored.append((sunday_diff, last_move, pos, str(cand.get('Nome') or '').upper(), cand))
-                scored.sort(key=lambda x: (x[0], x[1], x[2], x[3]))
-                chosen = scored[0][4]
+                    scored.append((
+                        -int(match_info.get('trab_iguais_qtd', 0) or 0),
+                        -int(match_info.get('folga_iguais_qtd', 0) or 0),
+                        sunday_diff,
+                        last_move,
+                        pos,
+                        str(cand.get('Nome') or '').upper(),
+                        cand,
+                    ))
+                scored.sort(key=lambda x: (x[0], x[1], x[2], x[3], x[4], x[5]))
+                chosen = scored[0][6]
 
             ch = str(chosen.get('Chapa') or '').strip()
             usados.add(ch)
+            dest_ch_final = str(d.get('Chapa') or '').strip()
             domingos_orig = int(domingos_map.get(ch, 0) or 0)
-            domingos_dest = int(domingos_map.get(str(d.get('Chapa') or '').strip(), 0) or 0)
+            domingos_dest = int(domingos_map.get(dest_ch_final, 0) or 0)
             sunday_diff = abs(domingos_orig - domingos_dest)
+            origem_dom_info = domingos_detalhe_map.get(ch, {'trab': tuple(), 'folga': tuple()})
+            destino_dom_info = domingos_detalhe_map.get(dest_ch_final, {'trab': tuple(), 'folga': tuple()})
+            match_info = _rodizio_match_domingos(origem_dom_info, destino_dom_info)
             compat = _classificar_compat_horario(chosen.get('Entrada', ''), d.get('Entrada', ''), tolerancia_min=tolerancia_min)
             last_move_ym = int(last_move_map.get(ch, 0) or 0)
             obs_parts = [f'Regra fixa do horário {horario_ref}']
-            if sunday_diff == 0:
-                obs_parts.append('Preferência de domingo atendida')
+            if int(match_info.get('trab_iguais_qtd', 0) or 0) > 0 or int(match_info.get('folga_iguais_qtd', 0) or 0) > 0:
+                obs_parts.append(
+                    f"Domingos parecidos por data: trabalha igual {int(match_info.get('trab_iguais_qtd', 0) or 0)} | folga igual {int(match_info.get('folga_iguais_qtd', 0) or 0)}"
+                )
             else:
-                obs_parts.append(f'Domingos: entra {domingos_orig} / sai {domingos_dest}')
+                obs_parts.append(
+                    f"Sem domingo igual por data; mantido o principal do horário {horario_ref}"
+                )
+            obs_parts.append(f'Quantidade de domingos: entra {domingos_orig} / sai {domingos_dest}')
             obs_parts.append(f'Último mês no destino: {_rodizio_format_ym(last_move_ym)}')
             alternativas_mesmo_horario = sum(
                 1 for cand in fila_horario
@@ -4680,6 +4755,12 @@ def simular_rodizio_caixa_mes(
                 'destino_entrada': str(d.get('Entrada') or ''),
                 'destino_domingos': int(domingos_dest),
                 'diff_domingos': int(sunday_diff),
+                'origem_domingos_label': _rodizio_domingos_label(origem_dom_info),
+                'destino_domingos_label': _rodizio_domingos_label(destino_dom_info),
+                'domingos_trabalho_iguais_qtd': int(match_info.get('trab_iguais_qtd', 0) or 0),
+                'domingos_folga_iguais_qtd': int(match_info.get('folga_iguais_qtd', 0) or 0),
+                'domingos_trabalho_iguais_label': ', '.join(match_info.get('trab_iguais') or []) or '-',
+                'domingos_folga_iguais_label': ', '.join(match_info.get('folga_iguais') or []) or '-',
                 'compatibilidade': compat,
                 'observacao': ' | '.join(obs_parts),
                 'horario_ref': horario_ref,
@@ -9603,10 +9684,12 @@ def page_app():
                         'Nome sugerido': s.get('origem_nome', ''),
                         'Chapa': s.get('origem_chapa', ''),
                         'Horário Caixa 01': s.get('origem_entrada', ''),
-                        'Domingos': int(s.get('origem_domingos', 0) or 0),
+                        'Domingos origem': s.get('origem_domingos_label', ''),
                         'Última vez que foi para o Caixa 02': s.get('origem_ultimo_mes_destino_label', ''),
                         'Sai do Caixa 02': s.get('destino_nome', ''),
-                        'Domingos de quem sai': int(s.get('destino_domingos', 0) or 0),
+                        'Domingos destino': s.get('destino_domingos_label', ''),
+                        'Domingos iguais trabalho': int(s.get('domingos_trabalho_iguais_qtd', 0) or 0),
+                        'Domingos iguais folga': int(s.get('domingos_folga_iguais_qtd', 0) or 0),
                         'Dif. domingos': int(s.get('diff_domingos', 0) or 0),
                         'Alternativas no mesmo horário': int(s.get('alternativas_mesmo_horario', 0) or 0),
                     } for s in slots])
@@ -9659,12 +9742,14 @@ def page_app():
                         'Entra no ' + subgrupo_destino: p['origem_nome'],
                         'Chapa entra': p['origem_chapa'],
                         'Horário atual entra': p['origem_entrada'],
-                        'Domingos entra': int(p.get('origem_domingos', 0) or 0),
+                        'Domingos entra': p.get('origem_domingos_label', ''),
                         'Última vez no Caixa 02': p.get('origem_ultimo_mes_destino_label', ''),
                         'Sai do ' + subgrupo_destino: p['destino_nome'],
                         'Chapa sai': p['destino_chapa'],
                         'Horário atual sai': p['destino_entrada'],
-                        'Domingos sai': int(p.get('destino_domingos', 0) or 0),
+                        'Domingos sai': p.get('destino_domingos_label', ''),
+                        'Domingos iguais trabalho': int(p.get('domingos_trabalho_iguais_qtd', 0) or 0),
+                        'Domingos iguais folga': int(p.get('domingos_folga_iguais_qtd', 0) or 0),
                         'Dif. domingos': int(p.get('diff_domingos', 0) or 0),
                         'Compatibilidade': p['compatibilidade'],
                         'Observação': p['observacao'] or '-',
