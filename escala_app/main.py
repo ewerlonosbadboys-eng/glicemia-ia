@@ -5158,6 +5158,94 @@ def aplicar_rodizio_caixa_mes(setor: str, ano: int, mes: int, simulacao: dict):
         )
     }
 
+
+
+def sincronizar_subgrupos_base_rodizio_caixa(setor: str, ano: int, mes: int, subgrupo_origem: str = 'OPERADOR DE CAIXA 01', subgrupo_destino: str = 'OPERADOR DE CAIXA 02'):
+    """
+    Reaplica manualmente na base de colaboradores o resultado já aprovado/aplicado
+    do rodízio do mês, sem permitir nova aplicação do rodízio.
+    Usa o histórico do próprio rodízio como fonte da verdade.
+    """
+    con = db_conn()
+    cur = con.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT chapa, nome, movimento, subgrupo_origem, subgrupo_destino, entrada_antiga, entrada_nova
+            FROM rodizio_caixa_hist
+            WHERE setor=? AND ano=? AND mes=?
+              AND ((movimento='ENTRA_DESTINO' AND subgrupo_origem=? AND subgrupo_destino=?)
+                   OR (movimento='SAI_DESTINO' AND subgrupo_origem=? AND subgrupo_destino=?))
+            ORDER BY criado_em ASC, chapa ASC
+            """,
+            (setor, int(ano), int(mes), subgrupo_origem, subgrupo_destino, subgrupo_destino, subgrupo_origem)
+        )
+        rows = cur.fetchall() or []
+        if not rows:
+            return {'ok': False, 'msg': f'Nenhum histórico do rodízio foi encontrado para {int(mes):02d}/{int(ano)}.'}
+
+        atualizacoes = {}
+        for chapa, nome, movimento, sg_origem_hist, sg_destino_hist, entrada_antiga, entrada_nova in rows:
+            ch = str(chapa or '').strip()
+            if not ch:
+                continue
+            mov = str(movimento or '').strip().upper()
+            if mov == 'ENTRA_DESTINO':
+                novo_subgrupo = str(subgrupo_destino)
+            elif mov == 'SAI_DESTINO':
+                novo_subgrupo = str(subgrupo_origem)
+            else:
+                continue
+            atualizacoes[ch] = {
+                'nome': str(nome or '').strip(),
+                'novo_subgrupo': novo_subgrupo,
+                'nova_entrada': str(entrada_nova or '').strip(),
+            }
+
+        if not atualizacoes:
+            return {'ok': False, 'msg': 'O histórico foi localizado, mas não houve chapas válidas para sincronizar.'}
+
+        chapas_afetadas = sorted(atualizacoes.keys())
+        cur.execute('BEGIN')
+        for ch in chapas_afetadas:
+            info = atualizacoes[ch]
+            cur.execute(
+                "UPDATE colaboradores SET subgrupo=?, entrada=? WHERE setor=? AND chapa=?",
+                (info['novo_subgrupo'], info['nova_entrada'], setor, ch)
+            )
+
+        marks = ','.join(['?'] * len(chapas_afetadas))
+        params_base = [setor, int(ano), int(mes), *chapas_afetadas]
+        cur.execute(
+            "DELETE FROM escala_mes WHERE setor=? AND ano=? AND mes=? AND chapa IN ({})".format(marks),
+            params_base
+        )
+        cur.execute(
+            """
+            DELETE FROM overrides
+            WHERE setor=? AND ano=? AND mes=?
+              AND chapa IN ({})
+              AND campo IN ('H_Entrada', 'H_Saida', 'Status')
+            """.format(marks),
+            params_base
+        )
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        con.close()
+
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+
+    return {
+        'ok': True,
+        'msg': f'Subgrupos base sincronizados manualmente para {len(chapas_afetadas)} colaborador(es) em {int(mes):02d}/{int(ano)}. Gere a escala novamente para refletir a troca.'
+    }
+
 # =========================================================
 # SUBGRUPOS + REGRAS
 # =========================================================
@@ -9990,7 +10078,7 @@ def page_app():
 
                 if pronto_aplicar:
                     st.success(f"Todas as {qtd_obrigatoria} sugestões foram aprovadas. Agora falta aplicar o rodízio no mês {mes_r:02d}/{ano_r}.")
-                    if st.button('🚀 Aplicar rodízio agora', key='rod_caixa_apply_now', use_container_width=True):
+                    if st.button('🔁 Aplicar mudança de subgrupos agora (antes da escala)', key='rod_caixa_apply_now', use_container_width=True):
                         res_apply = aplicar_rodizio_caixa_mes(setor, ano_r, mes_r, sim)
                         if res_apply.get('ok'):
                             st.session_state[aplic_key] = True
@@ -10001,7 +10089,7 @@ def page_app():
                 elif st.session_state.get(aplic_key):
                     st.success(f"Rodízio já aplicado na competência {mes_r:02d}/{ano_r}. Gere a escala novamente para refletir a troca.")
                 elif slots:
-                    st.info(f"Para aplicar de verdade no mês {mes_r:02d}/{ano_r}, todas as {qtd_obrigatoria} sugestões precisam estar aprovadas e depois você deve clicar em 'Aplicar rodízio agora'.")
+                    st.info(f"Para aplicar de verdade no mês {mes_r:02d}/{ano_r}, todas as {qtd_obrigatoria} sugestões precisam estar aprovadas e depois você deve clicar em 'Aplicar mudança de subgrupos agora (antes da escala)'.")
 
                 if slots:
                     st.markdown('### Aprovação das 14 pessoas sugeridas')
@@ -10133,16 +10221,16 @@ def page_app():
                 b1, b2 = st.columns([1, 2])
                 if not todos_aprovados:
                     b2.info('Para aplicar o rodízio, aprove manualmente todas as 14 sugestões atuais.')
-                if b1.button("Aplicar rodízio deste mês", key='rod_caixa_apply', use_container_width=True, disabled=not todos_aprovados):
+                else:
+                    b2.success('As 14 aprovações já estão prontas. Use o botão principal acima para aplicar. Se a base não refletir, use a sincronização manual abaixo.')
+                if b1.button("🛠️ Sincronizar subgrupos base manualmente", key='rod_caixa_sync_manual', use_container_width=True):
                     try:
-                        res = aplicar_rodizio_caixa_mes(setor, ano_r, mes_r, sim)
+                        res = sincronizar_subgrupos_base_rodizio_caixa(setor, ano_r, mes_r, subgrupo_origem, subgrupo_destino)
                         if res.get('ok'):
-                            st.session_state[aprov_key] = {}
-                            st.session_state[neg_key] = []
-                            st.success(res.get('msg', 'Rodízio aplicado.'))
+                            st.success(res.get('msg', 'Subgrupos sincronizados com sucesso.'))
                             st.rerun()
                         else:
-                            st.warning(res.get('msg', 'Sem trocas para aplicar.'))
+                            st.warning(res.get('msg', 'Nenhum dado para sincronizar.'))
                     except Exception as e:
                         st.error(str(e))
 
