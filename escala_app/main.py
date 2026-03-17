@@ -10639,16 +10639,20 @@ def page_app():
         sec_aj = st.radio("", ["🧩 Folgas manuais em grade", "📊 Contagens por dia", "🔁 Troca de horários", "✅ Preferência por subgrupo", "📌 Subgrupos (editável)", "✏️ Retificar folga, horário e subgrupo"], horizontal=True, key="ajustes_nav_fast", label_visibility="collapsed")
 
         status_comp = get_status_competencia(setor, ano, mes)
+        _is_admin_auth = bool((auth or {}).get('is_admin', False))
         cst1, cst2, cst3 = st.columns([1,1,3])
         cst1.metric('Status da competência', status_comp)
         if cst2.button('🔒 Fechar competência', key=f'fechar_comp::{setor}::{ano}::{mes}', disabled=(status_comp == 'FECHADA')):
             set_status_competencia(setor, ano, mes, 'FECHADA')
             st.success('Competência fechada. Visualização preservada.')
             st.rerun()
-        if cst3.button('🔓 Reabrir competência', key=f'reabrir_comp::{setor}::{ano}::{mes}', disabled=(status_comp == 'ABERTA')):
-            set_status_competencia(setor, ano, mes, 'ABERTA')
-            st.warning('Competência reaberta para edição.')
-            st.rerun()
+        if _is_admin_auth:
+            if cst3.button('🔓 Reabrir competência', key=f'reabrir_comp::{setor}::{ano}::{mes}', disabled=(status_comp == 'ABERTA')):
+                set_status_competencia(setor, ano, mes, 'ABERTA')
+                st.warning('Competência reaberta para edição.')
+                st.rerun()
+        else:
+            cst3.caption('🔓 Reabrir competência: disponível somente para admin.')
         if status_comp == 'FECHADA' and sec_aj != '✏️ Retificar folga, horário e subgrupo':
             st.error('🔒 Competência fechada: nesta área a visualização é apenas leitura. Use a subaba de retificação para correções pontuais.')
 
