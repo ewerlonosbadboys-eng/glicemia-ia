@@ -4907,6 +4907,7 @@ def simular_rodizio_caixa_mes(
         'negados_chapas': sorted(list(negados_set)),
     }
 
+
 def aplicar_rodizio_caixa_mes(setor: str, ano: int, mes: int, simulacao: dict):
     pares = list((simulacao or {}).get('pares') or [])
     if not pares:
@@ -4921,6 +4922,7 @@ def aplicar_rodizio_caixa_mes(setor: str, ano: int, mes: int, simulacao: dict):
     if len(pares) < qtd_obrigatoria:
         return {'ok': False, 'msg': f'Rodízio incompleto: {len(pares)} troca(s) simulada(s), mas a regra fixa exige {qtd_obrigatoria} no mês.'}
 
+    chapas_afetadas = set()
     con = db_conn()
     cur = con.cursor()
     ciclo = _mes_ref_str(ano, mes)
@@ -4928,28 +4930,72 @@ def aplicar_rodizio_caixa_mes(setor: str, ano: int, mes: int, simulacao: dict):
     try:
         cur.execute('BEGIN')
         for p in pares:
-            cur.execute("UPDATE colaboradores SET subgrupo=?, entrada=? WHERE setor=? AND chapa=?", (simulacao.get('subgrupo_destino', 'OPERADOR DE CAIXA 02'), p['destino_entrada'], setor, p['origem_chapa']))
-            cur.execute("UPDATE colaboradores SET subgrupo=?, entrada=? WHERE setor=? AND chapa=?", (simulacao.get('subgrupo_origem', 'OPERADOR DE CAIXA 01'), p['origem_entrada'], setor, p['destino_chapa']))
+            ch_origem = str(p.get('origem_chapa') or '').strip()
+            ch_destino = str(p.get('destino_chapa') or '').strip()
+            ent_origem = str(p.get('origem_entrada') or '').strip()
+            ent_destino = str(p.get('destino_entrada') or '').strip()
+
+            if ch_origem:
+                chapas_afetadas.add(ch_origem)
+                cur.execute(
+                    "UPDATE colaboradores SET subgrupo=?, entrada=? WHERE setor=? AND chapa=?",
+                    (simulacao.get('subgrupo_destino', 'OPERADOR DE CAIXA 02'), ent_destino, setor, ch_origem)
+                )
+            if ch_destino:
+                chapas_afetadas.add(ch_destino)
+                cur.execute(
+                    "UPDATE colaboradores SET subgrupo=?, entrada=? WHERE setor=? AND chapa=?",
+                    (simulacao.get('subgrupo_origem', 'OPERADOR DE CAIXA 01'), ent_origem, setor, ch_destino)
+                )
 
             cur.execute("""
                 INSERT OR REPLACE INTO rodizio_caixa_hist(setor, ano, mes, ciclo_ref, chapa, nome, movimento, subgrupo_origem, subgrupo_destino, entrada_antiga, entrada_nova, compat_status, observacao, criado_em)
                 VALUES (?, ?, ?, ?, ?, ?, 'ENTRA_DESTINO', ?, ?, ?, ?, ?, ?, ?)
-            """, (setor, int(ano), int(mes), ciclo, p['origem_chapa'], p['origem_nome'], simulacao.get('subgrupo_origem', 'OPERADOR DE CAIXA 01'), simulacao.get('subgrupo_destino', 'OPERADOR DE CAIXA 02'), p['origem_entrada'], p['destino_entrada'], p['compatibilidade'], p.get('observacao',''), ts))
+            """, (setor, int(ano), int(mes), ciclo, ch_origem, p['origem_nome'], simulacao.get('subgrupo_origem', 'OPERADOR DE CAIXA 01'), simulacao.get('subgrupo_destino', 'OPERADOR DE CAIXA 02'), ent_origem, ent_destino, p['compatibilidade'], p.get('observacao',''), ts))
             cur.execute("""
                 INSERT OR REPLACE INTO rodizio_caixa_hist(setor, ano, mes, ciclo_ref, chapa, nome, movimento, subgrupo_origem, subgrupo_destino, entrada_antiga, entrada_nova, compat_status, observacao, criado_em)
                 VALUES (?, ?, ?, ?, ?, ?, 'SAI_DESTINO', ?, ?, ?, ?, ?, ?, ?)
-            """, (setor, int(ano), int(mes), ciclo, p['destino_chapa'], p['destino_nome'], simulacao.get('subgrupo_destino', 'OPERADOR DE CAIXA 02'), simulacao.get('subgrupo_origem', 'OPERADOR DE CAIXA 01'), p['destino_entrada'], p['origem_entrada'], p['compatibilidade'], p.get('observacao',''), ts))
+            """, (setor, int(ano), int(mes), ciclo, ch_destino, p['destino_nome'], simulacao.get('subgrupo_destino', 'OPERADOR DE CAIXA 02'), simulacao.get('subgrupo_origem', 'OPERADOR DE CAIXA 01'), ent_destino, ent_origem, p['compatibilidade'], p.get('observacao',''), ts))
+
+        # IMPORTANTE:
+        # limpa a competência alvo já salva para obrigar a próxima geração/leitura
+        # a respeitar o cadastro atualizado pós-rodízio, sem apagar outras regras do sistema.
+        cur.execute("DELETE FROM escala_mes WHERE setor=? AND ano=? AND mes=?", (setor, int(ano), int(mes)))
+
+        # remove apenas overrides de horário/status dos colaboradores afetados nesta competência,
+        # para não manter desenho antigo do mês depois da troca de subgrupo/entrada.
+        if chapas_afetadas:
+            marks = ",".join(["?"] * len(chapas_afetadas))
+            params = [setor, int(ano), int(mes), *sorted(chapas_afetadas)]
+            cur.execute(
+                f"""
+                DELETE FROM overrides
+                WHERE setor=? AND ano=? AND mes=?
+                  AND chapa IN ({marks})
+                  AND campo IN ('H_Entrada', 'H_Saida', 'Status')
+                """,
+                params
+            )
+
         con.commit()
     except Exception:
         con.rollback()
         raise
     finally:
         con.close()
+
     try:
         st.cache_data.clear()
     except Exception:
         pass
-    return {'ok': True, 'msg': f'Rodízio aplicado com {len(pares)} troca(s).'}
+
+    return {
+        'ok': True,
+        'msg': (
+            f'Rodízio aplicado com {len(pares)} troca(s). '
+            f'A competência {int(mes):02d}/{int(ano)} foi limpa para regenerar já com o rodízio refletido.'
+        )
+    }
 
 # =========================================================
 # SUBGRUPOS + REGRAS
