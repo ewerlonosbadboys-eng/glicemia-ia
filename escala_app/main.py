@@ -4636,7 +4636,10 @@ def simular_rodizio_caixa_mes(
         pass
 
     destino_sorted = sorted(destino, key=lambda c: (str(c.get('Entrada') or ''), str(c.get('Nome') or '').upper()))
-    destino_sel = destino_sorted[:min(qtd_alvo, len(destino_sorted))]
+    # Usa todo o grupo de destino na simulação e deixa as cotas/seleção escolherem
+    # quais 14 sairão do Caixa 02. Isso evita cortar horários importantes
+    # (ex.: 12:40) quando existem mais de 14 pessoas no destino.
+    destino_sel = list(destino_sorted)
 
     candidatos = []
     for c in origem:
@@ -4686,7 +4689,32 @@ def simular_rodizio_caixa_mes(
     alertas = []
     cotas_resumo = []
 
+    cotas_processamento = []
     for horario_ref, qtd_horario in _rodizio_caixa_cotas_ordenadas():
+        exatos_origem_tmp = [c for c in candidatos if str(c.get('Entrada') or '').strip() == horario_ref and str(c.get('Chapa') or '').strip() not in negados_set]
+        exatos_destino_tmp = [d for d in destino_sel if str(d.get('Entrada') or '').strip() == horario_ref]
+        pool_origem_tmp = _pool_horario_proximo(candidatos, horario_ref, set(), negados_set, 60)
+        pool_destino_tmp = _pool_horario_proximo(destino_sel, horario_ref, set(), set(), 60)
+        cotas_processamento.append({
+            'horario_ref': horario_ref,
+            'qtd_horario': int(qtd_horario),
+            'exatos_origem': int(len(exatos_origem_tmp)),
+            'exatos_destino': int(len(exatos_destino_tmp)),
+            'pool_origem': int(len(pool_origem_tmp)),
+            'pool_destino': int(len(pool_destino_tmp)),
+        })
+
+    # Processa primeiro os horários mais escassos para não consumir cedo
+    # candidatos flexíveis que fecham as 14 vagas obrigatórias.
+    cotas_processamento = sorted(
+        cotas_processamento,
+        key=lambda x: (x['pool_destino'], x['pool_origem'], x['exatos_destino'], x['exatos_origem'], -x['qtd_horario'], x['horario_ref'])
+    )
+    cont_slot_por_horario = {}
+
+    for info_cota in cotas_processamento:
+        horario_ref = str(info_cota.get('horario_ref') or '')
+        qtd_horario = int(info_cota.get('qtd_horario') or 0)
         exatos_origem = [c for c in candidatos if str(c.get('Entrada') or '').strip() == horario_ref and str(c.get('Chapa') or '').strip() not in negados_set]
         exatos_destino = [d for d in destino_sel if str(d.get('Entrada') or '').strip() == horario_ref]
         pool_origem_inicio = _pool_horario_proximo(candidatos, horario_ref, set(), negados_set, 60)
@@ -4725,7 +4753,8 @@ def simular_rodizio_caixa_mes(
 
             d = pool_destino[0]
             dest_fallback = (str(d.get('Entrada') or '').strip() != horario_ref)
-            slot_key = f"{horario_ref}|{idx}|{str(d.get('Chapa') or '').strip()}"
+            idx_slot_horario = int(cont_slot_por_horario.get(horario_ref, 0))
+            slot_key = f"{horario_ref}|{idx_slot_horario}|{str(d.get('Chapa') or '').strip()}"
             locked_chapa = aprovados_por_slot.get(slot_key, '').strip()
 
             disponiveis_pool = _pool_horario_proximo(candidatos, horario_ref, usados_origem, negados_set, 60)
@@ -4735,38 +4764,60 @@ def simular_rodizio_caixa_mes(
             chosen = None
             escolha_fallback = False
 
+            dest_ch = str(d.get('Chapa') or '').strip()
+            domingos_dest = int(domingos_map.get(dest_ch, 0) or 0)
+            dest_dom_info = domingos_detalhe_map.get(dest_ch, {'trab': tuple(), 'folga': tuple()})
+            scored = []
+            for pos, cand in enumerate(disponiveis_pool):
+                ch = str(cand.get('Chapa') or '').strip()
+                ent = str(cand.get('Entrada') or '').strip()
+                diff_hor = abs(int((_hora_to_min(ent) or 0)) - int((_hora_to_min(horario_ref) or 0)))
+                domingos_orig = int(domingos_map.get(ch, 0) or 0)
+                sunday_diff = abs(domingos_orig - domingos_dest)
+                match_info = _rodizio_match_domingos(domingos_detalhe_map.get(ch), dest_dom_info)
+                last_move = int(last_move_map.get(ch, 0) or 0)
+                scored.append((
+                    0 if ent == horario_ref else 1,
+                    diff_hor,
+                    -int(match_info.get('trab_iguais_qtd', 0) or 0),
+                    -int(match_info.get('folga_iguais_qtd', 0) or 0),
+                    sunday_diff,
+                    last_move,
+                    pos,
+                    str(cand.get('Nome') or '').upper(),
+                    cand,
+                    match_info,
+                    domingos_orig,
+                ))
+            scored.sort(key=lambda x: (x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7]))
+
+            alternativas_opcoes = []
+            for item in scored[:20]:
+                cand = item[8]
+                match_item = item[9]
+                domingos_item = int(item[10] or 0)
+                last_move_item = int(last_move_map.get(str(cand.get('Chapa') or '').strip(), 0) or 0)
+                alternativas_opcoes.append({
+                    'chapa': str(cand.get('Chapa') or '').strip(),
+                    'nome': str(cand.get('Nome') or ''),
+                    'entrada': str(cand.get('Entrada') or '').strip(),
+                    'diff_horario_ref_min': int(item[1] or 0),
+                    'domingos': int(domingos_item),
+                    'diff_domingos': int(item[4] or 0),
+                    'domingos_trabalho_iguais_qtd': int(match_item.get('trab_iguais_qtd', 0) or 0),
+                    'domingos_folga_iguais_qtd': int(match_item.get('folga_iguais_qtd', 0) or 0),
+                    'ultimo_mes_destino_label': _rodizio_format_ym(last_move_item),
+                })
+
             if locked_chapa:
-                for cand in disponiveis_pool:
+                for item in scored:
+                    cand = item[8]
                     if str(cand.get('Chapa') or '').strip() == locked_chapa:
                         chosen = cand
                         escolha_fallback = (str(cand.get('Entrada') or '').strip() != horario_ref)
                         break
 
-            if chosen is None:
-                dest_ch = str(d.get('Chapa') or '').strip()
-                domingos_dest = int(domingos_map.get(dest_ch, 0) or 0)
-                dest_dom_info = domingos_detalhe_map.get(dest_ch, {'trab': tuple(), 'folga': tuple()})
-                scored = []
-                for pos, cand in enumerate(disponiveis_pool):
-                    ch = str(cand.get('Chapa') or '').strip()
-                    ent = str(cand.get('Entrada') or '').strip()
-                    diff_hor = abs(int((_hora_to_min(ent) or 0)) - int((_hora_to_min(horario_ref) or 0)))
-                    domingos_orig = int(domingos_map.get(ch, 0) or 0)
-                    sunday_diff = abs(domingos_orig - domingos_dest)
-                    match_info = _rodizio_match_domingos(domingos_detalhe_map.get(ch), dest_dom_info)
-                    last_move = int(last_move_map.get(ch, 0) or 0)
-                    scored.append((
-                        0 if ent == horario_ref else 1,
-                        diff_hor,
-                        -int(match_info.get('trab_iguais_qtd', 0) or 0),
-                        -int(match_info.get('folga_iguais_qtd', 0) or 0),
-                        sunday_diff,
-                        last_move,
-                        pos,
-                        str(cand.get('Nome') or '').upper(),
-                        cand,
-                    ))
-                scored.sort(key=lambda x: (x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7]))
+            if chosen is None and scored:
                 chosen = scored[0][8]
                 escolha_fallback = (str(chosen.get('Entrada') or '').strip() != horario_ref)
 
@@ -4845,9 +4896,11 @@ def simular_rodizio_caixa_mes(
                 'diff_horario_ref_min': int(diff_horario_ref),
                 'diff_destino_ref_min': int(diff_dest_ref),
                 'aprovado_manual': bool(aprovados_por_slot.get(slot_key) == ch),
+                'alternativas_opcoes': list(alternativas_opcoes),
             }
             slots.append(dict(row))
             pares.append(dict(row))
+            cont_slot_por_horario[horario_ref] = int(cont_slot_por_horario.get(horario_ref, 0)) + 1
 
     # preenchimento final para fechar as 14 sugestões obrigatórias, usando qualquer horário até 1h a menos/mais
     while len(slots) < qtd_obrigatoria:
@@ -4868,6 +4921,31 @@ def simular_rodizio_caixa_mes(
             break
 
         _diff_total, horario_ref, chosen, d = melhor
+        extras_pool = _pool_horario_proximo(candidatos, horario_ref, usados_origem, negados_set, 60)
+        alternativas_opcoes = []
+        for cand in extras_pool[:20]:
+            ch_alt = str(cand.get('Chapa') or '').strip()
+            ult_alt = int(last_move_map.get(ch_alt, 0) or 0)
+            domingos_alt = int(domingos_map.get(ch_alt, 0) or 0)
+            alternativas_opcoes.append({
+                'chapa': ch_alt,
+                'nome': str(cand.get('Nome') or ''),
+                'entrada': str(cand.get('Entrada') or '').strip(),
+                'diff_horario_ref_min': int(cand.get('_diff_horario_ref_min', 0) or 0),
+                'domingos': int(domingos_alt),
+                'diff_domingos': 0,
+                'domingos_trabalho_iguais_qtd': 0,
+                'domingos_folga_iguais_qtd': 0,
+                'ultimo_mes_destino_label': _rodizio_format_ym(ult_alt),
+            })
+
+        locked_chapa = aprovados_por_slot.get(f"{horario_ref}|extra|{str(d.get('Chapa') or '').strip()}|{len(slots)}", '').strip()
+        if locked_chapa:
+            for cand in extras_pool:
+                if str(cand.get('Chapa') or '').strip() == locked_chapa:
+                    chosen = cand
+                    break
+
         ch = str(chosen.get('Chapa') or '').strip()
         dest_ch_final = str(d.get('Chapa') or '').strip()
         usados_origem.add(ch)
@@ -4922,9 +5000,31 @@ def simular_rodizio_caixa_mes(
             'diff_horario_ref_min': int(diff_horario_ref),
             'diff_destino_ref_min': int(diff_dest_ref),
             'aprovado_manual': bool(aprovados_por_slot.get(slot_key) == ch),
+            'alternativas_opcoes': list(alternativas_opcoes),
         }
         slots.append(dict(row))
         pares.append(dict(row))
+        cont_slot_por_horario[horario_ref] = int(cont_slot_por_horario.get(horario_ref, 0)) + 1
+
+    ordem_horarios = {h: i for i, (h, _q) in enumerate(_rodizio_caixa_cotas_ordenadas())}
+    slots = sorted(slots, key=lambda x: (ordem_horarios.get(str(x.get('horario_ref') or ''), 999), str(x.get('origem_entrada') or ''), str(x.get('origem_nome') or '').upper(), str(x.get('origem_chapa') or '')))
+    pares = sorted(pares, key=lambda x: (ordem_horarios.get(str(x.get('horario_ref') or ''), 999), str(x.get('origem_entrada') or ''), str(x.get('origem_nome') or '').upper(), str(x.get('origem_chapa') or '')))
+
+    resumo_por_horario = {}
+    for s in slots:
+        h = str(s.get('horario_ref') or '')
+        resumo_por_horario[h] = int(resumo_por_horario.get(h, 0)) + 1
+    cotas_resumo = []
+    for horario_ref, qtd_horario in _rodizio_caixa_cotas_ordenadas():
+        exatos_origem = [c for c in candidatos if str(c.get('Entrada') or '').strip() == horario_ref and str(c.get('Chapa') or '').strip() not in negados_set]
+        exatos_destino = [d for d in destino_sel if str(d.get('Entrada') or '').strip() == horario_ref]
+        cotas_resumo.append({
+            'Horário': horario_ref,
+            'Regra': int(qtd_horario),
+            'Disponível origem': len(exatos_origem),
+            'Disponível destino': len(exatos_destino),
+            'Selecionados': int(resumo_por_horario.get(horario_ref, 0)),
+        })
 
     proximos = []
     for horario_ref, _qtd in _rodizio_caixa_cotas_ordenadas():
@@ -9939,10 +10039,40 @@ def page_app():
                                 f"Dif. domingos: **{int(s.get('diff_domingos', 0) or 0)}** | Alternativas restantes: **{int(s.get('alternativas_mesmo_horario', 0) or 0)}**"
                             )
                             st.caption(s.get('observacao') or '-')
+
+                            alternativas_slot = list(s.get('alternativas_opcoes') or [])
+                            mapa_alt = {}
+                            opcoes_alt = []
+                            for alt in alternativas_slot:
+                                ch_alt = str(alt.get('chapa') or '').strip()
+                                if not ch_alt or ch_alt in mapa_alt:
+                                    continue
+                                label_alt = (
+                                    f"{str(alt.get('nome') or '-') } | chapa {ch_alt} | horário {str(alt.get('entrada') or '-')} | "
+                                    f"dif. regra {int(alt.get('diff_horario_ref_min', 0) or 0)} min | domingos {int(alt.get('domingos', 0) or 0)} | "
+                                    f"último Caixa 02 {str(alt.get('ultimo_mes_destino_label') or '-')}"
+                                )
+                                mapa_alt[ch_alt] = label_alt
+                                opcoes_alt.append(ch_alt)
+
+                            chapa_aprovada_slot = str(aprovados_atuais.get(slot_key) or '').strip()
+                            chapa_padrao_slot = chapa_aprovada_slot if chapa_aprovada_slot in opcoes_alt else str(s.get('origem_chapa') or '').strip()
+                            idx_padrao_slot = opcoes_alt.index(chapa_padrao_slot) if chapa_padrao_slot in opcoes_alt else 0
+
+                            if opcoes_alt:
+                                st.selectbox(
+                                    'Escolha quem está mais próximo para este rodízio:',
+                                    options=opcoes_alt,
+                                    index=idx_padrao_slot,
+                                    key=f'rod_caixa_pick_{slot_key}',
+                                    format_func=lambda ch: mapa_alt.get(ch, ch),
+                                )
+
                             bcol1, bcol2, bcol3 = st.columns([1, 1, 3])
-                            if bcol1.button('✅ Aprovar', key=f'rod_caixa_ok_{slot_key}', use_container_width=True, disabled=aprovado):
+                            if bcol1.button('✅ Aprovar seleção', key=f'rod_caixa_ok_{slot_key}', use_container_width=True, disabled=aprovado and chapa_aprovada_slot == str(s.get('origem_chapa') or '').strip()):
+                                chapa_sel = str(st.session_state.get(f'rod_caixa_pick_{slot_key}', str(s.get('origem_chapa') or '')) or '').strip()
                                 tmp = dict(st.session_state.get(aprov_key, {}))
-                                tmp[slot_key] = str(s.get('origem_chapa') or '')
+                                tmp[slot_key] = chapa_sel or str(s.get('origem_chapa') or '')
                                 st.session_state[aprov_key] = tmp
                                 st.rerun()
                             if bcol2.button('❌ Negar e chamar próximo da fila', key=f'rod_caixa_no_{slot_key}', use_container_width=True):
