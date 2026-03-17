@@ -4907,7 +4907,6 @@ def simular_rodizio_caixa_mes(
         'negados_chapas': sorted(list(negados_set)),
     }
 
-
 def aplicar_rodizio_caixa_mes(setor: str, ano: int, mes: int, simulacao: dict):
     pares = list((simulacao or {}).get('pares') or [])
     if not pares:
@@ -4922,7 +4921,6 @@ def aplicar_rodizio_caixa_mes(setor: str, ano: int, mes: int, simulacao: dict):
     if len(pares) < qtd_obrigatoria:
         return {'ok': False, 'msg': f'Rodízio incompleto: {len(pares)} troca(s) simulada(s), mas a regra fixa exige {qtd_obrigatoria} no mês.'}
 
-    chapas_afetadas = set()
     con = db_conn()
     cur = con.cursor()
     ciclo = _mes_ref_str(ano, mes)
@@ -4930,72 +4928,28 @@ def aplicar_rodizio_caixa_mes(setor: str, ano: int, mes: int, simulacao: dict):
     try:
         cur.execute('BEGIN')
         for p in pares:
-            ch_origem = str(p.get('origem_chapa') or '').strip()
-            ch_destino = str(p.get('destino_chapa') or '').strip()
-            ent_origem = str(p.get('origem_entrada') or '').strip()
-            ent_destino = str(p.get('destino_entrada') or '').strip()
-
-            if ch_origem:
-                chapas_afetadas.add(ch_origem)
-                cur.execute(
-                    "UPDATE colaboradores SET subgrupo=?, entrada=? WHERE setor=? AND chapa=?",
-                    (simulacao.get('subgrupo_destino', 'OPERADOR DE CAIXA 02'), ent_destino, setor, ch_origem)
-                )
-            if ch_destino:
-                chapas_afetadas.add(ch_destino)
-                cur.execute(
-                    "UPDATE colaboradores SET subgrupo=?, entrada=? WHERE setor=? AND chapa=?",
-                    (simulacao.get('subgrupo_origem', 'OPERADOR DE CAIXA 01'), ent_origem, setor, ch_destino)
-                )
+            cur.execute("UPDATE colaboradores SET subgrupo=?, entrada=? WHERE setor=? AND chapa=?", (simulacao.get('subgrupo_destino', 'OPERADOR DE CAIXA 02'), p['destino_entrada'], setor, p['origem_chapa']))
+            cur.execute("UPDATE colaboradores SET subgrupo=?, entrada=? WHERE setor=? AND chapa=?", (simulacao.get('subgrupo_origem', 'OPERADOR DE CAIXA 01'), p['origem_entrada'], setor, p['destino_chapa']))
 
             cur.execute("""
                 INSERT OR REPLACE INTO rodizio_caixa_hist(setor, ano, mes, ciclo_ref, chapa, nome, movimento, subgrupo_origem, subgrupo_destino, entrada_antiga, entrada_nova, compat_status, observacao, criado_em)
                 VALUES (?, ?, ?, ?, ?, ?, 'ENTRA_DESTINO', ?, ?, ?, ?, ?, ?, ?)
-            """, (setor, int(ano), int(mes), ciclo, ch_origem, p['origem_nome'], simulacao.get('subgrupo_origem', 'OPERADOR DE CAIXA 01'), simulacao.get('subgrupo_destino', 'OPERADOR DE CAIXA 02'), ent_origem, ent_destino, p['compatibilidade'], p.get('observacao',''), ts))
+            """, (setor, int(ano), int(mes), ciclo, p['origem_chapa'], p['origem_nome'], simulacao.get('subgrupo_origem', 'OPERADOR DE CAIXA 01'), simulacao.get('subgrupo_destino', 'OPERADOR DE CAIXA 02'), p['origem_entrada'], p['destino_entrada'], p['compatibilidade'], p.get('observacao',''), ts))
             cur.execute("""
                 INSERT OR REPLACE INTO rodizio_caixa_hist(setor, ano, mes, ciclo_ref, chapa, nome, movimento, subgrupo_origem, subgrupo_destino, entrada_antiga, entrada_nova, compat_status, observacao, criado_em)
                 VALUES (?, ?, ?, ?, ?, ?, 'SAI_DESTINO', ?, ?, ?, ?, ?, ?, ?)
-            """, (setor, int(ano), int(mes), ciclo, ch_destino, p['destino_nome'], simulacao.get('subgrupo_destino', 'OPERADOR DE CAIXA 02'), simulacao.get('subgrupo_origem', 'OPERADOR DE CAIXA 01'), ent_destino, ent_origem, p['compatibilidade'], p.get('observacao',''), ts))
-
-        # IMPORTANTE:
-        # limpa a competência alvo já salva para obrigar a próxima geração/leitura
-        # a respeitar o cadastro atualizado pós-rodízio, sem apagar outras regras do sistema.
-        cur.execute("DELETE FROM escala_mes WHERE setor=? AND ano=? AND mes=?", (setor, int(ano), int(mes)))
-
-        # remove apenas overrides de horário/status dos colaboradores afetados nesta competência,
-        # para não manter desenho antigo do mês depois da troca de subgrupo/entrada.
-        if chapas_afetadas:
-            marks = ",".join(["?"] * len(chapas_afetadas))
-            params = [setor, int(ano), int(mes), *sorted(chapas_afetadas)]
-            cur.execute(
-                f"""
-                DELETE FROM overrides
-                WHERE setor=? AND ano=? AND mes=?
-                  AND chapa IN ({marks})
-                  AND campo IN ('H_Entrada', 'H_Saida', 'Status')
-                """,
-                params
-            )
-
+            """, (setor, int(ano), int(mes), ciclo, p['destino_chapa'], p['destino_nome'], simulacao.get('subgrupo_destino', 'OPERADOR DE CAIXA 02'), simulacao.get('subgrupo_origem', 'OPERADOR DE CAIXA 01'), p['destino_entrada'], p['origem_entrada'], p['compatibilidade'], p.get('observacao',''), ts))
         con.commit()
     except Exception:
         con.rollback()
         raise
     finally:
         con.close()
-
     try:
         st.cache_data.clear()
     except Exception:
         pass
-
-    return {
-        'ok': True,
-        'msg': (
-            f'Rodízio aplicado com {len(pares)} troca(s). '
-            f'A competência {int(mes):02d}/{int(ano)} foi limpa para regenerar já com o rodízio refletido.'
-        )
-    }
+    return {'ok': True, 'msg': f'Rodízio aplicado com {len(pares)} troca(s).'}
 
 # =========================================================
 # SUBGRUPOS + REGRAS
@@ -9804,20 +9758,7 @@ def page_app():
                 st.info(f"{subgrupo_destino}: {sim.get('qtd_destino_atual', 0)} pessoa(s) hoje. Rodízio planejado: {sim.get('qtd_troca', 0)} troca(s). Quantidade obrigatória: {sim.get('qtd_destino_obrigatoria', 14)}.")
                 st.caption("Na sugestão do mês, o sistema prioriza: 1) horário fixo da cota, 2) domingo mais parecido, 3) quem está há mais tempo sem ir para o Caixa 02.")
 
-                slots = list(sim.get('slots') or [])
-                qtd_obrigatoria = int(sim.get('qtd_destino_obrigatoria', 14) or 14)
-
-                # mantém a visualização estável e sem cortar os slots já montados
-                slots = sorted(
-                    slots,
-                    key=lambda x: (
-                        str(x.get('horario_ref') or ''),
-                        int(x.get('diff_horario_ref_min', 0) or 0),
-                        str(x.get('origem_nome') or '').upper(),
-                        str(x.get('origem_chapa') or ''),
-                    )
-                )[:qtd_obrigatoria]
-
+                slots = sim.get('slots') or []
                 aprovados_atuais = st.session_state.get(aprov_key, {})
                 aprovados_validos = sum(1 for s in slots if aprovados_atuais.get(s.get('slot_key')) == s.get('origem_chapa'))
                 top1, top2, top3 = st.columns(3)
@@ -9825,42 +9766,14 @@ def page_app():
                 top2.metric('Aprovadas', aprovados_validos)
                 top3.metric('Pendentes', max(0, len(slots) - aprovados_validos))
 
-                st.caption(f"Total de sugestões geradas: {len(slots)} / {qtd_obrigatoria}")
-                if len(slots) < qtd_obrigatoria:
-                    st.warning(
-                        f"O motor montou {len(slots)} sugestão(ões) nesta simulação. "
-                        f"A tela não está cortando; faltaram {qtd_obrigatoria - len(slots)} no retorno da simulação."
-                    )
-
                 a1, a2 = st.columns([1, 1])
                 if a1.button('Limpar aprovações e negativas', key='rod_caixa_clear_aprov', use_container_width=True):
                     st.session_state[aprov_key] = {}
                     st.session_state[neg_key] = []
-                    st.session_state.pop(state_base + "::aplicado", None)
                     st.rerun()
                 if a2.button('Aprovar todas as sugestões atuais', key='rod_caixa_aprov_all', use_container_width=True):
                     st.session_state[aprov_key] = {str(s.get('slot_key')): str(s.get('origem_chapa')) for s in slots}
-                    st.session_state.pop(state_base + "::aplicado", None)
                     st.rerun()
-
-                aplic_key = state_base + "::aplicado"
-                qtd_obrigatoria = int(sim.get('qtd_destino_obrigatoria', 14) or 14)
-                pronto_aplicar = bool(slots) and int(aprovados_validos) >= int(qtd_obrigatoria) and int(max(0, len(slots) - aprovados_validos)) == 0
-
-                if pronto_aplicar:
-                    st.success(f"Todas as {qtd_obrigatoria} sugestões foram aprovadas. Agora falta aplicar o rodízio no mês {mes_r:02d}/{ano_r}.")
-                    if st.button('🚀 Aplicar rodízio agora', key='rod_caixa_apply_now', use_container_width=True):
-                        res_apply = aplicar_rodizio_caixa_mes(setor, ano_r, mes_r, sim)
-                        if res_apply.get('ok'):
-                            st.session_state[aplic_key] = True
-                            st.success(res_apply.get('msg', 'Rodízio aplicado com sucesso.'))
-                            st.rerun()
-                        else:
-                            st.error(res_apply.get('msg', 'Não foi possível aplicar o rodízio.'))
-                elif st.session_state.get(aplic_key):
-                    st.success(f"Rodízio já aplicado na competência {mes_r:02d}/{ano_r}. Gere a escala novamente para refletir a troca.")
-                elif slots:
-                    st.info(f"Para aplicar de verdade no mês {mes_r:02d}/{ano_r}, todas as {qtd_obrigatoria} sugestões precisam estar aprovadas e depois você deve clicar em 'Aplicar rodízio agora'.")
 
                 if slots:
                     st.markdown('### Aprovação das 14 pessoas sugeridas')
