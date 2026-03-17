@@ -10168,7 +10168,7 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
                 st.success('Escala do mês vigente já assinada. Botão ocultado.')
             else:
                 st.warning('Assine aqui somente a escala do mês vigente.')
-                if st.button('✅ Assinar escala do mês', key=f'ass_oficial_{setor}_{chapa}_{ano_vigente}_{mes_vigente}'):
+                if st.button('✅ Assinar escala do mês', key=f'ass_oficial_{setor}_{chapa}_{ano_ref}_{mes_ref}'):
                     salvar_assinatura_portal(setor, chapa, ano_ref, mes_ref, 'oficial')
                     st.success('Escala do mês assinada com sucesso.')
                     st.rerun()
@@ -10192,7 +10192,7 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
                 if ass_mud.get('status') == 'Assinado':
                     st.success('Mudanças do mês vigente já assinadas. Botão ocultado.')
                 else:
-                    if st.button('✍️ Assinar mudanças de horários e folgas', key=f'ass_hist_{setor}_{chapa}_{ano_vigente}_{mes_vigente}'):
+                    if st.button('✍️ Assinar mudanças de horários e folgas', key=f'ass_hist_{setor}_{chapa}_{ano_ref}_{mes_ref}'):
                         salvar_assinatura_portal(setor, chapa, ano_ref, mes_ref, 'historico')
                         st.success('Mudanças do mês vigente assinadas com sucesso.')
                         st.rerun()
