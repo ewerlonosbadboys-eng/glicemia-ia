@@ -10740,6 +10740,12 @@ def page_app():
         if status_comp == 'FECHADA' and sec_aj != '✏️ Retificar folga, horário e subgrupo':
             st.error('🔒 Competência fechada: nesta área a visualização é apenas leitura. Use a subaba de retificação para correções pontuais.')
 
+        # Renderização direta da subaba de retificação.
+        # Isso evita que ela fique vazia por causa dos fluxos pesados das outras subabas.
+        if sec_aj == '✏️ Retificar folga, horário e subgrupo':
+            render_retificacao_competencia_ui(setor, ano, mes, auth=auth)
+            st.stop()
+
         _ajustes_precisam_escala = sec_aj in ("🧩 Folgas manuais em grade", "📊 Contagens por dia", "🔁 Troca de horários")
         hist_db = {}
         colaboradores = []
@@ -11256,9 +11262,6 @@ def page_app():
 
                                     st.success(f"Salvo! Ação: {acao_th}. Aplicados: {applied}. Ignorados (por conflito com Folga/Férias): {skipped}.")
                                     st.rerun()
-
-        if sec_aj == "✏️ Retificar folga, horário e subgrupo":
-            render_retificacao_competencia_ui(setor, ano, mes, auth=auth)
 
 
         if sec_aj == "✅ Preferência por subgrupo":
