@@ -383,90 +383,6 @@ def _apply_retificacoes_to_hist(setor: str, ano: int, mes: int, hist_db: dict[st
     return hist_db
 
 
-def render_retificacao_competencia_ui(setor: str, ano: int, mes: int, auth: dict | None = None) -> None:
-    st.markdown("### ✏️ Retificar folga, horário e subgrupo")
-    st.caption("Use esta subaba para corrigir competência fechada sem descongelar o mês inteiro. A alteração aparece nas leituras da escala e no portal do colaborador.")
-
-    colaboradores_ret = load_colaboradores_setor(setor)
-    if not colaboradores_ret:
-        st.info("Cadastre colaboradores primeiro.")
-        return
-
-    labels_ret = [f"{str(c.get('Nome') or '').strip()} ({str(c.get('Chapa') or '').strip()})" for c in colaboradores_ret]
-    inv_ret = {f"{str(c.get('Nome') or '').strip()} ({str(c.get('Chapa') or '').strip()})": c for c in colaboradores_ret}
-
-    colr1, colr2, colr3 = st.columns([2, 1, 1])
-    label_ret = colr1.selectbox("Funcionário", options=labels_ret, key=f"ret_func_live::{setor}::{ano}::{mes}")
-    colab_ret = inv_ret.get(label_ret) or {}
-    chapa_ret = str(colab_ret.get('Chapa') or '').strip()
-
-    qtd_ret = calendar.monthrange(int(ano), int(mes))[1]
-    dia_ret = int(colr2.selectbox("Dia", options=list(range(1, qtd_ret + 1)), key=f"ret_dia_live::{setor}::{ano}::{mes}"))
-
-    hist_ret = get_hist_mes_com_overrides_cached(setor, ano, mes) or {}
-    df_ret_hist = hist_ret.get(chapa_ret)
-    base_status = ''
-    base_ent = str(colab_ret.get('Entrada') or '06:00').strip()
-    base_sai = _saida_from_entrada(base_ent)
-    base_sub = str(colab_ret.get('Subgrupo') or '').strip()
-
-    if df_ret_hist is not None and len(df_ret_hist) >= dia_ret:
-        try:
-            base_status = str(df_ret_hist.loc[dia_ret - 1, 'Status'] or '').strip()
-            base_ent = str(df_ret_hist.loc[dia_ret - 1, 'H_Entrada'] or '').strip()
-            base_sai = str(df_ret_hist.loc[dia_ret - 1, 'H_Saida'] or '').strip()
-            if 'Subgrupo' in df_ret_hist.columns:
-                base_sub = str(df_ret_hist.loc[dia_ret - 1, 'Subgrupo'] or '').strip() or base_sub
-        except Exception:
-            pass
-
-    st.info(
-        f"Base do dia {dia_ret:02d}/{int(mes):02d}/{int(ano)} → "
-        f"Status: {base_status or '-'} | Entrada: {base_ent or '-'} | "
-        f"Saída: {base_sai or '-'} | Subgrupo: {base_sub or '-'}"
-    )
-
-    colra, colrb, colrc, colrd = st.columns([1, 1, 1, 1])
-    status_opts = ['', 'Trabalho', 'Folga', 'Férias', 'Afastamento']
-    idx_status = status_opts.index(base_status) if base_status in status_opts else 0
-    novo_status = colra.selectbox("Novo status", options=status_opts, index=idx_status, key=f"ret_status_live::{setor}::{ano}::{mes}")
-    nova_entrada = colrb.text_input("Nova entrada", value=base_ent, key=f"ret_ent_live::{setor}::{ano}::{mes}")
-    nova_saida = colrc.text_input("Nova saída", value=base_sai, key=f"ret_sai_live::{setor}::{ano}::{mes}")
-
-    sub_opts = sorted({str(c.get('Subgrupo') or '').strip() for c in colaboradores_ret if str(c.get('Subgrupo') or '').strip()})
-    for extra in ['OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02']:
-        if extra not in sub_opts:
-            sub_opts.append(extra)
-    sub_opts = [''] + sorted(set(sub_opts))
-    idx_sub = sub_opts.index(base_sub) if base_sub in sub_opts else 0
-    novo_subgrupo = colrd.selectbox("Novo subgrupo", options=sub_opts, index=idx_sub, key=f"ret_sub_live::{setor}::{ano}::{mes}")
-
-    motivo_ret = st.text_area("Motivo da retificação", key=f"ret_motivo_live::{setor}::{ano}::{mes}")
-
-    if st.button("💾 Salvar retificação", key=f"ret_save_live::{setor}::{ano}::{mes}", use_container_width=True):
-        if not chapa_ret:
-            st.warning('Selecione um funcionário válido.')
-        else:
-            salvar_retificacao_competencia(
-                setor, ano, mes, chapa_ret, dia_ret,
-                novo_status=novo_status or base_status,
-                novo_entrada=nova_entrada,
-                novo_saida=nova_saida,
-                novo_subgrupo=novo_subgrupo or base_sub,
-                motivo=motivo_ret,
-                usuario=str((auth or {}).get('nome') or st.session_state.get('auth_nome') or st.session_state.get('auth_chapa') or '')
-            )
-            st.success('Retificação salva com sucesso.')
-            st.rerun()
-
-    df_ret_list = load_retificacoes_competencia(setor, ano, mes)
-    if df_ret_list is not None and not df_ret_list.empty:
-        st.markdown('#### Retificações já registradas nesta competência')
-        cols_view = [c for c in ['dia', 'nome', 'chapa', 'novo_status', 'nova_entrada', 'nova_saida', 'novo_subgrupo', 'motivo', 'usuario', 'criado_em'] if c in df_ret_list.columns]
-        st.dataframe(df_ret_list[cols_view], use_container_width=True, hide_index=True)
-
-
-
 
 # =========================================================
 # PDF IMPORT (AUTOMÁTICO) — modelo ESCALA_PONTO_NEW (Savegnago)
@@ -3153,7 +3069,15 @@ def gerar_pdf_modelo_oficial(setor: str, ano: int, mes: int, hist_db: dict, cola
     def _make_block(ch: str) -> list:
         df = hist_db[ch].copy()
         nome = colab_by.get(ch, {}).get("Nome", ch)
-        sg = (colab_by.get(ch, {}).get("Subgrupo", "") or "").strip() or "COLABORADOR"
+        sg = ''
+        try:
+            if 'Subgrupo' in df.columns:
+                vals_sg = [str(v).strip() for v in df['Subgrupo'].astype(str).tolist() if str(v).strip()]
+                if vals_sg:
+                    sg = vals_sg[0]
+        except Exception:
+            sg = ''
+        sg = sg or (colab_by.get(ch, {}).get("Subgrupo", "") or "").strip() or "COLABORADOR"
         sg_title = str(sg).upper()
 
         # tabela por dia
@@ -6890,7 +6814,9 @@ def apply_overrides_to_hist(setor: str, ano: int, mes: int, hist_db: dict[str, p
     ov = load_overrides(setor, ano, mes)
     ff_map = _folga_fixa_days_map(setor, int(ano), int(mes))
     if (ov is None or ov.empty) and not hist_db and not ff_map:
-        return _apply_retificacoes_to_hist(setor, ano, mes, hist_db)
+        hist_db = _apply_retificacoes_to_hist(setor, ano, mes, hist_db)
+    hist_db = _apply_subgrupo_competencia_to_hist(setor, ano, mes, hist_db)
+    return hist_db
 
     # aplica overrides (se houver)
     if ov is not None and not ov.empty and hist_db:
@@ -9481,9 +9407,103 @@ def get_colaborador_record(setor: str, chapa: str):
     }
 
 
+def get_subgrupo_competencia_ou_base(setor: str, chapa: str, ano: int, mes: int, base_subgrupo: str = "") -> str:
+    setor = _norm_setor(setor)
+    chapa = _norm_chapa(chapa)
+    base_subgrupo = str(base_subgrupo or '').strip()
+    con = db_conn()
+    cur = con.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT subgrupo
+            FROM subgrupo_competencia
+            WHERE UPPER(TRIM(setor))=? AND ano=? AND mes=? AND TRIM(chapa)=?
+            LIMIT 1
+            """,
+            (setor, int(ano), int(mes), chapa),
+        )
+        row = cur.fetchone()
+        if row and str(row[0] or '').strip():
+            return str(row[0]).strip()
+        if base_subgrupo:
+            return base_subgrupo
+        cur.execute(
+            """
+            SELECT subgrupo
+            FROM colaboradores
+            WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=?
+            LIMIT 1
+            """,
+            (setor, chapa),
+        )
+        row2 = cur.fetchone()
+        return str((row2[0] if row2 else '') or '').strip() or 'SEM SUBGRUPO'
+    finally:
+        con.close()
+
+
+def _apply_subgrupo_competencia_to_hist(setor: str, ano: int, mes: int, hist_db: dict[str, pd.DataFrame]):
+    if not hist_db:
+        return hist_db
+    con = db_conn()
+    try:
+        df_sg = pd.read_sql_query(
+            """
+            SELECT chapa, subgrupo
+            FROM subgrupo_competencia
+            WHERE UPPER(TRIM(setor)) = UPPER(TRIM(?)) AND ano=? AND mes=?
+            """,
+            con,
+            params=(setor, int(ano), int(mes)),
+        )
+    except Exception:
+        try:
+            con.close()
+        except Exception:
+            pass
+        return hist_db
+    finally:
+        try:
+            con.close()
+        except Exception:
+            pass
+    if df_sg is None or df_sg.empty:
+        return hist_db
+    for _, r in df_sg.iterrows():
+        ch = str(r.get('chapa') or '').strip()
+        sg = str(r.get('subgrupo') or '').strip()
+        if not ch or not sg or ch not in hist_db:
+            continue
+        df = hist_db[ch].copy()
+        try:
+            df.loc[:, 'Subgrupo'] = sg
+        except Exception:
+            pass
+        hist_db[ch] = df
+    return hist_db
+
+
 def get_escala_colaborador_mes(setor: str, chapa: str, ano: int, mes: int) -> pd.DataFrame:
     setor = _norm_setor(setor)
     chapa = _norm_chapa(chapa)
+    hist_db = get_hist_mes_com_overrides_cached(setor, int(ano), int(mes)) or {}
+    df_hist = hist_db.get(chapa)
+    if df_hist is not None and not df_hist.empty:
+        out = df_hist.copy().reset_index(drop=True)
+        out.insert(0, 'Dia', list(range(1, len(out) + 1)))
+        out = out.rename(columns={
+            'Data': 'Data',
+            'Dia': 'Dia da semana',
+            'Status': 'Status',
+            'H_Entrada': 'Entrada',
+            'H_Saida': 'Saída',
+        })
+        keep = ['Dia', 'Data', 'Dia da semana', 'Status', 'Entrada', 'Saída']
+        for c in keep:
+            if c not in out.columns:
+                out[c] = ''
+        return out[keep]
     con = db_conn()
     try:
         df = pd.read_sql_query(
@@ -9500,28 +9520,46 @@ def get_escala_colaborador_mes(setor: str, chapa: str, ano: int, mes: int) -> pd
     finally:
         con.close()
     return df
-
-
 def get_overrides_colaborador_mes(setor: str, chapa: str, ano: int, mes: int) -> pd.DataFrame:
     setor = _norm_setor(setor)
     chapa = _norm_chapa(chapa)
     con = db_conn()
     try:
-        df = pd.read_sql_query(
+        df_ov = pd.read_sql_query(
             """
-            SELECT dia AS 'Dia', campo AS 'Campo', valor AS 'Novo valor', id AS '_ord'
+            SELECT dia AS 'Dia', campo AS 'Campo', valor AS 'Novo valor', '' AS 'Motivo', '' AS 'Alterado em', id AS '_ord'
             FROM overrides
             WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=? AND ano=? AND mes=?
-            ORDER BY dia DESC, id DESC
+            """,
+            con,
+            params=(setor, chapa, int(ano), int(mes)),
+        )
+        df_ret = pd.read_sql_query(
+            """
+            SELECT dia AS 'Dia',
+                   'retificacao' AS 'Campo',
+                   TRIM(
+                     COALESCE(NULLIF(novo_status,''), '') ||
+                     CASE WHEN COALESCE(NULLIF(nova_entrada,''), '') <> '' THEN ' | Entrada: ' || nova_entrada ELSE '' END ||
+                     CASE WHEN COALESCE(NULLIF(nova_saida,''), '') <> '' THEN ' | Saída: ' || nova_saida ELSE '' END ||
+                     CASE WHEN COALESCE(NULLIF(novo_subgrupo,''), '') <> '' THEN ' | Subgrupo: ' || novo_subgrupo ELSE '' END
+                   ) AS 'Novo valor',
+                   COALESCE(motivo,'') AS 'Motivo',
+                   COALESCE(criado_em,'') AS 'Alterado em',
+                   (1000000 + id) AS '_ord'
+            FROM retificacoes_competencia
+            WHERE UPPER(TRIM(setor))=? AND TRIM(chapa)=? AND ano=? AND mes=?
             """,
             con,
             params=(setor, chapa, int(ano), int(mes)),
         )
     finally:
         con.close()
+    df = pd.concat([df_ov, df_ret], ignore_index=True)
+    if df is None or df.empty:
+        return pd.DataFrame(columns=['Dia', 'Campo', 'Novo valor', 'Motivo', 'Alterado em', '_ord'])
+    df = df.sort_values(['Dia', '_ord'], ascending=[False, False]).reset_index(drop=True)
     return df
-
-
 def get_portal_version(setor: str, chapa: str, ano: int, mes: int) -> int:
     setor = _norm_setor(setor)
     chapa = _norm_chapa(chapa)
@@ -9735,10 +9773,12 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
     }
 
     hoje = datetime.now()
-    ano_vigente = int(hoje.year)
-    mes_vigente = int(hoje.month)
-    prox_mes = mes_vigente + 1
-    prox_ano = ano_vigente
+    ano_ref = int(ano_cfg or hoje.year)
+    mes_ref = int(mes_cfg or hoje.month)
+    if mes_ref < 1 or mes_ref > 12:
+        mes_ref = int(hoje.month)
+    prox_mes = mes_ref + 1
+    prox_ano = ano_ref
     if prox_mes > 12:
         prox_mes = 1
         prox_ano += 1
@@ -9747,29 +9787,19 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
     i1, i2, i3, i4 = st.columns(4)
     i1.info(f"**Nome**\n\n{colab.get('Nome','-')}")
     i2.info(f"**Setor**\n\n{setor}")
-    subgrupo_portal = colab.get('Subgrupo','SEM SUBGRUPO')
-    try:
-        con = db_conn()
-        cur = con.cursor()
-        cur.execute("SELECT subgrupo FROM subgrupo_competencia WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=? LIMIT 1", (setor, ano_vigente, mes_vigente, chapa))
-        row_sg = cur.fetchone()
-        con.close()
-        if row_sg and str(row_sg[0] or '').strip():
-            subgrupo_portal = str(row_sg[0]).strip()
-    except Exception:
-        pass
+    subgrupo_portal = get_subgrupo_competencia_ou_base(setor, chapa, ano_ref, mes_ref, colab.get('Subgrupo','SEM SUBGRUPO'))
     i3.info(f"**Subgrupo**\n\n{subgrupo_portal}")
     i4.info(f"**Chapa**\n\n{chapa}")
 
     st.caption(
-        f"Portal do colaborador travado no mês vigente ({mes_vigente:02d}/{ano_vigente}) e na pré-escala do próximo mês ({prox_mes:02d}/{prox_ano})."
+        f"Portal do colaborador mostrando a competência de referência {mes_ref:02d}/{ano_ref} e a pré-escala do próximo mês ({prox_mes:02d}/{prox_ano})."
     )
 
-    df_oficial = get_escala_colaborador_mes(setor, chapa, ano_vigente, mes_vigente)
+    df_oficial = get_escala_colaborador_mes(setor, chapa, ano_ref, mes_ref)
     df_pre = get_escala_colaborador_mes(setor, chapa, prox_ano, prox_mes)
-    hist = get_overrides_colaborador_mes(setor, chapa, ano_vigente, mes_vigente)
-    ass_escala = get_assinatura_status(setor, chapa, ano_vigente, mes_vigente, 'oficial')
-    ass_mud = get_assinatura_status(setor, chapa, ano_vigente, mes_vigente, 'historico')
+    hist = get_overrides_colaborador_mes(setor, chapa, ano_ref, mes_ref)
+    ass_escala = get_assinatura_status(setor, chapa, ano_ref, mes_ref, 'oficial')
+    ass_mud = get_assinatura_status(setor, chapa, ano_ref, mes_ref, 'historico')
 
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         '📋 Escala Oficial',
@@ -9781,7 +9811,7 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
     ])
 
     with tab1:
-        st.markdown(f"#### Escala oficial — {mes_vigente:02d}/{ano_vigente}")
+        st.markdown(f"#### Escala oficial — {mes_ref:02d}/{ano_ref}")
         c1, c2, c3 = st.columns(3)
         c1.metric('Versão atual', ass_escala.get('versao', 1))
         c2.metric('Status da assinatura', ass_escala.get('status', 'Pendente'))
@@ -9789,7 +9819,7 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
         if ass_escala.get('assinado_em'):
             st.caption(f"Última assinatura da escala: {ass_escala.get('assinado_em')}")
         try:
-            df_ret_mes = load_retificacoes_competencia(setor, ano_vigente, mes_vigente)
+            df_ret_mes = load_retificacoes_competencia(setor, ano_ref, mes_ref)
             if df_ret_mes is not None and not df_ret_mes.empty:
                 st.warning('⚠️ Esta escala possui retificações após o fechamento.')
         except Exception:
@@ -9813,7 +9843,7 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
             st.caption('Assinatura bloqueada até o início do mês vigente correspondente.')
 
     with tab3:
-        st.markdown(f"#### Histórico de mudanças — {mes_vigente:02d}/{ano_vigente}")
+        st.markdown(f"#### Histórico de mudanças — {mes_ref:02d}/{ano_ref}")
         m1, m2 = st.columns(2)
         m1.metric('Mudanças registradas no mês vigente', len(hist) if hasattr(hist, '__len__') else 0)
         m2.metric('Status do aceite das mudanças', ass_mud.get('status', 'Pendente'))
@@ -9830,12 +9860,12 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
             st.caption('A assinatura dessas mudanças fica concentrada na aba Assinaturas.')
 
     with tab4:
-        st.markdown(f"#### Assinaturas — {mes_vigente:02d}/{ano_vigente}")
+        st.markdown(f"#### Assinaturas — {mes_ref:02d}/{ano_ref}")
         sub1, sub2 = st.tabs(['🗓️ Assinatura da Escala do Mês', '🔁 Assinatura de Mudanças'])
 
         with sub1:
             a1, a2, a3 = st.columns(3)
-            a1.metric('Competência', f'{mes_vigente:02d}/{ano_vigente}')
+            a1.metric('Competência', f'{mes_ref:02d}/{ano_ref}')
             a2.metric('Versão atual', ass_escala.get('versao', 1))
             a3.metric('Status', ass_escala.get('status', 'Pendente'))
             if ass_escala.get('assinado_em'):
@@ -9847,7 +9877,7 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
             else:
                 st.warning('Assine aqui somente a escala do mês vigente.')
                 if st.button('✅ Assinar escala do mês', key=f'ass_oficial_{setor}_{chapa}_{ano_vigente}_{mes_vigente}'):
-                    salvar_assinatura_portal(setor, chapa, ano_vigente, mes_vigente, 'oficial')
+                    salvar_assinatura_portal(setor, chapa, ano_ref, mes_ref, 'oficial')
                     st.success('Escala do mês assinada com sucesso.')
                     st.rerun()
 
@@ -9871,12 +9901,12 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
                     st.success('Mudanças do mês vigente já assinadas. Botão ocultado.')
                 else:
                     if st.button('✍️ Assinar mudanças de horários e folgas', key=f'ass_hist_{setor}_{chapa}_{ano_vigente}_{mes_vigente}'):
-                        salvar_assinatura_portal(setor, chapa, ano_vigente, mes_vigente, 'historico')
+                        salvar_assinatura_portal(setor, chapa, ano_ref, mes_ref, 'historico')
                         st.success('Mudanças do mês vigente assinadas com sucesso.')
                         st.rerun()
 
     with tab5:
-        st.markdown(f"#### Férias — {mes_vigente:02d}/{ano_vigente}")
+        st.markdown(f"#### Férias — {mes_ref:02d}/{ano_ref}")
         rows_fer = [r for r in (list_ferias(setor) or []) if _norm_chapa(r[0]) == chapa]
         if not rows_fer:
             st.info('Nenhuma férias cadastrada para este colaborador.')
@@ -10740,86 +10770,6 @@ def page_app():
         if status_comp == 'FECHADA' and sec_aj != '✏️ Retificar folga, horário e subgrupo':
             st.error('🔒 Competência fechada: nesta área a visualização é apenas leitura. Use a subaba de retificação para correções pontuais.')
 
-        # Renderização direta e isolada da subaba de retificação.
-        # Mantém essa tela independente do restante dos fluxos pesados de Ajustes.
-        if sec_aj == '✏️ Retificar folga, horário e subgrupo':
-            st.markdown("### ✏️ Retificar folga, horário e subgrupo")
-            st.caption("FIX4 ativa — esta tela é independente das outras subabas.")
-
-            colaboradores_ret = load_colaboradores_setor(setor) or []
-            if not colaboradores_ret:
-                st.info("Cadastre colaboradores primeiro.")
-                st.stop()
-
-            labels_ret = [f"{str(c.get('Nome') or '').strip()} ({str(c.get('Chapa') or '').strip()})" for c in colaboradores_ret]
-            inv_ret = {f"{str(c.get('Nome') or '').strip()} ({str(c.get('Chapa') or '').strip()})": c for c in colaboradores_ret}
-
-            colr1, colr2 = st.columns([2,1])
-            label_ret = colr1.selectbox("Funcionário", options=labels_ret, key=f"ret_func_fix4::{setor}::{ano}::{mes}")
-            colab_ret = inv_ret.get(label_ret) or {}
-            chapa_ret = str(colab_ret.get('Chapa') or '').strip()
-            qtd_ret = calendar.monthrange(int(ano), int(mes))[1]
-            dia_ret = int(colr2.selectbox("Dia", options=list(range(1, qtd_ret + 1)), key=f"ret_dia_fix4::{setor}::{ano}::{mes}"))
-
-            hist_ret = get_hist_mes_com_overrides_cached(setor, ano, mes) or {}
-            df_ret_hist = hist_ret.get(chapa_ret)
-            base_status = ''
-            base_ent = str(colab_ret.get('Entrada') or '06:00').strip()
-            base_sai = _saida_from_entrada(base_ent)
-            base_sub = str(colab_ret.get('Subgrupo') or '').strip()
-
-            if df_ret_hist is not None and len(df_ret_hist) >= dia_ret:
-                try:
-                    base_status = str(df_ret_hist.loc[dia_ret - 1, 'Status'] or '').strip()
-                    base_ent = str(df_ret_hist.loc[dia_ret - 1, 'H_Entrada'] or '').strip()
-                    base_sai = str(df_ret_hist.loc[dia_ret - 1, 'H_Saida'] or '').strip()
-                    if 'Subgrupo' in df_ret_hist.columns:
-                        base_sub = str(df_ret_hist.loc[dia_ret - 1, 'Subgrupo'] or '').strip() or base_sub
-                except Exception:
-                    pass
-
-            st.info(f"Base do dia {dia_ret:02d}/{int(mes):02d}/{int(ano)} → Status: {base_status or '-'} | Entrada: {base_ent or '-'} | Saída: {base_sai or '-'} | Subgrupo: {base_sub or '-'}")
-
-            colra, colrb, colrc, colrd = st.columns([1,1,1,1])
-            status_opts = ['', 'Trabalho', 'Folga', 'Férias', 'Afastamento']
-            idx_status = status_opts.index(base_status) if base_status in status_opts else 0
-            novo_status = colra.selectbox("Novo status", options=status_opts, index=idx_status, key=f"ret_status_fix4::{setor}::{ano}::{mes}")
-            nova_entrada = colrb.text_input("Nova entrada", value=base_ent, key=f"ret_ent_fix4::{setor}::{ano}::{mes}")
-            nova_saida = colrc.text_input("Nova saída", value=base_sai, key=f"ret_sai_fix4::{setor}::{ano}::{mes}")
-
-            sub_opts = sorted({str(c.get('Subgrupo') or '').strip() for c in colaboradores_ret if str(c.get('Subgrupo') or '').strip()})
-            for extra in ['OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02']:
-                if extra not in sub_opts:
-                    sub_opts.append(extra)
-            sub_opts = [''] + sorted(set(sub_opts))
-            idx_sub = sub_opts.index(base_sub) if base_sub in sub_opts else 0
-            novo_subgrupo = colrd.selectbox("Novo subgrupo", options=sub_opts, index=idx_sub, key=f"ret_sub_fix4::{setor}::{ano}::{mes}")
-
-            motivo_ret = st.text_area("Motivo da retificação", key=f"ret_motivo_fix4::{setor}::{ano}::{mes}")
-
-            if st.button("💾 Salvar retificação", key=f"ret_save_fix4::{setor}::{ano}::{mes}", use_container_width=True):
-                if not chapa_ret:
-                    st.warning('Selecione um funcionário válido.')
-                else:
-                    salvar_retificacao_competencia(
-                        setor, ano, mes, chapa_ret, dia_ret,
-                        novo_status=novo_status or base_status,
-                        novo_entrada=nova_entrada,
-                        novo_saida=nova_saida,
-                        novo_subgrupo=novo_subgrupo or base_sub,
-                        motivo=motivo_ret,
-                        usuario=str((auth or {}).get('nome') or st.session_state.get('auth_nome') or st.session_state.get('auth_chapa') or '')
-                    )
-                    st.success('Retificação salva com sucesso.')
-                    st.rerun()
-
-            df_ret_list = load_retificacoes_competencia(setor, ano, mes)
-            if df_ret_list is not None and not df_ret_list.empty:
-                st.markdown('#### Retificações já registradas nesta competência')
-                cols_view = [c for c in ['dia', 'nome', 'chapa', 'novo_status', 'nova_entrada', 'nova_saida', 'novo_subgrupo', 'motivo', 'usuario', 'criado_em'] if c in df_ret_list.columns]
-                st.dataframe(df_ret_list[cols_view], use_container_width=True, hide_index=True)
-            st.stop()
-
         _ajustes_precisam_escala = sec_aj in ("🧩 Folgas manuais em grade", "📊 Contagens por dia", "🔁 Troca de horários")
         hist_db = {}
         colaboradores = []
@@ -11337,6 +11287,76 @@ def page_app():
                                     st.success(f"Salvo! Ação: {acao_th}. Aplicados: {applied}. Ignorados (por conflito com Folga/Férias): {skipped}.")
                                     st.rerun()
 
+        if sec_aj == "✏️ Retificar folga, horário e subgrupo":
+            st.markdown("### ✏️ Retificar folga, horário e subgrupo")
+            st.caption("Use esta subaba para corrigir competência fechada sem descongelar o mês inteiro. A alteração aparece nas leituras da escala e no portal do colaborador.")
+            colaboradores_ret = load_colaboradores_setor(setor)
+            if not colaboradores_ret:
+                st.info("Cadastre colaboradores primeiro.")
+            else:
+                labels_ret = [f"{c['Nome']} ({c['Chapa']})" for c in colaboradores_ret]
+                inv_ret = {f"{c['Nome']} ({c['Chapa']})": c for c in colaboradores_ret}
+                colr1, colr2, colr3 = st.columns([2, 1, 1])
+                label_ret = colr1.selectbox("Funcionário", options=labels_ret, key=f"ret_func_live::{setor}::{ano}::{mes}")
+                colab_ret = inv_ret.get(label_ret) or {}
+                chapa_ret = str(colab_ret.get('Chapa') or '').strip()
+                qtd_ret = calendar.monthrange(int(ano), int(mes))[1]
+                dia_ret = int(colr2.selectbox("Dia", options=list(range(1, qtd_ret + 1)), key=f"ret_dia_live::{setor}::{ano}::{mes}"))
+
+                hist_ret = get_hist_mes_com_overrides_cached(setor, ano, mes) or {}
+                df_ret_hist = hist_ret.get(chapa_ret)
+                base_status = ''
+                base_ent = str(colab_ret.get('Entrada') or '06:00').strip()
+                base_sai = _saida_from_entrada(base_ent)
+                base_sub = str(colab_ret.get('Subgrupo') or '').strip()
+                if df_ret_hist is not None and len(df_ret_hist) >= dia_ret:
+                    base_status = str(df_ret_hist.loc[dia_ret - 1, 'Status'] or '').strip()
+                    base_ent = str(df_ret_hist.loc[dia_ret - 1, 'H_Entrada'] or '').strip()
+                    base_sai = str(df_ret_hist.loc[dia_ret - 1, 'H_Saida'] or '').strip()
+                    try:
+                        if 'Subgrupo' in df_ret_hist.columns:
+                            base_sub = str(df_ret_hist.loc[dia_ret - 1, 'Subgrupo'] or '').strip() or base_sub
+                    except Exception:
+                        pass
+
+                st.info(f"Base do dia {dia_ret:02d}/{int(mes):02d}/{int(ano)} → Status: {base_status or '-'} | Entrada: {base_ent or '-'} | Saída: {base_sai or '-'} | Subgrupo: {base_sub or '-'}")
+                colra, colrb, colrc, colrd = st.columns([1, 1, 1, 1])
+                status_opts = ['', 'Trabalho', 'Folga', 'Férias', 'Afastamento']
+                idx_status = status_opts.index(base_status) if base_status in status_opts else 0
+                novo_status = colra.selectbox("Novo status", options=status_opts, index=idx_status, key=f"ret_status_live::{setor}::{ano}::{mes}")
+                nova_entrada = colrb.text_input("Nova entrada", value=base_ent, key=f"ret_ent_live::{setor}::{ano}::{mes}")
+                nova_saida = colrc.text_input("Nova saída", value=base_sai, key=f"ret_sai_live::{setor}::{ano}::{mes}")
+                sub_opts = [''] + sorted({str(c.get('Subgrupo') or '').strip() for c in colaboradores_ret if str(c.get('Subgrupo') or '').strip()})
+                if 'OPERADOR DE CAIXA 01' not in sub_opts:
+                    sub_opts.append('OPERADOR DE CAIXA 01')
+                if 'OPERADOR DE CAIXA 02' not in sub_opts:
+                    sub_opts.append('OPERADOR DE CAIXA 02')
+                sub_opts = [''] + sorted({x for x in sub_opts if x})
+                idx_sub = sub_opts.index(base_sub) if base_sub in sub_opts else 0
+                novo_subgrupo = colrd.selectbox("Novo subgrupo", options=sub_opts, index=idx_sub, key=f"ret_sub_live::{setor}::{ano}::{mes}")
+                motivo_ret = st.text_area("Motivo da retificação", key=f"ret_motivo_live::{setor}::{ano}::{mes}")
+
+                if st.button("💾 Salvar retificação", key=f"ret_save_live::{setor}::{ano}::{mes}", use_container_width=True):
+                    if not chapa_ret:
+                        st.warning('Selecione um funcionário válido.')
+                    else:
+                        salvar_retificacao_competencia(
+                            setor, ano, mes, chapa_ret, dia_ret,
+                            novo_status=novo_status or base_status,
+                            novo_entrada=nova_entrada,
+                            novo_saida=nova_saida,
+                            novo_subgrupo=novo_subgrupo or base_sub,
+                            motivo=motivo_ret,
+                            usuario=str(st.session_state.get('auth_nome') or st.session_state.get('auth_chapa') or '')
+                        )
+                        st.success('Retificação salva com sucesso.')
+                        st.rerun()
+
+                df_ret_list = load_retificacoes_competencia(setor, ano, mes)
+                if df_ret_list is not None and not df_ret_list.empty:
+                    st.markdown('#### Retificações já registradas nesta competência')
+                    cols_view = [c for c in ['dia', 'nome', 'chapa', 'novo_status', 'nova_entrada', 'nova_saida', 'novo_subgrupo', 'motivo', 'usuario', 'criado_em'] if c in df_ret_list.columns]
+                    st.dataframe(df_ret_list[cols_view], use_container_width=True, hide_index=True)
 
         if sec_aj == "✅ Preferência por subgrupo":
             st.markdown("### ✅ Preferência por subgrupo (Evitar folga se possível)")
