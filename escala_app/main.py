@@ -10740,41 +10740,87 @@ def page_app():
         if status_comp == 'FECHADA' and sec_aj != '✏️ Retificar folga, horário e subgrupo':
             st.error('🔒 Competência fechada: nesta área a visualização é apenas leitura. Use a subaba de retificação para correções pontuais.')
 
-        # Renderização isolada e garantida da subaba de retificação.
-        # Fica fora dos fluxos pesados das outras subabas e fora do carregamento sob demanda.
+        # Renderização direta e isolada da subaba de retificação.
+        # Mantém essa tela independente do restante dos fluxos pesados de Ajustes.
         if sec_aj == '✏️ Retificar folga, horário e subgrupo':
-            _ret_box = st.container(border=True)
-            with _ret_box:
-                render_retificacao_competencia_ui(setor, ano, mes, auth=auth)
-        else:
-            _ajustes_precisam_escala = sec_aj in ("🧩 Folgas manuais em grade", "📊 Contagens por dia", "🔁 Troca de horários")
-            hist_db = {}
-            colaboradores = []
-            colab_by = {}
+            st.markdown("### ✏️ Retificar folga, horário e subgrupo")
+            st.caption("FIX4 ativa — esta tela é independente das outras subabas.")
 
-            if _ajustes_precisam_escala:
-                _aj_load_key = f"ajustes_loaded::{setor}::{ano}::{mes}::{sec_aj}"
-                if _aj_load_key not in st.session_state:
-                    st.session_state[_aj_load_key] = False
-                c_load1, c_load2, c_load3 = st.columns([1, 1, 3])
-                if c_load1.button("📥 Carregar dados dos ajustes", key=f"btn_{_aj_load_key}"):
-                    st.session_state[_aj_load_key] = True
-                if c_load2.button("🧹 Limpar cache desta tela", key=f"clear_{_aj_load_key}"):
-                    st.session_state.pop(_aj_load_key, None)
-                    st.rerun()
-                c_load3.caption("Para deixar leve, a grade só carrega quando você clicar no botão.")
+            colaboradores_ret = load_colaboradores_setor(setor) or []
+            if not colaboradores_ret:
+                st.info("Cadastre colaboradores primeiro.")
+                st.stop()
 
-                if not st.session_state.get(_aj_load_key, False):
-                    st.info("Esta aba carrega sob demanda. Clique em 📥 Carregar dados dos ajustes para abrir a grade.")
+            labels_ret = [f"{str(c.get('Nome') or '').strip()} ({str(c.get('Chapa') or '').strip()})" for c in colaboradores_ret]
+            inv_ret = {f"{str(c.get('Nome') or '').strip()} ({str(c.get('Chapa') or '').strip()})": c for c in colaboradores_ret}
+
+            colr1, colr2 = st.columns([2,1])
+            label_ret = colr1.selectbox("Funcionário", options=labels_ret, key=f"ret_func_fix4::{setor}::{ano}::{mes}")
+            colab_ret = inv_ret.get(label_ret) or {}
+            chapa_ret = str(colab_ret.get('Chapa') or '').strip()
+            qtd_ret = calendar.monthrange(int(ano), int(mes))[1]
+            dia_ret = int(colr2.selectbox("Dia", options=list(range(1, qtd_ret + 1)), key=f"ret_dia_fix4::{setor}::{ano}::{mes}"))
+
+            hist_ret = get_hist_mes_com_overrides_cached(setor, ano, mes) or {}
+            df_ret_hist = hist_ret.get(chapa_ret)
+            base_status = ''
+            base_ent = str(colab_ret.get('Entrada') or '06:00').strip()
+            base_sai = _saida_from_entrada(base_ent)
+            base_sub = str(colab_ret.get('Subgrupo') or '').strip()
+
+            if df_ret_hist is not None and len(df_ret_hist) >= dia_ret:
+                try:
+                    base_status = str(df_ret_hist.loc[dia_ret - 1, 'Status'] or '').strip()
+                    base_ent = str(df_ret_hist.loc[dia_ret - 1, 'H_Entrada'] or '').strip()
+                    base_sai = str(df_ret_hist.loc[dia_ret - 1, 'H_Saida'] or '').strip()
+                    if 'Subgrupo' in df_ret_hist.columns:
+                        base_sub = str(df_ret_hist.loc[dia_ret - 1, 'Subgrupo'] or '').strip() or base_sub
+                except Exception:
+                    pass
+
+            st.info(f"Base do dia {dia_ret:02d}/{int(mes):02d}/{int(ano)} → Status: {base_status or '-'} | Entrada: {base_ent or '-'} | Saída: {base_sai or '-'} | Subgrupo: {base_sub or '-'}")
+
+            colra, colrb, colrc, colrd = st.columns([1,1,1,1])
+            status_opts = ['', 'Trabalho', 'Folga', 'Férias', 'Afastamento']
+            idx_status = status_opts.index(base_status) if base_status in status_opts else 0
+            novo_status = colra.selectbox("Novo status", options=status_opts, index=idx_status, key=f"ret_status_fix4::{setor}::{ano}::{mes}")
+            nova_entrada = colrb.text_input("Nova entrada", value=base_ent, key=f"ret_ent_fix4::{setor}::{ano}::{mes}")
+            nova_saida = colrc.text_input("Nova saída", value=base_sai, key=f"ret_sai_fix4::{setor}::{ano}::{mes}")
+
+            sub_opts = sorted({str(c.get('Subgrupo') or '').strip() for c in colaboradores_ret if str(c.get('Subgrupo') or '').strip()})
+            for extra in ['OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02']:
+                if extra not in sub_opts:
+                    sub_opts.append(extra)
+            sub_opts = [''] + sorted(set(sub_opts))
+            idx_sub = sub_opts.index(base_sub) if base_sub in sub_opts else 0
+            novo_subgrupo = colrd.selectbox("Novo subgrupo", options=sub_opts, index=idx_sub, key=f"ret_sub_fix4::{setor}::{ano}::{mes}")
+
+            motivo_ret = st.text_area("Motivo da retificação", key=f"ret_motivo_fix4::{setor}::{ano}::{mes}")
+
+            if st.button("💾 Salvar retificação", key=f"ret_save_fix4::{setor}::{ano}::{mes}", use_container_width=True):
+                if not chapa_ret:
+                    st.warning('Selecione um funcionário válido.')
                 else:
-                    with st.spinner("Carregando dados dos ajustes..."):
-                        hist_db = get_hist_mes_com_overrides_cached(setor, ano, mes)
-                        colaboradores = load_colaboradores_setor(setor)
-                        colab_by = {c["Chapa"]: c for c in colaboradores}
+                    salvar_retificacao_competencia(
+                        setor, ano, mes, chapa_ret, dia_ret,
+                        novo_status=novo_status or base_status,
+                        novo_entrada=nova_entrada,
+                        novo_saida=nova_saida,
+                        novo_subgrupo=novo_subgrupo or base_sub,
+                        motivo=motivo_ret,
+                        usuario=str((auth or {}).get('nome') or st.session_state.get('auth_nome') or st.session_state.get('auth_chapa') or '')
+                    )
+                    st.success('Retificação salva com sucesso.')
+                    st.rerun()
 
-                    if not hist_db:
-                        st.info("Gere a escala primeiro na aba 🚀 Gerar Escala.")
-                        return
+            df_ret_list = load_retificacoes_competencia(setor, ano, mes)
+            if df_ret_list is not None and not df_ret_list.empty:
+                st.markdown('#### Retificações já registradas nesta competência')
+                cols_view = [c for c in ['dia', 'nome', 'chapa', 'novo_status', 'nova_entrada', 'nova_saida', 'novo_subgrupo', 'motivo', 'usuario', 'criado_em'] if c in df_ret_list.columns]
+                st.dataframe(df_ret_list[cols_view], use_container_width=True, hide_index=True)
+            st.stop()
+
+        _ajustes_precisam_escala = sec_aj in ("🧩 Folgas manuais em grade", "📊 Contagens por dia", "🔁 Troca de horários")
         hist_db = {}
         colaboradores = []
         colab_by = {}
