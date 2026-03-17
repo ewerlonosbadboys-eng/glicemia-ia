@@ -9816,10 +9816,31 @@ def page_app():
                 if a1.button('Limpar aprovações e negativas', key='rod_caixa_clear_aprov', use_container_width=True):
                     st.session_state[aprov_key] = {}
                     st.session_state[neg_key] = []
+                    st.session_state.pop(state_base + "::aplicado", None)
                     st.rerun()
                 if a2.button('Aprovar todas as sugestões atuais', key='rod_caixa_aprov_all', use_container_width=True):
                     st.session_state[aprov_key] = {str(s.get('slot_key')): str(s.get('origem_chapa')) for s in slots}
+                    st.session_state.pop(state_base + "::aplicado", None)
                     st.rerun()
+
+                aplic_key = state_base + "::aplicado"
+                qtd_obrigatoria = int(sim.get('qtd_destino_obrigatoria', 14) or 14)
+                pronto_aplicar = bool(slots) and int(aprovados_validos) >= int(qtd_obrigatoria) and int(max(0, len(slots) - aprovados_validos)) == 0
+
+                if pronto_aplicar:
+                    st.success(f"Todas as {qtd_obrigatoria} sugestões foram aprovadas. Agora falta aplicar o rodízio no mês {mes_r:02d}/{ano_r}.")
+                    if st.button('🚀 Aplicar rodízio agora', key='rod_caixa_apply_now', use_container_width=True):
+                        res_apply = aplicar_rodizio_caixa_mes(setor, ano_r, mes_r, sim)
+                        if res_apply.get('ok'):
+                            st.session_state[aplic_key] = True
+                            st.success(res_apply.get('msg', 'Rodízio aplicado com sucesso.'))
+                            st.rerun()
+                        else:
+                            st.error(res_apply.get('msg', 'Não foi possível aplicar o rodízio.'))
+                elif st.session_state.get(aplic_key):
+                    st.success(f"Rodízio já aplicado na competência {mes_r:02d}/{ano_r}. Gere a escala novamente para refletir a troca.")
+                elif slots:
+                    st.info(f"Para aplicar de verdade no mês {mes_r:02d}/{ano_r}, todas as {qtd_obrigatoria} sugestões precisam estar aprovadas e depois você deve clicar em 'Aplicar rodízio agora'.")
 
                 if slots:
                     st.markdown('### Aprovação das 14 pessoas sugeridas')
