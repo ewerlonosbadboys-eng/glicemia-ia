@@ -3957,6 +3957,23 @@ def db_init_fast_login():
     )
     """)
 
+    _safe_exec(cur, """
+    CREATE TABLE IF NOT EXISTS ax_lider_pendencias (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        setor TEXT NOT NULL,
+        modulo TEXT NOT NULL,
+        acao TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        criado_por_nome TEXT,
+        criado_por_chapa TEXT,
+        status TEXT NOT NULL DEFAULT 'PENDENTE',
+        observacao TEXT,
+        aprovado_por TEXT,
+        aprovado_em TEXT,
+        criado_em TEXT NOT NULL
+    )
+    """)
+
     _safe_exec(cur, "INSERT OR IGNORE INTO setores(nome) VALUES (?)", ("GERAL",))
     _safe_exec(cur, "INSERT OR IGNORE INTO setores(nome) VALUES (?)", ("ADMIN",))
     _safe_exec(cur, "INSERT OR IGNORE INTO setores(nome) VALUES (?)", ("GESTAO",))
@@ -4152,6 +4169,23 @@ def db_init():
         perfil_novo TEXT,
         entrada_nova TEXT,
         folga_sab_nova INTEGER DEFAULT 0,
+        criado_por_nome TEXT,
+        criado_por_chapa TEXT,
+        status TEXT NOT NULL DEFAULT 'PENDENTE',
+        observacao TEXT,
+        aprovado_por TEXT,
+        aprovado_em TEXT,
+        criado_em TEXT NOT NULL
+    )
+    """)
+
+    _safe_exec(cur, """
+    CREATE TABLE IF NOT EXISTS ax_lider_pendencias (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        setor TEXT NOT NULL,
+        modulo TEXT NOT NULL,
+        acao TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
         criado_por_nome TEXT,
         criado_por_chapa TEXT,
         status TEXT NOT NULL DEFAULT 'PENDENTE',
@@ -4711,6 +4745,181 @@ def decidir_solicitacao_ax_lider(solicitacao_id: int, aprovador_nome: str, aprov
             folga_sab=bool(int(folga_sab_nova or 0)),
             criar_usuario_se_nao_existir=True,
         )
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+
+
+
+def registrar_pendencia_ax_generica(setor: str, modulo: str, acao: str, payload: dict, criado_por_nome: str, criado_por_chapa: str, observacao: str = '') -> int:
+    con = db_conn()
+    cur = con.cursor()
+    try:
+        cur.execute("""
+            INSERT INTO ax_lider_pendencias(
+                setor, modulo, acao, payload_json, criado_por_nome, criado_por_chapa, status, observacao, criado_em
+            ) VALUES (?, ?, ?, ?, ?, ?, 'PENDENTE', ?, ?)
+        """, (
+            _norm_setor(setor),
+            str(modulo or '').strip(),
+            str(acao or '').strip(),
+            json.dumps(payload or {}, ensure_ascii=False),
+            str(criado_por_nome or '').strip(),
+            _norm_chapa(criado_por_chapa),
+            str(observacao or '').strip(),
+            datetime.now().isoformat(),
+        ))
+        con.commit()
+        return int(cur.lastrowid)
+    finally:
+        con.close()
+
+@st.cache_data(show_spinner=False, ttl=60)
+def listar_pendencias_ax_genericas(status: str | None = None, setor_alvo: str | None = None) -> pd.DataFrame:
+    con = db_conn()
+    params = []
+    sql = """
+        SELECT id, setor, modulo, acao, payload_json, criado_por_nome, criado_por_chapa, status, observacao, aprovado_por, aprovado_em, criado_em
+        FROM ax_lider_pendencias
+        WHERE 1=1
+    """
+    if status:
+        sql += " AND UPPER(TRIM(status))=?"
+        params.append(str(status).strip().upper())
+    if setor_alvo:
+        sql += " AND UPPER(TRIM(setor))=?"
+        params.append(_norm_setor(setor_alvo))
+    sql += " ORDER BY CASE UPPER(TRIM(status)) WHEN 'PENDENTE' THEN 0 ELSE 1 END, id DESC"
+    try:
+        return pd.read_sql_query(sql, con, params=params)
+    finally:
+        con.close()
+
+
+def _aplicar_pendencia_ax_generica(payload: dict):
+    modulo = str(payload.get('_modulo') or '').strip()
+    acao = str(payload.get('_acao') or '').strip()
+    if modulo == 'cadastrar_colaborador':
+        create_colaborador(payload['nome'], payload['setor'], payload['chapa'], subgrupo=payload.get('subgrupo',''), entrada=payload.get('entrada','06:00'), folga_sab=bool(payload.get('folga_sab', False)))
+        for d in payload.get('dias_folga', []) or []:
+            set_override(payload['setor'], int(payload['ano']), int(payload['mes']), payload['chapa'], int(d), 'status', 'Folga')
+    elif modulo == 'excluir_colaborador':
+        delete_colaborador_total(payload['setor'], payload['chapa'])
+    elif modulo == 'editar_perfil':
+        update_colaborador_perfil(payload['setor'], payload['ch_sel'], payload['chapa_edit'], payload['nome_edit'], payload.get('sg',''), payload.get('ent_sel','06:00'), bool(payload.get('sab', False)))
+    elif modulo == 'alterar_senha':
+        setor = payload['setor']; ch = payload['chapa']; senha_final = payload['senha_final']; forcar = bool(payload.get('forcar_troca', False))
+        user_pwd = get_usuario_sistema_por_setor_chapa(setor, ch)
+        if not user_pwd:
+            upsert_usuario_sistema(nome=str(payload.get('nome') or ch).strip(), setor=setor, chapa=ch, senha=senha_final, is_admin=False, is_lider=False, forcar_troca_senha=forcar)
+        else:
+            update_password(setor, ch, senha_final)
+            set_force_change_password(setor, ch, forcar)
+    elif modulo == 'folgas_grade':
+        hist_db = get_hist_mes_com_overrides_cached(payload['setor'], int(payload['ano']), int(payload['mes']))
+        colaboradores = load_colaboradores_setor(payload['setor'])
+        colab_by = {c['Chapa']: c for c in colaboradores}
+        dias = list(range(1, int(payload['qtd']) + 1))
+        for r in payload.get('edited', []) or []:
+            chg = str(r.get('Chapa') or '')
+            dfh = hist_db.get(chg)
+            for d in dias:
+                want_folga = bool(r.get(str(d), False))
+                if dfh is not None and len(dfh) >= d and dfh.loc[d - 1, 'Status'] == 'Férias':
+                    continue
+                if want_folga:
+                    set_override(payload['setor'], int(payload['ano']), int(payload['mes']), chg, d, 'status', 'Folga')
+                else:
+                    set_override(payload['setor'], int(payload['ano']), int(payload['mes']), chg, d, 'status', 'Trabalho')
+        if bool(payload.get('auto_readequar', False)):
+            _regenerar_mes_inteiro(payload['setor'], int(payload['ano']), int(payload['mes']), seed=int(payload.get('seed', 0)), respeitar_ajustes=True)
+    elif modulo == 'troca_horarios':
+        hist_db = get_hist_mes_com_overrides_cached(payload['setor'], int(payload['ano']), int(payload['mes']))
+        colaboradores = load_colaboradores_setor(payload['setor'])
+        colab_by = {c['Chapa']: c for c in colaboradores}
+        ovmap = _ov_map(payload['setor'], int(payload['ano']), int(payload['mes']))
+        dias2 = list(range(1, int(payload['qtd2']) + 1))
+        acao_th = payload.get('acao_th')
+        horario_sel = payload.get('horario_sel')
+        for r in payload.get('edited', []) or []:
+            ch = str(r.get('Chapa') or '')
+            dfh = hist_db.get(ch)
+            for d in dias2:
+                want = bool(r.get(str(d), False))
+                status_dia = None
+                if dfh is not None and len(dfh) >= d:
+                    status_dia = str(dfh.loc[d - 1, 'Status'])
+                st_ov = (ovmap.get(ch, {}).get(d, {}) or {}).get('status')
+                if st_ov:
+                    status_dia = str(st_ov)
+                st_norm = str(status_dia or '').strip().upper()
+                if acao_th == 'Horário':
+                    if st_norm in ('FOLGA','FOLG','FÉRIAS','FERIAS','FER','AFA','AFASTAMENTO'):
+                        continue
+                    if want:
+                        set_override(payload['setor'], int(payload['ano']), int(payload['mes']), ch, d, 'h_entrada', horario_sel)
+                    else:
+                        del_override(payload['setor'], int(payload['ano']), int(payload['mes']), ch, d, 'h_entrada')
+                elif acao_th == 'Folga':
+                    if st_norm in ('FER','FÉRIAS','FERIAS'):
+                        continue
+                    if want:
+                        set_override(payload['setor'], int(payload['ano']), int(payload['mes']), ch, d, 'status', 'Folga')
+                        del_override(payload['setor'], int(payload['ano']), int(payload['mes']), ch, d, 'h_entrada')
+                    else:
+                        del_override(payload['setor'], int(payload['ano']), int(payload['mes']), ch, d, 'status')
+                else:
+                    if st_norm in ('FER','FÉRIAS','FERIAS'):
+                        continue
+                    if want:
+                        set_override(payload['setor'], int(payload['ano']), int(payload['mes']), ch, d, 'status', 'AFA')
+                        del_override(payload['setor'], int(payload['ano']), int(payload['mes']), ch, d, 'h_entrada')
+                    else:
+                        del_override(payload['setor'], int(payload['ano']), int(payload['mes']), ch, d, 'status')
+        if bool(payload.get('auto_readequar', False)):
+            _regenerar_mes_inteiro(payload['setor'], int(payload['ano']), int(payload['mes']), seed=int(payload.get('seed', 0)), respeitar_ajustes=True)
+    elif modulo == 'preferencia_subgrupo':
+        set_subgrupo_regras(payload['setor'], payload['sg_sel'], payload['regras'])
+        _regenerar_mes_inteiro(payload['setor'], int(payload['ano']), int(payload['mes']), seed=int(payload.get('seed', 0)), respeitar_ajustes=True)
+    elif modulo == 'subgrupo_add':
+        add_subgrupo(payload['setor'], payload['novo_sub'])
+    elif modulo == 'subgrupo_remove':
+        delete_subgrupo(payload['setor'], payload['del_sel'])
+        _regenerar_mes_inteiro(payload['setor'], int(payload['ano']), int(payload['mes']), seed=int(payload.get('seed', 0)), respeitar_ajustes=True)
+    elif modulo == 'retificacao':
+        salvar_retificacao_competencia(payload['setor'], int(payload['ano']), int(payload['mes']), payload['chapa_ret'], int(payload['dia_ret']), novo_status=payload.get('novo_status',''), nova_entrada=payload.get('nova_entrada',''), nova_saida=payload.get('nova_saida',''), novo_subgrupo=payload.get('novo_subgrupo',''), motivo=payload.get('motivo_ret',''), usuario=str(payload.get('usuario','') or ''))
+    elif modulo == 'ferias_add':
+        add_ferias(payload['setor'], payload['ch'], date.fromisoformat(payload['ini']), date.fromisoformat(payload['fim']))
+        _regenerar_mes_inteiro(payload['setor'], int(payload['ano']), int(payload['mes']), seed=int(payload.get('seed', 0)), respeitar_ajustes=True)
+    elif modulo == 'ferias_remove':
+        delete_ferias_row(payload['setor'], payload['chapa'], payload['inicio'], payload['fim'])
+        _regenerar_mes_inteiro(payload['setor'], int(payload['ano']), int(payload['mes']), seed=int(payload.get('seed', 0)), respeitar_ajustes=True)
+
+
+def decidir_pendencia_ax_generica(pendencia_id: int, aprovador_nome: str, aprovar: bool, observacao_aprovador: str = ''):
+    con = db_conn()
+    cur = con.cursor()
+    try:
+        cur.execute("SELECT payload_json, status FROM ax_lider_pendencias WHERE id=? LIMIT 1", (int(pendencia_id),))
+        row = cur.fetchone()
+        if not row:
+            raise ValueError('Pendência AX não encontrada.')
+        payload_json, status_atual = row
+        if str(status_atual or '').strip().upper() != 'PENDENTE':
+            raise ValueError('Essa pendência já foi decidida.')
+        novo_status = 'APROVADO' if aprovar else 'REPROVADO'
+        cur.execute("""
+            UPDATE ax_lider_pendencias
+            SET status=?, aprovado_por=?, aprovado_em=?, observacao=TRIM(COALESCE(observacao,'') || CASE WHEN ?<>'' THEN ' | ' || ? ELSE '' END)
+            WHERE id=?
+        """, (novo_status, str(aprovador_nome or '').strip(), datetime.now().isoformat(), str(observacao_aprovador or '').strip(), str(observacao_aprovador or '').strip(), int(pendencia_id)))
+        con.commit()
+    finally:
+        con.close()
+    if aprovar:
+        payload = json.loads(payload_json or '{}')
+        _aplicar_pendencia_ax_generica(payload)
     try:
         st.cache_data.clear()
     except Exception:
@@ -10804,6 +11013,18 @@ def page_app():
                         st.error("Já existe essa chapa.")
                     else:
                         ch_new = chapa_n.strip()
+                        if bool(auth.get('is_ax_lider', False)) and not bool(auth.get('is_admin', False)):
+                            rid = registrar_pendencia_ax_generica(
+                                setor=setor,
+                                modulo='cadastrar_colaborador',
+                                acao='criar',
+                                payload={'_modulo':'cadastrar_colaborador','_acao':'criar','setor':setor,'nome':nome_n.strip(),'chapa':ch_new,'subgrupo':subgrupo_n,'entrada':entrada_n,'folga_sab':bool(folga_sab_n),'dias_folga':[int(x) for x in dias_folga],'ano':int(ano_cfg),'mes':int(mes_cfg)},
+                                criado_por_nome=str(auth.get('nome') or '').strip(),
+                                criado_por_chapa=str(auth.get('chapa') or '').strip(),
+                                observacao='Cadastro de colaborador enviado pelo AX do Líder'
+                            )
+                            st.warning(f'Solicitação enviada para aprovação do líder. Protocolo #{rid}.')
+                            st.rerun()
                         create_colaborador(nome_n.strip(), setor, ch_new, subgrupo=subgrupo_n, entrada=entrada_n, folga_sab=folga_sab_n)
                         for d in dias_folga:
                             set_override(setor, ano_cfg, mes_cfg, ch_new, int(d), "status", "Folga")
@@ -10831,6 +11052,10 @@ def page_app():
                     if not confirm:
                         st.error("Marque a confirmação para excluir.")
                     else:
+                        if bool(auth.get('is_ax_lider', False)) and not bool(auth.get('is_admin', False)):
+                            rid = registrar_pendencia_ax_generica(setor, 'excluir_colaborador', 'excluir', {'_modulo':'excluir_colaborador','_acao':'excluir','setor':setor,'chapa':ch_del}, str(auth.get('nome') or '').strip(), str(auth.get('chapa') or '').strip(), 'Exclusão de colaborador enviada pelo AX do Líder')
+                            st.warning(f'Solicitação enviada para aprovação do líder. Protocolo #{rid}.')
+                            st.rerun()
                         delete_colaborador_total(setor, ch_del)
                         st.success("Colaborador excluído!")
                         st.rerun()
@@ -10894,6 +11119,10 @@ def page_app():
                         st.error("Preencha a chapa.")
                     else:
                         try:
+                            if bool(auth.get('is_ax_lider', False)) and not bool(auth.get('is_admin', False)):
+                                rid = registrar_pendencia_ax_generica(setor, 'editar_perfil', 'salvar', {'_modulo':'editar_perfil','_acao':'salvar','setor':setor,'ch_sel':ch_sel,'chapa_edit':chapa_edit,'nome_edit':nome_edit,'sg':sg,'ent_sel':ent_sel,'sab':bool(sab)}, str(auth.get('nome') or '').strip(), str(auth.get('chapa') or '').strip(), 'Edição de perfil enviada pelo AX do Líder')
+                                st.warning(f'Solicitação enviada para aprovação do líder. Protocolo #{rid}.')
+                                st.rerun()
                             update_colaborador_perfil(setor, ch_sel, chapa_edit, nome_edit, sg, ent_sel, sab)
                             st.success("Salvo!")
                             st.rerun()
@@ -10949,6 +11178,10 @@ def page_app():
                             st.error("A confirmação da senha não confere.")
                             st.stop()
                     try:
+                        if bool(auth.get('is_ax_lider', False)) and not bool(auth.get('is_admin', False)):
+                            rid = registrar_pendencia_ax_generica(setor, 'alterar_senha', 'salvar', {'_modulo':'alterar_senha','_acao':'salvar','setor':setor,'chapa':ch_sel_pwd,'nome':(csel_pwd.get("Nome") or "").strip(),'senha_final':senha_final,'forcar_troca':bool(forcar_troca)}, str(auth.get('nome') or '').strip(), str(auth.get('chapa') or '').strip(), 'Alteração de senha enviada pelo AX do Líder')
+                            st.warning(f'Solicitação enviada para aprovação do líder. Protocolo #{rid}.')
+                            st.rerun()
                         if not user_pwd:
                             upsert_usuario_sistema(
                                 nome=(csel_pwd.get("Nome") or "").strip(),
@@ -11095,18 +11328,31 @@ def page_app():
             st.markdown("## 🧾 Aprovações AX do Líder")
             eh_ax = bool(auth.get("is_ax_lider", False)) and not bool(auth.get("is_admin", False))
             df_ax = listar_solicitacoes_ax_lider()
-            if df_ax.empty:
+            df_axg = listar_pendencias_ax_genericas()
+            if df_ax.empty and df_axg.empty:
                 st.info("Nenhuma solicitação AX cadastrada.")
             else:
                 if eh_ax:
-                    df_meu = df_ax[df_ax["criado_por_chapa"].astype(str).str.strip() == str(auth.get("chapa") or "").strip()].copy()
                     st.caption("Aqui você acompanha suas solicitações enviadas para aprovação.")
-                    st.dataframe(df_meu, use_container_width=True, height=380)
+                    if not df_ax.empty:
+                        df_meu = df_ax[df_ax["criado_por_chapa"].astype(str).str.strip() == str(auth.get("chapa") or "").strip()].copy()
+                        if not df_meu.empty:
+                            st.markdown("### Solicitações de atualização de funcionário")
+                            st.dataframe(df_meu, use_container_width=True, height=220)
+                    if not df_axg.empty:
+                        df_meu_g = df_axg[df_axg["criado_por_chapa"].astype(str).str.strip() == str(auth.get("chapa") or "").strip()].copy()
+                        if not df_meu_g.empty:
+                            df_meu_g = df_meu_g.copy()
+                            df_meu_g['resumo'] = df_meu_g['modulo'].astype(str) + ' / ' + df_meu_g['acao'].astype(str)
+                            st.markdown("### Demais solicitações")
+                            st.dataframe(df_meu_g[['id','setor','resumo','status','observacao','criado_em','aprovado_por','aprovado_em']], use_container_width=True, height=260)
                 else:
                     st.caption("O líder/admin aprova ou reprova as alterações propostas pelo AX do Líder.")
-                    pend = df_ax[df_ax["status"].astype(str).str.upper() == "PENDENTE"].copy()
-                    hist = df_ax[df_ax["status"].astype(str).str.upper() != "PENDENTE"].copy()
-                    if pend.empty:
+                    pend = df_ax[df_ax["status"].astype(str).str.upper() == "PENDENTE"].copy() if not df_ax.empty else pd.DataFrame()
+                    pendg = df_axg[df_axg["status"].astype(str).str.upper() == "PENDENTE"].copy() if not df_axg.empty else pd.DataFrame()
+                    hist = df_ax[df_ax["status"].astype(str).str.upper() != "PENDENTE"].copy() if not df_ax.empty else pd.DataFrame()
+                    histg = df_axg[df_axg["status"].astype(str).str.upper() != "PENDENTE"].copy() if not df_axg.empty else pd.DataFrame()
+                    if pend.empty and pendg.empty:
                         st.success("Não há pendências para aprovação no momento.")
                     else:
                         for _, r in pend.iterrows():
@@ -11132,9 +11378,40 @@ def page_app():
                                         st.rerun()
                                     except Exception as e:
                                         st.error(f"Falha ao reprovar: {e}")
+                        for _, r in pendg.iterrows():
+                            with st.container(border=True):
+                                st.write(f"**Pendência #{int(r['id'])}** — módulo **{str(r['modulo'])}** / ação **{str(r['acao'])}**")
+                                st.write(f"**AX:** {str(r['criado_por_nome'])} ({str(r['criado_por_chapa'])}) | **Setor:** {str(r['setor'])}")
+                                if str(r.get('observacao') or '').strip():
+                                    st.caption(f"Observação: {str(r.get('observacao') or '').strip()}")
+                                try:
+                                    payload_view = json.loads(str(r.get('payload_json') or '{}'))
+                                    st.json(payload_view)
+                                except Exception:
+                                    pass
+                                gp1, gp2 = st.columns(2)
+                                if gp1.button("✅ Aprovar pendência", key=f"axg_aprov_{int(r['id'])}"):
+                                    try:
+                                        decidir_pendencia_ax_generica(int(r['id']), str(auth.get('nome') or '').strip(), True)
+                                        st.success("Pendência aprovada e aplicada.")
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"Falha ao aprovar pendência: {e}")
+                                if gp2.button("❌ Reprovar pendência", key=f"axg_reprov_{int(r['id'])}"):
+                                    try:
+                                        decidir_pendencia_ax_generica(int(r['id']), str(auth.get('nome') or '').strip(), False)
+                                        st.warning("Pendência reprovada.")
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"Falha ao reprovar pendência: {e}")
                     if not hist.empty:
-                        st.markdown("### Histórico")
-                        st.dataframe(hist, use_container_width=True, height=280)
+                        st.markdown("### Histórico — atualização de funcionário")
+                        st.dataframe(hist, use_container_width=True, height=180)
+                    if not histg.empty:
+                        st.markdown("### Histórico — demais módulos")
+                        histg = histg.copy()
+                        histg['resumo'] = histg['modulo'].astype(str) + ' / ' + histg['acao'].astype(str)
+                        st.dataframe(histg[['id','setor','resumo','status','observacao','criado_em','aprovado_por','aprovado_em']], use_container_width=True, height=220)
 
         elif sec_col == "🔄 Rodízio Caixa":
             st.markdown("## 🔄 Rodízio mensal Caixa 01 ↔ Caixa 02")
@@ -11616,6 +11893,10 @@ def page_app():
                     auto_readequar = st.checkbox("🔄 Readequar escala ao salvar (somente se você quiser)", value=False, key="grid_auto_regen")
 
                     if st.button("💾 Salvar folgas manuais (e readequar mês)", key="grid_save", disabled=(status_comp == 'FECHADA')):
+                        if bool(auth.get('is_ax_lider', False)) and not bool(auth.get('is_admin', False)):
+                            rid = registrar_pendencia_ax_generica(setor, 'folgas_grade', 'salvar', {'_modulo':'folgas_grade','_acao':'salvar','setor':setor,'ano':int(ano),'mes':int(mes),'qtd':int(qtd),'edited':edited.to_dict(orient='records'),'auto_readequar':bool(auto_readequar),'seed':int(st.session_state.get('last_seed', 0))}, str(auth.get('nome') or '').strip(), str(auth.get('chapa') or '').strip(), 'Folgas manuais enviadas pelo AX do Líder')
+                            st.warning(f'Solicitação enviada para aprovação do líder. Protocolo #{rid}.')
+                            st.rerun()
                         set_folga = 0
                         set_trab = 0
                         for _, r in edited.iterrows():
@@ -11968,6 +12249,10 @@ def page_app():
                                 auto_readequar_th = st.checkbox("🔄 Readequar escala ao salvar", value=True, key="th_auto_regen")
 
                                 if st.button("💾 Salvar troca de horários (aplicar nos dias marcados)", key="th_save"):
+                                    if bool(auth.get('is_ax_lider', False)) and not bool(auth.get('is_admin', False)):
+                                        rid = registrar_pendencia_ax_generica(setor, 'troca_horarios', 'salvar', {'_modulo':'troca_horarios','_acao':'salvar','setor':setor,'ano':int(ano),'mes':int(mes),'qtd2':int(qtd2),'edited':edited_th.to_dict(orient='records'),'acao_th':acao_th,'horario_sel':horario_sel,'auto_readequar':bool(auto_readequar_th),'seed':int(st.session_state.get('last_seed', 0))}, str(auth.get('nome') or '').strip(), str(auth.get('chapa') or '').strip(), 'Troca de horários enviada pelo AX do Líder')
+                                        st.warning(f'Solicitação enviada para aprovação do líder. Protocolo #{rid}.')
+                                        st.rerun()
                                     applied = 0
                                     skipped = 0
                                     for _, r in edited_th.iterrows():
@@ -12121,10 +12406,12 @@ def page_app():
                 ev_sab = p3.checkbox("Evitar SÁB", value=bool(regras["sáb"]), key=f"ev_sab_{sg_sel}")
 
                 if st.button("Salvar preferência do subgrupo (e readequar mês)", key="pref_save"):
-                    set_subgrupo_regras(setor, sg_sel, {
-                        "seg": int(ev_seg), "ter": int(ev_ter), "qua": int(ev_qua),
-                        "qui": int(ev_qui), "sex": int(ev_sex), "sáb": int(ev_sab)
-                    })
+                    regras_pref = {"seg": int(ev_seg), "ter": int(ev_ter), "qua": int(ev_qua), "qui": int(ev_qui), "sex": int(ev_sex), "sáb": int(ev_sab)}
+                    if bool(auth.get('is_ax_lider', False)) and not bool(auth.get('is_admin', False)):
+                        rid = registrar_pendencia_ax_generica(setor, 'preferencia_subgrupo', 'salvar', {'_modulo':'preferencia_subgrupo','_acao':'salvar','setor':setor,'sg_sel':sg_sel,'regras':regras_pref,'ano':int(ano),'mes':int(mes),'seed':int(st.session_state.get('last_seed', 0))}, str(auth.get('nome') or '').strip(), str(auth.get('chapa') or '').strip(), 'Preferência de subgrupo enviada pelo AX do Líder')
+                        st.warning(f'Solicitação enviada para aprovação do líder. Protocolo #{rid}.')
+                        st.rerun()
+                    set_subgrupo_regras(setor, sg_sel, regras_pref)
                     _regenerar_mes_inteiro(setor, ano, mes, seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
                     st.success("Preferência salva e escala readequada!")
                     st.rerun()
@@ -12140,6 +12427,10 @@ def page_app():
                     novo_sub = st.text_input("Novo subgrupo:", key="sg_new")
                     if st.button("Adicionar subgrupo", key="sg_add"):
                         if novo_sub.strip():
+                            if bool(auth.get('is_ax_lider', False)) and not bool(auth.get('is_admin', False)):
+                                rid = registrar_pendencia_ax_generica(setor, 'subgrupo_add', 'criar', {'_modulo':'subgrupo_add','_acao':'criar','setor':setor,'novo_sub':novo_sub.strip()}, str(auth.get('nome') or '').strip(), str(auth.get('chapa') or '').strip(), 'Inclusão de subgrupo enviada pelo AX do Líder')
+                                st.warning(f'Solicitação enviada para aprovação do líder. Protocolo #{rid}.')
+                                st.rerun()
                             add_subgrupo(setor, novo_sub.strip())
                             st.success("Subgrupo adicionado!")
                             st.rerun()
@@ -12150,6 +12441,10 @@ def page_app():
                     if subgrupos:
                         del_sel = st.selectbox("Remover subgrupo:", ["(nenhum)"] + subgrupos, key="sg_del")
                         if del_sel != "(nenhum)" and st.button("Remover", key="sg_del_btn"):
+                            if bool(auth.get('is_ax_lider', False)) and not bool(auth.get('is_admin', False)):
+                                rid = registrar_pendencia_ax_generica(setor, 'subgrupo_remove', 'remover', {'_modulo':'subgrupo_remove','_acao':'remover','setor':setor,'del_sel':del_sel,'ano':int(ano),'mes':int(mes),'seed':int(st.session_state.get('last_seed', 0))}, str(auth.get('nome') or '').strip(), str(auth.get('chapa') or '').strip(), 'Remoção de subgrupo enviada pelo AX do Líder')
+                                st.warning(f'Solicitação enviada para aprovação do líder. Protocolo #{rid}.')
+                                st.rerun()
                             delete_subgrupo(setor, del_sel)
                             _regenerar_mes_inteiro(setor, ano, mes, seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
                             st.success("Subgrupo removido e escala readequada!")
@@ -12222,6 +12517,10 @@ def page_app():
                     if fim < ini:
                         st.error("Data final não pode ser menor que a inicial.")
                     else:
+                        if bool(auth.get('is_ax_lider', False)) and not bool(auth.get('is_admin', False)):
+                            rid = registrar_pendencia_ax_generica(setor, 'ferias_add', 'salvar', {'_modulo':'ferias_add','_acao':'salvar','setor':setor,'ch':ch,'ini':ini.isoformat(),'fim':fim.isoformat(),'ano':int(st.session_state['cfg_ano']),'mes':int(st.session_state['cfg_mes']),'seed':int(st.session_state.get('last_seed', 0))}, str(auth.get('nome') or '').strip(), str(auth.get('chapa') or '').strip(), 'Lançamento de férias enviado pelo AX do Líder')
+                            st.warning(f'Solicitação enviada para aprovação do líder. Protocolo #{rid}.')
+                            st.rerun()
                         add_ferias(setor, ch, ini, fim)
                         _regenerar_mes_inteiro(setor, int(st.session_state["cfg_ano"]), int(st.session_state["cfg_mes"]), seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
                         st.success("Férias adicionadas e escala readequada!")
@@ -12322,6 +12621,10 @@ def page_app():
                     rem_idx = st.number_input("Linha para remover (1,2,3...)", min_value=1, max_value=len(df_f), value=1, key="fer_rem_idx")
                     if st.button("Remover linha (e readequar mês)", key="fer_rem_btn"):
                         r = df_f.iloc[int(rem_idx) - 1]
+                        if bool(auth.get('is_ax_lider', False)) and not bool(auth.get('is_admin', False)):
+                            rid = registrar_pendencia_ax_generica(setor, 'ferias_remove', 'remover', {'_modulo':'ferias_remove','_acao':'remover','setor':setor,'chapa':r['Chapa'],'inicio':r['Início'],'fim':r['Fim'],'ano':int(st.session_state['cfg_ano']),'mes':int(st.session_state['cfg_mes']),'seed':int(st.session_state.get('last_seed', 0))}, str(auth.get('nome') or '').strip(), str(auth.get('chapa') or '').strip(), 'Remoção de férias enviada pelo AX do Líder')
+                            st.warning(f'Solicitação enviada para aprovação do líder. Protocolo #{rid}.')
+                            st.rerun()
                         delete_ferias_row(setor, r["Chapa"], r["Início"], r["Fim"])
                         _regenerar_mes_inteiro(setor, int(st.session_state["cfg_ano"]), int(st.session_state["cfg_mes"]), seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
                         st.success("Férias removidas e escala readequada!")
