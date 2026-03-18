@@ -12453,6 +12453,10 @@ def page_app():
                 qtd_destino = int(c3.number_input("Qtd fixa no destino", min_value=1, max_value=100, step=1, key='rod_caixa_qtd'))
                 tolerancia = int(c4.number_input("Tolerância (min)", min_value=0, max_value=120, step=5, key='rod_caixa_tol'))
 
+                ano_r = int(st.session_state.get('cfg_ano', datetime.now().year))
+                mes_r = int(st.session_state.get('cfg_mes', datetime.now().month))
+                _status_comp_rod = get_status_competencia(setor, ano_r, mes_r)
+
                 bcfg1, bcfg2, _bcfg3 = st.columns([1, 1, 4])
                 if bcfg1.button("Salvar configuração do rodízio", key='rod_caixa_save_cfg', use_container_width=True, disabled=(_status_comp_rod == 'FECHADA')):
                     set_rodizio_caixa_cfg(setor, subgrupo_origem, subgrupo_destino, qtd_destino, tolerancia, True)
@@ -12466,10 +12470,6 @@ def page_app():
                     set_rodizio_caixa_cfg(setor, 'OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02', 14, 20, True)
                     st.success('Configuração resetada para o padrão.')
                     st.rerun()
-
-                ano_r = int(st.session_state.get('cfg_ano', datetime.now().year))
-                mes_r = int(st.session_state.get('cfg_mes', datetime.now().month))
-                _status_comp_rod = get_status_competencia(setor, ano_r, mes_r)
                 if _status_comp_rod == 'FECHADA':
                     st.error(f'🔒 Competência {mes_r:02d}/{ano_r} fechada: o rodízio deste mês fica somente para consulta.')
                 state_base = f"rod_caixa_aprov::{setor}::{ano_r}::{mes_r}::{subgrupo_origem}::{subgrupo_destino}"
