@@ -7066,12 +7066,13 @@ def load_escala_mes_db(setor: str, ano: int, mes: int):
         return {}
     hist = {}
     for chapa, data_s, dia_sem, status, h_ent, h_sai in rows:
+        ch = _norm_chapa(chapa)
         dt = pd.to_datetime(data_s)
-        hist.setdefault(chapa, []).append({
+        hist.setdefault(ch, []).append({
             "Data": dt, "Dia": dia_sem, "Status": status,
             "H_Entrada": h_ent or "", "H_Saida": h_sai or ""
         })
-    return {ch: pd.DataFrame(items) for ch, items in hist.items()}
+    return {_norm_chapa(ch): pd.DataFrame(items) for ch, items in hist.items()}
 
 
 @st.cache_data(show_spinner=False, ttl=120)
@@ -9794,6 +9795,12 @@ def get_escala_colaborador_mes(setor: str, chapa: str, ano: int, mes: int) -> pd
     chapa = _norm_chapa(chapa)
     hist_db = get_hist_mes_com_overrides_cached(setor, int(ano), int(mes)) or {}
     df_hist = hist_db.get(chapa)
+    if df_hist is None:
+        # compatibilidade extra caso alguma chave histórica tenha vindo sem normalização
+        for k, v in (hist_db or {}).items():
+            if _norm_chapa(k) == chapa:
+                df_hist = v
+                break
     if df_hist is not None and not df_hist.empty:
         out = df_hist.copy().reset_index(drop=True)
 
