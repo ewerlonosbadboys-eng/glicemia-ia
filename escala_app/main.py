@@ -3584,24 +3584,31 @@ def _fast_restore_bundled_latest_before_start() -> None:
         pass
 
 
+# =========================================================
+# SAFE BOOT FIXES
+# =========================================================
+# Defaults de inicialização para evitar NameError/KeyError no boot
+if "QUICK_LOGIN_BOOT" not in globals():
+    QUICK_LOGIN_BOOT = True
+if "FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP" not in globals():
+    FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP = False
+if not hasattr(st, "session_state"):
+    pass
+else:
+    if "auth" not in st.session_state:
+        st.session_state["auth"] = None
+    if "_full_boot_done" not in st.session_state:
+        st.session_state["_full_boot_done"] = False
 
-
-# Fallback seguro: em algumas versões o validador de contrato não veio no merge
-# e o app quebrava com NameError logo na inicialização.
-def validar_contrato_sistema():
-    return True
+if "validar_contrato_sistema" not in globals():
+    def validar_contrato_sistema():
+        return None
 
 # =========================================================
 # MAIN
 # =========================================================
 _fast_restore_bundled_latest_before_start()
 validar_contrato_sistema()
-
-# Inicialização segura do session_state para evitar KeyError no primeiro boot
-if "auth" not in st.session_state:
-    st.session_state["auth"] = None
-if "_full_boot_done" not in st.session_state:
-    st.session_state["_full_boot_done"] = False
 
 if st.session_state["auth"] is None and QUICK_LOGIN_BOOT:
     db_init_fast_login()
