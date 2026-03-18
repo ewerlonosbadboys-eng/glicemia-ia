@@ -384,6 +384,132 @@ def aplicar_tema_premium_etapa1():
     </style>
     """, unsafe_allow_html=True)
 
+
+def aplicar_reforco_visual_etapa5():
+    st.markdown("""
+    <style>
+    /* ETAPA 5 — reforço visual mais forte sem mexer na lógica */
+    .block-container {
+        max-width: 1560px !important;
+    }
+
+    div[data-testid="stMetric"] {
+        border: 1px solid rgba(96,165,250,0.28) !important;
+        box-shadow: 0 20px 44px rgba(0,0,0,0.30) !important;
+    }
+
+    div[data-testid="stMetric"]::after {
+        content: "";
+        position: absolute;
+        inset: auto 0 0 0;
+        height: 1px;
+        background: linear-gradient(90deg, rgba(96,165,250,0), rgba(96,165,250,0.55), rgba(96,165,250,0));
+    }
+
+    .stDataFrame, .stTable, [data-testid="stDataFrameResizable"] {
+        border-radius: 20px !important;
+        border: 1px solid rgba(96,165,250,0.24) !important;
+        box-shadow: 0 24px 50px rgba(0,0,0,0.34) !important;
+        overflow: hidden !important;
+    }
+
+    [data-testid="stDataFrameResizable"] thead tr,
+    [data-testid="stDataFrameResizable"] th {
+        background: linear-gradient(180deg, rgba(17,48,104,1), rgba(8,22,48,1)) !important;
+        border-bottom: 1px solid rgba(96,165,250,0.34) !important;
+        text-transform: uppercase !important;
+        letter-spacing: .04em !important;
+        font-size: 11px !important;
+    }
+
+    [data-testid="stDataFrameResizable"] td {
+        background: rgba(3,11,25,0.98) !important;
+        border-bottom: 1px solid rgba(255,255,255,0.06) !important;
+    }
+
+    [data-testid="stDataFrameResizable"] tbody tr:nth-child(odd) td {
+        background: rgba(4,13,29,0.96) !important;
+    }
+
+    [data-testid="stDataFrameResizable"] tbody tr:nth-child(even) td {
+        background: rgba(8,18,38,0.96) !important;
+    }
+
+    [data-testid="stDataFrameResizable"] tbody tr:hover td {
+        background: linear-gradient(90deg, rgba(10,32,71,0.98), rgba(8,22,48,0.98)) !important;
+        box-shadow: inset 0 1px 0 rgba(96,165,250,0.10), inset 0 -1px 0 rgba(96,165,250,0.10) !important;
+    }
+
+    .stButton > button,
+    div[data-testid="stFormSubmitButton"] button,
+    .stDownloadButton > button,
+    button[kind="secondary"] {
+        min-height: 44px !important;
+        border-radius: 14px !important;
+        box-shadow: 0 18px 34px rgba(37,99,235,0.34) !important;
+    }
+
+    .stButton > button:hover,
+    div[data-testid="stFormSubmitButton"] button:hover,
+    .stDownloadButton > button:hover,
+    button[kind="secondary"]:hover {
+        transform: translateY(-2px) !important;
+    }
+
+    div[data-baseweb="input"] > div,
+    div[data-baseweb="select"] > div,
+    .stTextInput input,
+    .stNumberInput input,
+    .stTextArea textarea,
+    .stDateInput input,
+    .stTimeInput input,
+    .stMultiSelect div[data-baseweb="select"] > div {
+        background: rgba(255,255,255,0.07) !important;
+        border: 1px solid rgba(96,165,250,0.22) !important;
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.04), 0 10px 24px rgba(0,0,0,0.16) !important;
+    }
+
+    .stTabs [data-baseweb="tab-list"] {
+        padding: 8px !important;
+        gap: 12px !important;
+        border: 1px solid rgba(96,165,250,0.18) !important;
+        box-shadow: 0 14px 30px rgba(0,0,0,0.18) !important;
+    }
+
+    .stTabs [data-baseweb="tab"] {
+        min-height: 48px !important;
+        padding-left: 16px !important;
+        padding-right: 16px !important;
+        font-weight: 800 !important;
+    }
+
+    .stTabs [aria-selected="true"] {
+        box-shadow: 0 16px 30px rgba(29,78,216,0.28) !important;
+    }
+
+    div[data-testid="stForm"] {
+        border: 1px solid rgba(96,165,250,0.16) !important;
+        box-shadow: 0 22px 40px rgba(0,0,0,0.24) !important;
+    }
+
+    section[data-testid="stSidebar"] {
+        box-shadow: inset -1px 0 0 rgba(255,255,255,0.04), 22px 0 46px rgba(0,0,0,0.30) !important;
+    }
+
+    section[data-testid="stSidebar"] .stButton > button {
+        width: 100% !important;
+    }
+
+    .stAlert {
+        border: 1px solid rgba(96,165,250,0.16) !important;
+    }
+
+    .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
+        text-shadow: 0 2px 18px rgba(79,140,255,0.10);
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
 VERSAO_ACESSO_LIDER = "ACESSO_LIDER_FIX_2026_03_14_v2"
 
 # =========================================================
