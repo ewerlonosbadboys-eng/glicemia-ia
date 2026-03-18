@@ -2377,6 +2377,125 @@ def ui_hero(title: str, subtitle: str = "", badge: str = ""):
     )
 
 
+def get_app_like_nav_config(is_admin_area: bool, setor: str = ""):
+    setor_norm = str(setor or "").strip().upper()
+    colabs = [
+        ("👥 Colaboradores", {"sec_main": "👥 Colaboradores", "sec_col": "👥 Colaboradores"}),
+        ("➕ Cadastrar colaborador", {"sec_main": "👥 Colaboradores", "sec_col": "➕ Cadastrar colaborador"}),
+        ("✏️ Editar perfil", {"sec_main": "👥 Colaboradores", "sec_col": "✏️ Editar perfil"}),
+        ("🔑 Alterar senha", {"sec_main": "👥 Colaboradores", "sec_col": "🔑 Alterar senha colaborador"}),
+        ("🗑️ Excluir colaborador", {"sec_main": "👥 Colaboradores", "sec_col": "🗑️ Excluir colaborador"}),
+        ("🧾 Aprovações AX", {"sec_main": "👥 Colaboradores", "sec_col": "🧾 Aprovações AX"}),
+    ]
+    if setor_norm == "FRENTECAIXA":
+        colabs.append(("🔄 Rodízio Caixa", {"sec_main": "👥 Colaboradores", "sec_col": "🔄 Rodízio Caixa"}))
+
+    return {
+        "dashboard": {
+            "label": "🏠 Dashboard",
+            "default_sub": "Visão geral",
+            "submenus": [
+                ("Visão geral", {"sec_main": "dashboard"}),
+            ],
+        },
+        "colaboradores": {
+            "label": "👥 Colaboradores",
+            "default_sub": "👥 Colaboradores",
+            "submenus": colabs,
+        },
+        "escala": {
+            "label": "📅 Escala",
+            "default_sub": "🚀 Gerar escala",
+            "submenus": [
+                ("🚀 Gerar escala", {"sec_main": "🚀 Gerar Escala"}),
+                ("📊 Excel modelo", {"sec_main": "🖨️ Impressão", "sec_imp": "📊 Excel modelo"}),
+                ("🗓️ Quem trabalha no dia", {"sec_main": "🖨️ Impressão", "sec_imp": "🗓️ Quem trabalha no dia"}),
+                ("📅 Escala", {"sec_main": "🖨️ Impressão", "sec_imp": "📅 Escala"}),
+                ("🖨️ Imprimir escala parede", {"sec_main": "🖨️ Impressão", "sec_imp": "🖨️ Imprimir escala parede"}),
+            ],
+        },
+        "gestao": {
+            "label": "⚙️ Gestão",
+            "default_sub": "🧩 Folgas manuais em grade",
+            "submenus": [
+                ("🧩 Folgas manuais em grade", {"sec_main": "⚙️ Ajustes", "sec_aj": "🧩 Folgas manuais em grade"}),
+                ("📊 Contagens por dia", {"sec_main": "⚙️ Ajustes", "sec_aj": "📊 Contagens por dia"}),
+                ("🔁 Troca de horários", {"sec_main": "⚙️ Ajustes", "sec_aj": "🔁 Troca de horários"}),
+                ("✅ Preferência por subgrupo", {"sec_main": "⚙️ Ajustes", "sec_aj": "✅ Preferência por subgrupo"}),
+                ("📌 Subgrupos (editável)", {"sec_main": "⚙️ Ajustes", "sec_aj": "📌 Subgrupos (editável)"}),
+                ("✏️ Retificar folga, horário e subgrupo", {"sec_main": "⚙️ Ajustes", "sec_aj": "✏️ Retificar folga, horário e subgrupo"}),
+                ("🗺️ Mapa anual de férias", {"sec_main": "🏖️ Férias", "sec_fer": "🗺️ Mapa anual de férias"}),
+                ("➕ Lançar Férias", {"sec_main": "🏖️ Férias", "sec_fer": "➕ Lançar Férias"}),
+                ("📊 Controle (histórico)", {"sec_main": "🏖️ Férias", "sec_fer": "📊 Controle (histórico)"}),
+                ("📋 Férias cadastradas", {"sec_main": "🏖️ Férias", "sec_fer": "📋 Férias cadastradas"}),
+                ("❌ Remover férias", {"sec_main": "🏖️ Férias", "sec_fer": "❌ Remover férias"}),
+                ("✍️ Assinaturas", {"sec_main": "✍️ Assinaturas"}),
+                ("📨 Minhas solicitações", {"sec_main": "📨 Minhas solicitações"}),
+            ],
+        },
+        "admin": {
+            "label": "🔒 Admin",
+            "default_sub": "Painel admin",
+            "submenus": [("Painel admin", {"sec_main": "🔒 Admin"})],
+        },
+    }
+
+
+def render_app_like_sidebar_nav(is_admin_area: bool, setor: str = ""):
+    cfg = get_app_like_nav_config(is_admin_area, setor)
+    main_keys = ["admin"] if is_admin_area else ["dashboard", "colaboradores", "escala", "gestao"]
+    default_main = main_keys[0]
+    if st.session_state.get("app_like_main") not in main_keys:
+        st.session_state["app_like_main"] = default_main
+    current_main = st.session_state["app_like_main"]
+
+    st.markdown("<div class='app-nav-label'>App</div>", unsafe_allow_html=True)
+    for key in main_keys:
+        label = cfg[key]["label"]
+        clicked = st.button(label, key=f"app_like_main_btn::{key}", use_container_width=True, type="primary" if current_main == key else "secondary")
+        if clicked:
+            st.session_state["app_like_main"] = key
+            st.session_state["app_like_sub"] = cfg[key]["default_sub"]
+            current_main = key
+
+    submenus = cfg[current_main]["submenus"]
+    labels = [label for label, _ in submenus]
+    current_sub = st.session_state.get("app_like_sub")
+    if current_sub not in labels:
+        current_sub = cfg[current_main]["default_sub"]
+        st.session_state["app_like_sub"] = current_sub
+
+    if labels:
+        st.markdown("<div class='app-nav-label'>Subabas</div>", unsafe_allow_html=True)
+        chosen = st.radio(
+            "Abrir",
+            labels,
+            index=labels.index(current_sub),
+            key=f"app_like_sub_radio::{current_main}",
+            label_visibility="collapsed",
+        )
+        st.session_state["app_like_sub"] = chosen
+        st.markdown(f"<div class='app-nav-note'>Atual: {chosen}</div>", unsafe_allow_html=True)
+
+
+def resolve_app_like_route(is_admin_area: bool, setor: str = ""):
+    cfg = get_app_like_nav_config(is_admin_area, setor)
+    main_keys = ["admin"] if is_admin_area else ["dashboard", "colaboradores", "escala", "gestao"]
+    current_main = st.session_state.get("app_like_main")
+    if current_main not in main_keys:
+        current_main = main_keys[0]
+    submenus = cfg[current_main]["submenus"]
+    labels = [label for label, _ in submenus]
+    current_sub = st.session_state.get("app_like_sub")
+    if current_sub not in labels:
+        current_sub = cfg[current_main]["default_sub"]
+    route_map = {label: route for label, route in submenus}
+    route = dict(route_map.get(current_sub, {}))
+    route["main_group"] = current_main
+    route["sub_label"] = current_sub
+    return route
+
+
 # =========================
 # ADMIN: Backup / Restore + Setores + Import
 # =========================
@@ -11631,6 +11750,9 @@ def page_app():
     aplicar_tema_premium_etapa1()
     auth = st.session_state.get("auth") or {}
     setor = auth.get("setor", "GERAL")
+    _lideranca_ok_nav = bool(auth.get('is_lider', False)) or bool(auth.get('is_ax_lider', False)) or colaborador_eh_lideranca(setor, auth.get('chapa',''))
+    _perfil_gestao_nav = bool(auth.get('is_admin', False)) or _lideranca_ok_nav
+    _is_admin_area_nav = bool(auth.get("is_admin", False)) and setor == "ADMIN"
 
     if st.session_state.get("auth_force_change", False):
         st.markdown("## 🔐 Troca obrigatória de senha")
@@ -11720,6 +11842,10 @@ def page_app():
 
         st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
 
+        if _perfil_gestao_nav:
+            render_app_like_sidebar_nav(_is_admin_area_nav, setor)
+            st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
+
         if st.button("🚪 Sair", use_container_width=True, key="logout_btn"):
             st.session_state["auth"] = None
             st.rerun()
@@ -11782,26 +11908,45 @@ def page_app():
     st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
 
     # =========================
-    # ABAS
+    # APP / NAVEGAÇÃO LATERAL
     # =========================
-    tabs = ["👥 Colaboradores", "🚀 Gerar Escala", "⚙️ Ajustes", "🏖️ Férias", "🖨️ Impressão", "✍️ Assinaturas", "📨 Minhas solicitações"]
     is_admin_area = bool(auth.get("is_admin", False)) and setor == "ADMIN"
-    if is_admin_area:
-        tabs = ["🔒 Admin"]
+    app_route = resolve_app_like_route(is_admin_area, setor)
+    sec_main = app_route.get("sec_main", "dashboard")
+    sec_col = app_route.get("sec_col", "👥 Colaboradores")
+    sec_aj = app_route.get("sec_aj", "🧩 Folgas manuais em grade")
+    sec_fer = app_route.get("sec_fer", "🗺️ Mapa anual de férias")
+    sec_imp = app_route.get("sec_imp", "📊 Excel modelo")
 
-    sec_main = st.radio("Navegação", tabs, horizontal=True, key="main_nav_radio_ultra_fast")
+    if sec_main == "dashboard":
+        ui_section("Dashboard", f"Área inicial do app. Clique nas subabas da sidebar para abrir cada fluxo sem mudar a lógica do sistema.")
+        d1, d2, d3 = st.columns(3)
+        with d1:
+            st.markdown("<div class='ax-section-head'><div class='ax-section-title'>👥 Colaboradores</div><div class='ax-section-sub'>Cadastros, perfil, senha e aprovações AX.</div></div>", unsafe_allow_html=True)
+            if st.button("Abrir colaboradores", key="goto_colab_dashboard", use_container_width=True):
+                st.session_state["app_like_main"] = "colaboradores"
+                st.session_state["app_like_sub"] = "👥 Colaboradores"
+                st.rerun()
+        with d2:
+            st.markdown("<div class='ax-section-head'><div class='ax-section-title'>📅 Escala</div><div class='ax-section-sub'>Gerar, consultar e imprimir a escala do mês.</div></div>", unsafe_allow_html=True)
+            if st.button("Abrir escala", key="goto_escala_dashboard", use_container_width=True):
+                st.session_state["app_like_main"] = "escala"
+                st.session_state["app_like_sub"] = "🚀 Gerar escala"
+                st.rerun()
+        with d3:
+            st.markdown("<div class='ax-section-head'><div class='ax-section-title'>⚙️ Gestão</div><div class='ax-section-sub'>Ajustes, férias, assinaturas e solicitações.</div></div>", unsafe_allow_html=True)
+            if st.button("Abrir gestão", key="goto_gestao_dashboard", use_container_width=True):
+                st.session_state["app_like_main"] = "gestao"
+                st.session_state["app_like_sub"] = "🧩 Folgas manuais em grade"
+                st.rerun()
+        st.info("Use a barra lateral para navegar entre abas e subabas no estilo aplicativo, mantendo todas as regras e telas atuais.")
+        return
 
     # ------------------------------------------------------
     # ABA 1: Colaboradores
     # ------------------------------------------------------
     if sec_main == "👥 Colaboradores":
-        sec_col = st.radio(
-            "",
-            (["👥 Colaboradores", "➕ Cadastrar colaborador", "🗑️ Excluir colaborador", "✏️ Editar perfil", "🔑 Alterar senha colaborador", "🧾 Aprovações AX"] + (["🔄 Rodízio Caixa"] if str(setor).strip().upper() == "FRENTECAIXA" else [])), 
-            horizontal=True,
-            key="sec_col_radio_real_speed",
-            label_visibility="collapsed",
-        )
+        ui_section("Colaboradores", f"Subaba ativa: {sec_col}")
 
         if sec_col == "👥 Colaboradores":
             st.markdown("### 👥 Colaboradores")
@@ -12648,7 +12793,7 @@ def page_app():
             c2.caption("Alterar em 🗓️ Competência (sidebar)")
             c3.caption("Ajustes aplicam na competência ativa.")
 
-        sec_aj = st.radio("", ["🧩 Folgas manuais em grade", "📊 Contagens por dia", "🔁 Troca de horários", "✅ Preferência por subgrupo", "📌 Subgrupos (editável)", "✏️ Retificar folga, horário e subgrupo"], horizontal=True, key="ajustes_nav_fast", label_visibility="collapsed")
+        ui_section("Ajustes", f"Subaba ativa: {sec_aj}")
 
         status_comp = get_status_competencia(setor, ano, mes)
         _is_admin_auth = bool((auth or {}).get('is_admin', False))
@@ -13395,7 +13540,7 @@ def page_app():
         if not colaboradores:
             st.warning("Sem colaboradores cadastrados.")
         else:
-            sec_fer = st.radio("", ["🗺️ Mapa anual de férias", "➕ Lançar Férias", "📊 Controle (histórico)", "📋 Férias cadastradas", "❌ Remover férias"], horizontal=True, key="ferias_nav_fast", label_visibility="collapsed")
+            ui_section("Férias", f"Subaba ativa: {sec_fer}")
 
             # ---------------------------
             # TAB 1 — MAPA ANUAL
@@ -13559,7 +13704,7 @@ def page_app():
                         st.rerun()
 
     elif sec_main == "🖨️ Impressão":
-        sec_imp = st.radio("", ["📊 Excel modelo", "🗓️ Quem trabalha no dia", "📅 Escala", "🖨️ Imprimir escala parede"], horizontal=True, key="impressao_nav_fast", label_visibility="collapsed")
+        ui_section("Impressão", f"Subaba ativa: {sec_imp}")
 
         # V94.2 — lazy load da impressão:
         # evita carregar escala + colaboradores + overrides logo ao abrir a aba.
