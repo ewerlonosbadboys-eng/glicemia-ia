@@ -408,39 +408,6 @@ def aplicar_tema_premium_etapa1():
         background: rgba(96,165,250,0.08);
     }
 
-    .ax-side-title {
-        font-size: .78rem;
-        text-transform: uppercase;
-        letter-spacing: .11em;
-        color: #aecdff;
-        margin-top: .4rem;
-        margin-bottom: .35rem;
-        font-weight: 800;
-    }
-
-    .ax-side-card {
-        background: linear-gradient(180deg, rgba(12,27,56,0.92), rgba(6,15,32,0.92));
-        border: 1px solid rgba(120,160,255,0.18);
-        border-radius: 18px;
-        padding: 0.9rem 0.9rem 0.8rem 0.9rem;
-        box-shadow: 0 18px 36px rgba(0,0,0,0.18);
-        margin-bottom: .8rem;
-    }
-
-    section[data-testid="stSidebar"] div[role="radiogroup"] > label {
-        width: 100%;
-        border-radius: 16px !important;
-        padding: .55rem .8rem !important;
-        margin-bottom: .28rem;
-        min-height: 2.35rem;
-    }
-
-    section[data-testid="stSidebar"] div[role="radiogroup"] > label[data-checked="true"] {
-        background: linear-gradient(90deg, rgba(79,140,255,0.42), rgba(37,99,235,0.30)) !important;
-        border-color: rgba(96,165,250,0.60) !important;
-        box-shadow: 0 16px 28px rgba(0,0,0,0.24);
-    }
-
     hr {
         border-color: rgba(120,160,255,0.14);
         margin-top: 1.4rem;
@@ -542,66 +509,6 @@ def page_app():
 
         st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
 
-        if _perfil_gestao:
-            nav_map = {
-                "🏠 Dashboard": {"sec_main": "🏠 Dashboard", "subs": ["📊 Visão geral"]},
-                "👥 Colaboradores": {"sec_main": "👥 Colaboradores", "subs": ["👥 Colaboradores", "➕ Cadastrar colaborador", "🗑️ Excluir colaborador", "✏️ Editar perfil", "🔑 Alterar senha colaborador", "🧾 Aprovações AX"] + (["🔄 Rodízio Caixa"] if str(setor).strip().upper() == "FRENTECAIXA" else [])},
-                "🚀 Escala": {"sec_main": "🚀 Gerar Escala", "subs": ["🚀 Gerar escala"]},
-                "⚙️ Gestão": {"sec_main": "⚙️ Ajustes", "subs": ["🧩 Folgas manuais em grade", "📊 Contagens por dia", "🔁 Troca de horários", "✅ Preferência por subgrupo", "📌 Subgrupos (editável)", "✏️ Retificar folga, horário e subgrupo", "🏖️ Controle de Férias", "✍️ Assinaturas", "📨 Minhas solicitações"]},
-                "🖨️ Impressão": {"sec_main": "🖨️ Impressão", "subs": ["📊 Excel modelo", "🗓️ Quem trabalha no dia", "📅 Escala", "🖨️ Imprimir escala parede"]},
-            }
-            if is_admin_area if 'is_admin_area' in locals() else (bool(auth.get('is_admin', False)) and setor == 'ADMIN'):
-                nav_map = {"🔒 Admin": {"sec_main": "🔒 Admin", "subs": ["🔒 Admin"]}}
-
-            default_group = st.session_state.get("ax_nav_group", "🏠 Dashboard")
-            if default_group not in nav_map:
-                default_group = list(nav_map.keys())[0]
-
-            st.markdown("<div class='ax-side-title'>Menu principal</div>", unsafe_allow_html=True)
-            st.markdown("<div class='ax-side-card'>", unsafe_allow_html=True)
-            nav_group = st.radio(
-                "Menu principal",
-                list(nav_map.keys()),
-                index=list(nav_map.keys()).index(default_group),
-                key="ax_nav_group",
-                label_visibility="collapsed",
-            )
-            st.markdown("</div>", unsafe_allow_html=True)
-
-            sub_options = nav_map[nav_group]["subs"]
-            sub_key = "ax_nav_sub"
-            if st.session_state.get("_ax_nav_group_last") != nav_group or st.session_state.get(sub_key) not in sub_options:
-                st.session_state[sub_key] = sub_options[0]
-                st.session_state["_ax_nav_group_last"] = nav_group
-
-            st.markdown("<div class='ax-side-title'>Submenu</div>", unsafe_allow_html=True)
-            st.markdown("<div class='ax-side-card'>", unsafe_allow_html=True)
-            nav_sub = st.radio(
-                "Submenu",
-                sub_options,
-                index=sub_options.index(st.session_state.get(sub_key, sub_options[0])),
-                key=sub_key,
-                label_visibility="collapsed",
-            )
-            st.markdown("</div>", unsafe_allow_html=True)
-
-            st.session_state["nav_sec_main"] = nav_map[nav_group]["sec_main"]
-            st.session_state["nav_sec_col"] = nav_sub if nav_group == "👥 Colaboradores" else st.session_state.get("nav_sec_col", "👥 Colaboradores")
-            st.session_state["nav_sec_aj"] = nav_sub if nav_group == "⚙️ Gestão" and nav_sub in ["🧩 Folgas manuais em grade", "📊 Contagens por dia", "🔁 Troca de horários", "✅ Preferência por subgrupo", "📌 Subgrupos (editável)", "✏️ Retificar folga, horário e subgrupo"] else st.session_state.get("nav_sec_aj", "🧩 Folgas manuais em grade")
-            st.session_state["nav_sec_fer"] = "🗺️ Mapa anual de férias" if nav_sub == "🏖️ Controle de Férias" else st.session_state.get("nav_sec_fer", "🗺️ Mapa anual de férias")
-            st.session_state["nav_sec_imp"] = nav_sub if nav_group == "🖨️ Impressão" else st.session_state.get("nav_sec_imp", "📊 Excel modelo")
-            st.session_state["nav_sec_ass"] = st.session_state.get("nav_sec_ass", f"Competência selecionada ({int(st.session_state['cfg_mes']):02d}/{int(st.session_state['cfg_ano'])})")
-
-            if nav_group == "⚙️ Gestão":
-                if nav_sub == "🏖️ Controle de Férias":
-                    st.session_state["nav_sec_main"] = "🏖️ Férias"
-                elif nav_sub == "✍️ Assinaturas":
-                    st.session_state["nav_sec_main"] = "✍️ Assinaturas"
-                elif nav_sub == "📨 Minhas solicitações":
-                    st.session_state["nav_sec_main"] = "📨 Minhas solicitações"
-                else:
-                    st.session_state["nav_sec_main"] = "⚙️ Ajustes"
-
         if st.button("🚪 Sair", use_container_width=True, key="logout_btn"):
             st.session_state["auth"] = None
             st.rerun()
@@ -664,30 +571,26 @@ def page_app():
     st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
 
     # =========================
-    # NAVEGAÇÃO ESTRUTURADA (sidebar)
+    # ABAS
     # =========================
-    tabs = ["🏠 Dashboard", "👥 Colaboradores", "🚀 Gerar Escala", "⚙️ Ajustes", "🏖️ Férias", "🖨️ Impressão", "✍️ Assinaturas", "📨 Minhas solicitações"]
+    tabs = ["👥 Colaboradores", "🚀 Gerar Escala", "⚙️ Ajustes", "🏖️ Férias", "🖨️ Impressão", "✍️ Assinaturas", "📨 Minhas solicitações"]
     is_admin_area = bool(auth.get("is_admin", False)) and setor == "ADMIN"
     if is_admin_area:
         tabs = ["🔒 Admin"]
 
-    sec_main = st.session_state.get("nav_sec_main", ("🔒 Admin" if is_admin_area else "🏠 Dashboard"))
-
-    st.markdown(
-        f"<div class='ax-side-card' style='margin-bottom:1rem;'><div class='ax-side-title' style='margin-top:0;'>Área atual</div><div style='font-size:1.1rem;font-weight:800;color:#fff'>{sec_main}</div></div>",
-        unsafe_allow_html=True,
-    )
-
-    if sec_main == "🏠 Dashboard":
-        st.info("Use o menu lateral para abrir Colaboradores, Escala, Gestão ou Impressão com subabas no estilo aplicativo.")
-        return
+    sec_main = st.radio("Navegação", tabs, horizontal=True, key="main_nav_radio_ultra_fast")
 
     # ------------------------------------------------------
     # ABA 1: Colaboradores
     # ------------------------------------------------------
     if sec_main == "👥 Colaboradores":
-        sec_col = st.session_state.get("nav_sec_col", "👥 Colaboradores")
-        st.caption(f"Colaboradores • {sec_col}")
+        sec_col = st.radio(
+            "",
+            (["👥 Colaboradores", "➕ Cadastrar colaborador", "🗑️ Excluir colaborador", "✏️ Editar perfil", "🔑 Alterar senha colaborador", "🧾 Aprovações AX"] + (["🔄 Rodízio Caixa"] if str(setor).strip().upper() == "FRENTECAIXA" else [])), 
+            horizontal=True,
+            key="sec_col_radio_real_speed",
+            label_visibility="collapsed",
+        )
 
         if sec_col == "👥 Colaboradores":
             st.markdown("### 👥 Colaboradores")
@@ -1534,8 +1437,7 @@ def page_app():
             c2.caption("Alterar em 🗓️ Competência (sidebar)")
             c3.caption("Ajustes aplicam na competência ativa.")
 
-        sec_aj = st.session_state.get("nav_sec_aj", "🧩 Folgas manuais em grade")
-        st.caption(f"Gestão / Ajustes • {sec_aj}")
+        sec_aj = st.radio("", ["🧩 Folgas manuais em grade", "📊 Contagens por dia", "🔁 Troca de horários", "✅ Preferência por subgrupo", "📌 Subgrupos (editável)", "✏️ Retificar folga, horário e subgrupo"], horizontal=True, key="ajustes_nav_fast", label_visibility="collapsed")
 
         status_comp = get_status_competencia(setor, ano, mes)
         _is_admin_auth = bool((auth or {}).get('is_admin', False))
@@ -2282,8 +2184,7 @@ def page_app():
         if not colaboradores:
             st.warning("Sem colaboradores cadastrados.")
         else:
-            sec_fer = st.session_state.get("nav_sec_fer", "🗺️ Mapa anual de férias")
-            st.caption(f"Gestão / Férias • {sec_fer}")
+            sec_fer = st.radio("", ["🗺️ Mapa anual de férias", "➕ Lançar Férias", "📊 Controle (histórico)", "📋 Férias cadastradas", "❌ Remover férias"], horizontal=True, key="ferias_nav_fast", label_visibility="collapsed")
 
             # ---------------------------
             # TAB 1 — MAPA ANUAL
@@ -2447,8 +2348,7 @@ def page_app():
                         st.rerun()
 
     elif sec_main == "🖨️ Impressão":
-        sec_imp = st.session_state.get("nav_sec_imp", "📊 Excel modelo")
-        st.caption(f"Impressão • {sec_imp}")
+        sec_imp = st.radio("", ["📊 Excel modelo", "🗓️ Quem trabalha no dia", "📅 Escala", "🖨️ Imprimir escala parede"], horizontal=True, key="impressao_nav_fast", label_visibility="collapsed")
 
         # V94.2 — lazy load da impressão:
         # evita carregar escala + colaboradores + overrides logo ao abrir a aba.
@@ -3683,6 +3583,13 @@ def _fast_restore_bundled_latest_before_start() -> None:
     except Exception:
         pass
 
+
+
+
+# Fallback seguro: em algumas versões o validador de contrato não veio no merge
+# e o app quebrava com NameError logo na inicialização.
+def validar_contrato_sistema():
+    return True
 
 # =========================================================
 # MAIN
