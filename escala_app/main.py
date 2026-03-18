@@ -11796,7 +11796,7 @@ def page_app():
     # SIDEBAR — Sessão + Competência
     # =========================
     with st.sidebar:
-        st.title("👤 Sessão")
+        st.title("⚡ Painel")
         st.caption("Acesso por setor (usuário / líder / admin)")
         st.caption(VERSAO_ACESSO_LIDER)
 
@@ -11806,15 +11806,8 @@ def page_app():
         _subgrupo_auth = get_subgrupo_competencia_ou_base(setor, auth.get('chapa',''), _ano_sb, _mes_sb, (_colab_sb or {}).get('Subgrupo', 'SEM SUBGRUPO'))
         _lideranca_ok = bool(auth.get('is_lider', False)) or bool(auth.get('is_ax_lider', False)) or colaborador_eh_lideranca(setor, auth.get('chapa',''))
         _perfil_gestao = bool(auth.get('is_admin', False)) or _lideranca_ok
-
-        cA, cB = st.columns([1, 1])
         perfil_label = 'ADMIN' if auth.get('is_admin', False) else ('AX LÍDER' if auth.get('is_ax_lider', False) else ('LÍDER' if _lideranca_ok else 'COLABORADOR'))
-        cA.write(f"**Nome:** {auth.get('nome','-')}")
-        cB.write(f"**Perfil:** {perfil_label}")
 
-        st.write(f"**Setor:** {setor}")
-        st.write(f"**Chapa:** {auth.get('chapa','-')}")
-        st.write(f"**Subgrupo:** {_subgrupo_auth}")
         if bool(auth.get('is_lider', False)) and not _lideranca_ok and not bool(auth.get('is_admin', False)):
             st.warning('Perfil líder liberado somente para colaborador do subgrupo LIDERANÇA neste setor.')
 
@@ -11866,7 +11859,10 @@ def page_app():
 
     ui_hero(
         f"Olá, {auth.get('nome','Usuário')}",
-        f"Setor {setor} • Competência {int(st.session_state['cfg_mes']):02d}/{int(st.session_state['cfg_ano'])} • Visual premium aplicado sem alterar a lógica do app.",
+        (
+            f"Perfil: {perfil_label} • Setor: {setor} • Chapa: {auth.get('chapa','-')} • "
+            f"Subgrupo: {_subgrupo_auth} • Competência {int(st.session_state['cfg_mes']):02d}/{int(st.session_state['cfg_ano'])}"
+        ),
         "⚡ Painel executivo",
     )
     ui_section("Navegação principal", "As abas e fluxos abaixo continuam seguindo as mesmas permissões, aprovações e regras já definidas no sistema.")
