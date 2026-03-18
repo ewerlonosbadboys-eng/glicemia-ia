@@ -1824,6 +1824,23 @@ input, textarea,
   border: 1px solid rgba(127,176,255,0.16);
 }
 
+.streamlit-expanderHeader,
+[data-testid="stExpander"] details {
+  border-radius: 16px !important;
+}
+
+[data-testid="stForm"],
+div[data-testid="stForm"] {
+  background: linear-gradient(180deg, rgba(18,34,73,.44), rgba(10,20,48,.54));
+  border: 1px solid rgba(127,176,255,0.10);
+  border-radius: 18px;
+  padding: 10px 12px 4px 12px;
+}
+
+[data-testid="stMarkdownContainer"] code {
+  border-radius: 10px;
+}
+
 @media (max-width: 900px) {
   .block-container { padding-top: .6rem; }
   .ax-hero { padding: 18px 16px; border-radius: 18px; }
@@ -1833,6 +1850,22 @@ input, textarea,
 </style>
 """, unsafe_allow_html=True)
 
+
+def ui_section(title: str, subtitle: str = ""):
+    sub_html = f"<div class='ax-section-sub'>{subtitle}</div>" if subtitle else ""
+    st.markdown(
+        f"<div class='ax-section-head'><div class='ax-section-title'>{title}</div>{sub_html}</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def ui_hero(title: str, subtitle: str = "", badge: str = ""):
+    badge_html = f"<div class='ax-badge'>{badge}</div>" if badge else ""
+    sub_html = f"<div class='ax-hero-sub'>{subtitle}</div>" if subtitle else ""
+    st.markdown(
+        f"<div class='ax-hero'>{badge_html}<h1 class='ax-hero-title'>{title}</h1>{sub_html}</div>",
+        unsafe_allow_html=True,
+    )
 
 
 # =========================
@@ -9907,16 +9940,12 @@ def page_login():
             con.close()
 
     st.title("ESCALA 5x2 DO FUTURO")
-    st.markdown(
-        f"""
-        <div class='ax-hero'>
-          <div class='ax-badge'>🔵 Layout premium leve</div>
-          <h1 class='ax-hero-title'>Olá, bem-vindo de volta</h1>
-          <div class='ax-hero-sub'>Acesse sua escala com visual mais moderno, sem mexer nas regras centrais do sistema.</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
+    ui_hero(
+        "Olá, bem-vindo de volta",
+        "Acesse sua escala com visual mais moderno, sem mexer nas regras centrais do sistema.",
+        "🔵 Layout premium leve",
     )
+    ui_section("Acesso ao sistema", "Entre com setor, chapa e senha para abrir o painel certo sem alterar a lógica já existente.")
 
     if _RESTORE_GUARD_ACTIVE:
         st.warning(_RESTORE_GUARD_MESSAGE or "Base não restaurada automaticamente. O app liberou uma base mínima temporária para permitir o login.")
@@ -10188,6 +10217,7 @@ def _regenerar_mes_inteiro(setor: str, ano: int, mes: int, seed: int = 0, respei
 def page_gestao_dashboard(ano: int, mes: int):
     st.title("📊 Gestão — Visão Geral (todos os setores)")
     st.caption("Indicadores de trabalho, folgas, férias e afastamentos. Use os filtros para cruzar setor e período.")
+    ui_section("Filtros executivos", "Cruze setores e competência para enxergar volume de trabalho, folgas, férias e afastamentos sem mexer nos dados-base.")
 
     con = db_conn()
     try:
@@ -10252,11 +10282,11 @@ def page_gestao_dashboard(ano: int, mes: int):
             pivot[col] = 0
     pivot["TOTAL_REGISTROS"] = pivot[["TRABALHO","FOLGA","FÉRIAS","AFASTAMENTO"]].sum(axis=1)
 
-    st.subheader("Resumo por setor (mês)")
+    ui_section("Resumo por setor (mês)", "Leitura consolidada da competência filtrada por setor.")
     st.dataframe(pivot.sort_values("setor"), use_container_width=True, hide_index=True)
 
     # Filtro detalhado
-    st.subheader("Detalhe")
+    ui_section("Detalhe", "Aprofunde por setor e escolha a visão diária ou por colaborador.")
     sA, sB = st.columns([2,1])
     setor_det = sA.selectbox("Setor (detalhe)", setores_sel, key="gest_setor_det")
     modo = sB.selectbox("Visão", ["Por dia (contagem)", "Por colaborador (totais)"], key="gest_modo")
@@ -10799,7 +10829,12 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
         prox_mes = 1
         prox_ano += 1
 
-    st.markdown("### 👤 Portal do Colaborador — v0.01 beta premium")
+    ui_hero(
+        f"Olá, {colab.get('Nome','Colaborador')}",
+        f"Portal do colaborador na competência {mes_ref:02d}/{ano_ref} com prévia do próximo mês em {prox_mes:02d}/{prox_ano}.",
+        "👤 Portal do Colaborador",
+    )
+    ui_section("Resumo do colaborador", "Visual mais limpo para consultar nome, setor, subgrupo e chapa sem mudar regras do app.")
     i1, i2, i3, i4 = st.columns(4)
     i1.info(f"**Nome**\n\n{colab.get('Nome','-')}")
     i2.info(f"**Setor**\n\n{setor}")
@@ -10827,7 +10862,7 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
     ])
 
     with tab1:
-        st.markdown(f"#### Escala oficial — {mes_ref:02d}/{ano_ref}")
+        ui_section(f"Escala oficial — {mes_ref:02d}/{ano_ref}", "Competência fechada e pronta para consulta, impressão e assinatura quando aplicável.")
         c1, c2, c3 = st.columns(3)
         c1.metric('Versão atual', ass_escala.get('versao', 1))
         c2.metric('Status da assinatura', ass_escala.get('status', 'Pendente'))
@@ -10850,7 +10885,7 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
                 st.info('A assinatura da escala do mês vigente fica na aba Assinaturas.')
 
     with tab2:
-        st.markdown(f"#### Pré-escala — {prox_mes:02d}/{prox_ano}")
+        ui_section(f"Pré-escala — {prox_mes:02d}/{prox_ano}", "Prévia do próximo mês para consulta do colaborador antes da oficialização.")
         st.warning('Prévia do próximo mês. Ainda não é oficial, não pode ser assinada e pode ser alterada até a liberação do líder.')
         if df_pre.empty:
             st.info('Ainda não há pré-escala disponível para o próximo mês.')
@@ -10859,7 +10894,7 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
             st.caption('Assinatura bloqueada até o início do mês vigente correspondente.')
 
     with tab3:
-        st.markdown(f"#### Histórico de mudanças — {mes_ref:02d}/{ano_ref}")
+        ui_section(f"Histórico de mudanças — {mes_ref:02d}/{ano_ref}", "Acompanhe retificações e alterações registradas sem perder o histórico do mês.")
         m1, m2 = st.columns(2)
         m1.metric('Mudanças registradas no mês vigente', len(hist) if hasattr(hist, '__len__') else 0)
         m2.metric('Status do aceite das mudanças', ass_mud.get('status', 'Pendente'))
@@ -10876,7 +10911,7 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
             st.caption('A assinatura dessas mudanças fica concentrada na aba Assinaturas.')
 
     with tab4:
-        st.markdown(f"#### Assinaturas — {mes_ref:02d}/{ano_ref}")
+        ui_section(f"Assinaturas — {mes_ref:02d}/{ano_ref}", "Controle de assinatura da escala oficial e do histórico do mês selecionado.")
         sub1, sub2 = st.tabs(['🗓️ Assinatura da Escala do Mês', '🔁 Assinatura de Mudanças'])
 
         with sub1:
@@ -11193,16 +11228,12 @@ def page_app():
         page_portal_colaborador(auth, int(st.session_state["cfg_ano"]), int(st.session_state["cfg_mes"]))
         return
 
-    st.markdown(
-        f"""
-        <div class='ax-hero'>
-          <div class='ax-badge'>⚡ Painel executivo</div>
-          <h1 class='ax-hero-title'>Olá, {auth.get('nome','Usuário')}</h1>
-          <div class='ax-hero-sub'>Setor {setor} • Competência {int(st.session_state['cfg_mes']):02d}/{int(st.session_state['cfg_ano'])} • Visual premium aplicado sem alterar a lógica do app.</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
+    ui_hero(
+        f"Olá, {auth.get('nome','Usuário')}",
+        f"Setor {setor} • Competência {int(st.session_state['cfg_mes']):02d}/{int(st.session_state['cfg_ano'])} • Visual premium aplicado sem alterar a lógica do app.",
+        "⚡ Painel executivo",
     )
+    ui_section("Navegação principal", "As abas e fluxos abaixo continuam seguindo as mesmas permissões, aprovações e regras já definidas no sistema.")
 
     # =========================
     # KPIs
