@@ -12089,16 +12089,43 @@ def page_app():
                             if not chapa_ret:
                                 st.warning('Selecione um funcionário válido.')
                             else:
-                                salvar_retificacao_competencia(
-                                    setor, ano, mes, chapa_ret, dia_ret,
-                                    novo_status=novo_status or base_status,
-                                    novo_entrada=nova_entrada,
-                                    novo_saida=nova_saida,
-                                    novo_subgrupo=novo_subgrupo,
-                                    motivo=motivo_ret,
-                                    usuario=str(st.session_state.get('auth_nome') or st.session_state.get('auth_chapa') or '')
-                                )
-                                st.success('Retificação salva com sucesso.')
+                                payload_ret = {
+                                    '_modulo': 'retificacao',
+                                    '_acao': 'salvar',
+                                    'setor': setor,
+                                    'ano': int(ano),
+                                    'mes': int(mes),
+                                    'chapa_ret': chapa_ret,
+                                    'dia_ret': int(dia_ret),
+                                    'novo_status': novo_status or base_status,
+                                    'nova_entrada': nova_entrada,
+                                    'nova_saida': nova_saida,
+                                    'novo_subgrupo': novo_subgrupo,
+                                    'motivo_ret': motivo_ret,
+                                    'usuario': str(st.session_state.get('auth_nome') or st.session_state.get('auth_chapa') or ''),
+                                }
+                                if bool(auth.get('is_ax_lider', False)) and not bool(auth.get('is_admin', False)) and not bool(auth.get('is_lider', False)):
+                                    registrar_pendencia_ax_generica(
+                                        setor=setor,
+                                        modulo='retificacao',
+                                        acao='salvar',
+                                        payload=payload_ret,
+                                        criado_por_nome=str(auth.get('nome') or '').strip(),
+                                        criado_por_chapa=str(auth.get('chapa') or '').strip(),
+                                        observacao=motivo_ret,
+                                    )
+                                    st.success('Retificação enviada para aprovação do líder.')
+                                else:
+                                    salvar_retificacao_competencia(
+                                        setor, ano, mes, chapa_ret, dia_ret,
+                                        novo_status=novo_status or base_status,
+                                        novo_entrada=nova_entrada,
+                                        novo_saida=nova_saida,
+                                        novo_subgrupo=novo_subgrupo,
+                                        motivo=motivo_ret,
+                                        usuario=str(st.session_state.get('auth_nome') or st.session_state.get('auth_chapa') or '')
+                                    )
+                                    st.success('Retificação salva com sucesso.')
                                 st.rerun()
                         df_ret_list = load_retificacoes_competencia(setor, ano, mes)
                         if df_ret_list is not None and not df_ret_list.empty:
@@ -12372,16 +12399,43 @@ def page_app():
                     if not chapa_ret:
                         st.warning('Selecione um funcionário válido.')
                     else:
-                        salvar_retificacao_competencia(
-                            setor, ano, mes, chapa_ret, dia_ret,
-                            novo_status=novo_status or base_status,
-                            novo_entrada=nova_entrada,
-                            novo_saida=nova_saida,
-                            novo_subgrupo=novo_subgrupo or base_sub,
-                            motivo=motivo_ret,
-                            usuario=str(st.session_state.get('auth_nome') or st.session_state.get('auth_chapa') or '')
-                        )
-                        st.success('Retificação salva com sucesso.')
+                        payload_ret = {
+                            '_modulo': 'retificacao',
+                            '_acao': 'salvar',
+                            'setor': setor,
+                            'ano': int(ano),
+                            'mes': int(mes),
+                            'chapa_ret': chapa_ret,
+                            'dia_ret': int(dia_ret),
+                            'novo_status': novo_status or base_status,
+                            'nova_entrada': nova_entrada,
+                            'nova_saida': nova_saida,
+                            'novo_subgrupo': novo_subgrupo or base_sub,
+                            'motivo_ret': motivo_ret,
+                            'usuario': str(st.session_state.get('auth_nome') or st.session_state.get('auth_chapa') or ''),
+                        }
+                        if bool(auth.get('is_ax_lider', False)) and not bool(auth.get('is_admin', False)) and not bool(auth.get('is_lider', False)):
+                            registrar_pendencia_ax_generica(
+                                setor=setor,
+                                modulo='retificacao',
+                                acao='salvar',
+                                payload=payload_ret,
+                                criado_por_nome=str(auth.get('nome') or '').strip(),
+                                criado_por_chapa=str(auth.get('chapa') or '').strip(),
+                                observacao=motivo_ret,
+                            )
+                            st.success('Retificação enviada para aprovação do líder.')
+                        else:
+                            salvar_retificacao_competencia(
+                                setor, ano, mes, chapa_ret, dia_ret,
+                                novo_status=novo_status or base_status,
+                                novo_entrada=nova_entrada,
+                                novo_saida=nova_saida,
+                                novo_subgrupo=novo_subgrupo or base_sub,
+                                motivo=motivo_ret,
+                                usuario=str(st.session_state.get('auth_nome') or st.session_state.get('auth_chapa') or '')
+                            )
+                            st.success('Retificação salva com sucesso.')
                         st.rerun()
 
                 df_ret_list = load_retificacoes_competencia(setor, ano, mes)
