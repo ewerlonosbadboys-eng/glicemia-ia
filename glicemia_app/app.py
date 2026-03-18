@@ -63,6 +63,7 @@ COOKIE_DIAS = 30
 # ================= CONFIGURAÇÕES INICIAIS =================
 fuso_br = pytz.timezone("America/Sao_Paulo")
 st.set_page_config(page_title="Saúde Kids BETA", page_icon="🧪", layout="wide")
+aplicar_layout_premium()
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
@@ -435,21 +436,19 @@ def apagar_backups_antigos(dias_manter=7) -> int:
 
 backup_automatico_diario_3h()
 
-# ================= DESIGN =================
-st.markdown(r"""
-<style>
-    .stApp { background-color: #0e1117; color: #ffffff; }
-    .card { background-color: #1a1c24; padding: 22px; border-radius: 18px; border: 1px solid #30363d; margin-bottom: 18px; }
-    .metric-box { background: #262730; border: 1px solid #4a4a4a; padding: 14px; border-radius: 12px; text-align: center; }
-    .dose-destaque { font-size: 34px; font-weight: 700; color: #4ade80; }
-    label, p, span, h1, h2, h3, .stMarkdown { color: white !important; }
-    .stTextInput>div>div>input, .stNumberInput>div>div>input {
-        background-color: #262730 !important; color: white !important; border: 1px solid #4a4a4a !important;
-    }
-    .stTabs [data-baseweb="tab-list"] { background-color: #0e1117; }
-    .stTabs [data-baseweb="tab"] { color: white; }
-</style>
-""", unsafe_allow_html=True)
+
+# ================= DESIGN PREMIUM =================
+def aplicar_layout_premium():
+    import streamlit as st
+    st.markdown(r"""
+    <style>
+    .stApp {background: radial-gradient(circle at top left, #1b1f4b 0%, #0b1020 38%, #050816 100%); color: white;}
+    .card {background: rgba(24,31,56,0.9); border-radius: 20px; padding: 20px;}
+    .stButton>button {background: linear-gradient(90deg,#6c7dff,#57c7ff); color:white; border-radius:12px;}
+    input {background:#0b1020 !important; color:white !important;}
+    </style>
+    """, unsafe_allow_html=True)
+
 
 # ================= EMAIL (RESET) =================
 def gerar_senha_temporaria(tamanho=6):
