@@ -571,6 +571,48 @@ def salvar_retificacao_competencia(setor: str, ano: int, mes: int, chapa: str, d
                     subgrupo=excluded.subgrupo,
                     atualizado_em=excluded.atualizado_em
             """, (setor, int(ano), int(mes), str(chapa).strip(), str(novo_subgrupo).strip(), datetime.now().isoformat()))
+
+            # mantém o snapshot congelado alinhado com a retificação do mês
+            cur.execute("""
+                INSERT INTO colaborador_competencia_snapshot(
+                    setor, ano, mes, chapa, nome, subgrupo, entrada, folga_sab, atualizado_em
+                )
+                SELECT
+                    ?, ?, ?, ?,
+                    COALESCE(NULLIF(nome, ''), ?),
+                    ?,
+                    COALESCE(NULLIF(entrada, ''), ?),
+                    COALESCE(folga_sab, 0),
+                    ?
+                FROM colaborador_competencia_snapshot
+                WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=?
+                UNION ALL
+                SELECT
+                    ?, ?, ?, ?,
+                    ?,
+                    ?,
+                    ?,
+                    COALESCE((SELECT folga_sab FROM colaboradores WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND TRIM(chapa)=? LIMIT 1), 0),
+                    ?
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM colaborador_competencia_snapshot
+                    WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=?
+                )
+                ON CONFLICT(setor, ano, mes, chapa) DO UPDATE SET
+                    nome=excluded.nome,
+                    subgrupo=excluded.subgrupo,
+                    entrada=COALESCE(NULLIF(excluded.entrada, ''), colaborador_competencia_snapshot.entrada),
+                    folga_sab=COALESCE(excluded.folga_sab, colaborador_competencia_snapshot.folga_sab),
+                    atualizado_em=excluded.atualizado_em
+            """, (
+                setor, int(ano), int(mes), str(chapa).strip(),
+                nome, str(novo_subgrupo).strip(), entrada_antiga or '06:00', datetime.now().isoformat(),
+                setor, int(ano), int(mes), str(chapa).strip(),
+                setor, int(ano), int(mes), str(chapa).strip(),
+                nome, str(novo_subgrupo).strip(), entrada_antiga or '06:00',
+                setor, str(chapa).strip(), datetime.now().isoformat(),
+                setor, int(ano), int(mes), str(chapa).strip(),
+            ))
         con.commit()
     finally:
         con.close()
@@ -9674,10 +9716,10 @@ def get_subgrupo_competencia_ou_base(setor: str, chapa: str, ano: int, mes: int,
     chapa = _norm_chapa(chapa)
     base_subgrupo = str(base_subgrupo or '').strip()
 
-    snap = get_colaborador_competencia_snapshot(setor, chapa, int(ano), int(mes))
-    if snap and str(snap.get('Subgrupo') or '').strip():
-        return str(snap.get('Subgrupo') or '').strip()
-
+    # Regra correta para competência fechada/retificada:
+    # 1) subgrupo_competencia do mês é a fonte oficial
+    # 2) depois snapshot congelado
+    # 3) depois base recebida / cadastro atual
     con = db_conn()
     cur = con.cursor()
     try:
@@ -9693,8 +9735,19 @@ def get_subgrupo_competencia_ou_base(setor: str, chapa: str, ano: int, mes: int,
         row = cur.fetchone()
         if row and str(row[0] or '').strip():
             return str(row[0]).strip()
-        if base_subgrupo:
-            return base_subgrupo
+    finally:
+        con.close()
+
+    snap = get_colaborador_competencia_snapshot(setor, chapa, int(ano), int(mes))
+    if snap and str(snap.get('Subgrupo') or '').strip():
+        return str(snap.get('Subgrupo') or '').strip()
+
+    if base_subgrupo:
+        return base_subgrupo
+
+    con = db_conn()
+    cur = con.cursor()
+    try:
         cur.execute(
             """
             SELECT subgrupo
