@@ -10723,7 +10723,7 @@ def page_app():
     if sec_main == "👥 Colaboradores":
         sec_col = st.radio(
             "",
-            (["👥 Colaboradores", "➕ Cadastrar colaborador", "🗑️ Excluir colaborador", "✏️ Editar perfil", "🔑 Alterar senha colaborador", "🛠️ Atualizar funcionário (AX/Líder)", "🧾 Aprovações AX"] + (["🔄 Rodízio Caixa"] if str(setor).strip().upper() == "FRENTECAIXA" else [])), 
+            (["👥 Colaboradores", "➕ Cadastrar colaborador", "🗑️ Excluir colaborador", "✏️ Editar perfil", "🔑 Alterar senha colaborador", "🧾 Aprovações AX"] + (["🔄 Rodízio Caixa"] if str(setor).strip().upper() == "FRENTECAIXA" else [])), 
             horizontal=True,
             key="sec_col_radio_real_speed",
             label_visibility="collapsed",
@@ -10984,7 +10984,9 @@ def page_app():
             st.markdown("---")
 
         elif sec_col == "🛠️ Atualizar funcionário (AX/Líder)":
-            st.markdown("## 🛠️ Atualizar funcionário (AX/Líder)")
+            st.info("Esta subaba foi removida para LÍDER e AX_LIDER.")
+            sec_col = "👥 Colaboradores"
+            st.rerun()
             eh_ax = bool(auth.get("is_ax_lider", False)) and not bool(auth.get("is_admin", False))
             st.caption("Perfil AX do Líder propõe alterações. Perfil Líder aprova na subaba de aprovações. Admin e Líder podem aplicar direto.")
             try:
