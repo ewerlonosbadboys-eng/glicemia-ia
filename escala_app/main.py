@@ -604,51 +604,6 @@ def salvar_retificacao_competencia(setor: str, ano: int, mes: int, chapa: str, d
         pass
 
 
-def excluir_retificacao_competencia(setor: str, ano: int, mes: int, chapa: str, dia: int) -> None:
-    ensure_competencia_runtime_tables()
-    con = db_conn()
-    cur = con.cursor()
-    try:
-        cur.execute(
-            """
-            DELETE FROM retificacoes_competencia
-            WHERE UPPER(TRIM(setor)) = UPPER(TRIM(?))
-              AND ano=? AND mes=? AND TRIM(chapa)=? AND dia=?
-            """,
-            (setor, int(ano), int(mes), str(chapa).strip(), int(dia))
-        )
-        con.commit()
-    finally:
-        con.close()
-    try:
-        st.cache_data.clear()
-    except Exception:
-        pass
-
-
-def _set_retificacao_edit_state(prefix: str, row: dict) -> None:
-    st.session_state[f'{prefix}::edit_mode'] = True
-    st.session_state[f'{prefix}::edit_chapa'] = str(row.get('chapa') or '').strip()
-    st.session_state[f'{prefix}::edit_dia'] = int(row.get('dia') or 1)
-    st.session_state[f'{prefix}::edit_status'] = str(row.get('novo_status') or '').strip()
-    st.session_state[f'{prefix}::edit_entrada'] = str(row.get('nova_entrada') or '').strip()
-    st.session_state[f'{prefix}::edit_saida'] = str(row.get('nova_saida') or '').strip()
-    st.session_state[f'{prefix}::edit_subgrupo'] = str(row.get('novo_subgrupo') or '').strip()
-    st.session_state[f'{prefix}::edit_motivo'] = str(row.get('motivo') or '').strip()
-
-
-def _clear_retificacao_edit_state(prefix: str) -> None:
-    for k in [
-        f'{prefix}::edit_mode', f'{prefix}::edit_chapa', f'{prefix}::edit_dia',
-        f'{prefix}::edit_status', f'{prefix}::edit_entrada', f'{prefix}::edit_saida',
-        f'{prefix}::edit_subgrupo', f'{prefix}::edit_motivo'
-    ]:
-        try:
-            st.session_state.pop(k, None)
-        except Exception:
-            pass
-
-
 @st.cache_data(show_spinner=False, ttl=120)
 def load_retificacoes_competencia(setor: str, ano: int, mes: int) -> pd.DataFrame:
     con = db_conn()
@@ -3311,8 +3266,8 @@ def gerar_pdf_modelo_oficial(setor: str, ano: int, mes: int, hist_db: dict, cola
     normal.leading = 8
 
     # Ordena colaboradores pelo nome (igual na tela)
-    colab_by = {c["Chapa"]: c for c in colaboradores}
-    chapas = sorted([ch for ch in hist_db.keys()], key=lambda ch: (colab_by.get(ch, {}).get("Nome", ch) or ch))
+    colab_by = {str(c.get("Chapa", "")).strip(): c for c in colaboradores}
+    chapas = sorted([str(ch).strip() for ch in hist_db.keys()], key=lambda ch: (colab_by.get(str(ch).strip(), {}).get("Nome", ch) or ch))
 
     # Config páginas
     buffer = BytesIO()
@@ -3397,7 +3352,13 @@ def gerar_pdf_modelo_oficial(setor: str, ano: int, mes: int, hist_db: dict, cola
                     sg = vals_sg[0]
         except Exception:
             sg = ''
-        sg = sg or (colab_by.get(ch, {}).get("Subgrupo", "") or "").strip() or "COLABORADOR"
+        sg = sg or get_subgrupo_competencia_ou_base(
+            setor,
+            str(ch).strip(),
+            int(ano),
+            int(mes),
+            (colab_by.get(str(ch).strip(), {}).get("Subgrupo", "") or "").strip()
+        ) or "COLABORADOR"
         sg_title = str(sg).upper()
 
         # tabela por dia
@@ -3747,7 +3708,8 @@ def gerar_pdf_trabalhando_no_dia(setor: str, ano: int, mes: int, dia: int, hist_
             continue
         ent = str(r.get("H_Entrada", "") or "").strip()
         sai = str(r.get("H_Saida", "") or "").strip()
-        nome, subg = meta.get(str(chapa).strip(), ("", ""))
+        nome, subg_base = meta.get(str(chapa).strip(), ("", ""))
+        subg = get_subgrupo_competencia_ou_base(setor, str(chapa).strip(), int(ano), int(mes), subg_base)
         rows.append([str(chapa).strip(), nome, subg, ent, sai])
 
     # Ordena por subgrupo e nome (mantendo cabeçalho)
@@ -9041,6 +9003,7 @@ def _load_hist_periodo(setor: str, data_ini: date, data_fim: date) -> dict[str, 
         if not hist_mes:
             continue
         hist_mes = apply_overrides_to_hist(setor, int(y), int(m), hist_mes)
+        hist_mes = _apply_retificacoes_to_hist(setor, int(y), int(m), hist_mes)
         for ch, df in hist_mes.items():
             dfx = df.copy()
             dfx["Data"] = pd.to_datetime(dfx["Data"]).dt.date
@@ -11413,85 +11376,36 @@ def page_app():
                         st.info("Cadastre as metas do mês para acompanhar o comparativo depois.")
 
                 elif sec_aj == "✏️ Retificar folga, horário e subgrupo":
-
                     st.markdown("### ✏️ Retificar folga, horário e subgrupo")
                     st.caption("Use esta subaba para corrigir competência fechada sem descongelar o mês inteiro. A alteração aparece nas leituras da escala e no portal do colaborador.")
                     colaboradores_ret = load_colaboradores_setor(setor)
                     if not colaboradores_ret:
                         st.info("Cadastre colaboradores primeiro.")
                     else:
-                        prefix_ret = f"ret::{setor}::{ano}::{mes}"
                         labels_ret = [f"{c['Nome']} ({c['Chapa']})" for c in colaboradores_ret]
                         inv_ret = {f"{c['Nome']} ({c['Chapa']})": c for c in colaboradores_ret}
-                        by_chapa_ret = {str(c.get('Chapa') or '').strip(): c for c in colaboradores_ret}
-
-                        edit_mode = bool(st.session_state.get(f"{prefix_ret}::edit_mode", False))
-                        edit_chapa = str(st.session_state.get(f"{prefix_ret}::edit_chapa", '') or '').strip()
-                        edit_dia = int(st.session_state.get(f"{prefix_ret}::edit_dia", 1) or 1)
-                        edit_status = str(st.session_state.get(f"{prefix_ret}::edit_status", '') or '').strip()
-                        edit_entrada = str(st.session_state.get(f"{prefix_ret}::edit_entrada", '') or '').strip()
-                        edit_saida = str(st.session_state.get(f"{prefix_ret}::edit_saida", '') or '').strip()
-                        edit_subgrupo = str(st.session_state.get(f"{prefix_ret}::edit_subgrupo", '') or '').strip()
-                        edit_motivo = str(st.session_state.get(f"{prefix_ret}::edit_motivo", '') or '').strip()
-
-                        label_default = labels_ret[0] if labels_ret else None
-                        if edit_chapa and edit_chapa in by_chapa_ret:
-                            label_try = f"{by_chapa_ret[edit_chapa]['Nome']} ({by_chapa_ret[edit_chapa]['Chapa']})"
-                            if label_try in inv_ret:
-                                label_default = label_try
-
-                        colr1, colr2, colr3 = st.columns([2, 1, 1])
-                        func_key = f"ret_func::{setor}::{ano}::{mes}"
-                        dia_key = f"ret_dia::{setor}::{ano}::{mes}"
-                        if label_default is not None and func_key not in st.session_state:
-                            st.session_state[func_key] = label_default
-                        if edit_mode:
-                            st.session_state[func_key] = label_default or st.session_state.get(func_key, label_default)
-                            st.session_state[dia_key] = int(edit_dia)
-                        elif dia_key not in st.session_state:
-                            st.session_state[dia_key] = 1
-
-                        label_ret = colr1.selectbox("Funcionário", options=labels_ret, key=func_key)
+                        colr1, colr2, colr3 = st.columns([2,1,1])
+                        label_ret = colr1.selectbox("Funcionário", options=labels_ret, key=f"ret_func::{setor}::{ano}::{mes}")
                         colab_ret = inv_ret.get(label_ret) or {}
                         chapa_ret = str(colab_ret.get('Chapa') or '').strip()
                         qtd_ret = calendar.monthrange(int(ano), int(mes))[1]
-                        dia_ret = int(colr2.selectbox("Dia", options=list(range(1, qtd_ret + 1)), key=dia_key))
-
+                        dia_ret = int(colr2.selectbox("Dia", options=list(range(1, qtd_ret + 1)), key=f"ret_dia::{setor}::{ano}::{mes}"))
                         hist_ret = get_hist_mes_com_overrides_cached(setor, ano, mes) or {}
                         df_ret_hist = hist_ret.get(chapa_ret)
                         base_status = ''
                         base_ent = str(colab_ret.get('Entrada') or '06:00').strip()
                         base_sai = _saida_from_entrada(base_ent)
-                        base_sub = str(colab_ret.get('Subgrupo') or '').strip()
                         if df_ret_hist is not None and len(df_ret_hist) >= dia_ret:
                             base_status = str(df_ret_hist.loc[dia_ret - 1, 'Status'] or '').strip()
                             base_ent = str(df_ret_hist.loc[dia_ret - 1, 'H_Entrada'] or '').strip()
                             base_sai = str(df_ret_hist.loc[dia_ret - 1, 'H_Saida'] or '').strip()
-                            try:
-                                if 'Subgrupo' in df_ret_hist.columns:
-                                    base_sub = str(df_ret_hist.loc[dia_ret - 1, 'Subgrupo'] or '').strip() or base_sub
-                            except Exception:
-                                pass
-
-                        if edit_mode:
-                            st.warning(f"✏️ Editando retificação — dia {edit_dia}")
-
-                        st.info(f"Base do dia {dia_ret:02d}/{int(mes):02d}/{int(ano)} → Status: {base_status or '-'} | Entrada: {base_ent or '-'} | Saída: {base_sai or '-'} | Subgrupo: {base_sub or '-'}")
-                        colra, colrb, colrc, colrd = st.columns([1, 1, 1, 1])
-                        status_opts = ['', 'Trabalho', 'Folga', 'Férias', 'Afastamento']
-                        status_value = edit_status if edit_mode and edit_chapa == chapa_ret and edit_dia == dia_ret else base_status
-                        idx_status = status_opts.index(status_value) if status_value in status_opts else 0
-                        novo_status = colra.selectbox("Novo status", options=status_opts, index=idx_status, key=f"{prefix_ret}::status::{chapa_ret}::{dia_ret}")
-                        nova_entrada = colrb.text_input("Nova entrada", value=(edit_entrada if edit_mode and edit_chapa == chapa_ret and edit_dia == dia_ret else base_ent), key=f"{prefix_ret}::entrada::{chapa_ret}::{dia_ret}")
-                        nova_saida = colrc.text_input("Nova saída", value=(edit_saida if edit_mode and edit_chapa == chapa_ret and edit_dia == dia_ret else base_sai), key=f"{prefix_ret}::saida::{chapa_ret}::{dia_ret}")
-                        sub_opts = [''] + sorted({str(c.get('Subgrupo') or '').strip() for c in colaboradores_ret if str(c.get('Subgrupo') or '').strip()} | {'OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02'})
-                        sub_value = edit_subgrupo if edit_mode and edit_chapa == chapa_ret and edit_dia == dia_ret else base_sub
-                        idx_sub = sub_opts.index(sub_value) if sub_value in sub_opts else 0
-                        novo_subgrupo = colrd.selectbox("Novo subgrupo", options=sub_opts, index=idx_sub, key=f"{prefix_ret}::subgrupo::{chapa_ret}::{dia_ret}")
-                        motivo_ret = st.text_area("Motivo da retificação", value=(edit_motivo if edit_mode and edit_chapa == chapa_ret and edit_dia == dia_ret else ''), key=f"{prefix_ret}::motivo::{chapa_ret}::{dia_ret}")
-
-                        csave, ccancel = st.columns([3, 1])
-                        if csave.button("💾 Salvar retificação", key=f"{prefix_ret}::save", use_container_width=True):
+                        colra, colrb, colrc, colrd = st.columns([1,1,1,1])
+                        novo_status = colra.selectbox("Novo status", options=['', 'Trabalho', 'Folga', 'Férias', 'Afastamento'], index=0, key=f"ret_status::{setor}::{ano}::{mes}")
+                        nova_entrada = colrb.text_input("Nova entrada", value=base_ent, key=f"ret_ent::{setor}::{ano}::{mes}")
+                        nova_saida = colrc.text_input("Nova saída", value=base_sai, key=f"ret_sai::{setor}::{ano}::{mes}")
+                        novo_subgrupo = colrd.selectbox("Novo subgrupo", options=['', 'OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02'] + sorted({str(c.get('Subgrupo') or '').strip() for c in colaboradores_ret if str(c.get('Subgrupo') or '').strip()}), index=0, key=f"ret_sub::{setor}::{ano}::{mes}")
+                        motivo_ret = st.text_area("Motivo da retificação", key=f"ret_motivo::{setor}::{ano}::{mes}")
+                        if st.button("💾 Salvar retificação", key=f"ret_save::{setor}::{ano}::{mes}", use_container_width=True):
                             if not chapa_ret:
                                 st.warning('Selecione um funcionário válido.')
                             else:
@@ -11500,36 +11414,16 @@ def page_app():
                                     novo_status=novo_status or base_status,
                                     novo_entrada=nova_entrada,
                                     novo_saida=nova_saida,
-                                    novo_subgrupo=novo_subgrupo or base_sub,
+                                    novo_subgrupo=novo_subgrupo,
                                     motivo=motivo_ret,
                                     usuario=str(st.session_state.get('auth_nome') or st.session_state.get('auth_chapa') or '')
                                 )
-                                _clear_retificacao_edit_state(prefix_ret)
                                 st.success('Retificação salva com sucesso.')
                                 st.rerun()
-                        if edit_mode and ccancel.button("Cancelar edição", key=f"{prefix_ret}::cancel", use_container_width=True):
-                            _clear_retificacao_edit_state(prefix_ret)
-                            st.rerun()
-
                         df_ret_list = load_retificacoes_competencia(setor, ano, mes)
                         if df_ret_list is not None and not df_ret_list.empty:
                             st.markdown('#### Retificações já registradas nesta competência')
-                            cols_view = [c for c in ['dia', 'nome', 'chapa', 'novo_status', 'nova_entrada', 'nova_saida', 'novo_subgrupo', 'motivo', 'usuario', 'criado_em'] if c in df_ret_list.columns]
-                            for i, (_, row) in enumerate(df_ret_list[cols_view].iterrows()):
-                                rowd = row.to_dict()
-                                c1, c2, c3 = st.columns([10, 1, 1])
-                                resumo = f"Dia {rowd.get('dia', '')} | {rowd.get('nome', '')} ({rowd.get('chapa', '')}) | Status: {rowd.get('novo_status', '') or '-'} | Entrada: {rowd.get('nova_entrada', '') or '-'} | Saída: {rowd.get('nova_saida', '') or '-'} | Subgrupo: {rowd.get('novo_subgrupo', '') or '-'}"
-                                c1.write(resumo)
-                                if c2.button('✏️', key=f"{prefix_ret}::edit::{i}"):
-                                    _set_retificacao_edit_state(prefix_ret, rowd)
-                                    st.rerun()
-                                if c3.button('🗑️', key=f"{prefix_ret}::del::{i}"):
-                                    excluir_retificacao_competencia(setor, ano, mes, rowd.get('chapa', ''), rowd.get('dia', 0))
-                                    _clear_retificacao_edit_state(prefix_ret)
-                                    st.success('Retificação excluída com sucesso.')
-                                    st.rerun()
-                            st.dataframe(df_ret_list[cols_view], use_container_width=True, hide_index=True)
-
+                            st.dataframe(df_ret_list[[c for c in ['dia','nome','chapa','novo_status','nova_entrada','nova_saida','novo_subgrupo','motivo','usuario','criado_em'] if c in df_ret_list.columns]], use_container_width=True, hide_index=True)
 
                 elif sec_aj == "📊 Contagens por dia":
                     st.markdown("### 📊 Contagens por dia")
@@ -11742,49 +11636,20 @@ def page_app():
                                     st.rerun()
 
         if sec_aj == "✏️ Retificar folga, horário e subgrupo":
-
             st.markdown("### ✏️ Retificar folga, horário e subgrupo")
             st.caption("Use esta subaba para corrigir competência fechada sem descongelar o mês inteiro. A alteração aparece nas leituras da escala e no portal do colaborador.")
             colaboradores_ret = load_colaboradores_setor(setor)
             if not colaboradores_ret:
                 st.info("Cadastre colaboradores primeiro.")
             else:
-                prefix_ret = f"ret_live::{setor}::{ano}::{mes}"
                 labels_ret = [f"{c['Nome']} ({c['Chapa']})" for c in colaboradores_ret]
                 inv_ret = {f"{c['Nome']} ({c['Chapa']})": c for c in colaboradores_ret}
-                by_chapa_ret = {str(c.get('Chapa') or '').strip(): c for c in colaboradores_ret}
-
-                edit_mode = bool(st.session_state.get(f"{prefix_ret}::edit_mode", False))
-                edit_chapa = str(st.session_state.get(f"{prefix_ret}::edit_chapa", '') or '').strip()
-                edit_dia = int(st.session_state.get(f"{prefix_ret}::edit_dia", 1) or 1)
-                edit_status = str(st.session_state.get(f"{prefix_ret}::edit_status", '') or '').strip()
-                edit_entrada = str(st.session_state.get(f"{prefix_ret}::edit_entrada", '') or '').strip()
-                edit_saida = str(st.session_state.get(f"{prefix_ret}::edit_saida", '') or '').strip()
-                edit_subgrupo = str(st.session_state.get(f"{prefix_ret}::edit_subgrupo", '') or '').strip()
-                edit_motivo = str(st.session_state.get(f"{prefix_ret}::edit_motivo", '') or '').strip()
-
-                label_default = labels_ret[0] if labels_ret else None
-                if edit_chapa and edit_chapa in by_chapa_ret:
-                    label_try = f"{by_chapa_ret[edit_chapa]['Nome']} ({by_chapa_ret[edit_chapa]['Chapa']})"
-                    if label_try in inv_ret:
-                        label_default = label_try
-
                 colr1, colr2, colr3 = st.columns([2, 1, 1])
-                func_key = f"ret_func_live::{setor}::{ano}::{mes}"
-                dia_key = f"ret_dia_live::{setor}::{ano}::{mes}"
-                if label_default is not None and func_key not in st.session_state:
-                    st.session_state[func_key] = label_default
-                if edit_mode:
-                    st.session_state[func_key] = label_default or st.session_state.get(func_key, label_default)
-                    st.session_state[dia_key] = int(edit_dia)
-                elif dia_key not in st.session_state:
-                    st.session_state[dia_key] = 1
-
-                label_ret = colr1.selectbox("Funcionário", options=labels_ret, key=func_key)
+                label_ret = colr1.selectbox("Funcionário", options=labels_ret, key=f"ret_func_live::{setor}::{ano}::{mes}")
                 colab_ret = inv_ret.get(label_ret) or {}
                 chapa_ret = str(colab_ret.get('Chapa') or '').strip()
                 qtd_ret = calendar.monthrange(int(ano), int(mes))[1]
-                dia_ret = int(colr2.selectbox("Dia", options=list(range(1, qtd_ret + 1)), key=dia_key))
+                dia_ret = int(colr2.selectbox("Dia", options=list(range(1, qtd_ret + 1)), key=f"ret_dia_live::{setor}::{ano}::{mes}"))
 
                 hist_ret = get_hist_mes_com_overrides_cached(setor, ano, mes) or {}
                 df_ret_hist = hist_ret.get(chapa_ret)
@@ -11802,25 +11667,24 @@ def page_app():
                     except Exception:
                         pass
 
-                if edit_mode:
-                    st.warning(f"✏️ Editando retificação — dia {edit_dia}")
-
                 st.info(f"Base do dia {dia_ret:02d}/{int(mes):02d}/{int(ano)} → Status: {base_status or '-'} | Entrada: {base_ent or '-'} | Saída: {base_sai or '-'} | Subgrupo: {base_sub or '-'}")
                 colra, colrb, colrc, colrd = st.columns([1, 1, 1, 1])
                 status_opts = ['', 'Trabalho', 'Folga', 'Férias', 'Afastamento']
-                status_value = edit_status if edit_mode and edit_chapa == chapa_ret and edit_dia == dia_ret else base_status
-                idx_status = status_opts.index(status_value) if status_value in status_opts else 0
-                novo_status = colra.selectbox("Novo status", options=status_opts, index=idx_status, key=f"{prefix_ret}::status::{chapa_ret}::{dia_ret}")
-                nova_entrada = colrb.text_input("Nova entrada", value=(edit_entrada if edit_mode and edit_chapa == chapa_ret and edit_dia == dia_ret else base_ent), key=f"{prefix_ret}::entrada::{chapa_ret}::{dia_ret}")
-                nova_saida = colrc.text_input("Nova saída", value=(edit_saida if edit_mode and edit_chapa == chapa_ret and edit_dia == dia_ret else base_sai), key=f"{prefix_ret}::saida::{chapa_ret}::{dia_ret}")
-                sub_opts = [''] + sorted({str(c.get('Subgrupo') or '').strip() for c in colaboradores_ret if str(c.get('Subgrupo') or '').strip()} | {'OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02'})
-                sub_value = edit_subgrupo if edit_mode and edit_chapa == chapa_ret and edit_dia == dia_ret else base_sub
-                idx_sub = sub_opts.index(sub_value) if sub_value in sub_opts else 0
-                novo_subgrupo = colrd.selectbox("Novo subgrupo", options=sub_opts, index=idx_sub, key=f"{prefix_ret}::subgrupo::{chapa_ret}::{dia_ret}")
-                motivo_ret = st.text_area("Motivo da retificação", value=(edit_motivo if edit_mode and edit_chapa == chapa_ret and edit_dia == dia_ret else ''), key=f"{prefix_ret}::motivo::{chapa_ret}::{dia_ret}")
+                idx_status = status_opts.index(base_status) if base_status in status_opts else 0
+                novo_status = colra.selectbox("Novo status", options=status_opts, index=idx_status, key=f"ret_status_live::{setor}::{ano}::{mes}")
+                nova_entrada = colrb.text_input("Nova entrada", value=base_ent, key=f"ret_ent_live::{setor}::{ano}::{mes}")
+                nova_saida = colrc.text_input("Nova saída", value=base_sai, key=f"ret_sai_live::{setor}::{ano}::{mes}")
+                sub_opts = [''] + sorted({str(c.get('Subgrupo') or '').strip() for c in colaboradores_ret if str(c.get('Subgrupo') or '').strip()})
+                if 'OPERADOR DE CAIXA 01' not in sub_opts:
+                    sub_opts.append('OPERADOR DE CAIXA 01')
+                if 'OPERADOR DE CAIXA 02' not in sub_opts:
+                    sub_opts.append('OPERADOR DE CAIXA 02')
+                sub_opts = [''] + sorted({x for x in sub_opts if x})
+                idx_sub = sub_opts.index(base_sub) if base_sub in sub_opts else 0
+                novo_subgrupo = colrd.selectbox("Novo subgrupo", options=sub_opts, index=idx_sub, key=f"ret_sub_live::{setor}::{ano}::{mes}")
+                motivo_ret = st.text_area("Motivo da retificação", key=f"ret_motivo_live::{setor}::{ano}::{mes}")
 
-                csave, ccancel = st.columns([3, 1])
-                if csave.button("💾 Salvar retificação", key=f"{prefix_ret}::save", use_container_width=True):
+                if st.button("💾 Salvar retificação", key=f"ret_save_live::{setor}::{ano}::{mes}", use_container_width=True):
                     if not chapa_ret:
                         st.warning('Selecione um funcionário válido.')
                     else:
@@ -11833,32 +11697,14 @@ def page_app():
                             motivo=motivo_ret,
                             usuario=str(st.session_state.get('auth_nome') or st.session_state.get('auth_chapa') or '')
                         )
-                        _clear_retificacao_edit_state(prefix_ret)
                         st.success('Retificação salva com sucesso.')
                         st.rerun()
-                if edit_mode and ccancel.button("Cancelar edição", key=f"{prefix_ret}::cancel", use_container_width=True):
-                    _clear_retificacao_edit_state(prefix_ret)
-                    st.rerun()
 
                 df_ret_list = load_retificacoes_competencia(setor, ano, mes)
                 if df_ret_list is not None and not df_ret_list.empty:
                     st.markdown('#### Retificações já registradas nesta competência')
                     cols_view = [c for c in ['dia', 'nome', 'chapa', 'novo_status', 'nova_entrada', 'nova_saida', 'novo_subgrupo', 'motivo', 'usuario', 'criado_em'] if c in df_ret_list.columns]
-                    for i, (_, row) in enumerate(df_ret_list[cols_view].iterrows()):
-                        rowd = row.to_dict()
-                        c1, c2, c3 = st.columns([10, 1, 1])
-                        resumo = f"Dia {rowd.get('dia', '')} | {rowd.get('nome', '')} ({rowd.get('chapa', '')}) | Status: {rowd.get('novo_status', '') or '-'} | Entrada: {rowd.get('nova_entrada', '') or '-'} | Saída: {rowd.get('nova_saida', '') or '-'} | Subgrupo: {rowd.get('novo_subgrupo', '') or '-'}"
-                        c1.write(resumo)
-                        if c2.button('✏️', key=f"{prefix_ret}::edit::{i}"):
-                            _set_retificacao_edit_state(prefix_ret, rowd)
-                            st.rerun()
-                        if c3.button('🗑️', key=f"{prefix_ret}::del::{i}"):
-                            excluir_retificacao_competencia(setor, ano, mes, rowd.get('chapa', ''), rowd.get('dia', 0))
-                            _clear_retificacao_edit_state(prefix_ret)
-                            st.success('Retificação excluída com sucesso.')
-                            st.rerun()
                     st.dataframe(df_ret_list[cols_view], use_container_width=True, hide_index=True)
-
 
         if sec_aj == "✅ Preferência por subgrupo":
             st.markdown("### ✅ Preferência por subgrupo (Evitar folga se possível)")
@@ -12106,11 +11952,12 @@ def page_app():
                 st.session_state.pop("xls_cached_bytes", None)
                 colaboradores = load_colaboradores_setor(setor)
                 hist_db = load_escala_mes_db(setor, ano, mes) or {}
-                colab_by = {str(c.get("Chapa", "")): c for c in colaboradores}
+                colab_by = {str(c.get("Chapa", "")).strip(): c for c in colaboradores}
                 if not hist_db:
                     st.info("Gere a escala.")
                 else:
                     hist_db = apply_overrides_to_hist(setor, ano, mes, hist_db)
+                    hist_db = _apply_retificacoes_to_hist(setor, ano, mes, hist_db)
                     from openpyxl import Workbook
                     output = io.BytesIO()
                     wb = Workbook()
@@ -12168,8 +12015,20 @@ def page_app():
 
                     subgrupo_map = {}
                     for chx in hist_db.keys():
-                        ch_str = str(chx)
-                        sg = (colab_by.get(ch_str, {}).get("Subgrupo", "") or "").strip() or "SEM SUBGRUPO"
+                        ch_str = str(chx).strip()
+                        df_sg = hist_db.get(chx)
+                        sg = ""
+                        try:
+                            if df_sg is not None and "Subgrupo" in df_sg.columns:
+                                vals_sg = [str(v).strip() for v in df_sg["Subgrupo"].astype(str).tolist() if str(v).strip()]
+                                if vals_sg:
+                                    sg = vals_sg[-1]
+                        except Exception:
+                            sg = ""
+                        sg = sg or get_subgrupo_competencia_ou_base(
+                            setor, ch_str, int(ano), int(mes),
+                            (colab_by.get(ch_str, {}).get("Subgrupo", "") or "").strip()
+                        ) or "SEM SUBGRUPO"
                         subgrupo_map.setdefault(sg, []).append(chx)
 
                     row_idx = 3
@@ -12381,6 +12240,7 @@ def page_app():
                 hist_db = load_escala_mes_db(setor, ano, mes) or {}
                 if hist_db:
                     hist_db = apply_overrides_to_hist(setor, ano, mes, hist_db)
+                    hist_db = _apply_retificacoes_to_hist(setor, ano, mes, hist_db)
                 linhas = []
                 for _chapa, _df in (hist_db or {}).items():
                     if _df is None or _df.empty:
@@ -12398,12 +12258,13 @@ def page_app():
                     _ent = str(_r.get("H_Entrada", "") or "").strip()
                     _sai = str(_r.get("H_Saida", "") or "").strip()
                     _nome = ""
-                    _subg = ""
+                    _subg_base = ""
                     for c in colaboradores:
                         if str(c.get("Chapa", "")).strip() == str(_chapa).strip():
                             _nome = str(c.get("Nome", "")).strip()
-                            _subg = str(c.get("Subgrupo", "")).strip()
+                            _subg_base = str(c.get("Subgrupo", "")).strip()
                             break
+                    _subg = get_subgrupo_competencia_ou_base(setor, str(_chapa).strip(), int(ano), int(mes), _subg_base)
                     linhas.append({"Chapa": str(_chapa).strip(), "Nome": _nome, "Subgrupo": _subg, "Entrada": _ent, "Saída": _sai})
                 df_dia = pd.DataFrame(linhas).sort_values(["Subgrupo", "Nome"]) if linhas else pd.DataFrame(columns=["Chapa","Nome","Subgrupo","Entrada","Saída"])
                 dia_cache[dia_key] = {"df": df_dia, "hist": hist_db, "colaboradores": colaboradores}
@@ -12533,6 +12394,7 @@ def page_app():
                             st.warning("Gere a escala antes na aba 🚀 Gerar Escala.")
                         else:
                             hist_db_pdf = apply_overrides_to_hist(setor, ano, mes, hist_db_pdf)
+                            hist_db_pdf = _apply_retificacoes_to_hist(setor, ano, mes, hist_db_pdf)
                             hist_db_pdf = {ch: df for ch, df in hist_db_pdf.items() if ch in set(chapas_sel)}
                             if not hist_db_pdf:
                                 st.warning("Nenhum colaborador para imprimir com os filtros atuais.")
