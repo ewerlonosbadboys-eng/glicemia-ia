@@ -477,6 +477,7 @@ def rebuild_colaborador_competencia_snapshot(setor: str, ano: int, mes: int) -> 
         con.close()
 
 
+@st.cache_data(show_spinner=False, ttl=120)
 def get_colaborador_competencia_snapshot(setor: str, chapa: str, ano: int, mes: int):
     ensure_competencia_runtime_tables()
     setor = _norm_setor(setor)
@@ -499,25 +500,6 @@ def get_colaborador_competencia_snapshot(setor: str, chapa: str, ano: int, mes: 
         row = cur.fetchone()
     finally:
         con.close()
-
-    if not row:
-        try:
-            rebuild_colaborador_competencia_snapshot(setor, ano, mes)
-        except Exception:
-            pass
-
-        con = db_conn()
-        cur = con.cursor()
-        try:
-            cur.execute("""
-                SELECT nome, chapa, subgrupo, entrada, folga_sab
-                FROM colaborador_competencia_snapshot
-                WHERE UPPER(TRIM(setor))=? AND ano=? AND mes=? AND TRIM(chapa)=?
-                LIMIT 1
-            """, (setor, ano, mes, chapa))
-            row = cur.fetchone()
-        finally:
-            con.close()
 
     if not row:
         return None
@@ -622,6 +604,7 @@ def salvar_retificacao_competencia(setor: str, ano: int, mes: int, chapa: str, d
         pass
 
 
+@st.cache_data(show_spinner=False, ttl=120)
 def load_retificacoes_competencia(setor: str, ano: int, mes: int) -> pd.DataFrame:
     con = db_conn()
     try:
@@ -9711,6 +9694,7 @@ def get_colaborador_record(setor: str, chapa: str):
     }
 
 
+@st.cache_data(show_spinner=False, ttl=120)
 def get_subgrupo_competencia_ou_base(setor: str, chapa: str, ano: int, mes: int, base_subgrupo: str = "") -> str:
     setor = _norm_setor(setor)
     chapa = _norm_chapa(chapa)
@@ -9804,6 +9788,7 @@ def _apply_subgrupo_competencia_to_hist(setor: str, ano: int, mes: int, hist_db:
     return hist_db
 
 
+@st.cache_data(show_spinner=False, ttl=120)
 def get_escala_colaborador_mes(setor: str, chapa: str, ano: int, mes: int) -> pd.DataFrame:
     setor = _norm_setor(setor)
     chapa = _norm_chapa(chapa)
@@ -9865,6 +9850,7 @@ def get_escala_colaborador_mes(setor: str, chapa: str, ano: int, mes: int) -> pd
     finally:
         con.close()
     return df
+@st.cache_data(show_spinner=False, ttl=120)
 def get_overrides_colaborador_mes(setor: str, chapa: str, ano: int, mes: int) -> pd.DataFrame:
     setor = _norm_setor(setor)
     chapa = _norm_chapa(chapa)
