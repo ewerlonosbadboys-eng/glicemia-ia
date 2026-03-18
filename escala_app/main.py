@@ -2570,7 +2570,7 @@ def get_app_like_nav_config(is_admin_area: bool, setor: str = ""):
         ("🗑️ Excluir colaborador", {"sec_main": "👥 Colaboradores", "sec_col": "🗑️ Excluir colaborador"}),
         ("🧾 Aprovações AX", {"sec_main": "👥 Colaboradores", "sec_col": "🧾 Aprovações AX"}),
     ]
-    if setor_norm.startswith("FRENTECAIXA"):
+    if setor_norm.replace(" ", "").startswith("FRENTECAIXA"):
         colabs.append(("🔄 Rodízio Caixa", {"sec_main": "👥 Colaboradores", "sec_col": "🔄 Rodízio Caixa"}))
 
     return {
@@ -2641,6 +2641,7 @@ def render_app_like_sidebar_nav(is_admin_area: bool, setor: str = ""):
             st.session_state["app_like_main"] = key
             st.session_state["app_like_sub"] = cfg[key]["default_sub"]
             current_main = key
+            st.rerun()
 
     submenus = cfg[current_main]["submenus"]
     labels = [label for label, _ in submenus]
@@ -2649,17 +2650,22 @@ def render_app_like_sidebar_nav(is_admin_area: bool, setor: str = ""):
         current_sub = cfg[current_main]["default_sub"]
         st.session_state["app_like_sub"] = current_sub
 
+    radio_key = f"app_like_sub_radio::{current_main}"
     if labels:
+        if st.session_state.get(radio_key) != current_sub:
+            st.session_state[radio_key] = current_sub
+
         st.markdown("<div class='app-nav-label'>Subabas</div>", unsafe_allow_html=True)
         chosen = st.radio(
             "Abrir",
             labels,
-            index=labels.index(current_sub),
-            key=f"app_like_sub_radio::{current_main}",
+            key=radio_key,
             label_visibility="collapsed",
         )
-        st.session_state["app_like_sub"] = chosen
-        st.markdown(f"<div class='app-nav-note'>Atual: {chosen}</div>", unsafe_allow_html=True)
+        if chosen != st.session_state.get("app_like_sub"):
+            st.session_state["app_like_sub"] = chosen
+            st.rerun()
+        st.markdown(f"<div class='app-nav-note'>Atual: {st.session_state.get('app_like_sub', chosen)}</div>", unsafe_allow_html=True)
 
 
 def resolve_app_like_route(is_admin_area: bool, setor: str = ""):
@@ -12175,7 +12181,7 @@ def page_app():
                 ("🗑️ Excluir colaborador", "🗑️ Excluir colaborador", "col_menu_excluir"),
                 ("🧾 Aprovações AX", "🧾 Aprovações AX", "col_menu_ax"),
             ]
-            if setor_norm.startswith("FRENTECAIXA"):
+            if setor_norm.replace(" ", "").startswith("FRENTECAIXA"):
                 botoes_colab.append(("🔄 Rodízio Caixa", "🔄 Rodízio Caixa", "col_menu_rodizio_caixa"))
 
             total_botoes_colab = len(botoes_colab)
