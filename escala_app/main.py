@@ -1,4 +1,5 @@
 # V97 ENTERPRISE — boot resiliente, restore em camadas e login sempre liberado
+# V97.3 PREMIUM UI — refinamento visual adicional sem alterar regras
 # Derivado da V95.2 com reforço no restore local/Supabase/latest_stable e sem bloqueio rígido de login.
 
 # V84 BASE — DISTRIBUIÇÃO INTELIGENTE POR SEMANA DO SUBGRUPO
@@ -1849,6 +1850,98 @@ div[data-testid="stForm"] {
 }
 </style>
 """, unsafe_allow_html=True)
+
+
+
+
+st.markdown(r"""
+<style>
+/* Premium UI v3 — refinamento extra, sem tocar na lógica */
+[data-testid="stToolbar"], [data-testid="stDecoration"] {
+  background: transparent !important;
+}
+
+[data-testid="stHeader"] {
+  background: rgba(4, 10, 24, 0.72) !important;
+  border-bottom: 1px solid rgba(127,176,255,0.08);
+  backdrop-filter: blur(10px);
+}
+
+[data-testid="stSidebarNav"] {
+  padding-top: .35rem;
+}
+
+[data-testid="stSidebarNav"] li div a,
+[data-testid="stSidebarNav"] li button {
+  border-radius: 14px !important;
+}
+
+[data-testid="stSidebarNav"] li div a:hover,
+[data-testid="stSidebarNav"] li button:hover {
+  background: rgba(79,140,255,0.10) !important;
+}
+
+[data-testid="stSidebarNav"] li div a[aria-current="page"] {
+  background: linear-gradient(180deg, rgba(79,140,255,0.22), rgba(47,105,221,0.18)) !important;
+  border: 1px solid rgba(127,176,255,0.20) !important;
+}
+
+[data-testid="stMetricValue"],
+[data-testid="stMetricLabel"],
+[data-testid="stMetricDelta"] {
+  color: var(--ax-text) !important;
+}
+
+[data-testid="stFileUploader"] section {
+  background: linear-gradient(180deg, rgba(18,34,73,.44), rgba(10,20,48,.54));
+  border: 1px dashed rgba(127,176,255,0.22) !important;
+  border-radius: 18px !important;
+}
+
+[data-testid="stSelectbox"] label,
+[data-testid="stMultiSelect"] label,
+[data-testid="stDateInput"] label,
+[data-testid="stTextInput"] label,
+[data-testid="stTextArea"] label,
+[data-testid="stNumberInput"] label,
+[data-testid="stRadio"] label,
+[data-testid="stCheckbox"] label,
+[data-testid="stMarkdownContainer"],
+label, p, span, small {
+  color: var(--ax-text);
+}
+
+[data-testid="stCaptionContainer"] {
+  color: var(--ax-muted) !important;
+}
+
+hr {
+  border-color: rgba(127,176,255,0.08);
+}
+
+[data-testid="stDataFrame"] div[role="grid"],
+[data-testid="stTable"] table {
+  background: rgba(8,18,44,.74) !important;
+}
+
+[data-testid="stDataFrame"] div[role="columnheader"],
+[data-testid="stDataFrame"] [data-testid="stDataFrameResizable"] {
+  background: rgba(79,140,255,0.10) !important;
+}
+
+[data-testid="column"] > div:has(.kpi-card) {
+  height: 100%;
+}
+
+@media (min-width: 901px) {
+  .block-container { padding-left: 1.1rem; padding-right: 1.1rem; }
+}
+</style>
+""", unsafe_allow_html=True)
+
+
+def ui_divider():
+    st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
 
 
 def ui_section(title: str, subtitle: str = ""):
