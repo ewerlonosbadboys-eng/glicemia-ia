@@ -4688,6 +4688,61 @@ def admin_update_funcionario(setor: str, chapa_atual: str, nome_novo: str, subgr
 # =========================================================
 # COLABORADORES
 # =========================================================
+
+def admin_rename_setor_global(setor_atual: str, setor_novo: str) -> dict:
+    """Renomeia um setor em todas as tabelas que possuem a coluna 'setor'."""
+    setor_atual_norm = _norm_setor(setor_atual)
+    setor_novo_norm = _norm_setor(setor_novo)
+
+    if not setor_atual_norm or not setor_novo_norm:
+        raise ValueError('Informe o setor atual e o novo nome do setor.')
+    if setor_atual_norm == setor_novo_norm:
+        raise ValueError('O novo nome do setor precisa ser diferente do setor atual.')
+
+    con = db_conn()
+    cur = con.cursor()
+    atualizados = []
+    try:
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+        tabelas = [str(r[0]) for r in cur.fetchall() if str(r[0]).strip()]
+
+        for tabela in tabelas:
+            try:
+                cur.execute(f"PRAGMA table_info({tabela})")
+                cols = [str(r[1]) for r in cur.fetchall()]
+            except Exception:
+                continue
+
+            if 'setor' not in cols:
+                continue
+
+            try:
+                cur.execute(
+                    f"UPDATE {tabela} SET setor=? WHERE UPPER(TRIM(setor))=UPPER(TRIM(?))",
+                    (setor_novo_norm, setor_atual_norm),
+                )
+                if int(cur.rowcount or 0) > 0:
+                    atualizados.append((tabela, int(cur.rowcount or 0)))
+            except Exception:
+                raise
+
+        con.commit()
+    finally:
+        con.close()
+
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+
+    return {
+        'setor_antigo': setor_atual_norm,
+        'setor_novo': setor_novo_norm,
+        'tabelas_atualizadas': atualizados,
+        'total_tabelas': len(atualizados),
+        'total_registros': sum(q for _, q in atualizados),
+    }
+
 def colaborador_exists(setor: str, chapa: str) -> bool:
     con = db_conn()
     cur = con.cursor()
@@ -12809,6 +12864,29 @@ def page_app():
                         st.rerun()
                     except Exception as e:
                         st.error(f"Falha ao salvar usuário: {e}")
+
+            st.markdown("---")
+            st.subheader("🏷️ Renomear setor")
+            st.caption("Use esta subárea para trocar o nome de um setor em todo o sistema sem precisar editar tabela por tabela.")
+            try:
+                setores_ren = listar_setores_db()
+            except Exception:
+                setores_ren = []
+            rr1, rr2 = st.columns([1.2, 1.4])
+            with rr1:
+                setor_ren_atual = st.selectbox("Setor atual", setores_ren, key="adm_ren_setor_atual") if setores_ren else st.text_input("Setor atual", value="FLV", key="adm_ren_setor_atual_txt")
+            with rr2:
+                setor_ren_novo = st.text_input("Novo nome do setor", value=str(setor_ren_atual or ''), key="adm_ren_setor_novo")
+            st.caption("Isso atualiza o nome do setor nas tabelas que possuem a coluna setor, incluindo colaboradores, usuários, escala, retificações, assinaturas e competências.")
+            if st.button("Renomear setor", key="adm_ren_setor_btn"):
+                try:
+                    res = admin_rename_setor_global(str(setor_ren_atual), str(setor_ren_novo))
+                    st.success(f"Setor renomeado de {res['setor_antigo']} para {res['setor_novo']}. Tabelas afetadas: {res['total_tabelas']} | Registros atualizados: {res['total_registros']}")
+                    if res['tabelas_atualizadas']:
+                        st.dataframe(pd.DataFrame(res['tabelas_atualizadas'], columns=['Tabela', 'Registros atualizados']), use_container_width=True, hide_index=True)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Falha ao renomear setor: {e}")
 
             st.markdown("---")
             st.subheader("🧊 Competência do setor (fechar / reabrir)")
