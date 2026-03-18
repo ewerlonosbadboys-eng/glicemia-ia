@@ -94,6 +94,88 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib import colors
 st.set_page_config(page_title="Escala 5x2 Oficial", layout="wide")
 
+
+def aplicar_tema_premium_etapa1():
+    st.markdown("""
+    <style>
+    .stApp {
+        background: radial-gradient(circle at top right, rgba(59,130,246,0.20), transparent 20%),
+                    linear-gradient(135deg, #061225 0%, #081833 40%, #07152b 100%);
+        color: #f8fbff;
+    }
+
+    section[data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #07152b 0%, #0a1d3e 100%);
+        border-right: 1px solid rgba(255,255,255,0.06);
+    }
+
+    .block-container {
+        padding-top: 1.2rem;
+    }
+
+    div[data-testid="stMetric"] {
+        background: linear-gradient(180deg, rgba(11,26,55,0.95), rgba(8,18,37,0.92));
+        border: 1px solid rgba(96,165,250,0.18);
+        border-radius: 16px;
+        padding: 14px 16px;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.18);
+    }
+
+    .stButton > button, div[data-testid="stFormSubmitButton"] button {
+        background: linear-gradient(90deg, #3b82f6 0%, #2563eb 100%);
+        color: white;
+        border: none;
+        border-radius: 12px;
+        font-weight: 700;
+        padding: 0.62rem 1rem;
+        box-shadow: 0 8px 24px rgba(37,99,235,0.28);
+    }
+
+    .stButton > button:hover, div[data-testid="stFormSubmitButton"] button:hover {
+        background: linear-gradient(90deg, #2563eb 0%, #1d4ed8 100%);
+    }
+
+    div[data-baseweb="input"] > div,
+    div[data-baseweb="select"] > div,
+    .stTextInput input,
+    .stNumberInput input,
+    .stTextArea textarea,
+    .stDateInput input {
+        background: rgba(255,255,255,0.035) !important;
+        color: #f8fbff !important;
+        border-radius: 12px !important;
+        border: 1px solid rgba(148,163,184,0.22) !important;
+    }
+
+    .stDataFrame, .stTable {
+        border: 1px solid rgba(148,163,184,0.16);
+        border-radius: 14px;
+        overflow: hidden;
+    }
+
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 6px;
+    }
+
+    .stTabs [data-baseweb="tab"] {
+        background: rgba(255,255,255,0.03);
+        border-radius: 10px 10px 0 0;
+        border: 1px solid rgba(148,163,184,0.12);
+    }
+
+    .stAlert {
+        border-radius: 14px;
+        border: 1px solid rgba(148,163,184,0.16);
+    }
+
+    .stExpander {
+        border: 1px solid rgba(148,163,184,0.16) !important;
+        border-radius: 14px !important;
+        background: rgba(255,255,255,0.02) !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
 VERSAO_ACESSO_LIDER = "ACESSO_LIDER_FIX_2026_03_14_v2"
 
 # =========================================================
@@ -11212,6 +11294,7 @@ def _ax_resumo_pendencia_generica(payload: dict) -> list[str]:
     return linhas or ['Sem resumo simples disponível para esta solicitação.']
 
 def page_app():
+    aplicar_tema_premium_etapa1()
     auth = st.session_state.get("auth") or {}
     setor = auth.get("setor", "GERAL")
 
@@ -14378,7 +14461,7 @@ def _fast_restore_bundled_latest_before_start() -> None:
         pass
 
 
-# ========================================================= 
+# =========================================================
 # MAIN
 # =========================================================
 _fast_restore_bundled_latest_before_start()
