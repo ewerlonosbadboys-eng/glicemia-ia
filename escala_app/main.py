@@ -10988,9 +10988,10 @@ def page_app():
 
                 if rec_ax:
                     login_hit_ax = df_login_ax[(df_login_ax['setor'].astype(str).str.strip().str.upper() == _norm_setor(setor_ax)) & (df_login_ax['chapa'].astype(str).str.strip() == chapa_ax)]
-                    is_admin_cur_ax = bool(int(login_hit_ax.iloc[0]['is_admin'])) if not login_hit_ax.empty else False
-                    is_lider_cur_ax = bool(int(login_hit_ax.iloc[0]['is_lider'])) if not login_hit_ax.empty else False
-                    is_ax_cur_ax = bool(int(login_hit_ax.iloc[0]['is_ax_lider'])) if not login_hit_ax.empty else False
+                    row_login_ax = login_hit_ax.iloc[0].to_dict() if not login_hit_ax.empty else {}
+                    is_admin_cur_ax = bool(int(row_login_ax.get('is_admin', 0) or 0))
+                    is_lider_cur_ax = bool(int(row_login_ax.get('is_lider', 0) or 0))
+                    is_ax_cur_ax = bool(int(row_login_ax.get('is_ax_lider', 0) or 0))
                     perfil_cur_ax = 'ADMIN' if is_admin_cur_ax else ('LIDER' if is_lider_cur_ax else ('AX_LIDER' if is_ax_cur_ax else 'COLABORADOR'))
 
                     st.write(f"Atualizando: **{str(rec_ax.get('nome') or '').strip()}** — chapa **{chapa_ax}**")
@@ -13041,9 +13042,10 @@ def page_app():
 
                 if rec_func:
                     login_hit = df_login_adm[(df_login_adm['setor'].astype(str).str.strip().str.upper() == _norm_setor(setor_func)) & (df_login_adm['chapa'].astype(str).str.strip() == chapa_func)]
-                    is_admin_cur = bool(int(login_hit.iloc[0]['is_admin'])) if not login_hit.empty else False
-                    is_lider_cur = bool(int(login_hit.iloc[0]['is_lider'])) if not login_hit.empty else False
-                    is_ax_cur = bool(int(login_hit.iloc[0]['is_ax_lider'])) if not login_hit.empty else False
+                    row_login = login_hit.iloc[0].to_dict() if not login_hit.empty else {}
+                    is_admin_cur = bool(int(row_login.get('is_admin', 0) or 0))
+                    is_lider_cur = bool(int(row_login.get('is_lider', 0) or 0))
+                    is_ax_cur = bool(int(row_login.get('is_ax_lider', 0) or 0))
                     perfil_cur = 'ADMIN' if is_admin_cur else ('LIDER' if is_lider_cur else ('AX_LIDER' if is_ax_cur else ('LIDER' if _norm_subgrupo_label(rec_func.get('subgrupo','')) == 'LIDERANCA' else 'COLABORADOR')))
 
                     st.write(f"Atualizando: **{str(rec_func.get('nome') or '').strip()}** — chapa **{chapa_func}**")
