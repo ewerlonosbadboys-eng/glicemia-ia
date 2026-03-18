@@ -99,34 +99,38 @@ def aplicar_tema_premium_etapa1():
     st.markdown("""
     <style>
     :root {
-        --ax-bg-1: #040b19;
-        --ax-bg-2: #07152c;
-        --ax-bg-3: #0b1f43;
-        --ax-line: rgba(125, 170, 255, 0.18);
+        --ax-bg-1: #020816;
+        --ax-bg-2: #06142b;
+        --ax-bg-3: #0a2450;
+        --ax-line: rgba(125, 170, 255, 0.20);
         --ax-line-2: rgba(255,255,255,0.08);
         --ax-text: #f8fbff;
         --ax-soft: #9fb8e7;
         --ax-blue: #4f8cff;
         --ax-blue-2: #2563eb;
-        --ax-card: linear-gradient(180deg, rgba(10,27,58,0.96), rgba(5,15,33,0.96));
+        --ax-card: linear-gradient(180deg, rgba(11,28,60,0.98), rgba(4,12,28,0.98));
+        --ax-card-2: linear-gradient(180deg, rgba(9,23,49,0.96), rgba(5,13,29,0.96));
     }
 
     .stApp {
         background:
-            radial-gradient(circle at 88% 8%, rgba(79,140,255,0.24), transparent 14%),
-            radial-gradient(circle at 18% 0%, rgba(59,130,246,0.12), transparent 18%),
-            linear-gradient(135deg, var(--ax-bg-1) 0%, var(--ax-bg-2) 45%, #03101f 100%);
+            radial-gradient(circle at 85% 6%, rgba(79,140,255,0.30), transparent 16%),
+            radial-gradient(circle at 16% -4%, rgba(59,130,246,0.15), transparent 20%),
+            linear-gradient(135deg, var(--ax-bg-1) 0%, var(--ax-bg-2) 45%, #020b18 100%);
         color: var(--ax-text);
     }
 
     .block-container {
-        padding-top: 1.15rem;
-        padding-bottom: 2rem;
+        padding-top: 1.05rem;
+        padding-bottom: 2.35rem;
+        max-width: 1480px;
     }
 
     section[data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #061125 0%, #092148 100%);
-        border-right: 1px solid rgba(120, 160, 255, 0.12);
+        background:
+            radial-gradient(circle at 20% 0%, rgba(79,140,255,0.10), transparent 20%),
+            linear-gradient(180deg, #061125 0%, #081a38 55%, #092148 100%);
+        border-right: 1px solid rgba(120, 160, 255, 0.14);
         box-shadow: inset -1px 0 0 rgba(255,255,255,0.04), 16px 0 34px rgba(0,0,0,0.18);
     }
 
@@ -145,10 +149,22 @@ def aplicar_tema_premium_etapa1():
 
     div[data-testid="stMetric"] {
         background: var(--ax-card);
-        border: 1px solid rgba(96,165,250,0.16);
+        border: 1px solid rgba(96,165,250,0.18);
         border-radius: 18px;
         padding: 14px 16px;
-        box-shadow: 0 14px 34px rgba(0,0,0,0.20);
+        box-shadow: 0 16px 38px rgba(0,0,0,0.24);
+        position: relative;
+        overflow: hidden;
+    }
+
+    div[data-testid="stMetric"]::before {
+        content: "";
+        position: absolute;
+        inset: 0 auto auto 0;
+        width: 100%;
+        height: 2px;
+        background: linear-gradient(90deg, rgba(79,140,255,0.0), rgba(79,140,255,0.95), rgba(79,140,255,0.0));
+        opacity: 0.85;
     }
 
     div[data-testid="stMetric"] label,
@@ -162,18 +178,21 @@ def aplicar_tema_premium_etapa1():
     .stDownloadButton > button {
         background: linear-gradient(90deg, var(--ax-blue) 0%, var(--ax-blue-2) 100%);
         color: white;
-        border: 1px solid rgba(255,255,255,0.08);
+        border: 1px solid rgba(255,255,255,0.10);
         border-radius: 12px;
         font-weight: 700;
-        padding: 0.66rem 1rem;
-        box-shadow: 0 10px 26px rgba(37,99,235,0.26);
+        padding: 0.70rem 1rem;
+        box-shadow: 0 12px 28px rgba(37,99,235,0.28);
+        transition: transform 0.15s ease, box-shadow 0.15s ease;
     }
 
     .stButton > button:hover,
     div[data-testid="stFormSubmitButton"] button:hover,
     .stDownloadButton > button:hover {
         background: linear-gradient(90deg, #3b82f6 0%, #1d4ed8 100%);
-        border-color: rgba(255,255,255,0.14);
+        border-color: rgba(255,255,255,0.16);
+        transform: translateY(-1px);
+        box-shadow: 0 16px 34px rgba(37,99,235,0.34);
     }
 
     div[data-baseweb="input"] > div,
@@ -184,11 +203,22 @@ def aplicar_tema_premium_etapa1():
     .stDateInput input,
     .stTimeInput input,
     .stMultiSelect div[data-baseweb="select"] > div {
-        background: rgba(255,255,255,0.04) !important;
+        background: rgba(255,255,255,0.045) !important;
         color: #f8fbff !important;
         border-radius: 13px !important;
-        border: 1px solid rgba(148,163,184,0.20) !important;
-        box-shadow: inset 0 1px 0 rgba(255,255,255,0.02);
+        border: 1px solid rgba(148,163,184,0.22) !important;
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.03), 0 8px 18px rgba(0,0,0,0.10);
+    }
+
+    div[data-baseweb="input"] > div:focus-within,
+    div[data-baseweb="select"] > div:focus-within,
+    .stTextInput input:focus,
+    .stNumberInput input:focus,
+    .stTextArea textarea:focus,
+    .stDateInput input:focus,
+    .stTimeInput input:focus {
+        border-color: rgba(79,140,255,0.42) !important;
+        box-shadow: 0 0 0 1px rgba(79,140,255,0.18), 0 12px 22px rgba(0,0,0,0.16) !important;
     }
 
     div[data-baseweb="input"] input::placeholder,
@@ -197,11 +227,11 @@ def aplicar_tema_premium_etapa1():
     }
 
     .stDataFrame, .stTable {
-        background: rgba(4,14,30,0.85);
-        border: 1px solid rgba(148,163,184,0.14);
+        background: rgba(4,14,30,0.90);
+        border: 1px solid rgba(148,163,184,0.16);
         border-radius: 16px;
         overflow: hidden;
-        box-shadow: 0 10px 30px rgba(0,0,0,0.16);
+        box-shadow: 0 14px 34px rgba(0,0,0,0.20);
     }
 
     [data-testid="stDataFrameResizable"] table {
@@ -209,65 +239,85 @@ def aplicar_tema_premium_etapa1():
     }
 
     [data-testid="stDataFrameResizable"] th {
-        background: linear-gradient(180deg, rgba(12,31,67,0.98), rgba(8,21,45,0.98)) !important;
+        background: linear-gradient(180deg, rgba(13,34,74,0.99), rgba(8,21,45,0.99)) !important;
         color: #eff6ff !important;
         font-weight: 700 !important;
-        border-bottom: 1px solid rgba(96,165,250,0.18) !important;
+        border-bottom: 1px solid rgba(96,165,250,0.20) !important;
     }
 
     [data-testid="stDataFrameResizable"] td {
-        background: rgba(3,11,24,0.72) !important;
+        background: rgba(3,11,24,0.82) !important;
         color: #f5f9ff !important;
-        border-bottom: 1px solid rgba(255,255,255,0.04) !important;
+        border-bottom: 1px solid rgba(255,255,255,0.045) !important;
+    }
+
+    [data-testid="stDataFrameResizable"] tr:hover td {
+        background: rgba(9,24,52,0.96) !important;
     }
 
     .stTabs [data-baseweb="tab-list"] {
         gap: 8px;
-        background: rgba(255,255,255,0.02);
+        background: rgba(255,255,255,0.025);
         border-radius: 14px;
-        padding: 4px;
-        border: 1px solid rgba(255,255,255,0.05);
+        padding: 5px;
+        border: 1px solid rgba(255,255,255,0.06);
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.02);
     }
 
     .stTabs [data-baseweb="tab"] {
-        background: rgba(255,255,255,0.025);
+        background: rgba(255,255,255,0.03);
         border-radius: 10px;
-        border: 1px solid rgba(148,163,184,0.10);
+        border: 1px solid rgba(148,163,184,0.12);
         color: #eaf2ff;
-        min-height: 42px;
+        min-height: 44px;
         padding-left: 12px;
         padding-right: 12px;
+        font-weight: 600;
     }
 
     .stTabs [aria-selected="true"] {
-        background: linear-gradient(180deg, rgba(35,99,235,0.34), rgba(29,78,216,0.24)) !important;
-        border-color: rgba(96,165,250,0.25) !important;
+        background: linear-gradient(180deg, rgba(35,99,235,0.36), rgba(29,78,216,0.28)) !important;
+        border-color: rgba(96,165,250,0.28) !important;
+        box-shadow: 0 10px 22px rgba(29,78,216,0.18);
     }
 
     .stAlert {
         border-radius: 14px;
-        border: 1px solid rgba(148,163,184,0.14);
-        background: rgba(255,255,255,0.025);
+        border: 1px solid rgba(148,163,184,0.16);
+        background: rgba(255,255,255,0.03);
+        box-shadow: 0 10px 24px rgba(0,0,0,0.12);
     }
 
     .stExpander {
-        border: 1px solid rgba(148,163,184,0.14) !important;
+        border: 1px solid rgba(148,163,184,0.16) !important;
         border-radius: 16px !important;
-        background: rgba(255,255,255,0.025) !important;
+        background: rgba(255,255,255,0.03) !important;
         overflow: hidden;
+        box-shadow: 0 10px 24px rgba(0,0,0,0.12);
     }
 
     .stExpander summary {
-        background: linear-gradient(180deg, rgba(9,24,52,0.92), rgba(6,18,38,0.92));
+        background: linear-gradient(180deg, rgba(10,26,56,0.96), rgba(6,18,38,0.96));
         border-radius: 16px;
+        font-weight: 600;
     }
 
     div[data-testid="stForm"] {
-        background: linear-gradient(180deg, rgba(7,20,42,0.82), rgba(4,13,28,0.82));
-        border: 1px solid rgba(255,255,255,0.06);
+        background: linear-gradient(180deg, rgba(7,20,42,0.88), rgba(4,13,28,0.88));
+        border: 1px solid rgba(255,255,255,0.07);
         border-radius: 18px;
-        padding: 1rem 1rem 0.8rem 1rem;
-        box-shadow: 0 10px 28px rgba(0,0,0,0.16);
+        padding: 1rem 1rem 0.85rem 1rem;
+        box-shadow: 0 14px 30px rgba(0,0,0,0.18);
+    }
+
+    [data-testid="stVerticalBlock"] > [style*="flex-direction: column;"] > [data-testid="stVerticalBlock"]:has(> div[data-testid="stForm"]),
+    [data-testid="stVerticalBlock"] > [style*="flex-direction: column;"] > div:has(> .stDataFrame),
+    [data-testid="stVerticalBlock"] > [style*="flex-direction: column;"] > div:has(> .stTable) {
+        background: var(--ax-card-2);
+        border: 1px solid rgba(255,255,255,0.05);
+        border-radius: 18px;
+        padding: 0.8rem;
+        box-shadow: 0 12px 28px rgba(0,0,0,0.14);
     }
 
     .stRadio > div,
@@ -278,15 +328,22 @@ def aplicar_tema_premium_etapa1():
     .stDateInput,
     .stNumberInput,
     .stTextArea {
-        margin-bottom: 0.25rem;
+        margin-bottom: 0.3rem;
     }
 
     hr {
-        border-color: rgba(255,255,255,0.06);
+        border-color: rgba(255,255,255,0.07);
     }
 
     .element-container div[data-testid="stHorizontalBlock"] > div {
-        gap: 0.65rem;
+        gap: 0.75rem;
+    }
+
+    .st-emotion-cache-1r6slb0,
+    .st-emotion-cache-ocqkz7,
+    .st-emotion-cache-13ln4jf,
+    .st-emotion-cache-1wivap2 {
+        border-radius: 18px !important;
     }
     </style>
     """, unsafe_allow_html=True)
