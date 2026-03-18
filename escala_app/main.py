@@ -12165,6 +12165,31 @@ def page_app():
 
         if sec_col == "👥 Colaboradores":
             st.markdown("### 👥 Colaboradores")
+
+            b1, b2, b3, b4 = st.columns(4)
+
+            with b1:
+                if st.button("📋 Cadastro", key="col_menu_cadastro", use_container_width=True):
+                    st.session_state["app_like_sub"] = "➕ Cadastrar colaborador"
+                    st.rerun()
+
+            with b2:
+                if st.button("👤 Perfil", key="col_menu_perfil", use_container_width=True):
+                    st.session_state["app_like_sub"] = "✏️ Editar perfil"
+                    st.rerun()
+
+            with b3:
+                if st.button("🔑 Senha", key="col_menu_senha", use_container_width=True):
+                    st.session_state["app_like_sub"] = "🔑 Alterar senha colaborador"
+                    st.rerun()
+
+            with b4:
+                if st.button("🧾 Aprovações AX", key="col_menu_ax", use_container_width=True):
+                    st.session_state["app_like_sub"] = "🧾 Aprovações AX"
+                    st.rerun()
+
+            st.markdown("---")
+
             colaboradores = load_colaboradores_setor(setor)
             if colaboradores:
                 df_col = pd.DataFrame([{
@@ -12199,8 +12224,6 @@ def page_app():
                 st.dataframe(df_view.iloc[ini:fim], use_container_width=True, height=420)
             else:
                 st.info("Sem colaboradores.")
-
-            st.markdown("---")
 
         elif sec_col == "➕ Cadastrar colaborador":
             colaboradores = load_colaboradores_setor(setor)
