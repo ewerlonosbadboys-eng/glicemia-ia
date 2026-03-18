@@ -510,6 +510,173 @@ def aplicar_reforco_visual_etapa5():
     </style>
     """, unsafe_allow_html=True)
 
+
+def aplicar_ultra_visual_empresa_total(sidebar_compact: bool = False):
+    _sidebar_css = """
+    section[data-testid=\"stSidebar\"] {
+        min-width: 5.8rem !important;
+        max-width: 5.8rem !important;
+    }
+    """ if sidebar_compact else ""
+
+    st.markdown(f"""
+    <style>
+    /* ULTRA visual — sem alterar regras */
+    {_sidebar_css}
+
+    .stApp [data-testid="stAppViewContainer"] {{
+        animation: ax-fade-in 0.35s ease;
+    }}
+
+    @keyframes ax-fade-in {{
+        from {{ opacity: 0; transform: translateY(6px); }}
+        to {{ opacity: 1; transform: translateY(0); }}
+    }}
+
+    .ax-hero {{
+        position: relative;
+        overflow: hidden;
+        box-shadow: 0 28px 60px rgba(0,0,0,0.34), inset 0 1px 0 rgba(255,255,255,0.03);
+    }}
+
+    .ax-hero::after {{
+        content: "";
+        position: absolute;
+        top: -70px;
+        right: -40px;
+        width: 240px;
+        height: 240px;
+        background: radial-gradient(circle, rgba(96,165,250,0.18), rgba(96,165,250,0.00) 68%);
+        pointer-events: none;
+        animation: ax-glow-float 5.8s ease-in-out infinite;
+    }}
+
+    @keyframes ax-glow-float {{
+        0% {{ transform: translateY(0px) scale(1); opacity: .75; }}
+        50% {{ transform: translateY(10px) scale(1.03); opacity: 1; }}
+        100% {{ transform: translateY(0px) scale(1); opacity: .75; }}
+    }}
+
+    .kpi-card {{
+        position: relative;
+        overflow: hidden;
+        transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+    }}
+
+    .kpi-card::before {{
+        content: "";
+        position: absolute;
+        inset: -30% auto auto 60%;
+        width: 160px;
+        height: 160px;
+        background: radial-gradient(circle, rgba(96,165,250,0.16), rgba(96,165,250,0.00) 65%);
+        pointer-events: none;
+        transition: opacity .2s ease;
+        opacity: .6;
+    }}
+
+    .kpi-card:hover {{
+        transform: translateY(-3px);
+        box-shadow: 0 24px 48px rgba(0,0,0,0.34);
+        border-color: rgba(96,165,250,0.28);
+    }}
+
+    .ax-section-head {{
+        transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease;
+    }}
+
+    .ax-section-head:hover {{
+        transform: translateY(-2px);
+        box-shadow: 0 18px 40px rgba(0,0,0,0.24);
+        border-color: rgba(96,165,250,0.18);
+    }}
+
+    .stButton > button,
+    div[data-testid="stFormSubmitButton"] button,
+    .stDownloadButton > button {{
+        position: relative;
+        overflow: hidden;
+    }}
+
+    .stButton > button:hover,
+    div[data-testid="stFormSubmitButton"] button:hover,
+    .stDownloadButton > button:hover {{
+        filter: saturate(1.08);
+    }}
+
+    .stButton > button:active,
+    div[data-testid="stFormSubmitButton"] button:active,
+    .stDownloadButton > button:active {{
+        transform: scale(.985) !important;
+    }}
+
+    .app-nav-label {{
+        letter-spacing: .02em;
+        text-transform: uppercase;
+    }}
+
+    .app-nav-note {{
+        border-radius: 12px;
+        padding: 8px 10px;
+        background: rgba(255,255,255,0.04);
+        border: 1px solid rgba(255,255,255,0.06);
+    }}
+
+    .ax-loading {{
+        position: relative;
+        overflow: hidden;
+        height: 4px;
+        width: 100%;
+        border-radius: 999px;
+        background: rgba(255,255,255,0.06);
+        margin-bottom: .8rem;
+    }}
+
+    .ax-loading::after {{
+        content: "";
+        position: absolute;
+        top: 0;
+        left: -30%;
+        width: 28%;
+        height: 100%;
+        background: linear-gradient(90deg, rgba(96,165,250,0), rgba(96,165,250,0.85), rgba(96,165,250,0));
+        animation: ax-loading-move 1.4s linear infinite;
+    }}
+
+    @keyframes ax-loading-move {{
+        0% {{ left: -30%; }}
+        100% {{ left: 102%; }}
+    }}
+
+    @media (max-width: 900px) {{
+        .block-container {{
+            padding-top: 0.5rem !important;
+            padding-left: 0.65rem !important;
+            padding-right: 0.65rem !important;
+        }}
+
+        .ax-hero-title {{
+            font-size: 1.55rem !important;
+            line-height: 1.2 !important;
+        }}
+
+        .ax-hero-sub {{
+            font-size: 0.82rem !important;
+            line-height: 1.45 !important;
+        }}
+
+        div[data-testid="stHorizontalBlock"] {{
+            gap: 0.5rem !important;
+            flex-wrap: wrap !important;
+        }}
+
+        .kpi-card {{
+            min-height: auto !important;
+        }}
+    }}
+    </style>
+    """, unsafe_allow_html=True)
+
 VERSAO_ACESSO_LIDER = "ACESSO_LIDER_FIX_2026_03_14_v2"
 
 # =========================================================
@@ -2378,13 +2545,18 @@ def ui_hero(title: str, subtitle: str = "", badge: str = ""):
 
 
 def ui_back_header(title: str, main_key: str, sub_label: str):
-    c1, c2 = st.columns([1.2, 8])
+    c1, c2, c3 = st.columns([1.2, 1.35, 7])
     with c1:
         if st.button("← Voltar", key=f"back::{main_key}::{sub_label}::{title}", use_container_width=True):
             st.session_state["app_like_main"] = main_key
             st.session_state["app_like_sub"] = sub_label
             st.rerun()
     with c2:
+        if st.button("🏠 Dashboard", key=f"dash::{main_key}::{sub_label}::{title}", use_container_width=True):
+            st.session_state["app_like_main"] = "dashboard"
+            st.session_state["app_like_sub"] = "Visão geral"
+            st.rerun()
+    with c3:
         st.markdown(f"## {title}")
 
 
@@ -11759,6 +11931,8 @@ def _ax_resumo_pendencia_generica(payload: dict) -> list[str]:
 
 def page_app():
     aplicar_tema_premium_etapa1()
+    aplicar_reforco_visual_etapa5()
+    aplicar_ultra_visual_empresa_total(bool(st.session_state.get("ultra_sidebar_compact", False)))
     auth = st.session_state.get("auth") or {}
     setor = auth.get("setor", "GERAL")
     _lideranca_ok_nav = bool(auth.get('is_lider', False)) or bool(auth.get('is_ax_lider', False)) or colaborador_eh_lideranca(setor, auth.get('chapa',''))
@@ -11847,6 +12021,7 @@ def page_app():
         st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
 
         if _perfil_gestao_nav:
+            st.toggle("Menu compacto", key="ultra_sidebar_compact", help="Diminui a largura da sidebar para leitura mais focada.")
             render_app_like_sidebar_nav(_is_admin_area_nav, setor)
             st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
 
@@ -11947,6 +12122,30 @@ def page_app():
                 st.session_state["app_like_sub"] = "🧩 Folgas manuais em grade"
                 st.rerun()
         st.info("Use a barra lateral para navegar entre abas e subabas no estilo aplicativo, mantendo todas as regras e telas atuais.")
+
+        st.markdown("<div class='ax-loading'></div>", unsafe_allow_html=True)
+        st.markdown("#### 📈 Painel rápido")
+        g1, g2 = st.columns([1.2, 1])
+        with g1:
+            df_kpi_ultra = pd.DataFrame({
+                "Indicador": ["Colaboradores", "Folgas", "Férias", "Trabalho"],
+                "Quantidade": [total_colab, folgas_mes, ferias_mes, trabalhos_mes],
+            }).set_index("Indicador")
+            st.bar_chart(df_kpi_ultra)
+        with g2:
+            try:
+                colaboradores_base = load_colaboradores_setor(setor) or []
+                resumo_sub = {}
+                for c in colaboradores_base:
+                    sg = str(c.get("Subgrupo") or "SEM SUBGRUPO").strip() or "SEM SUBGRUPO"
+                    resumo_sub[sg] = resumo_sub.get(sg, 0) + 1
+                if resumo_sub:
+                    df_sub = pd.DataFrame({"Subgrupo": list(resumo_sub.keys()), "Total": list(resumo_sub.values())}).set_index("Subgrupo")
+                    st.line_chart(df_sub)
+                else:
+                    st.caption("Sem dados suficientes para gráfico por subgrupo.")
+            except Exception:
+                st.caption("Não foi possível montar o gráfico por subgrupo nesta competência.")
         return
 
     # ------------------------------------------------------
