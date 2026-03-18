@@ -2377,6 +2377,17 @@ def ui_hero(title: str, subtitle: str = "", badge: str = ""):
     )
 
 
+def ui_back_header(title: str, main_key: str, sub_label: str):
+    c1, c2 = st.columns([1.2, 8])
+    with c1:
+        if st.button("← Voltar", key=f"back::{main_key}::{sub_label}::{title}", use_container_width=True):
+            st.session_state["app_like_main"] = main_key
+            st.session_state["app_like_sub"] = sub_label
+            st.rerun()
+    with c2:
+        st.markdown(f"## {title}")
+
+
 def get_app_like_nav_config(is_admin_area: bool, setor: str = ""):
     setor_norm = str(setor or "").strip().upper()
     colabs = [
@@ -11985,7 +11996,7 @@ def page_app():
 
         elif sec_col == "➕ Cadastrar colaborador":
             colaboradores = load_colaboradores_setor(setor)
-            st.markdown("## ➕ Cadastrar colaborador (perfil completo + folgas do mês)")
+            ui_back_header("➕ Cadastrar colaborador (perfil completo + folgas do mês)", "colaboradores", "👥 Colaboradores")
 
             ano_cfg = int(st.session_state.get("cfg_ano", datetime.now().year))
             mes_cfg = int(st.session_state.get("cfg_mes", datetime.now().month))
@@ -12042,7 +12053,7 @@ def page_app():
 
         elif sec_col == "🗑️ Excluir colaborador":
             colaboradores = load_colaboradores_setor(setor)
-            st.markdown("## 🗑️ Excluir colaborador")
+            ui_back_header("🗑️ Excluir colaborador", "colaboradores", "👥 Colaboradores")
             if colaboradores:
                 opts = []
                 for c in colaboradores:
@@ -12070,7 +12081,7 @@ def page_app():
 
         elif sec_col == "✏️ Editar perfil":
             colaboradores = load_colaboradores_setor(setor)
-            st.markdown("## ✏️ Editar perfil do colaborador")
+            ui_back_header("✏️ Editar perfil do colaborador", "colaboradores", "👥 Colaboradores")
             if colaboradores:
                 chapas = [c["Chapa"] for c in colaboradores]
                 nome_by_chapa = {c["Chapa"]: c.get("Nome", "") for c in colaboradores}
@@ -12139,7 +12150,7 @@ def page_app():
 
         elif sec_col == "🔑 Alterar senha colaborador":
             colaboradores = load_colaboradores_setor(setor)
-            st.markdown("## 🔑 Alterar senha colaborador")
+            ui_back_header("🔑 Alterar senha colaborador", "colaboradores", "👥 Colaboradores")
             if colaboradores:
                 chapas = [c["Chapa"] for c in colaboradores]
                 nome_by_chapa = {c["Chapa"]: c.get("Nome", "") for c in colaboradores}
@@ -12331,7 +12342,7 @@ def page_app():
                                 st.error(f"Falha ao atualizar funcionário: {e}")
 
         elif sec_col == "🧾 Aprovações AX":
-            st.markdown("## 🧾 Aprovações AX do Líder")
+            ui_back_header("🧾 Aprovações AX do Líder", "colaboradores", "👥 Colaboradores")
             eh_ax = bool(auth.get("is_ax_lider", False)) and not bool(auth.get("is_admin", False))
             df_ax = listar_solicitacoes_ax_lider()
             df_axg = listar_pendencias_ax_genericas()
@@ -12429,7 +12440,7 @@ def page_app():
                         st.dataframe(histg[['id','setor','resumo','status','observacao','criado_em','aprovado_por','aprovado_em']], use_container_width=True, height=220)
 
         elif sec_col == "🔄 Rodízio Caixa":
-            st.markdown("## 🔄 Rodízio mensal Caixa 01 ↔ Caixa 02")
+            ui_back_header("🔄 Rodízio mensal Caixa 01 ↔ Caixa 02", "colaboradores", "👥 Colaboradores")
             if not str(setor).strip().upper().startswith("FRENTECAIXA"):
                 st.info("Rodízio disponível somente para setores FRENTECAIXA.")
             else:
@@ -14087,7 +14098,7 @@ def page_app():
                     key="pdf_fer_dl"
                 )
         elif sec_imp == "🖨️ Imprimir escala parede":
-            st.subheader("🖨️ Imprimir escala parede")
+            ui_back_header("🖨️ Imprimir escala parede", "escala", "📅 Escala")
 
             colaboradores = load_colaboradores_setor(setor)
             all_subgrupos = sorted({((c.get("Subgrupo") or "").strip() or "SEM SUBGRUPO") for c in colaboradores})
