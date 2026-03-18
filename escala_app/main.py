@@ -98,41 +98,82 @@ st.set_page_config(page_title="Escala 5x2 Oficial", layout="wide")
 def aplicar_tema_premium_etapa1():
     st.markdown("""
     <style>
-    .stApp {
-        background: radial-gradient(circle at top right, rgba(59,130,246,0.20), transparent 20%),
-                    linear-gradient(135deg, #061225 0%, #081833 40%, #07152b 100%);
-        color: #f8fbff;
+    :root {
+        --ax-bg-1: #040b19;
+        --ax-bg-2: #07152c;
+        --ax-bg-3: #0b1f43;
+        --ax-line: rgba(125, 170, 255, 0.18);
+        --ax-line-2: rgba(255,255,255,0.08);
+        --ax-text: #f8fbff;
+        --ax-soft: #9fb8e7;
+        --ax-blue: #4f8cff;
+        --ax-blue-2: #2563eb;
+        --ax-card: linear-gradient(180deg, rgba(10,27,58,0.96), rgba(5,15,33,0.96));
     }
 
-    section[data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #07152b 0%, #0a1d3e 100%);
-        border-right: 1px solid rgba(255,255,255,0.06);
+    .stApp {
+        background:
+            radial-gradient(circle at 88% 8%, rgba(79,140,255,0.24), transparent 14%),
+            radial-gradient(circle at 18% 0%, rgba(59,130,246,0.12), transparent 18%),
+            linear-gradient(135deg, var(--ax-bg-1) 0%, var(--ax-bg-2) 45%, #03101f 100%);
+        color: var(--ax-text);
     }
 
     .block-container {
-        padding-top: 1.2rem;
+        padding-top: 1.15rem;
+        padding-bottom: 2rem;
+    }
+
+    section[data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #061125 0%, #092148 100%);
+        border-right: 1px solid rgba(120, 160, 255, 0.12);
+        box-shadow: inset -1px 0 0 rgba(255,255,255,0.04), 16px 0 34px rgba(0,0,0,0.18);
+    }
+
+    section[data-testid="stSidebar"] * {
+        color: #eef5ff !important;
+    }
+
+    .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
+        color: #ffffff;
+        letter-spacing: -0.02em;
+    }
+
+    .stMarkdown p, .stCaption, label, .stRadio label, .stCheckbox label {
+        color: #d7e6ff !important;
     }
 
     div[data-testid="stMetric"] {
-        background: linear-gradient(180deg, rgba(11,26,55,0.95), rgba(8,18,37,0.92));
-        border: 1px solid rgba(96,165,250,0.18);
-        border-radius: 16px;
+        background: var(--ax-card);
+        border: 1px solid rgba(96,165,250,0.16);
+        border-radius: 18px;
         padding: 14px 16px;
-        box-shadow: 0 10px 30px rgba(0,0,0,0.18);
+        box-shadow: 0 14px 34px rgba(0,0,0,0.20);
     }
 
-    .stButton > button, div[data-testid="stFormSubmitButton"] button {
-        background: linear-gradient(90deg, #3b82f6 0%, #2563eb 100%);
+    div[data-testid="stMetric"] label,
+    div[data-testid="stMetric"] [data-testid="stMetricLabel"],
+    div[data-testid="stMetric"] [data-testid="stMetricValue"] {
+        color: #f8fbff !important;
+    }
+
+    .stButton > button,
+    div[data-testid="stFormSubmitButton"] button,
+    .stDownloadButton > button {
+        background: linear-gradient(90deg, var(--ax-blue) 0%, var(--ax-blue-2) 100%);
         color: white;
-        border: none;
+        border: 1px solid rgba(255,255,255,0.08);
         border-radius: 12px;
         font-weight: 700;
-        padding: 0.62rem 1rem;
-        box-shadow: 0 8px 24px rgba(37,99,235,0.28);
+        padding: 0.66rem 1rem;
+        box-shadow: 0 10px 26px rgba(37,99,235,0.26);
     }
 
-    .stButton > button:hover, div[data-testid="stFormSubmitButton"] button:hover {
-        background: linear-gradient(90deg, #2563eb 0%, #1d4ed8 100%);
+    .stButton > button:hover,
+    div[data-testid="stFormSubmitButton"] button:hover,
+    .stDownloadButton > button:hover {
+        background: linear-gradient(90deg, #3b82f6 0%, #1d4ed8 100%);
+        border-color: rgba(255,255,255,0.14);
     }
 
     div[data-baseweb="input"] > div,
@@ -140,38 +181,112 @@ def aplicar_tema_premium_etapa1():
     .stTextInput input,
     .stNumberInput input,
     .stTextArea textarea,
-    .stDateInput input {
-        background: rgba(255,255,255,0.035) !important;
+    .stDateInput input,
+    .stTimeInput input,
+    .stMultiSelect div[data-baseweb="select"] > div {
+        background: rgba(255,255,255,0.04) !important;
         color: #f8fbff !important;
-        border-radius: 12px !important;
-        border: 1px solid rgba(148,163,184,0.22) !important;
+        border-radius: 13px !important;
+        border: 1px solid rgba(148,163,184,0.20) !important;
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.02);
+    }
+
+    div[data-baseweb="input"] input::placeholder,
+    .stTextArea textarea::placeholder {
+        color: #97afd8 !important;
     }
 
     .stDataFrame, .stTable {
-        border: 1px solid rgba(148,163,184,0.16);
-        border-radius: 14px;
+        background: rgba(4,14,30,0.85);
+        border: 1px solid rgba(148,163,184,0.14);
+        border-radius: 16px;
         overflow: hidden;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.16);
+    }
+
+    [data-testid="stDataFrameResizable"] table {
+        border-collapse: collapse !important;
+    }
+
+    [data-testid="stDataFrameResizable"] th {
+        background: linear-gradient(180deg, rgba(12,31,67,0.98), rgba(8,21,45,0.98)) !important;
+        color: #eff6ff !important;
+        font-weight: 700 !important;
+        border-bottom: 1px solid rgba(96,165,250,0.18) !important;
+    }
+
+    [data-testid="stDataFrameResizable"] td {
+        background: rgba(3,11,24,0.72) !important;
+        color: #f5f9ff !important;
+        border-bottom: 1px solid rgba(255,255,255,0.04) !important;
     }
 
     .stTabs [data-baseweb="tab-list"] {
-        gap: 6px;
+        gap: 8px;
+        background: rgba(255,255,255,0.02);
+        border-radius: 14px;
+        padding: 4px;
+        border: 1px solid rgba(255,255,255,0.05);
     }
 
     .stTabs [data-baseweb="tab"] {
-        background: rgba(255,255,255,0.03);
-        border-radius: 10px 10px 0 0;
-        border: 1px solid rgba(148,163,184,0.12);
+        background: rgba(255,255,255,0.025);
+        border-radius: 10px;
+        border: 1px solid rgba(148,163,184,0.10);
+        color: #eaf2ff;
+        min-height: 42px;
+        padding-left: 12px;
+        padding-right: 12px;
+    }
+
+    .stTabs [aria-selected="true"] {
+        background: linear-gradient(180deg, rgba(35,99,235,0.34), rgba(29,78,216,0.24)) !important;
+        border-color: rgba(96,165,250,0.25) !important;
     }
 
     .stAlert {
         border-radius: 14px;
-        border: 1px solid rgba(148,163,184,0.16);
+        border: 1px solid rgba(148,163,184,0.14);
+        background: rgba(255,255,255,0.025);
     }
 
     .stExpander {
-        border: 1px solid rgba(148,163,184,0.16) !important;
-        border-radius: 14px !important;
-        background: rgba(255,255,255,0.02) !important;
+        border: 1px solid rgba(148,163,184,0.14) !important;
+        border-radius: 16px !important;
+        background: rgba(255,255,255,0.025) !important;
+        overflow: hidden;
+    }
+
+    .stExpander summary {
+        background: linear-gradient(180deg, rgba(9,24,52,0.92), rgba(6,18,38,0.92));
+        border-radius: 16px;
+    }
+
+    div[data-testid="stForm"] {
+        background: linear-gradient(180deg, rgba(7,20,42,0.82), rgba(4,13,28,0.82));
+        border: 1px solid rgba(255,255,255,0.06);
+        border-radius: 18px;
+        padding: 1rem 1rem 0.8rem 1rem;
+        box-shadow: 0 10px 28px rgba(0,0,0,0.16);
+    }
+
+    .stRadio > div,
+    .stCheckbox > label,
+    .stSelectbox,
+    .stMultiSelect,
+    .stTextInput,
+    .stDateInput,
+    .stNumberInput,
+    .stTextArea {
+        margin-bottom: 0.25rem;
+    }
+
+    hr {
+        border-color: rgba(255,255,255,0.06);
+    }
+
+    .element-container div[data-testid="stHorizontalBlock"] > div {
+        gap: 0.65rem;
     }
     </style>
     """, unsafe_allow_html=True)
