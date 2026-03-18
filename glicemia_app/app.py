@@ -449,10 +449,20 @@ def aplicar_layout_premium():
     --radius-lg: 18px;
 }
 html, body, [class*="css"] { font-family: "Inter", "Segoe UI", sans-serif; }
-.stApp { background: var(--bg-main); color: var(--text); }
+.stApp {
+    background:
+        radial-gradient(circle at 10% 20%, rgba(80,120,255,0.15), transparent 40%),
+        radial-gradient(circle at 90% 10%, rgba(0,200,255,0.12), transparent 40%),
+        #050816;
+    color: var(--text);
+}
 .block-container { padding-top: 1.1rem; padding-bottom: 2rem; max-width: 1400px; }
 h1, h2, h3, h4, h5, h6, p, span, label, div, .stMarkdown, .stText, .stCaption { color: var(--text) !important; }
-section[data-testid="stSidebar"] { background: linear-gradient(180deg, rgba(11,16,32,0.96), rgba(16,22,45,0.96)); border-right: 1px solid rgba(255,255,255,0.06); }
+small, .caption { color: var(--muted) !important; }
+section[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, rgba(11,16,32,0.96), rgba(16,22,45,0.96));
+    border-right: 1px solid rgba(255,255,255,0.06);
+}
 section[data-testid="stSidebar"] * { color: var(--text) !important; }
 .card {
     background: linear-gradient(180deg, rgba(24,31,56,0.88), rgba(17,23,42,0.82));
@@ -461,7 +471,13 @@ section[data-testid="stSidebar"] * { color: var(--text) !important; }
     padding: 20px;
     box-shadow: var(--shadow);
     backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
     margin-bottom: 16px;
+    transition: 0.25s ease;
+}
+.card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 18px 40px rgba(0,0,0,0.35);
 }
 .metric-box {
     background: linear-gradient(180deg, rgba(30,37,68,0.82), rgba(18,24,44,0.82));
@@ -481,10 +497,12 @@ section[data-testid="stSidebar"] * { color: var(--text) !important; }
     font-weight: 700 !important;
     min-height: 46px;
     box-shadow: 0 8px 20px rgba(64, 99, 255, 0.28);
+    transition: all 0.18s ease-in-out;
 }
 .stButton > button:hover, .stDownloadButton > button:hover {
     transform: translateY(-1px);
     box-shadow: 0 10px 22px rgba(64, 99, 255, 0.35);
+    filter: brightness(1.03);
 }
 .stTextInput > div > div > input, .stNumberInput > div > div > input, .stTextArea textarea,
 div[data-baseweb="select"] > div, .stDateInput input, .stTimeInput input {
@@ -499,31 +517,57 @@ div[data-baseweb="select"] > div, .stDateInput input, .stTimeInput input {
     box-shadow: 0 0 0 1px rgba(85, 198, 255, 0.25) !important;
 }
 .stTabs [data-baseweb="tab-list"] {
-    gap: 8px; background: transparent; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 6px;
+    gap: 8px;
+    background: transparent;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    padding-bottom: 6px;
 }
 .stTabs [data-baseweb="tab"] {
-    background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05);
-    border-radius: 12px; color: #dbe7ff !important; padding: 10px 16px; font-weight: 600;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.05);
+    border-radius: 12px;
+    color: #dbe7ff !important;
+    padding: 10px 16px;
+    font-weight: 600;
 }
 .stTabs [aria-selected="true"] {
     background: linear-gradient(90deg, rgba(108,125,255,0.25), rgba(86,199,255,0.18)) !important;
-    border: 1px solid rgba(122, 162, 255, 0.30) !important; color: white !important;
+    border: 1px solid rgba(122, 162, 255, 0.30) !important;
+    color: white !important;
 }
 .login-shell { max-width: 560px; margin: 22px auto 10px auto; }
 .login-card {
     background: linear-gradient(180deg, rgba(18,24,44,0.92), rgba(13,18,36,0.90));
-    border: 1px solid rgba(122, 162, 255, 0.16); border-radius: 28px;
-    box-shadow: 0 18px 50px rgba(0,0,0,0.34); padding: 22px 22px 12px 22px;
+    border: 1px solid rgba(122, 162, 255, 0.16);
+    border-radius: 28px;
+    box-shadow: 0 18px 50px rgba(0,0,0,0.34);
+    padding: 22px 22px 12px 22px;
     backdrop-filter: blur(14px);
 }
 .login-badge {
-    display: inline-flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 999px;
-    background: rgba(108,125,255,0.14); border: 1px solid rgba(108,125,255,0.22);
-    color: #dbe7ff; font-size: 13px; margin-bottom: 12px;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-radius: 999px;
+    background: rgba(108,125,255,0.14);
+    border: 1px solid rgba(108,125,255,0.22);
+    color: #dbe7ff;
+    font-size: 13px;
+    margin-bottom: 12px;
 }
 .login-title { font-size: 38px; line-height: 1.05; font-weight: 800; margin: 0; letter-spacing: -0.8px; }
 .login-subtitle { color: var(--muted) !important; margin-top: 8px; margin-bottom: 18px; font-size: 15px; }
 .login-footer-note { text-align: center; color: var(--muted); font-size: 13px; margin-top: 10px; margin-bottom: 4px; }
+.dashboard-kpi .label { font-size: 13px; color: #a5b4d4; margin-bottom: 8px; }
+.dashboard-kpi .value { font-size: 30px; font-weight: 800; line-height: 1.1; }
+.dashboard-kpi .sub { font-size: 12px; color: #8ea0c9; margin-top: 4px; }
+[data-testid="stPlotlyChart"] {
+    background: rgba(20,25,45,0.45);
+    border-radius: 20px;
+    padding: 8px;
+    border: 1px solid rgba(122, 162, 255, 0.08);
+}
 [data-testid="stDataFrame"] { border: 1px solid rgba(122, 162, 255, 0.12); border-radius: 18px; overflow: hidden; box-shadow: var(--shadow); }
 .stAlert { border-radius: 16px !important; border: 1px solid rgba(255,255,255,0.08) !important; }
 @media (max-width: 768px) {
@@ -1455,6 +1499,143 @@ def _gerar_catalogo_alimentos_400plus():
 
 ALIMENTOS = _gerar_catalogo_alimentos_400plus()
 
+
+
+# ================= DASHBOARD PREMIUM REAL =================
+def render_dashboard_premium_real():
+    st.markdown("## 📊 Visão Geral")
+
+    try:
+        df_hist = carregar_glicemia_com_id()
+    except Exception:
+        df_hist = pd.DataFrame()
+
+    if df_hist is None or df_hist.empty:
+        st.info("Ainda não há medições suficientes para montar o dashboard.")
+        return
+
+    df_hist = df_hist.copy()
+
+    if "Data" in df_hist.columns and "Hora" in df_hist.columns:
+        df_hist["_dt"] = pd.to_datetime(
+            df_hist["Data"].astype(str).str.strip() + " " + df_hist["Hora"].astype(str).str.strip(),
+            errors="coerce",
+            dayfirst=True
+        )
+    else:
+        df_hist["_dt"] = pd.NaT
+
+    df_hist["Valor"] = pd.to_numeric(df_hist.get("Valor", 0), errors="coerce")
+    df_hist = df_hist.dropna(subset=["Valor"]).copy()
+
+    if df_hist.empty:
+        st.info("Ainda não há dados válidos para o dashboard.")
+        return
+
+    df_hist = df_hist.sort_values("_dt", ascending=True, na_position="last")
+
+    media_glicemia = int(round(df_hist["Valor"].mean())) if not df_hist.empty else 0
+    ultima = obter_ultima_medida_card()
+    ultima_valor = ultima.get("valor", "-") if ultima else "-"
+    ultima_momento = ultima.get("momento", "-") if ultima else "-"
+    ultima_hora = ultima.get("hora", "-") if ultima else "-"
+
+    hoje_str = datetime.now(fuso_br).strftime("%d/%m/%Y")
+    try:
+        df_hoje = df_hist[df_hist["Data"].astype(str).str.strip() == hoje_str].copy()
+    except Exception:
+        df_hoje = pd.DataFrame(columns=df_hist.columns)
+
+    medicoes_hoje = len(df_hoje)
+
+    status = "Estável"
+    status_cor = "#4ade80"
+    try:
+        ult_num = float(ultima_valor)
+        if ult_num < 70:
+            status = "Baixa"
+            status_cor = "#f59e0b"
+        elif ult_num > 180:
+            status = "Alta"
+            status_cor = "#fb7185"
+    except Exception:
+        pass
+
+    c1, c2, c3, c4 = st.columns(4)
+
+    with c1:
+        st.markdown(f"""
+        <div class="card dashboard-kpi">
+            <div class="label">Média Glicemia</div>
+            <div class="value">{media_glicemia}</div>
+            <div class="sub">mg/dL</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with c2:
+        st.markdown(f"""
+        <div class="card dashboard-kpi">
+            <div class="label">Última Medição</div>
+            <div class="value">{ultima_valor}</div>
+            <div class="sub">{ultima_momento} • {ultima_hora}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with c3:
+        st.markdown(f"""
+        <div class="card dashboard-kpi">
+            <div class="label">Medições Hoje</div>
+            <div class="value">{medicoes_hoje}</div>
+            <div class="sub">registros no dia</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with c4:
+        st.markdown(f"""
+        <div class="card dashboard-kpi">
+            <div class="label">Status Atual</div>
+            <div class="value" style="color:{status_cor};">{status}</div>
+            <div class="sub">baseado na última medição</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+
+    col_graf, col_lado = st.columns([2.2, 1])
+
+    with col_graf:
+        df_plot = df_hist.dropna(subset=["_dt"]).copy()
+        if not df_plot.empty:
+            fig = px.line(df_plot, x="_dt", y="Valor", markers=True, title="Tendência das Medições")
+            fig.update_traces(line=dict(width=3))
+            fig.update_layout(
+                plot_bgcolor="rgba(0,0,0,0)",
+                paper_bgcolor="rgba(0,0,0,0)",
+                font_color="white",
+                margin=dict(l=10, r=10, t=45, b=10),
+                xaxis_title="Data/Hora",
+                yaxis_title="Glicemia"
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Sem dados de data/hora suficientes para o gráfico.")
+
+    with col_lado:
+        media_hoje = int(round(df_hoje["Valor"].mean())) if not df_hoje.empty else 0
+        max_hoje = int(df_hoje["Valor"].max()) if not df_hoje.empty else 0
+        min_hoje = int(df_hoje["Valor"].min()) if not df_hoje.empty else 0
+
+        st.markdown(f"""
+        <div class="card">
+            <div style="font-size:14px;color:#a5b4d4;margin-bottom:10px;">Resumo do Dia</div>
+            <div style="font-size:13px;margin-bottom:8px;">📅 {hoje_str}</div>
+            <div style="font-size:13px;margin-bottom:8px;">📊 Média hoje: <b>{media_hoje}</b></div>
+            <div style="font-size:13px;margin-bottom:8px;">⬆ Máxima: <b>{max_hoje}</b></div>
+            <div style="font-size:13px;margin-bottom:8px;">⬇ Mínima: <b>{min_hoje}</b></div>
+            <div style="font-size:13px;">🧪 Registros: <b>{medicoes_hoje}</b></div>
+        </div>
+        """, unsafe_allow_html=True)
+
 # =========================================================
 # LOGIN UI
 # =========================================================
@@ -1784,6 +1965,7 @@ if st.session_state.user_email == "admin":
                     st.rerun()
 
 else:
+    render_dashboard_premium_real()
     tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Glicemia", "🩺 Última medição", "🍽️ Nutrição", "⚙️ Receita", "📩 Sugerir Melhoria"])
 
     # ====== GLICEMIA ======
