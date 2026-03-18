@@ -13075,18 +13075,27 @@ def page_app():
                     is_ax_cur = bool(int(login_row.get('is_ax_lider', 0) or 0)) if hasattr(login_row, 'get') else False
                     perfil_cur = 'ADMIN' if is_admin_cur else ('LIDER' if is_lider_cur else ('AX_LIDER' if is_ax_cur else ('LIDER' if _norm_subgrupo_label(rec_func.get('subgrupo','')) == 'LIDERANCA' else 'COLABORADOR')))
 
+                    func_token = f"{_norm_setor(setor_func)}::{str(chapa_func).strip()}"
+                    if st.session_state.get('adm_func_last_token', '') != func_token:
+                        st.session_state['adm_func_last_token'] = func_token
+                        st.session_state['adm_func_nome'] = str(rec_func.get('nome') or '').strip()
+                        st.session_state['adm_func_subgrupo'] = str(rec_func.get('subgrupo') or '').strip()
+                        st.session_state['adm_func_entrada'] = str(rec_func.get('entrada') or '06:00').strip() or '06:00'
+                        st.session_state['adm_func_folga_sab'] = bool(int(rec_func.get('folga_sab', 0) or 0))
+                        st.session_state['adm_func_perfil'] = perfil_cur
+
                     st.write(f"Atualizando: **{str(rec_func.get('nome') or '').strip()}** — chapa **{chapa_func}**")
                     af1, af2, af3, af4 = st.columns([1.4, 1.2, 1.2, 1])
                     with af1:
-                        nome_func_novo = st.text_input("Nome", value=str(rec_func.get('nome') or '').strip(), key='adm_func_nome')
+                        nome_func_novo = st.text_input("Nome", key='adm_func_nome')
                     with af2:
-                        subgrupo_func_novo = st.text_input("Subgrupo", value=str(rec_func.get('subgrupo') or '').strip(), key='adm_func_subgrupo')
+                        subgrupo_func_novo = st.text_input("Subgrupo", key='adm_func_subgrupo')
                     with af3:
-                        entrada_func_nova = st.text_input("Entrada padrão", value=str(rec_func.get('entrada') or '06:00').strip() or '06:00', key='adm_func_entrada')
+                        entrada_func_nova = st.text_input("Entrada padrão", key='adm_func_entrada')
                     with af4:
-                        folga_sab_func = st.checkbox("Folga sábado", value=bool(int(rec_func.get('folga_sab', 0) or 0)), key='adm_func_folga_sab')
+                        folga_sab_func = st.checkbox("Folga sábado", key='adm_func_folga_sab')
 
-                    perfil_func_novo = st.selectbox("Perfil do sistema", ['COLABORADOR', 'AX_LIDER', 'LIDER', 'ADMIN'], index=['COLABORADOR', 'AX_LIDER', 'LIDER', 'ADMIN'].index(perfil_cur), key='adm_func_perfil')
+                    perfil_func_novo = st.selectbox("Perfil do sistema", ['COLABORADOR', 'AX_LIDER', 'LIDER', 'ADMIN'], key='adm_func_perfil')
                     criar_login_func = st.checkbox("Criar login do sistema se não existir", value=True, key='adm_func_criar_login')
 
                     if st.button("Salvar atualização do funcionário", key='adm_func_salvar'):
