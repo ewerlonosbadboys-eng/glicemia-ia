@@ -4716,15 +4716,58 @@ def decidir_solicitacao_ax_lider(solicitacao_id: int, aprovador_nome: str, aprov
     except Exception:
         pass
 
+@st.cache_data(show_spinner=False, ttl=300)
 def admin_list_users():
     con = db_conn()
     df = pd.read_sql_query("""
-        SELECT id, nome, setor, chapa, is_admin, is_lider, COALESCE(is_ax_lider,0) AS is_ax_lider, criado_em
+        SELECT id, nome, setor, chapa, COALESCE(is_admin,0) AS is_admin, COALESCE(is_lider,0) AS is_lider, COALESCE(is_ax_lider,0) AS is_ax_lider, criado_em
         FROM usuarios_sistema
         ORDER BY setor ASC, nome ASC
     """, con)
     con.close()
     return df
+
+
+@st.cache_data(show_spinner=False, ttl=300)
+def admin_get_funcionarios_leve_all() -> pd.DataFrame:
+    con = db_conn()
+    try:
+        return pd.read_sql_query(
+            """
+            SELECT
+                COALESCE(nome,'') AS nome,
+                UPPER(TRIM(COALESCE(setor,''))) AS setor,
+                TRIM(COALESCE(chapa,'')) AS chapa,
+                COALESCE(subgrupo,'') AS subgrupo,
+                COALESCE(entrada,'06:00') AS entrada,
+                COALESCE(folga_sab,0) AS folga_sab
+            FROM colaboradores
+            ORDER BY setor ASC, nome ASC
+            """,
+            con,
+        )
+    finally:
+        con.close()
+
+
+@st.cache_data(show_spinner=False, ttl=300)
+def admin_get_logins_leve_all() -> pd.DataFrame:
+    con = db_conn()
+    try:
+        return pd.read_sql_query(
+            """
+            SELECT
+                UPPER(TRIM(COALESCE(setor,''))) AS setor,
+                TRIM(COALESCE(chapa,'')) AS chapa,
+                COALESCE(is_admin,0) AS is_admin,
+                COALESCE(is_lider,0) AS is_lider,
+                COALESCE(is_ax_lider,0) AS is_ax_lider
+            FROM usuarios_sistema
+            """,
+            con,
+        )
+    finally:
+        con.close()
 
 def admin_reset_user_password(user_id: int, nova_senha: str):
     con = db_conn()
@@ -10988,10 +11031,9 @@ def page_app():
 
                 if rec_ax:
                     login_hit_ax = df_login_ax[(df_login_ax['setor'].astype(str).str.strip().str.upper() == _norm_setor(setor_ax)) & (df_login_ax['chapa'].astype(str).str.strip() == chapa_ax)]
-                    row_login_ax = login_hit_ax.iloc[0].to_dict() if not login_hit_ax.empty else {}
-                    is_admin_cur_ax = bool(int(row_login_ax.get('is_admin', 0) or 0))
-                    is_lider_cur_ax = bool(int(row_login_ax.get('is_lider', 0) or 0))
-                    is_ax_cur_ax = bool(int(row_login_ax.get('is_ax_lider', 0) or 0))
+                    is_admin_cur_ax = bool(int(login_hit_ax.iloc[0]['is_admin'])) if not login_hit_ax.empty else False
+                    is_lider_cur_ax = bool(int(login_hit_ax.iloc[0]['is_lider'])) if not login_hit_ax.empty else False
+                    is_ax_cur_ax = bool(int(login_hit_ax.iloc[0]['is_ax_lider'])) if not login_hit_ax.empty else False
                     perfil_cur_ax = 'ADMIN' if is_admin_cur_ax else ('LIDER' if is_lider_cur_ax else ('AX_LIDER' if is_ax_cur_ax else 'COLABORADOR'))
 
                     st.write(f"Atualizando: **{str(rec_ax.get('nome') or '').strip()}** — chapa **{chapa_ax}**")
@@ -12999,23 +13041,8 @@ def page_app():
             st.warning("NOVO BLOCO ADMIN ATIVO: aqui você altera subgrupo e perfil do sistema do funcionário.")
             st.caption("Aqui o ADMIN pode alterar nome, subgrupo e perfil do colaborador em qualquer setor. O perfil sincroniza o login do sistema.")
             try:
-                con = db_conn()
-                df_func_adm = pd.read_sql_query(
-                    """
-                    SELECT nome, setor, chapa, COALESCE(subgrupo,'') AS subgrupo, COALESCE(entrada,'06:00') AS entrada, COALESCE(folga_sab,0) AS folga_sab
-                    FROM colaboradores
-                    ORDER BY setor, nome
-                    """,
-                    con,
-                )
-                df_login_adm = pd.read_sql_query(
-                    """
-                    SELECT setor, chapa, COALESCE(is_admin,0) AS is_admin, COALESCE(is_lider,0) AS is_lider
-                    FROM usuarios_sistema
-                    """,
-                    con,
-                )
-                con.close()
+                df_func_adm = admin_get_funcionarios_leve_all()
+                df_login_adm = admin_get_logins_leve_all()
             except Exception:
                 df_func_adm = pd.DataFrame(columns=['nome','setor','chapa','subgrupo','entrada','folga_sab'])
                 df_login_adm = pd.DataFrame(columns=['setor','chapa','is_admin','is_lider','is_ax_lider'])
@@ -13042,10 +13069,10 @@ def page_app():
 
                 if rec_func:
                     login_hit = df_login_adm[(df_login_adm['setor'].astype(str).str.strip().str.upper() == _norm_setor(setor_func)) & (df_login_adm['chapa'].astype(str).str.strip() == chapa_func)]
-                    row_login = login_hit.iloc[0].to_dict() if not login_hit.empty else {}
-                    is_admin_cur = bool(int(row_login.get('is_admin', 0) or 0))
-                    is_lider_cur = bool(int(row_login.get('is_lider', 0) or 0))
-                    is_ax_cur = bool(int(row_login.get('is_ax_lider', 0) or 0))
+                    login_row = login_hit.iloc[0] if not login_hit.empty else {}
+                    is_admin_cur = bool(int(login_row.get('is_admin', 0) or 0)) if hasattr(login_row, 'get') else False
+                    is_lider_cur = bool(int(login_row.get('is_lider', 0) or 0)) if hasattr(login_row, 'get') else False
+                    is_ax_cur = bool(int(login_row.get('is_ax_lider', 0) or 0)) if hasattr(login_row, 'get') else False
                     perfil_cur = 'ADMIN' if is_admin_cur else ('LIDER' if is_lider_cur else ('AX_LIDER' if is_ax_cur else ('LIDER' if _norm_subgrupo_label(rec_func.get('subgrupo','')) == 'LIDERANCA' else 'COLABORADOR')))
 
                     st.write(f"Atualizando: **{str(rec_func.get('nome') or '').strip()}** — chapa **{chapa_func}**")
