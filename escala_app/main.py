@@ -2387,7 +2387,7 @@ def get_app_like_nav_config(is_admin_area: bool, setor: str = ""):
         ("🗑️ Excluir colaborador", {"sec_main": "👥 Colaboradores", "sec_col": "🗑️ Excluir colaborador"}),
         ("🧾 Aprovações AX", {"sec_main": "👥 Colaboradores", "sec_col": "🧾 Aprovações AX"}),
     ]
-    if setor_norm == "FRENTECAIXA":
+    if setor_norm.startswith("FRENTECAIXA"):
         colabs.append(("🔄 Rodízio Caixa", {"sec_main": "👥 Colaboradores", "sec_col": "🔄 Rodízio Caixa"}))
 
     return {
@@ -12434,8 +12434,8 @@ def page_app():
 
         elif sec_col == "🔄 Rodízio Caixa":
             st.markdown("## 🔄 Rodízio mensal Caixa 01 ↔ Caixa 02")
-            if str(setor).strip().upper() != "FRENTECAIXA":
-                st.info("Rodízio disponível somente para o setor FRENTECAIXA.")
+            if not str(setor).strip().upper().startswith("FRENTECAIXA"):
+                st.info("Rodízio disponível somente para setores FRENTECAIXA.")
             else:
                 cfg = get_rodizio_caixa_cfg(setor)
                 c1, c2, c3, c4 = st.columns([1.4, 1.4, 1, 1])
