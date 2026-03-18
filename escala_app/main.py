@@ -12101,27 +12101,36 @@ def page_app():
     sec_imp = app_route.get("sec_imp", "📊 Excel modelo")
 
     if sec_main == "dashboard":
-        ui_section("Dashboard", f"Área inicial do app. Clique nas subabas da sidebar para abrir cada fluxo sem mudar a lógica do sistema.")
+        ui_section("Dashboard", f"Área inicial do app. Clique nas áreas abaixo para abrir cada fluxo sem mudar a lógica do sistema.")
+        st.markdown("""
+        <style>
+        div.stButton > button[kind="secondary"],
+        div.stButton > button {
+            white-space: pre-line !important;
+            min-height: 84px !important;
+            text-align: left !important;
+            justify-content: flex-start !important;
+            line-height: 1.35 !important;
+            font-size: 1.05rem !important;
+        }
+        </style>
+        """, unsafe_allow_html=True)
         d1, d2, d3 = st.columns(3)
         with d1:
-            st.markdown("<div class='ax-section-head'><div class='ax-section-title'>👥 Colaboradores</div><div class='ax-section-sub'>Cadastros, perfil, senha e aprovações AX.</div></div>", unsafe_allow_html=True)
-            if st.button("Abrir colaboradores", key="goto_colab_dashboard", use_container_width=True):
+            if st.button("👥 Colaboradores\nCadastros, perfil, senha e aprovações AX.", key="goto_colab_dashboard", use_container_width=True):
                 st.session_state["app_like_main"] = "colaboradores"
                 st.session_state["app_like_sub"] = "👥 Colaboradores"
                 st.rerun()
         with d2:
-            st.markdown("<div class='ax-section-head'><div class='ax-section-title'>📅 Escala</div><div class='ax-section-sub'>Gerar, consultar e imprimir a escala do mês.</div></div>", unsafe_allow_html=True)
-            if st.button("Abrir escala", key="goto_escala_dashboard", use_container_width=True):
+            if st.button("📅 Escala\nGerar, consultar e imprimir a escala do mês.", key="goto_escala_dashboard", use_container_width=True):
                 st.session_state["app_like_main"] = "escala"
                 st.session_state["app_like_sub"] = "🚀 Gerar escala"
                 st.rerun()
         with d3:
-            st.markdown("<div class='ax-section-head'><div class='ax-section-title'>⚙️ Gestão</div><div class='ax-section-sub'>Ajustes, férias, assinaturas e solicitações.</div></div>", unsafe_allow_html=True)
-            if st.button("Abrir gestão", key="goto_gestao_dashboard", use_container_width=True):
+            if st.button("⚙️ Gestão\nAjustes, férias, assinaturas e solicitações.", key="goto_gestao_dashboard", use_container_width=True):
                 st.session_state["app_like_main"] = "gestao"
                 st.session_state["app_like_sub"] = "🧩 Folgas manuais em grade"
                 st.rerun()
-        st.info("Use a barra lateral para navegar entre abas e subabas no estilo aplicativo, mantendo todas as regras e telas atuais.")
 
         st.markdown("<div class='ax-loading'></div>", unsafe_allow_html=True)
         st.markdown("#### 📈 Painel rápido")
