@@ -10770,6 +10770,104 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
             else:
                 st.dataframe(df_sol, use_container_width=True, hide_index=True)
 
+
+
+def _ax_fmt_bool(v) -> str:
+    return "Sim" if bool(v) else "Não"
+
+
+def _ax_resumo_pendencia_generica(payload: dict) -> list[str]:
+    payload = payload or {}
+    modulo = str(payload.get('_modulo') or payload.get('modulo') or '').strip().lower()
+    linhas = []
+
+    if modulo == 'troca_horarios':
+        ano = payload.get('ano', '')
+        mes = payload.get('mes', '')
+        horario = str(payload.get('horario_sel') or '').strip()
+        qtd2 = payload.get('qtd2', '')
+        auto = _ax_fmt_bool(payload.get('auto_readequar'))
+        linhas.append(f'Competência: {mes}/{ano}')
+        if horario:
+            linhas.append(f'Horário base: {horario}')
+        if qtd2 != '':
+            linhas.append(f'Quantidade alvo: {qtd2}')
+        linhas.append(f'Readequar escala ao salvar: {auto}')
+        alterados = []
+        for rec in (payload.get('edited') or []):
+            nome = str(rec.get('Nome') or rec.get('nome') or '').strip()
+            chapa = str(rec.get('Chapa') or rec.get('chapa') or '').strip()
+            dias = []
+            for k, v in rec.items():
+                ks = str(k).strip()
+                if ks.isdigit() and bool(v):
+                    dias.append(int(ks))
+            if dias:
+                dias_txt = ', '.join(str(x) for x in sorted(dias))
+                alterados.append(f'{nome} ({chapa}) — dias: {dias_txt}')
+        if alterados:
+            linhas.append(f'Funcionários marcados: {len(alterados)}')
+            for item in alterados[:6]:
+                linhas.append(item)
+            if len(alterados) > 6:
+                linhas.append(f'+ {len(alterados) - 6} funcionário(s) com marcações')
+        else:
+            linhas.append('Nenhum funcionário foi marcado.')
+        return linhas
+
+    if modulo == 'retificacao_competencia':
+        linhas.append(f"Funcionário: {payload.get('nome','')} ({payload.get('chapa','')})")
+        linhas.append(f"Competência: {payload.get('mes','')}/{payload.get('ano','')} — dia {payload.get('dia','')}")
+        if str(payload.get('novo_status') or '').strip():
+            linhas.append(f"Novo status: {payload.get('novo_status')}")
+        if str(payload.get('nova_entrada') or '').strip() or str(payload.get('nova_saida') or '').strip():
+            linhas.append(f"Horário: {payload.get('nova_entrada','-')} até {payload.get('nova_saida','-')}")
+        if str(payload.get('novo_subgrupo') or '').strip():
+            linhas.append(f"Novo subgrupo: {payload.get('novo_subgrupo')}")
+        if str(payload.get('motivo') or '').strip():
+            linhas.append(f"Motivo: {payload.get('motivo')}")
+        return linhas
+
+    if modulo in ('ferias', 'férias'):
+        linhas.append(f"Funcionário: {payload.get('nome','')} ({payload.get('chapa','')})")
+        if str(payload.get('inicio') or '').strip() or str(payload.get('fim') or '').strip():
+            linhas.append(f"Período: {payload.get('inicio','')} até {payload.get('fim','')}")
+        if str(payload.get('acao') or '').strip():
+            linhas.append(f"Ação: {payload.get('acao')}")
+        return linhas
+
+    if modulo in ('alterar_senha', 'senha_colaborador'):
+        linhas.append(f"Funcionário: {payload.get('nome','')} ({payload.get('chapa','')})")
+        linhas.append('Ação: alteração de senha do colaborador')
+        return linhas
+
+    if modulo in ('cadastrar_colaborador', 'excluir_colaborador', 'editar_perfil', 'preferencia_subgrupo', 'subgrupos_editavel', 'folgas_grade', 'assinaturas'):
+        mapa = {
+            'cadastrar_colaborador': 'Cadastro de colaborador',
+            'excluir_colaborador': 'Exclusão de colaborador',
+            'editar_perfil': 'Edição de perfil',
+            'preferencia_subgrupo': 'Preferência por subgrupo',
+            'subgrupos_editavel': 'Subgrupos editáveis',
+            'folgas_grade': 'Folgas manuais em grade',
+            'assinaturas': 'Assinaturas',
+        }
+        linhas.append(mapa.get(modulo, modulo.replace('_',' ').title()))
+        for k in ['nome','chapa','subgrupo','perfil','entrada','setor','ano','mes']:
+            v = str(payload.get(k) or '').strip()
+            if v:
+                linhas.append(f"{k.replace('_',' ').title()}: {v}")
+        return linhas
+
+    for k, v in payload.items():
+        if str(k).startswith('_') or k in ('edited', 'payload_json'):
+            continue
+        if isinstance(v, (dict, list)):
+            continue
+        vs = str(v).strip()
+        if vs:
+            linhas.append(f"{str(k).replace('_',' ').title()}: {vs}")
+    return linhas or ['Sem resumo simples disponível para esta solicitação.']
+
 def page_app():
     auth = st.session_state.get("auth") or {}
     setor = auth.get("setor", "GERAL")
@@ -11380,15 +11478,24 @@ def page_app():
                                         st.error(f"Falha ao reprovar: {e}")
                         for _, r in pendg.iterrows():
                             with st.container(border=True):
-                                st.write(f"**Pendência #{int(r['id'])}** — módulo **{str(r['modulo'])}** / ação **{str(r['acao'])}**")
-                                st.write(f"**AX:** {str(r['criado_por_nome'])} ({str(r['criado_por_chapa'])}) | **Setor:** {str(r['setor'])}")
+                                modulo_nome = str(r['modulo']).replace('_', ' ').title()
+                                acao_nome = str(r['acao']).replace('_', ' ').title()
+                                st.write(f"**Pendência #{int(r['id'])}** — {modulo_nome}")
+                                st.write(f"**Quem enviou:** {str(r['criado_por_nome'])} ({str(r['criado_por_chapa'])})")
+                                st.write(f"**Setor:** {str(r['setor'])} | **Ação pedida:** {acao_nome}")
                                 if str(r.get('observacao') or '').strip():
-                                    st.caption(f"Observação: {str(r.get('observacao') or '').strip()}")
+                                    st.caption(f"Resumo: {str(r.get('observacao') or '').strip()}")
                                 try:
                                     payload_view = json.loads(str(r.get('payload_json') or '{}'))
-                                    st.json(payload_view)
                                 except Exception:
-                                    pass
+                                    payload_view = {}
+                                resumo_linhas = _ax_resumo_pendencia_generica(payload_view)
+                                if resumo_linhas:
+                                    st.markdown("**O que o AX pediu:**")
+                                    for linha in resumo_linhas:
+                                        st.write(f"• {linha}")
+                                with st.expander("Ver detalhes técnicos", expanded=False):
+                                    st.json(payload_view if payload_view else {})
                                 gp1, gp2 = st.columns(2)
                                 if gp1.button("✅ Aprovar pendência", key=f"axg_aprov_{int(r['id'])}"):
                                     try:
