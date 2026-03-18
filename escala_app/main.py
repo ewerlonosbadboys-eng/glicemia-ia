@@ -2588,8 +2588,9 @@ def get_app_like_nav_config(is_admin_area: bool, setor: str = ""):
         },
         "escala": {
             "label": "📅 Escala",
-            "default_sub": "🚀 Gerar escala",
+            "default_sub": "📂 Menu Escala",
             "submenus": [
+                ("📂 Menu Escala", {"sec_main": "📂 Menu Escala"}),
                 ("🚀 Gerar escala", {"sec_main": "🚀 Gerar Escala"}),
                 ("📊 Excel modelo", {"sec_main": "🖨️ Impressão", "sec_imp": "📊 Excel modelo"}),
                 ("🗓️ Quem trabalha no dia", {"sec_main": "🖨️ Impressão", "sec_imp": "🗓️ Quem trabalha no dia"}),
@@ -2599,8 +2600,9 @@ def get_app_like_nav_config(is_admin_area: bool, setor: str = ""):
         },
         "gestao": {
             "label": "⚙️ Gestão",
-            "default_sub": "🧩 Folgas manuais em grade",
+            "default_sub": "📂 Menu Gestão",
             "submenus": [
+                ("📂 Menu Gestão", {"sec_main": "📂 Menu Gestão"}),
                 ("🧩 Folgas manuais em grade", {"sec_main": "⚙️ Ajustes", "sec_aj": "🧩 Folgas manuais em grade"}),
                 ("📊 Contagens por dia", {"sec_main": "⚙️ Ajustes", "sec_aj": "📊 Contagens por dia"}),
                 ("🔁 Troca de horários", {"sec_main": "⚙️ Ajustes", "sec_aj": "🔁 Troca de horários"}),
@@ -2622,7 +2624,6 @@ def get_app_like_nav_config(is_admin_area: bool, setor: str = ""):
             "submenus": [("Painel admin", {"sec_main": "🔒 Admin"})],
         },
     }
-
 
 def render_app_like_sidebar_nav(is_admin_area: bool, setor: str = ""):
     cfg = get_app_like_nav_config(is_admin_area, setor)
@@ -12124,12 +12125,12 @@ def page_app():
         with d2:
             if st.button("📅 Escala\nGerar, consultar e imprimir a escala do mês.", key="goto_escala_dashboard", use_container_width=True):
                 st.session_state["app_like_main"] = "escala"
-                st.session_state["app_like_sub"] = "🚀 Gerar escala"
+                st.session_state["app_like_sub"] = "📂 Menu Escala"
                 st.rerun()
         with d3:
             if st.button("⚙️ Gestão\nAjustes, férias, assinaturas e solicitações.", key="goto_gestao_dashboard", use_container_width=True):
                 st.session_state["app_like_main"] = "gestao"
-                st.session_state["app_like_sub"] = "🧩 Folgas manuais em grade"
+                st.session_state["app_like_sub"] = "📂 Menu Gestão"
                 st.rerun()
 
         st.markdown("<div class='ax-loading'></div>", unsafe_allow_html=True)
@@ -12168,9 +12169,10 @@ def page_app():
 
             setor_norm = str(setor or "").strip().upper()
             botoes_colab = [
-                ("📋 Cadastro", "➕ Cadastrar colaborador", "col_menu_cadastro"),
-                ("👤 Perfil", "✏️ Editar perfil", "col_menu_perfil"),
-                ("🔑 Senha", "🔑 Alterar senha colaborador", "col_menu_senha"),
+                ("➕ Cadastrar colaborador", "➕ Cadastrar colaborador", "col_menu_cadastro"),
+                ("✏️ Editar perfil", "✏️ Editar perfil", "col_menu_perfil"),
+                ("🔑 Alterar senha", "🔑 Alterar senha colaborador", "col_menu_senha"),
+                ("🗑️ Excluir colaborador", "🗑️ Excluir colaborador", "col_menu_excluir"),
                 ("🧾 Aprovações AX", "🧾 Aprovações AX", "col_menu_ax"),
             ]
             if setor_norm.startswith("FRENTECAIXA"):
@@ -12883,6 +12885,56 @@ def page_app():
                 if hist:
                     st.markdown("### Relatório de trocas já aplicadas")
                     st.dataframe(pd.DataFrame(hist), use_container_width=True, height=320)
+
+    elif sec_main == "📂 Menu Escala":
+        ui_section("Escala", "Clique em uma opção para abrir as telas da área de escala.")
+        botoes_escala = [
+            ("🚀 Gerar escala", "🚀 Gerar escala", "esc_menu_gerar"),
+            ("📊 Excel modelo", "📊 Excel modelo", "esc_menu_excel"),
+            ("🗓️ Quem trabalha no dia", "🗓️ Quem trabalha no dia", "esc_menu_quem_trabalha"),
+            ("📅 Escala", "📅 Escala", "esc_menu_escala_mes"),
+            ("🖨️ Imprimir escala parede", "🖨️ Imprimir escala parede", "esc_menu_imprimir_parede"),
+        ]
+        idx_btn_esc = 0
+        while idx_btn_esc < len(botoes_escala):
+            linha = st.columns(min(4, len(botoes_escala) - idx_btn_esc))
+            for col_btn in linha:
+                label_btn, destino_btn, key_btn = botoes_escala[idx_btn_esc]
+                with col_btn:
+                    if st.button(label_btn, key=key_btn, use_container_width=True):
+                        st.session_state["app_like_sub"] = destino_btn
+                        st.rerun()
+                idx_btn_esc += 1
+        st.info("Clique em uma das opções acima para abrir o conteúdo de Escala.")
+
+    elif sec_main == "📂 Menu Gestão":
+        ui_section("Gestão", "Clique em uma opção para abrir as telas da área de gestão.")
+        botoes_gestao = [
+            ("🧩 Folgas manuais em grade", "🧩 Folgas manuais em grade", "ges_menu_folgas"),
+            ("📊 Contagens por dia", "📊 Contagens por dia", "ges_menu_contagens"),
+            ("🔁 Troca de horários", "🔁 Troca de horários", "ges_menu_troca"),
+            ("✅ Preferência por subgrupo", "✅ Preferência por subgrupo", "ges_menu_preferencia"),
+            ("📌 Subgrupos (editável)", "📌 Subgrupos (editável)", "ges_menu_subgrupos"),
+            ("✏️ Retificar folga, horário e subgrupo", "✏️ Retificar folga, horário e subgrupo", "ges_menu_retificar"),
+            ("🗺️ Mapa anual de férias", "🗺️ Mapa anual de férias", "ges_menu_mapa_ferias"),
+            ("➕ Lançar Férias", "➕ Lançar Férias", "ges_menu_lancar_ferias"),
+            ("📊 Controle (histórico)", "📊 Controle (histórico)", "ges_menu_controle_ferias"),
+            ("📋 Férias cadastradas", "📋 Férias cadastradas", "ges_menu_ferias_cadastradas"),
+            ("❌ Remover férias", "❌ Remover férias", "ges_menu_remover_ferias"),
+            ("✍️ Assinaturas", "✍️ Assinaturas", "ges_menu_assinaturas"),
+            ("📨 Minhas solicitações", "📨 Minhas solicitações", "ges_menu_solicitacoes"),
+        ]
+        idx_btn_ges = 0
+        while idx_btn_ges < len(botoes_gestao):
+            linha = st.columns(min(4, len(botoes_gestao) - idx_btn_ges))
+            for col_btn in linha:
+                label_btn, destino_btn, key_btn = botoes_gestao[idx_btn_ges]
+                with col_btn:
+                    if st.button(label_btn, key=key_btn, use_container_width=True):
+                        st.session_state["app_like_sub"] = destino_btn
+                        st.rerun()
+                idx_btn_ges += 1
+        st.info("Clique em uma das opções acima para abrir o conteúdo de Gestão.")
 
     elif sec_main == "🚀 Gerar Escala":
         st.subheader("🚀 Gerar escala")
