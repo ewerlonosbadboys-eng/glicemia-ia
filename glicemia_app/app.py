@@ -63,7 +63,6 @@ COOKIE_DIAS = 30
 # ================= CONFIGURAÇÕES INICIAIS =================
 fuso_br = pytz.timezone("America/Sao_Paulo")
 st.set_page_config(page_title="Saúde Kids BETA", page_icon="🧪", layout="wide")
-aplicar_layout_premium()
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
@@ -440,58 +439,21 @@ backup_automatico_diario_3h()
 def aplicar_layout_premium():
     st.markdown(r"""
 <style>
-/* ================= BASE ================= */
 :root {
     --bg-main: radial-gradient(circle at top left, #1b1f4b 0%, #0b1020 38%, #050816 100%);
-    --bg-card: rgba(20, 25, 45, 0.78);
-    --bg-card-2: rgba(32, 39, 68, 0.72);
     --border: rgba(122, 162, 255, 0.18);
     --text: #f8fafc;
     --muted: #a5b4d4;
-    --primary: #7c8cff;
-    --primary-2: #55c6ff;
-    --success: #4ade80;
-    --danger: #fb7185;
     --shadow: 0 10px 30px rgba(0,0,0,0.28);
     --radius-xl: 24px;
     --radius-lg: 18px;
-    --radius-md: 14px;
 }
-
-/* ================= APP ================= */
-html, body, [class*="css"] {
-    font-family: "Inter", "Segoe UI", sans-serif;
-}
-
-.stApp {
-    background: var(--bg-main);
-    color: var(--text);
-}
-
-.block-container {
-    padding-top: 1.1rem;
-    padding-bottom: 2rem;
-    max-width: 1400px;
-}
-
-/* ================= TEXTOS ================= */
-h1, h2, h3, h4, h5, h6,
-p, span, label, div,
-.stMarkdown, .stText, .stCaption {
-    color: var(--text) !important;
-}
-
-/* ================= SIDEBAR ================= */
-section[data-testid="stSidebar"] {
-    background: linear-gradient(180deg, rgba(11,16,32,0.96), rgba(16,22,45,0.96));
-    border-right: 1px solid rgba(255,255,255,0.06);
-}
-
-section[data-testid="stSidebar"] * {
-    color: var(--text) !important;
-}
-
-/* ================= CARDS ================= */
+html, body, [class*="css"] { font-family: "Inter", "Segoe UI", sans-serif; }
+.stApp { background: var(--bg-main); color: var(--text); }
+.block-container { padding-top: 1.1rem; padding-bottom: 2rem; max-width: 1400px; }
+h1, h2, h3, h4, h5, h6, p, span, label, div, .stMarkdown, .stText, .stCaption { color: var(--text) !important; }
+section[data-testid="stSidebar"] { background: linear-gradient(180deg, rgba(11,16,32,0.96), rgba(16,22,45,0.96)); border-right: 1px solid rgba(255,255,255,0.06); }
+section[data-testid="stSidebar"] * { color: var(--text) !important; }
 .card {
     background: linear-gradient(180deg, rgba(24,31,56,0.88), rgba(17,23,42,0.82));
     border: 1px solid var(--border);
@@ -499,10 +461,8 @@ section[data-testid="stSidebar"] * {
     padding: 20px;
     box-shadow: var(--shadow);
     backdrop-filter: blur(14px);
-    -webkit-backdrop-filter: blur(14px);
     margin-bottom: 16px;
 }
-
 .metric-box {
     background: linear-gradient(180deg, rgba(30,37,68,0.82), rgba(18,24,44,0.82));
     border: 1px solid rgba(133, 170, 255, 0.16);
@@ -511,17 +471,8 @@ section[data-testid="stSidebar"] * {
     text-align: center;
     box-shadow: 0 8px 24px rgba(0,0,0,0.22);
 }
-
-.dose-destaque {
-    font-size: 34px;
-    font-weight: 800;
-    color: #8bffb0;
-    letter-spacing: -0.5px;
-}
-
-/* ================= BOTÕES ================= */
-.stButton > button,
-.stDownloadButton > button {
+.dose-destaque { font-size: 34px; font-weight: 800; color: #8bffb0; letter-spacing: -0.5px; }
+.stButton > button, .stDownloadButton > button {
     width: 100%;
     border: 1px solid rgba(122, 162, 255, 0.22) !important;
     background: linear-gradient(90deg, rgba(108,125,255,0.95), rgba(86,199,255,0.95)) !important;
@@ -530,171 +481,65 @@ section[data-testid="stSidebar"] * {
     font-weight: 700 !important;
     min-height: 46px;
     box-shadow: 0 8px 20px rgba(64, 99, 255, 0.28);
-    transition: all 0.18s ease-in-out;
 }
-
-.stButton > button:hover,
-.stDownloadButton > button:hover {
+.stButton > button:hover, .stDownloadButton > button:hover {
     transform: translateY(-1px);
     box-shadow: 0 10px 22px rgba(64, 99, 255, 0.35);
-    filter: brightness(1.03);
 }
-
-/* ================= INPUTS ================= */
-.stTextInput > div > div > input,
-.stNumberInput > div > div > input,
-.stTextArea textarea,
-div[data-baseweb="select"] > div,
-.stDateInput input,
-.stTimeInput input {
+.stTextInput > div > div > input, .stNumberInput > div > div > input, .stTextArea textarea,
+div[data-baseweb="select"] > div, .stDateInput input, .stTimeInput input {
     background: rgba(13, 18, 36, 0.95) !important;
     color: var(--text) !important;
     border: 1px solid rgba(115, 144, 230, 0.22) !important;
     border-radius: 14px !important;
 }
-
-.stTextInput > div > div > input:focus,
-.stNumberInput > div > div > input:focus,
-.stTextArea textarea:focus,
-div[data-baseweb="select"] > div:focus-within {
+.stTextInput > div > div > input:focus, .stNumberInput > div > div > input:focus,
+.stTextArea textarea:focus, div[data-baseweb="select"] > div:focus-within {
     border: 1px solid rgba(85, 198, 255, 0.55) !important;
     box-shadow: 0 0 0 1px rgba(85, 198, 255, 0.25) !important;
 }
-
-/* ================= TABS ================= */
 .stTabs [data-baseweb="tab-list"] {
-    gap: 8px;
-    background: transparent;
-    border-bottom: 1px solid rgba(255,255,255,0.06);
-    padding-bottom: 6px;
+    gap: 8px; background: transparent; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 6px;
 }
-
 .stTabs [data-baseweb="tab"] {
-    background: rgba(255,255,255,0.03);
-    border: 1px solid rgba(255,255,255,0.05);
-    border-radius: 12px;
-    color: #dbe7ff !important;
-    padding: 10px 16px;
-    font-weight: 600;
+    background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05);
+    border-radius: 12px; color: #dbe7ff !important; padding: 10px 16px; font-weight: 600;
 }
-
 .stTabs [aria-selected="true"] {
     background: linear-gradient(90deg, rgba(108,125,255,0.25), rgba(86,199,255,0.18)) !important;
-    border: 1px solid rgba(122, 162, 255, 0.30) !important;
-    color: white !important;
+    border: 1px solid rgba(122, 162, 255, 0.30) !important; color: white !important;
 }
-
-/* ================= LOGIN ================= */
-.login-shell {
-    max-width: 560px;
-    margin: 22px auto 10px auto;
-}
-
+.login-shell { max-width: 560px; margin: 22px auto 10px auto; }
 .login-card {
     background: linear-gradient(180deg, rgba(18,24,44,0.92), rgba(13,18,36,0.90));
-    border: 1px solid rgba(122, 162, 255, 0.16);
-    border-radius: 28px;
-    box-shadow: 0 18px 50px rgba(0,0,0,0.34);
-    padding: 22px 22px 12px 22px;
+    border: 1px solid rgba(122, 162, 255, 0.16); border-radius: 28px;
+    box-shadow: 0 18px 50px rgba(0,0,0,0.34); padding: 22px 22px 12px 22px;
     backdrop-filter: blur(14px);
 }
-
 .login-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 12px;
-    border-radius: 999px;
-    background: rgba(108,125,255,0.14);
-    border: 1px solid rgba(108,125,255,0.22);
-    color: #dbe7ff;
-    font-size: 13px;
-    margin-bottom: 12px;
+    display: inline-flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 999px;
+    background: rgba(108,125,255,0.14); border: 1px solid rgba(108,125,255,0.22);
+    color: #dbe7ff; font-size: 13px; margin-bottom: 12px;
 }
-
-.login-title {
-    font-size: 38px;
-    line-height: 1.05;
-    font-weight: 800;
-    margin: 0;
-    letter-spacing: -0.8px;
-}
-
-.login-subtitle {
-    color: var(--muted) !important;
-    margin-top: 8px;
-    margin-bottom: 18px;
-    font-size: 15px;
-}
-
-.login-footer-note {
-    text-align: center;
-    color: var(--muted);
-    font-size: 13px;
-    margin-top: 10px;
-    margin-bottom: 4px;
-}
-
-/* ================= DATAFRAME ================= */
-[data-testid="stDataFrame"] {
-    border: 1px solid rgba(122, 162, 255, 0.12);
-    border-radius: 18px;
-    overflow: hidden;
-    box-shadow: var(--shadow);
-}
-
-.stAlert {
-    border-radius: 16px !important;
-    border: 1px solid rgba(255,255,255,0.08) !important;
-}
-
-/* ================= MOBILE ================= */
+.login-title { font-size: 38px; line-height: 1.05; font-weight: 800; margin: 0; letter-spacing: -0.8px; }
+.login-subtitle { color: var(--muted) !important; margin-top: 8px; margin-bottom: 18px; font-size: 15px; }
+.login-footer-note { text-align: center; color: var(--muted); font-size: 13px; margin-top: 10px; margin-bottom: 4px; }
+[data-testid="stDataFrame"] { border: 1px solid rgba(122, 162, 255, 0.12); border-radius: 18px; overflow: hidden; box-shadow: var(--shadow); }
+.stAlert { border-radius: 16px !important; border: 1px solid rgba(255,255,255,0.08) !important; }
 @media (max-width: 768px) {
-    .block-container {
-        padding-top: 0.7rem;
-        padding-left: 0.8rem;
-        padding-right: 0.8rem;
-        padding-bottom: 1.5rem;
-    }
-
-    .card {
-        padding: 16px;
-        border-radius: 18px;
-    }
-
-    .login-shell {
-        max-width: 100%;
-        margin-top: 8px;
-    }
-
-    .login-card {
-        padding: 16px 14px 8px 14px;
-        border-radius: 22px;
-    }
-
-    .login-title {
-        font-size: 28px;
-    }
-
-    .login-subtitle {
-        font-size: 14px;
-        margin-bottom: 14px;
-    }
-
-    .stTabs [data-baseweb="tab"] {
-        padding: 8px 10px;
-        font-size: 13px;
-    }
-
-    .stButton > button,
-    .stDownloadButton > button {
-        min-height: 44px;
-        border-radius: 12px !important;
-        font-size: 15px !important;
-    }
+    .block-container { padding-top: 0.7rem; padding-left: 0.8rem; padding-right: 0.8rem; padding-bottom: 1.5rem; }
+    .card { padding: 16px; border-radius: 18px; }
+    .login-shell { max-width: 100%; margin-top: 8px; }
+    .login-card { padding: 16px 14px 8px 14px; border-radius: 22px; }
+    .login-title { font-size: 28px; }
+    .login-subtitle { font-size: 14px; margin-bottom: 14px; }
+    .stTabs [data-baseweb="tab"] { padding: 8px 10px; font-size: 13px; }
+    .stButton > button, .stDownloadButton > button { min-height: 44px; border-radius: 12px !important; font-size: 15px !important; }
 }
 </style>
 """, unsafe_allow_html=True)
+
+aplicar_layout_premium()
 
 # ================= EMAIL (RESET) =================
 def gerar_senha_temporaria(tamanho=6):
@@ -1702,6 +1547,8 @@ if not st.session_state.logado:
             else:
                 st.error("Dados atuais incorretos.")
 
+
+    st.markdown('<div class="login-footer-note">Acesso seguro • Design premium</div></div></div>', unsafe_allow_html=True)
 
     # ====== TELA DE TESTE EXPIRADO / MENSALIDADE ======
     if st.session_state.get("pending_email"):
