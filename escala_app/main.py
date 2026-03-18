@@ -102,38 +102,36 @@ def aplicar_tema_premium_etapa1():
         --ax-bg-1: #020816;
         --ax-bg-2: #07152f;
         --ax-bg-3: #0a2450;
-        --ax-line: rgba(125, 170, 255, 0.24);
-        --ax-line-2: rgba(255,255,255,0.10);
+        --ax-line: rgba(125, 170, 255, 0.22);
+        --ax-line-2: rgba(255,255,255,0.09);
         --ax-text: #f8fbff;
         --ax-soft: #b4c8ee;
-        --ax-blue: #60a5fa;
+        --ax-blue: #5a95ff;
         --ax-blue-2: #2563eb;
-        --ax-blue-3: #93c5fd;
+        --ax-blue-3: #7cb4ff;
         --ax-card: linear-gradient(180deg, rgba(11,28,60,0.99), rgba(4,12,28,0.99));
         --ax-card-2: linear-gradient(180deg, rgba(9,23,49,0.98), rgba(5,13,29,0.98));
         --ax-card-3: linear-gradient(180deg, rgba(13,33,70,0.99), rgba(6,16,35,0.99));
-        --ax-shadow: 0 24px 52px rgba(0,0,0,0.34);
     }
 
     .stApp {
         background:
-            radial-gradient(circle at 88% 4%, rgba(96,165,250,0.28), transparent 12%),
-            radial-gradient(circle at 14% 0%, rgba(59,130,246,0.15), transparent 16%),
-            radial-gradient(circle at 95% 35%, rgba(30,64,175,0.16), transparent 20%),
+            radial-gradient(circle at 88% 4%, rgba(96,165,250,0.30), transparent 14%),
+            radial-gradient(circle at 14% 0%, rgba(59,130,246,0.16), transparent 18%),
             linear-gradient(135deg, var(--ax-bg-1) 0%, var(--ax-bg-2) 45%, #020b18 100%);
         color: var(--ax-text);
     }
 
     .block-container {
-        padding-top: 1.0rem;
-        padding-bottom: 3.1rem;
-        max-width: 1540px;
+        padding-top: 1.05rem;
+        padding-bottom: 2.9rem;
+        max-width: 1520px;
     }
 
     section[data-testid="stSidebar"] {
         background:
-            radial-gradient(circle at 20% 0%, rgba(79,140,255,0.16), transparent 22%),
-            linear-gradient(180deg, #071125 0%, #081a38 55%, #0a2148 100%);
+            radial-gradient(circle at 20% 0%, rgba(79,140,255,0.14), transparent 20%),
+            linear-gradient(180deg, #061125 0%, #081a38 55%, #092148 100%);
         border-right: 1px solid rgba(120, 160, 255, 0.18);
         box-shadow: inset -1px 0 0 rgba(255,255,255,0.04), 20px 0 44px rgba(0,0,0,0.24);
     }
@@ -148,27 +146,22 @@ def aplicar_tema_premium_etapa1():
     }
 
     .stMarkdown h2 {
-        font-size: 1.95rem;
-        margin-top: 0.4rem;
+        font-size: 1.85rem;
+        margin-top: 0.35rem;
         margin-bottom: 1rem;
-        font-weight: 800;
-    }
-
-    .stMarkdown h3 {
-        font-size: 1.2rem;
-        font-weight: 700;
     }
 
     .stMarkdown p, .stCaption, label, .stRadio label, .stCheckbox label {
         color: #d7e6ff !important;
     }
 
+    /* cards de métricas */
     div[data-testid="stMetric"] {
         background: var(--ax-card-3);
         border: 1px solid rgba(96,165,250,0.24);
-        border-radius: 20px;
-        padding: 15px 17px;
-        box-shadow: var(--ax-shadow);
+        border-radius: 18px;
+        padding: 14px 16px;
+        box-shadow: 0 18px 42px rgba(0,0,0,0.26);
         position: relative;
         overflow: hidden;
     }
@@ -178,56 +171,43 @@ def aplicar_tema_premium_etapa1():
         position: absolute;
         inset: 0 auto auto 0;
         width: 100%;
-        height: 3px;
+        height: 2px;
         background: linear-gradient(90deg, rgba(79,140,255,0.0), rgba(96,165,250,0.98), rgba(79,140,255,0.0));
         opacity: 0.95;
     }
 
     div[data-testid="stMetric"] label,
-    div[data-testid="stMetric"] [data-testid="stMetricLabel"] {
-        color: #dfe9ff !important;
-        font-size: 0.72rem !important;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-    }
-
+    div[data-testid="stMetric"] [data-testid="stMetricLabel"],
     div[data-testid="stMetric"] [data-testid="stMetricValue"] {
-        color: #ffffff !important;
-        font-size: 1.18rem !important;
-        font-weight: 800 !important;
+        color: #f8fbff !important;
     }
 
+    /* botões */
     .stButton > button,
     div[data-testid="stFormSubmitButton"] button,
     .stDownloadButton > button,
     button[kind="secondary"] {
-        background: linear-gradient(90deg, #4f8cff 0%, #2563eb 55%, #1d4ed8 100%);
+        background: linear-gradient(90deg, var(--ax-blue) 0%, var(--ax-blue-2) 100%);
         color: white;
-        border: 1px solid rgba(255,255,255,0.11);
-        border-radius: 14px;
-        font-weight: 800;
-        padding: 0.78rem 1rem;
-        box-shadow: 0 16px 34px rgba(37,99,235,0.34);
-        transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease, filter 0.16s ease;
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 12px;
+        font-weight: 700;
+        padding: 0.74rem 1rem;
+        box-shadow: 0 14px 32px rgba(37,99,235,0.30);
+        transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
     }
 
     .stButton > button:hover,
     div[data-testid="stFormSubmitButton"] button:hover,
     .stDownloadButton > button:hover,
     button[kind="secondary"]:hover {
-        background: linear-gradient(90deg, #69a8ff 0%, #2563eb 60%, #1e40af 100%);
-        border-color: rgba(255,255,255,0.22);
+        background: linear-gradient(90deg, #3b82f6 0%, #1d4ed8 100%);
+        border-color: rgba(255,255,255,0.18);
         transform: translateY(-1px);
-        box-shadow: 0 20px 40px rgba(37,99,235,0.38);
-        filter: saturate(1.1);
+        box-shadow: 0 18px 36px rgba(37,99,235,0.36);
     }
 
-    .stButton > button:active,
-    div[data-testid="stFormSubmitButton"] button:active,
-    .stDownloadButton > button:active {
-        transform: translateY(0);
-    }
-
+    /* inputs */
     div[data-baseweb="input"] > div,
     div[data-baseweb="select"] > div,
     .stTextInput input,
@@ -236,12 +216,11 @@ def aplicar_tema_premium_etapa1():
     .stDateInput input,
     .stTimeInput input,
     .stMultiSelect div[data-baseweb="select"] > div {
-        background: rgba(255,255,255,0.06) !important;
+        background: rgba(255,255,255,0.055) !important;
         color: #f8fbff !important;
-        border-radius: 14px !important;
-        border: 1px solid rgba(148,163,184,0.26) !important;
-        box-shadow: inset 0 1px 0 rgba(255,255,255,0.03), 0 10px 22px rgba(0,0,0,0.14);
-        min-height: 2.85rem;
+        border-radius: 13px !important;
+        border: 1px solid rgba(148,163,184,0.24) !important;
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.03), 0 8px 18px rgba(0,0,0,0.12);
     }
 
     div[data-baseweb="input"] > div:focus-within,
@@ -251,8 +230,8 @@ def aplicar_tema_premium_etapa1():
     .stTextArea textarea:focus,
     .stDateInput input:focus,
     .stTimeInput input:focus {
-        border-color: rgba(96,165,250,0.62) !important;
-        box-shadow: 0 0 0 1px rgba(79,140,255,0.30), 0 16px 32px rgba(0,0,0,0.20) !important;
+        border-color: rgba(96,165,250,0.54) !important;
+        box-shadow: 0 0 0 1px rgba(79,140,255,0.22), 0 14px 28px rgba(0,0,0,0.18) !important;
     }
 
     div[data-baseweb="input"] input::placeholder,
@@ -260,107 +239,86 @@ def aplicar_tema_premium_etapa1():
         color: #97afd8 !important;
     }
 
+    /* tabelas */
     .stDataFrame, .stTable {
-        background: rgba(4,14,30,0.96);
-        border: 1px solid rgba(148,163,184,0.22);
-        border-radius: 20px;
+        background: rgba(4,14,30,0.94);
+        border: 1px solid rgba(148,163,184,0.20);
+        border-radius: 18px;
         overflow: hidden;
-        box-shadow: var(--ax-shadow);
+        box-shadow: 0 18px 40px rgba(0,0,0,0.26);
     }
 
     [data-testid="stDataFrame"] div[role="table"] {
-        border-radius: 20px;
+        border-radius: 18px;
         overflow: hidden;
     }
 
     [data-testid="stDataFrame"] [role="rowgroup"] [role="row"]:nth-child(even) {
-        background: rgba(255,255,255,0.035) !important;
-    }
-
-    [data-testid="stDataFrame"] [role="rowgroup"] [role="row"]:nth-child(odd) {
-        background: rgba(255,255,255,0.012) !important;
+        background: rgba(255,255,255,0.025) !important;
     }
 
     [data-testid="stDataFrame"] [role="rowgroup"] [role="row"]:hover {
-        background: rgba(96,165,250,0.12) !important;
+        background: rgba(96,165,250,0.09) !important;
     }
 
     [data-testid="stDataFrame"] [role="columnheader"] {
-        background: linear-gradient(180deg, rgba(24,48,97,0.98), rgba(10,21,44,0.98)) !important;
+        background: linear-gradient(180deg, rgba(18,38,78,0.98), rgba(9,19,39,0.98)) !important;
         color: #f8fbff !important;
-        font-weight: 800 !important;
-        border-bottom: 1px solid rgba(120,160,255,0.20) !important;
+        font-weight: 700 !important;
+        border-bottom: 1px solid rgba(120,160,255,0.18) !important;
     }
 
+    /* tabs mais profissionais */
     button[data-baseweb="tab"] {
-        background: rgba(255,255,255,0.04) !important;
-        border: 1px solid rgba(148,163,184,0.16) !important;
-        border-radius: 14px !important;
-        margin-right: 0.42rem !important;
+        background: rgba(255,255,255,0.035) !important;
+        border: 1px solid rgba(148,163,184,0.14) !important;
+        border-radius: 12px !important;
+        margin-right: 0.35rem !important;
         color: #dfeaff !important;
-        padding: 0.50rem 0.92rem !important;
-        font-weight: 700 !important;
+        padding: 0.45rem 0.85rem !important;
     }
 
     button[data-baseweb="tab"][aria-selected="true"] {
-        background: linear-gradient(180deg, rgba(79,140,255,0.30), rgba(37,99,235,0.24)) !important;
-        border-color: rgba(96,165,250,0.38) !important;
-        color: #ffffff !important;
-        box-shadow: 0 10px 26px rgba(0,0,0,0.22);
-    }
-
-    div[role="radiogroup"] {
-        gap: 0.45rem;
-        flex-wrap: wrap;
-    }
-
-    div[role="radiogroup"] > label {
-        background: linear-gradient(180deg, rgba(11,26,54,0.88), rgba(5,14,30,0.88)) !important;
-        border: 1px solid rgba(148,163,184,0.18) !important;
-        border-radius: 999px !important;
-        padding: 0.34rem 0.72rem !important;
-        min-height: 2.05rem;
-        transition: all .16s ease;
-        box-shadow: 0 10px 22px rgba(0,0,0,0.12);
-    }
-
-    div[role="radiogroup"] > label:hover {
+        background: linear-gradient(180deg, rgba(79,140,255,0.28), rgba(37,99,235,0.22)) !important;
         border-color: rgba(96,165,250,0.34) !important;
-        background: linear-gradient(180deg, rgba(18,38,78,0.92), rgba(8,20,40,0.92)) !important;
+        color: #ffffff !important;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.18);
     }
 
-    div[role="radiogroup"] > label[data-checked="true"] {
-        background: linear-gradient(90deg, rgba(79,140,255,0.34), rgba(37,99,235,0.28)) !important;
-        border-color: rgba(96,165,250,0.50) !important;
-        box-shadow: 0 14px 28px rgba(0,0,0,0.20);
-    }
-
-    div[role="radiogroup"] > label p {
-        color: #eef5ff !important;
-        font-weight: 700 !important;
-        font-size: 0.92rem !important;
+    /* formularios e expansores em caixa */
+    div[data-testid="stForm"],
+    details,
+    .stExpander,
+    div[data-testid="stVerticalBlock"] > div:has(> div[data-testid="stTextInput"]),
+    div[data-testid="stVerticalBlock"] > div:has(> div[data-testid="stSelectbox"]),
+    div[data-testid="stVerticalBlock"] > div:has(> div[data-testid="stDateInput"]),
+    div[data-testid="stVerticalBlock"] > div:has(> div[data-testid="stMultiSelect"]) {
+        border-radius: 18px;
     }
 
     div[data-testid="stForm"] {
-        background: linear-gradient(180deg, rgba(8,22,46,0.90), rgba(4,12,26,0.90));
-        border: 1px solid rgba(120,160,255,0.20);
-        border-radius: 22px;
-        padding: 1.25rem 1.05rem 1.05rem 1.05rem;
-        box-shadow: var(--ax-shadow);
+        background: linear-gradient(180deg, rgba(8,22,46,0.82), rgba(4,12,26,0.82));
+        border: 1px solid rgba(120,160,255,0.18);
+        padding: 1.1rem 1rem 1rem 1rem;
+        box-shadow: 0 18px 36px rgba(0,0,0,0.18);
     }
 
-    div[data-testid="stExpander"], details {
-        background: linear-gradient(180deg, rgba(8,22,46,0.88), rgba(4,12,26,0.88));
+    div[data-testid="stExpander"] {
+        background: linear-gradient(180deg, rgba(8,22,46,0.82), rgba(4,12,26,0.82));
         border: 1px solid rgba(120,160,255,0.18);
-        border-radius: 20px;
+        border-radius: 18px;
         overflow: hidden;
         box-shadow: 0 18px 36px rgba(0,0,0,0.18);
     }
 
     details {
-        padding: 0.4rem 0.8rem;
+        background: linear-gradient(180deg, rgba(8,22,46,0.82), rgba(4,12,26,0.82));
+        border: 1px solid rgba(120,160,255,0.18);
+        padding: 0.35rem 0.75rem;
+        box-shadow: 0 18px 36px rgba(0,0,0,0.18);
     }
 
+    /* blocos com títulos */
     .stMarkdown h2, .stMarkdown h3 {
         position: relative;
     }
@@ -368,50 +326,33 @@ def aplicar_tema_premium_etapa1():
     .stMarkdown h2::after, .stMarkdown h3::after {
         content: "";
         display: block;
-        width: 92px;
-        height: 3px;
-        margin-top: 0.4rem;
+        width: 86px;
+        height: 2px;
+        margin-top: 0.35rem;
         background: linear-gradient(90deg, rgba(96,165,250,1), rgba(96,165,250,0));
         border-radius: 999px;
     }
 
+    /* alertas */
     div[data-testid="stAlert"] {
-        border-radius: 18px;
+        border-radius: 16px;
         border: 1px solid rgba(255,255,255,0.08);
         box-shadow: 0 16px 34px rgba(0,0,0,0.18);
     }
 
+    /* separação melhor entre elementos */
     .element-container {
-        margin-bottom: 0.28rem;
+        margin-bottom: 0.2rem;
     }
 
     div[data-testid="stHorizontalBlock"] {
-        gap: 0.95rem;
-    }
-
-    div[data-testid="stVerticalBlock"] > div:has(> div[data-testid="stMarkdownContainer"] h2),
-    div[data-testid="stVerticalBlock"] > div:has(> div[data-testid="stMarkdownContainer"] h3) {
-        margin-top: 0.4rem;
-        margin-bottom: 0.55rem;
-    }
-
-    div[data-testid="stCheckbox"] {
-        background: rgba(255,255,255,0.025);
-        border: 1px solid rgba(148,163,184,0.14);
-        border-radius: 14px;
-        padding: 0.55rem 0.7rem 0.45rem 0.7rem;
-        min-height: 2.8rem;
-    }
-
-    div[data-testid="stCheckbox"]:has(input:checked) {
-        border-color: rgba(96,165,250,0.34);
-        background: rgba(96,165,250,0.08);
+        gap: 0.9rem;
     }
 
     hr {
         border-color: rgba(120,160,255,0.14);
-        margin-top: 1.4rem;
-        margin-bottom: 1.4rem;
+        margin-top: 1.3rem;
+        margin-bottom: 1.3rem;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -3586,7 +3527,7 @@ def _fast_restore_bundled_latest_before_start() -> None:
 
 # =========================================================
 # MAIN
-# ========================================================= 
+# =========================================================
 _fast_restore_bundled_latest_before_start()
 validar_contrato_sistema()
 
