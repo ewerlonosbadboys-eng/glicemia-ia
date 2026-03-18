@@ -3597,6 +3597,12 @@ def validar_contrato_sistema():
 _fast_restore_bundled_latest_before_start()
 validar_contrato_sistema()
 
+# Inicialização segura do session_state para evitar KeyError no primeiro boot
+if "auth" not in st.session_state:
+    st.session_state["auth"] = None
+if "_full_boot_done" not in st.session_state:
+    st.session_state["_full_boot_done"] = False
+
 if st.session_state["auth"] is None and QUICK_LOGIN_BOOT:
     db_init_fast_login()
     page_login()
