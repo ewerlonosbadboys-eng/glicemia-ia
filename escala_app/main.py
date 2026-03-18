@@ -10467,7 +10467,7 @@ def page_app():
     tabs = ["👥 Colaboradores", "🚀 Gerar Escala", "⚙️ Ajustes", "🏖️ Férias", "🖨️ Impressão", "✍️ Assinaturas", "📨 Minhas solicitações"]
     is_admin_area = bool(auth.get("is_admin", False)) and setor == "ADMIN"
     if is_admin_area:
-        tabs.append("🔒 Admin")
+        tabs = ["🔒 Admin"]
 
     sec_main = st.radio("Navegação", tabs, horizontal=True, key="main_nav_radio_ultra_fast")
 
@@ -12811,6 +12811,36 @@ def page_app():
                         st.error(f"Falha ao salvar usuário: {e}")
 
             st.markdown("---")
+            st.subheader("🧊 Competência do setor (fechar / reabrir)")
+            st.caption("Use este painel do ADMIN para congelar ou descongelar a competência de qualquer setor.")
+            setores_comp = listar_setores_db()
+            ac1, ac2, ac3 = st.columns([1.4, 1, 1])
+            with ac1:
+                setor_comp_admin = st.selectbox("Setor da competência", setores_comp, key="adm_comp_setor") if setores_comp else st.text_input("Setor da competência", value="FLV", key="adm_comp_setor_txt")
+            with ac2:
+                ano_comp_admin = st.number_input("Ano da competência", value=int(st.session_state.get("cfg_ano", datetime.now().year)), step=1, key="adm_comp_ano")
+            with ac3:
+                mes_comp_admin = st.selectbox("Mês da competência", list(range(1, 13)), index=max(0, int(st.session_state.get("cfg_mes", datetime.now().month)) - 1), key="adm_comp_mes")
+
+            status_comp_admin = get_status_competencia(str(setor_comp_admin), int(ano_comp_admin), int(mes_comp_admin))
+            s1, s2, s3 = st.columns([1.2, 1, 1])
+            s1.metric("Status atual", status_comp_admin)
+            if s2.button("🔒 Fechar competência", key="adm_comp_fechar", disabled=(status_comp_admin == "FECHADA")):
+                try:
+                    set_status_competencia(str(setor_comp_admin), int(ano_comp_admin), int(mes_comp_admin), "FECHADA")
+                    st.success(f"Competência {int(mes_comp_admin):02d}/{int(ano_comp_admin)} do setor {str(setor_comp_admin).strip()} fechada com sucesso.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Falha ao fechar competência: {e}")
+            if s3.button("🔓 Reabrir competência", key="adm_comp_reabrir", disabled=(status_comp_admin == "ABERTA")):
+                try:
+                    set_status_competencia(str(setor_comp_admin), int(ano_comp_admin), int(mes_comp_admin), "ABERTA")
+                    st.success(f"Competência {int(mes_comp_admin):02d}/{int(ano_comp_admin)} do setor {str(setor_comp_admin).strip()} reaberta com sucesso.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Falha ao reabrir competência: {e}")
+
+            st.markdown("---")
             st.subheader("🗄️ Backup / Restauração (escala.db)")
 
             c1, c2 = st.columns([1, 2])
@@ -12925,26 +12955,6 @@ def page_app():
                     st.rerun()
                 except Exception as e:
                     st.error(str(e))
-
-            st.markdown("---")
-            st.subheader("👥 Importar colaboradores (CSV / Excel)")
-            st.write("Colunas aceitas: **nome, chapa, subgrupo, entrada, folga_sabado** (folga_sabado opcional).")
-            setor_imp = st.selectbox("Setor destino", setores, key="adm_imp_setor")
-            imp = st.file_uploader("Enviar CSV/XLSX", type=["csv", "xlsx"], key="adm_imp_file")
-            if imp is not None:
-                try:
-                    if imp.name.lower().endswith(".csv"):
-                        df_imp = pd.read_csv(imp)
-                    else:
-                        df_imp = pd.read_excel(imp)
-                    st.dataframe(df_imp.head(50), use_container_width=True, height=260)
-                    if st.button("Importar agora", key="adm_imp_run"):
-                        ins, upd = importar_colaboradores_df(setor_imp, df_imp)
-                        st.success(f"Importação concluída. Inseridos: {ins} | Atualizados: {upd}")
-                except Exception as e:
-                    st.error(f"Erro ao ler/importar: {e}")
-
-            st.markdown("---")
 
             st.markdown("---")
 
