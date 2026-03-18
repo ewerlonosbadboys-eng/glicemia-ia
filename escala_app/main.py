@@ -12166,64 +12166,29 @@ def page_app():
         if sec_col == "👥 Colaboradores":
             st.markdown("### 👥 Colaboradores")
 
-            b1, b2, b3, b4 = st.columns(4)
+            setor_norm = str(setor or "").strip().upper()
+            botoes_colab = [
+                ("📋 Cadastro", "➕ Cadastrar colaborador", "col_menu_cadastro"),
+                ("👤 Perfil", "✏️ Editar perfil", "col_menu_perfil"),
+                ("🔑 Senha", "🔑 Alterar senha colaborador", "col_menu_senha"),
+                ("🧾 Aprovações AX", "🧾 Aprovações AX", "col_menu_ax"),
+            ]
+            if setor_norm.startswith("FRENTECAIXA"):
+                botoes_colab.append(("🔄 Rodízio Caixa", "🔄 Rodízio Caixa", "col_menu_rodizio_caixa"))
 
-            with b1:
-                if st.button("📋 Cadastro", key="col_menu_cadastro", use_container_width=True):
-                    st.session_state["app_like_sub"] = "➕ Cadastrar colaborador"
-                    st.rerun()
+            total_botoes_colab = len(botoes_colab)
+            idx_btn_colab = 0
+            while idx_btn_colab < total_botoes_colab:
+                linha = st.columns(min(4, total_botoes_colab - idx_btn_colab))
+                for col_btn in linha:
+                    label_btn, destino_btn, key_btn = botoes_colab[idx_btn_colab]
+                    with col_btn:
+                        if st.button(label_btn, key=key_btn, use_container_width=True):
+                            st.session_state["app_like_sub"] = destino_btn
+                            st.rerun()
+                    idx_btn_colab += 1
 
-            with b2:
-                if st.button("👤 Perfil", key="col_menu_perfil", use_container_width=True):
-                    st.session_state["app_like_sub"] = "✏️ Editar perfil"
-                    st.rerun()
-
-            with b3:
-                if st.button("🔑 Senha", key="col_menu_senha", use_container_width=True):
-                    st.session_state["app_like_sub"] = "🔑 Alterar senha colaborador"
-                    st.rerun()
-
-            with b4:
-                if st.button("🧾 Aprovações AX", key="col_menu_ax", use_container_width=True):
-                    st.session_state["app_like_sub"] = "🧾 Aprovações AX"
-                    st.rerun()
-
-            st.markdown("---")
-
-            colaboradores = load_colaboradores_setor(setor)
-            if colaboradores:
-                df_col = pd.DataFrame([{
-                    "Nome": c["Nome"],
-                    "Chapa": c["Chapa"],
-                    "Subgrupo": c["Subgrupo"] or "SEM SUBGRUPO",
-                    "Entrada": c["Entrada"],
-                    "Folga Sábado": "Sim" if c["Folga_Sab"] else "Não",
-                } for c in colaboradores])
-
-                cbus1, cbus2, cbus3 = st.columns([2, 1, 1])
-                termo = cbus1.text_input("Buscar nome/chapa/subgrupo", key="col_busca_fast")
-                tam_pagina = cbus2.selectbox("Por página", [10, 15, 20, 30, 50], index=1, key="col_page_size_fast")
-
-                if termo:
-                    termo_n = str(termo).strip().lower()
-                    mask = (
-                        df_col["Nome"].astype(str).str.lower().str.contains(termo_n, na=False)
-                        | df_col["Chapa"].astype(str).str.lower().str.contains(termo_n, na=False)
-                        | df_col["Subgrupo"].astype(str).str.lower().str.contains(termo_n, na=False)
-                    )
-                    df_view = df_col.loc[mask].reset_index(drop=True)
-                else:
-                    df_view = df_col.reset_index(drop=True)
-
-                total_regs = len(df_view)
-                total_pag = max(1, (total_regs + int(tam_pagina) - 1) // int(tam_pagina))
-                pagina = cbus3.number_input("Página", min_value=1, max_value=total_pag, value=1, step=1, key="col_page_fast")
-                ini = (int(pagina) - 1) * int(tam_pagina)
-                fim = ini + int(tam_pagina)
-                st.caption(f"Mostrando {min(total_regs, 0 if total_regs == 0 else ini + 1)}–{min(total_regs, fim)} de {total_regs} registro(s).")
-                st.dataframe(df_view.iloc[ini:fim], use_container_width=True, height=420)
-            else:
-                st.info("Sem colaboradores.")
+            st.info("Clique em uma das opções acima para abrir o conteúdo de Colaboradores.")
 
         elif sec_col == "➕ Cadastrar colaborador":
             colaboradores = load_colaboradores_setor(setor)
