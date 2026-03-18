@@ -95,6 +95,33 @@ from reportlab.lib import colors
 st.set_page_config(page_title="Escala 5x2 Oficial", layout="wide")
 
 
+# =========================
+# BOOT SAFE DEFAULTS
+# =========================
+if "auth" not in st.session_state:
+    st.session_state["auth"] = None
+if "_full_boot_done" not in st.session_state:
+    st.session_state["_full_boot_done"] = False
+
+if 'QUICK_LOGIN_BOOT' not in globals():
+    QUICK_LOGIN_BOOT = True
+if 'FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP' not in globals():
+    FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP = False
+
+if 'validar_contrato_sistema' not in globals():
+    def validar_contrato_sistema():
+        return True
+
+if 'db_init_fast_login' not in globals():
+    def db_init_fast_login():
+        try:
+            if 'ensure_db_minimal_ready' in globals():
+                ensure_db_minimal_ready()
+        except Exception:
+            pass
+        return True
+
+
 def aplicar_tema_premium_etapa1():
     st.markdown("""
     <style>
@@ -3585,26 +3612,6 @@ def _fast_restore_bundled_latest_before_start() -> None:
 
 
 # =========================================================
-# SAFE BOOT FIXES
-# =========================================================
-# Defaults de inicialização para evitar NameError/KeyError no boot
-if "QUICK_LOGIN_BOOT" not in globals():
-    QUICK_LOGIN_BOOT = True
-if "FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP" not in globals():
-    FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP = False
-if not hasattr(st, "session_state"):
-    pass
-else:
-    if "auth" not in st.session_state:
-        st.session_state["auth"] = None
-    if "_full_boot_done" not in st.session_state:
-        st.session_state["_full_boot_done"] = False
-
-if "validar_contrato_sistema" not in globals():
-    def validar_contrato_sistema():
-        return None
-
-# ========================================================= 
 # MAIN
 # =========================================================
 _fast_restore_bundled_latest_before_start()
