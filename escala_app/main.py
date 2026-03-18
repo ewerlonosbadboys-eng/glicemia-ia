@@ -1582,52 +1582,257 @@ def _parse_escala_ponto_new_pdf_text(extracted_text: str):
 
 
 # =========================================================
-# UI THEME (CSS) — só visual
+# UI THEME (CSS) — premium, só visual
 # =========================================================
-st.markdown("""
+st.markdown(r"""
 <style>
-/* layout geral */
-.block-container { padding-top: .6rem; padding-bottom: 2rem; max-width: 1600px; }
-h1, h2, h3 { letter-spacing: -0.2px; }
-
-/* KPI cards (topo) */
-.kpi-card{
-  border: 1px solid rgba(255,255,255,0.10);
-  border-radius: 16px;
-  padding: 12px 14px;
-  background: rgba(255,255,255,0.06);
-  box-shadow: 0 6px 18px rgba(0,0,0,0.18);
-  backdrop-filter: blur(6px);
+:root {
+  --ax-bg-1: #06122b;
+  --ax-bg-2: #0a1838;
+  --ax-panel: rgba(16, 30, 68, 0.78);
+  --ax-panel-2: rgba(12, 24, 56, 0.88);
+  --ax-stroke: rgba(140, 181, 255, 0.18);
+  --ax-stroke-strong: rgba(140, 181, 255, 0.34);
+  --ax-text: #f4f8ff;
+  --ax-muted: #afbdd9;
+  --ax-blue: #4f8cff;
+  --ax-blue-2: #7fb0ff;
+  --ax-success: #7ad9a7;
+  --ax-shadow: 0 14px 38px rgba(0, 0, 0, 0.34);
+  --ax-radius: 18px;
 }
-.kpi-card:hover{ transform: translateY(-1px); transition: 120ms ease; border-color: rgba(255,255,255,0.18); }
-.kpi-title{ font-size: .78rem; opacity: .72; margin: 0 0 4px 0; text-transform: uppercase; letter-spacing: .4px; }
-.kpi-value{ font-size: 1.35rem; font-weight: 800; margin: 0; line-height: 1.05; }
 
-/* divisória */
-.hr{ height:1px; background: rgba(255,255,255,0.08); margin: 14px 0; }
+html, body, [class*="css"] {
+  font-family: "Inter", "Segoe UI", sans-serif;
+}
 
-/* Tabs (menu superior) */
-div[data-testid="stTabs"] { margin-top: .25rem; }
-div[data-testid="stTabs"] button {
+.stApp {
+  background:
+    radial-gradient(circle at top left, rgba(79,140,255,0.14), transparent 28%),
+    radial-gradient(circle at top right, rgba(99,164,255,0.10), transparent 24%),
+    linear-gradient(180deg, var(--ax-bg-1) 0%, #07152f 42%, #050e22 100%);
+  color: var(--ax-text);
+}
+
+.block-container {
+  padding-top: .9rem;
+  padding-bottom: 2rem;
+  max-width: 1540px;
+}
+
+h1, h2, h3 {
+  letter-spacing: -0.02em;
+}
+
+div[data-testid="stVerticalBlock"] > div:has(> .ax-hero),
+div[data-testid="stVerticalBlock"] > div:has(> .ax-section-head) {
+  width: 100%;
+}
+
+.ax-hero {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--ax-stroke);
+  border-radius: 24px;
+  padding: 22px 24px;
+  margin: 0 0 14px 0;
+  background: linear-gradient(145deg, rgba(20,36,78,0.96), rgba(8,18,44,0.94));
+  box-shadow: var(--ax-shadow);
+}
+.ax-hero::before {
+  content: "";
+  position: absolute;
+  width: 220px;
+  height: 220px;
+  right: -40px;
+  top: -90px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(127,176,255,0.32) 0%, rgba(127,176,255,0.02) 66%, transparent 72%);
+}
+.ax-hero-title {
+  margin: 0;
+  font-size: 2rem;
+  font-weight: 800;
+  color: var(--ax-text);
+}
+.ax-hero-sub {
+  margin-top: 6px;
+  color: var(--ax-muted);
+  font-size: 0.98rem;
+}
+.ax-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: .45rem;
+  padding: .38rem .72rem;
+  border-radius: 999px;
+  border: 1px solid rgba(127,176,255,0.26);
+  background: rgba(79,140,255,0.12);
+  color: #dce9ff;
+  font-size: .82rem;
+  font-weight: 700;
+  margin-bottom: 12px;
+}
+.ax-section-head {
+  border: 1px solid var(--ax-stroke);
+  border-radius: 18px;
+  padding: 14px 18px;
+  margin: 8px 0 14px 0;
+  background: linear-gradient(180deg, rgba(18,34,73,.80), rgba(9,18,42,.82));
+  box-shadow: 0 10px 26px rgba(0,0,0,.22);
+}
+.ax-section-title {
+  margin: 0;
+  font-size: 1.08rem;
+  font-weight: 800;
+}
+.ax-section-sub {
+  margin: 3px 0 0 0;
+  color: var(--ax-muted);
+  font-size: .9rem;
+}
+
+.kpi-card {
+  border: 1px solid var(--ax-stroke);
+  border-radius: 18px;
+  padding: 14px 16px;
+  min-height: 98px;
+  background: linear-gradient(180deg, rgba(18,34,73,.84), rgba(10,20,48,.88));
+  box-shadow: 0 10px 26px rgba(0,0,0,.24);
+  backdrop-filter: blur(8px);
+}
+.kpi-card:hover {
+  transform: translateY(-1px);
+  transition: 140ms ease;
+  border-color: var(--ax-stroke-strong);
+}
+.kpi-title {
+  font-size: .76rem;
+  color: var(--ax-muted);
+  margin: 0 0 7px 0;
+  text-transform: uppercase;
+  letter-spacing: .09em;
+  font-weight: 700;
+}
+.kpi-value {
+  font-size: 1.55rem;
+  font-weight: 800;
+  margin: 0;
+  line-height: 1.05;
+  color: var(--ax-text);
+}
+
+.hr {
+  height: 1px;
+  background: linear-gradient(90deg, rgba(127,176,255,0.22), rgba(127,176,255,0.04));
+  margin: 14px 0;
+}
+
+section[data-testid="stSidebar"] {
+  background: linear-gradient(180deg, rgba(8,18,44,.98), rgba(7,14,34,.98));
+  border-right: 1px solid rgba(127,176,255,0.14);
+}
+section[data-testid="stSidebar"] .block-container {
+  padding-top: 1rem;
+}
+section[data-testid="stSidebar"] h1,
+section[data-testid="stSidebar"] h2,
+section[data-testid="stSidebar"] h3,
+section[data-testid="stSidebar"] label,
+section[data-testid="stSidebar"] p,
+section[data-testid="stSidebar"] span,
+section[data-testid="stSidebar"] div {
+  color: var(--ax-text);
+}
+
+[data-testid="stMetric"] {
+  background: linear-gradient(180deg, rgba(18,34,73,.72), rgba(10,20,48,.78));
+  border: 1px solid var(--ax-stroke);
+  border-radius: 16px;
+  padding: 10px 12px;
+}
+
+.stButton > button,
+button[kind="primary"],
+button[kind="secondary"],
+div[data-testid="stDownloadButton"] > button {
+  border-radius: 14px !important;
+  border: 1px solid rgba(127,176,255,0.24) !important;
+  background: linear-gradient(180deg, #4d89ff, #2f69dd) !important;
+  color: white !important;
+  font-weight: 700 !important;
+  box-shadow: 0 8px 24px rgba(47,105,221,0.28);
+}
+.stButton > button:hover,
+div[data-testid="stDownloadButton"] > button:hover {
+  border-color: rgba(180, 212, 255, 0.34) !important;
+  filter: brightness(1.05);
+}
+
+input, textarea,
+[data-baseweb="select"] > div,
+[data-testid="stTextInput"] input,
+[data-testid="stNumberInput"] input,
+[data-testid="stTextArea"] textarea {
+  border-radius: 14px !important;
+}
+
+[data-baseweb="input"],
+[data-baseweb="base-input"],
+[data-baseweb="select"] > div,
+[data-testid="stTextInput"] > div > div,
+[data-testid="stNumberInput"] > div > div,
+[data-testid="stSelectbox"] > div > div,
+[data-testid="stMultiSelect"] > div > div,
+[data-testid="stDateInput"] > div > div,
+[data-testid="stTextArea"] > div > div {
+  background: rgba(10, 20, 48, 0.88) !important;
+  border: 1px solid rgba(127,176,255,0.16) !important;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
+}
+
+[data-testid="stRadio"] label,
+[data-testid="stCheckbox"] label {
+  color: var(--ax-text) !important;
+}
+
+[data-testid="stTabs"] {
+  margin-top: .25rem;
+}
+[data-testid="stTabs"] button {
   font-size: .92rem;
   padding: 10px 14px;
   border-radius: 12px;
 }
-div[data-testid="stTabs"] button[aria-selected="true"]{
-  background: rgba(255,255,255,0.07);
-  border-bottom: 2px solid rgba(255,255,255,0.35);
+[data-testid="stTabs"] button[aria-selected="true"] {
+  background: rgba(79,140,255,0.16);
+  border-bottom: 2px solid rgba(127,176,255,0.45);
 }
-div[data-testid="stTabs"] button:hover{
+[data-testid="stTabs"] button:hover {
   background: rgba(255,255,255,0.06);
 }
 
-/* sidebar mais limpa */
-section[data-testid="stSidebar"] .block-container { padding-top: 1rem; }
+[data-testid="stDataFrame"],
+[data-testid="stTable"] {
+  border-radius: 16px;
+  overflow: hidden;
+  border: 1px solid rgba(127,176,255,0.10);
+}
 
-/* dataframe: arredondar */
-div[data-testid="stDataFrame"] { border-radius: 12px; overflow: hidden; }
+[data-testid="stAlert"] {
+  border-radius: 16px;
+  border: 1px solid rgba(127,176,255,0.16);
+}
+
+@media (max-width: 900px) {
+  .block-container { padding-top: .6rem; }
+  .ax-hero { padding: 18px 16px; border-radius: 18px; }
+  .ax-hero-title { font-size: 1.45rem; }
+  .kpi-card { min-height: auto; }
+}
 </style>
 """, unsafe_allow_html=True)
+
 
 
 # =========================
@@ -9702,6 +9907,16 @@ def page_login():
             con.close()
 
     st.title("ESCALA 5x2 DO FUTURO")
+    st.markdown(
+        f"""
+        <div class='ax-hero'>
+          <div class='ax-badge'>🔵 Layout premium leve</div>
+          <h1 class='ax-hero-title'>Olá, bem-vindo de volta</h1>
+          <div class='ax-hero-sub'>Acesse sua escala com visual mais moderno, sem mexer nas regras centrais do sistema.</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     if _RESTORE_GUARD_ACTIVE:
         st.warning(_RESTORE_GUARD_MESSAGE or "Base não restaurada automaticamente. O app liberou uma base mínima temporária para permitir o login.")
@@ -10977,6 +11192,17 @@ def page_app():
     if not _perfil_gestao:
         page_portal_colaborador(auth, int(st.session_state["cfg_ano"]), int(st.session_state["cfg_mes"]))
         return
+
+    st.markdown(
+        f"""
+        <div class='ax-hero'>
+          <div class='ax-badge'>⚡ Painel executivo</div>
+          <h1 class='ax-hero-title'>Olá, {auth.get('nome','Usuário')}</h1>
+          <div class='ax-hero-sub'>Setor {setor} • Competência {int(st.session_state['cfg_mes']):02d}/{int(st.session_state['cfg_ano'])} • Visual premium aplicado sem alterar a lógica do app.</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     # =========================
     # KPIs
