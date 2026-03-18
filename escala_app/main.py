@@ -10726,13 +10726,14 @@ def page_app():
                 csel_pwd = next(x for x in colaboradores if x["Chapa"] == ch_sel_pwd)
                 user_pwd = get_usuario_sistema_por_setor_chapa(setor, ch_sel_pwd)
 
-                colx1, colx2 = st.columns(2)
-                colx1.text_input("Nome:", value=(csel_pwd.get("Nome") or "").strip(), disabled=True, key="pwd_nome_view")
-                colx2.text_input("Chapa:", value=str(ch_sel_pwd or "").strip(), disabled=True, key="pwd_chapa_view")
-                colx3, colx4 = st.columns(2)
-                colx3.text_input("Setor:", value=str(setor or "").strip(), disabled=True, key="pwd_setor_view")
                 perfil_view = "ADMIN" if (user_pwd and user_pwd.get("is_admin")) else "LÍDER" if (user_pwd and user_pwd.get("is_lider")) else "COLABORADOR" if user_pwd else "SEM ACESSO"
-                colx4.text_input("Perfil:", value=perfil_view, disabled=True, key="pwd_perfil_view")
+
+                colx1, colx2 = st.columns(2)
+                colx1.markdown(f"**Nome:** {(csel_pwd.get('Nome') or '').strip()}")
+                colx2.markdown(f"**Chapa:** {str(ch_sel_pwd or '').strip()}")
+                colx3, colx4 = st.columns(2)
+                colx3.markdown(f"**Setor:** {str(setor or '').strip()}")
+                colx4.markdown(f"**Perfil:** {perfil_view}")
 
                 nova_senha = st.text_input("Nova senha", type="password", key="pwd_nova")
                 confirma_senha = st.text_input("Confirmar nova senha", type="password", key="pwd_confirma")
