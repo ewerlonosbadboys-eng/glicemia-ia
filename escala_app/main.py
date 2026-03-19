@@ -6437,23 +6437,35 @@ def update_colaborador_perfil(setor: str, chapa_antiga: str, chapa_nova: str, no
 
 @st.cache_data(show_spinner=False, ttl=120)
 def load_colaboradores_setor(setor: str):
+    setor_raw = str(setor or '').strip()
+    setor_norm = _norm_setor(setor_raw)
     con = db_conn()
     cur = con.cursor()
-    cur.execute("""
-        SELECT nome, chapa, subgrupo, entrada, folga_sab
-        FROM colaboradores
-        WHERE setor=?
-        ORDER BY nome ASC
-    """, (setor,))
-    rows = cur.fetchall()
-    con.close()
+    try:
+        cur.execute("""
+            SELECT nome, chapa, subgrupo, entrada, folga_sab, setor
+            FROM colaboradores
+            WHERE UPPER(TRIM(setor))=?
+            ORDER BY nome ASC
+        """, (setor_norm,))
+        rows = cur.fetchall()
+        if not rows and setor_raw:
+            cur.execute("""
+                SELECT nome, chapa, subgrupo, entrada, folga_sab, setor
+                FROM colaboradores
+                WHERE TRIM(setor)=?
+                ORDER BY nome ASC
+            """, (setor_raw,))
+            rows = cur.fetchall()
+    finally:
+        con.close()
     return [{
         "Nome": r[0],
         "Chapa": r[1],
         "Subgrupo": (r[2] or "").strip(),
         "Entrada": (r[3] or "06:00").strip(),
         "Folga_Sab": bool(r[4]),
-        "Setor": setor,
+        "Setor": str((r[5] if len(r) > 5 else setor_raw) or setor_raw).strip(),
     } for r in rows]
 
 
@@ -12444,8 +12456,11 @@ def page_app():
                 st.markdown("---")
 
         elif sec_col == "🔑 Alterar senha colaborador":
-            colaboradores = load_colaboradores_setor(setor)
+            colaboradores = load_colaboradores_setor(setor) or []
             ui_back_header("🔑 Alterar senha colaborador", "colaboradores", "👥 Colaboradores")
+            if not colaboradores:
+                st.warning("Nenhum colaborador foi encontrado para este setor na tela de alteração de senha.")
+                st.caption(f"Setor atual do login: {str(setor or '').strip()}")
             if colaboradores:
                 chapas = [c["Chapa"] for c in colaboradores]
                 nome_by_chapa = {c["Chapa"]: c.get("Nome", "") for c in colaboradores}
