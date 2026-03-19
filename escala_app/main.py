@@ -1069,6 +1069,9 @@ def get_colaborador_competencia_snapshot(setor: str, chapa: str, ano: int, mes: 
     ano = int(ano)
     mes = int(mes)
 
+    if not competencia_fechada(setor, ano, mes):
+        return None
+
     con = db_conn()
     cur = con.cursor()
     try:
@@ -8320,22 +8323,12 @@ def _restaurar_subgrupo_preview_competencia(setor: str, ano: int, mes: int, chap
     return True
 
 
-
 def aplicar_preview_aprovacao_rodizio_caixa(setor: str, ano: int, mes: int, slot: dict, chapa_sel: str, subgrupo_origem: str = 'OPERADOR DE CAIXA 01', subgrupo_destino: str = 'OPERADOR DE CAIXA 02'):
-    """
-    Ao aprovar, aplica imediatamente a troca do par:
-    - grava em subgrupo_competencia
-    - grava em colaborador_competencia_snapshot
-    - atualiza colaboradores (base) para refletir na hora em todas as telas
-    - limpa escala_mes/overrides do mês para evitar exibição antiga
-    """
+    """Ao aprovar, grava imediatamente a troca no mês e no cadastro base do par selecionado."""
     slot = dict(slot or {})
     chapa_sel = _norm_chapa(chapa_sel or slot.get('origem_chapa') or '')
     destino_chapa = _norm_chapa(slot.get('destino_chapa') or '')
     setor = _norm_setor(setor)
-    ano = int(ano)
-    mes = int(mes)
-
     if not chapa_sel or not destino_chapa:
         return False
 
@@ -8352,94 +8345,18 @@ def aplicar_preview_aprovacao_rodizio_caixa(setor: str, ano: int, mes: int, slot
 
     entrada_sel_atual = str(alt_sel.get('entrada') or slot.get('origem_entrada') or '').strip() or '06:00'
     entrada_destino_atual = str(slot.get('destino_entrada') or '').strip() or '06:00'
-    ts = datetime.now().isoformat()
 
-    con = db_conn()
-    cur = con.cursor()
-    try:
-        try:
-            cur.execute("PRAGMA busy_timeout = 5000")
-        except Exception:
-            pass
-
-        def _carrega_base(chapa_alvo: str, entrada_padrao: str):
-            cur.execute("""
-                SELECT nome, subgrupo, entrada, COALESCE(folga_sab, 0)
-                FROM colaboradores
-                WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND TRIM(chapa)=?
-                LIMIT 1
-            """, (setor, chapa_alvo))
-            row = cur.fetchone()
-            nome = str((row[0] if row else '') or '').strip()
-            entrada = str((row[2] if row else '') or '').strip() or str(entrada_padrao or '06:00').strip() or '06:00'
-            folga_sab = int((row[3] if row else 0) or 0)
-            return nome, entrada, folga_sab
-
-        nome_sel, _, folga_sel = _carrega_base(chapa_sel, entrada_sel_atual)
-        nome_dest, _, folga_dest = _carrega_base(destino_chapa, entrada_destino_atual)
-
-        for ch, novo_sg, nova_ent, nome_ref, folga_ref in [
-            (chapa_sel, subgrupo_destino, entrada_destino_atual, nome_sel, folga_sel),
-            (destino_chapa, subgrupo_origem, entrada_sel_atual, nome_dest, folga_dest),
-        ]:
-            cur.execute("""
-                INSERT INTO subgrupo_competencia(setor, ano, mes, chapa, subgrupo, atualizado_em)
-                VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(setor, ano, mes, chapa) DO UPDATE SET
-                    subgrupo=excluded.subgrupo,
-                    atualizado_em=excluded.atualizado_em
-            """, (setor, ano, mes, ch, novo_sg, ts))
-
-            cur.execute("""
-                INSERT INTO colaborador_competencia_snapshot(
-                    setor, ano, mes, chapa, nome, subgrupo, entrada, folga_sab, atualizado_em
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(setor, ano, mes, chapa) DO UPDATE SET
-                    nome=excluded.nome,
-                    subgrupo=excluded.subgrupo,
-                    entrada=excluded.entrada,
-                    folga_sab=excluded.folga_sab,
-                    atualizado_em=excluded.atualizado_em
-            """, (setor, ano, mes, ch, nome_ref, novo_sg, nova_ent, int(folga_ref or 0), ts))
-
-            cur.execute("""
-                UPDATE colaboradores
-                SET subgrupo=?, entrada=?
-                WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND TRIM(chapa)=?
-            """, (novo_sg, nova_ent, setor, ch))
-
-            cur.execute(
-                "DELETE FROM escala_mes WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=?",
-                (setor, ano, mes, ch)
-            )
-            cur.execute("""
-                DELETE FROM overrides
-                WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=?
-                  AND campo IN ('H_Entrada', 'H_Saida', 'Status')
-            """, (setor, ano, mes, ch))
-
-        con.commit()
-    except Exception:
-        try:
-            con.rollback()
-        except Exception:
-            pass
-        return False
-    finally:
-        con.close()
+    ok_a = _upsert_subgrupo_preview_competencia(setor, ano, mes, chapa_sel, subgrupo_destino, entrada_destino_atual)
+    ok_b = _upsert_subgrupo_preview_competencia(setor, ano, mes, destino_chapa, subgrupo_origem, entrada_sel_atual)
 
     clear_retificacao_related_caches()
     _clear_preview_cache(setor, int(ano), int(mes))
     try:
-        if hasattr(load_colaboradores_setor_competencia, 'clear'):
-            load_colaboradores_setor_competencia.clear()
-    except Exception:
-        pass
-    try:
         st.cache_data.clear()
     except Exception:
         pass
-    return True
+    return bool(ok_a and ok_b)
+
 
 def resetar_preview_aprovacao_rodizio_caixa(setor: str, ano: int, mes: int, slot: dict, chapa_sel: str, subgrupo_origem: str = 'OPERADOR DE CAIXA 01', subgrupo_destino: str = 'OPERADOR DE CAIXA 02'):
     """Desfaz a aprovação do slot e recompõe o espelho do mês para o estado original do par."""
@@ -14141,13 +14058,9 @@ def page_app():
                                 chapa_eff = chapa_sel or str(s.get('origem_chapa') or '')
                                 if chapa_ant and chapa_ant != chapa_eff:
                                     resetar_preview_aprovacao_rodizio_caixa(setor, ano_r, mes_r, s, chapa_ant, subgrupo_origem, subgrupo_destino)
-                                ok_prev = aplicar_preview_aprovacao_rodizio_caixa(setor, ano_r, mes_r, s, chapa_eff, subgrupo_origem, subgrupo_destino)
-                                if ok_prev:
-                                    tmp[slot_key] = chapa_eff
-                                    st.session_state[aprov_state_key] = tmp
-                                    st.session_state[state_base + "::msg_preview_ok"] = f"Aprovação aplicada na hora para {chapa_eff} em {mes_r:02d}/{ano_r}."
-                                else:
-                                    st.session_state[state_base + "::msg_preview_erro"] = "Falha ao aplicar a aprovação imediatamente no banco."
+                                aplicar_preview_aprovacao_rodizio_caixa(setor, ano_r, mes_r, s, chapa_eff, subgrupo_origem, subgrupo_destino)
+                                tmp[slot_key] = chapa_eff
+                                st.session_state[aprov_state_key] = tmp
                                 st.session_state.pop(state_base + "::aplicado", None)
                                 st.rerun()
                             if bcol2.button('❌ Negar e chamar próximo da fila', key=f'rod_caixa_no_{slot_key}', use_container_width=True):
