@@ -8074,6 +8074,71 @@ def resetar_rodizio_caixa_mes(setor: str, ano: int, mes: int, subgrupo_origem: s
     }
 
 
+def _upsert_subgrupo_preview_competencia(setor: str, ano: int, mes: int, chapa: str, novo_subgrupo: str):
+    chapa = str(chapa or '').strip()
+    novo_subgrupo = str(novo_subgrupo or '').strip()
+    if not chapa or not novo_subgrupo:
+        return
+    ts = datetime.now().isoformat()
+    con = db_conn()
+    cur = con.cursor()
+    try:
+        cur.execute(
+            """
+            INSERT INTO subgrupo_competencia(setor, ano, mes, chapa, subgrupo, atualizado_em)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(setor, ano, mes, chapa) DO UPDATE SET
+                subgrupo=excluded.subgrupo,
+                atualizado_em=excluded.atualizado_em
+            """,
+            (setor, int(ano), int(mes), chapa, novo_subgrupo, ts)
+        )
+        cur.execute(
+            """
+            INSERT INTO colaborador_competencia_snapshot(setor, ano, mes, chapa, nome, subgrupo, entrada, folga_sab, atualizado_em)
+            SELECT ?, ?, ?, ?, COALESCE(NULLIF(nome,''), ''), ?, COALESCE(NULLIF(entrada,''), '06:00'), COALESCE(folga_sab, 0), ?
+            FROM colaboradores
+            WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND TRIM(chapa)=?
+            ON CONFLICT(setor, ano, mes, chapa) DO UPDATE SET
+                nome=COALESCE(excluded.nome, colaborador_competencia_snapshot.nome),
+                subgrupo=excluded.subgrupo,
+                entrada=COALESCE(NULLIF(excluded.entrada,''), colaborador_competencia_snapshot.entrada),
+                folga_sab=COALESCE(excluded.folga_sab, colaborador_competencia_snapshot.folga_sab),
+                atualizado_em=excluded.atualizado_em
+            """,
+            (setor, int(ano), int(mes), chapa, novo_subgrupo, ts, setor, chapa)
+        )
+        con.commit()
+    finally:
+        con.close()
+
+
+def aplicar_preview_aprovacao_rodizio_caixa(setor: str, ano: int, mes: int, slot: dict, chapa_sel: str, subgrupo_origem: str = 'OPERADOR DE CAIXA 01', subgrupo_destino: str = 'OPERADOR DE CAIXA 02'):
+    chapa_sel = str(chapa_sel or '').strip() or str(slot.get('origem_chapa') or '').strip()
+    chapa_sai = str(slot.get('destino_chapa') or '').strip()
+    if chapa_sel:
+        _upsert_subgrupo_preview_competencia(setor, ano, mes, chapa_sel, subgrupo_destino)
+    if chapa_sai:
+        _upsert_subgrupo_preview_competencia(setor, ano, mes, chapa_sai, subgrupo_origem)
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+
+
+def resetar_preview_aprovacao_rodizio_caixa(setor: str, ano: int, mes: int, slot: dict, chapa_sel: str, subgrupo_origem: str = 'OPERADOR DE CAIXA 01', subgrupo_destino: str = 'OPERADOR DE CAIXA 02'):
+    chapa_sel = str(chapa_sel or '').strip() or str(slot.get('origem_chapa') or '').strip()
+    chapa_sai = str(slot.get('destino_chapa') or '').strip()
+    if chapa_sel:
+        _upsert_subgrupo_preview_competencia(setor, ano, mes, chapa_sel, subgrupo_origem)
+    if chapa_sai:
+        _upsert_subgrupo_preview_competencia(setor, ano, mes, chapa_sai, subgrupo_destino)
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+
+
 # =========================================================
 # SUBGRUPOS + REGRAS
 # =========================================================
@@ -13620,12 +13685,27 @@ def page_app():
 
                     a1, a2 = st.columns([1, 1])
                     if a1.button('Limpar aprovações e negativas', key='rod_caixa_clear_aprov', use_container_width=True):
+                        aprov_tmp = dict(st.session_state.get(aprov_key, {}))
+                        for s in slots:
+                            slot_key_tmp = str(s.get('slot_key') or '')
+                            if not slot_key_tmp:
+                                continue
+                            chapa_sel_tmp = str(aprov_tmp.get(slot_key_tmp) or '').strip()
+                            if chapa_sel_tmp:
+                                resetar_preview_aprovacao_rodizio_caixa(setor, ano_r, mes_r, s, chapa_sel_tmp, subgrupo_origem, subgrupo_destino)
                         st.session_state[aprov_key] = {}
                         st.session_state[neg_key] = []
                         st.session_state.pop(state_base + "::aplicado", None)
                         st.rerun()
                     if a2.button('Aprovar todas as sugestões atuais', key='rod_caixa_aprov_all', use_container_width=True):
-                        st.session_state[aprov_key] = {str(s.get('slot_key')): str(s.get('origem_chapa')) for s in slots}
+                        aprov_all = {}
+                        for s in slots:
+                            slot_key_tmp = str(s.get('slot_key') or '')
+                            chapa_sel_tmp = str(st.session_state.get(f'rod_caixa_pick_{slot_key_tmp}', str(s.get('origem_chapa') or '')) or '').strip()
+                            if slot_key_tmp and chapa_sel_tmp:
+                                aprov_all[slot_key_tmp] = chapa_sel_tmp
+                                aplicar_preview_aprovacao_rodizio_caixa(setor, ano_r, mes_r, s, chapa_sel_tmp, subgrupo_origem, subgrupo_destino)
+                        st.session_state[aprov_key] = aprov_all
                         st.session_state.pop(state_base + "::aplicado", None)
                         st.rerun()
 
@@ -13719,8 +13799,13 @@ def page_app():
                             if bcol1.button('✅ Aprovar seleção', key=f'rod_caixa_ok_{slot_key}', use_container_width=True):
                                 chapa_sel = str(st.session_state.get(f'rod_caixa_pick_{slot_key}', str(s.get('origem_chapa') or '')) or '').strip()
                                 tmp = dict(st.session_state.get(aprov_state_key, {}))
-                                tmp[slot_key] = chapa_sel or str(s.get('origem_chapa') or '')
+                                chapa_ant = str(tmp.get(slot_key) or '').strip()
+                                if chapa_ant and chapa_ant != chapa_sel:
+                                    resetar_preview_aprovacao_rodizio_caixa(setor, ano_r, mes_r, s, chapa_ant, subgrupo_origem, subgrupo_destino)
+                                chapa_eff = chapa_sel or str(s.get('origem_chapa') or '')
+                                tmp[slot_key] = chapa_eff
                                 st.session_state[aprov_state_key] = tmp
+                                aplicar_preview_aprovacao_rodizio_caixa(setor, ano_r, mes_r, s, chapa_eff, subgrupo_origem, subgrupo_destino)
                                 st.session_state.pop(state_base + "::aplicado", None)
                                 st.rerun()
                             if bcol2.button('❌ Negar e chamar próximo da fila', key=f'rod_caixa_no_{slot_key}', use_container_width=True):
@@ -13729,6 +13814,9 @@ def page_app():
                                 if chapa_neg and chapa_neg not in negs:
                                     negs.append(chapa_neg)
                                 tmp = dict(st.session_state.get(aprov_state_key, {}))
+                                chapa_ant = str(tmp.get(slot_key) or '').strip()
+                                if chapa_ant:
+                                    resetar_preview_aprovacao_rodizio_caixa(setor, ano_r, mes_r, s, chapa_ant, subgrupo_origem, subgrupo_destino)
                                 tmp.pop(slot_key, None)
                                 st.session_state[aprov_state_key] = tmp
                                 st.session_state[neg_state_key] = negs
@@ -13736,6 +13824,9 @@ def page_app():
                                 st.rerun()
                             if bcol3.button('🔄 Resetar aprovação', key=f'rod_caixa_reset_{slot_key}', use_container_width=True, disabled=(not aprovado)):
                                 tmp = dict(st.session_state.get(aprov_state_key, {}))
+                                chapa_ant = str(tmp.get(slot_key) or '').strip()
+                                if chapa_ant:
+                                    resetar_preview_aprovacao_rodizio_caixa(setor, ano_r, mes_r, s, chapa_ant, subgrupo_origem, subgrupo_destino)
                                 tmp.pop(slot_key, None)
                                 st.session_state[aprov_state_key] = tmp
                                 st.session_state.pop(state_base + "::aplicado", None)
