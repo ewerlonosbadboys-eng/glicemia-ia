@@ -1141,10 +1141,26 @@ def salvar_retificacao_competencia(setor: str, ano: int, mes: int, chapa: str, d
         except Exception:
             pass
 
-        cur.execute("SELECT nome, subgrupo, entrada FROM colaboradores WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND TRIM(chapa)=? LIMIT 1", (setor, chapa))
+        cur.execute(
+            "SELECT nome, subgrupo, entrada, COALESCE(folga_sab, 0) FROM colaboradores WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND TRIM(chapa)=? LIMIT 1",
+            (setor, chapa)
+        )
         row = cur.fetchone()
         nome = str(row[0] or '').strip() if row else ''
+        subgrupo_base = str(row[1] or '').strip() if row else ''
         entrada_antiga = str(row[2] or '').strip() if row else ''
+        folga_sab_base = int(row[3] or 0) if row else 0
+
+        try:
+            cur.execute(
+                "SELECT subgrupo FROM subgrupo_competencia WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=? LIMIT 1",
+                (setor, ano, mes, chapa)
+            )
+            row_sub = cur.fetchone()
+            if row_sub and str(row_sub[0] or '').strip():
+                subgrupo_base = str(row_sub[0] or '').strip()
+        except Exception:
+            pass
 
         cur.execute("""
             INSERT INTO retificacoes_competencia(
@@ -1166,8 +1182,10 @@ def salvar_retificacao_competencia(setor: str, ano: int, mes: int, chapa: str, d
             novo_subgrupo, motivo, usuario, agora_iso
         ))
 
-        # se vier subgrupo, grava também o espelho mensal para leitura histórica
-        if novo_subgrupo:
+        mudou_subgrupo = bool(novo_subgrupo) and str(novo_subgrupo).strip() != str(subgrupo_base or '').strip()
+
+        # Só atualiza estruturas pesadas quando houve mudança real de subgrupo.
+        if mudou_subgrupo:
             cur.execute("""
                 INSERT INTO subgrupo_competencia(setor, ano, mes, chapa, subgrupo, atualizado_em)
                 VALUES (?, ?, ?, ?, ?, ?)
@@ -1176,46 +1194,32 @@ def salvar_retificacao_competencia(setor: str, ano: int, mes: int, chapa: str, d
                     atualizado_em=excluded.atualizado_em
             """, (setor, ano, mes, chapa, novo_subgrupo, agora_iso))
 
-            # mantém o snapshot congelado alinhado com a retificação do mês
+            cur.execute(
+                "SELECT nome, entrada, folga_sab FROM colaborador_competencia_snapshot WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=? LIMIT 1",
+                (setor, ano, mes, chapa)
+            )
+            row_snap = cur.fetchone()
+            nome_snap = str((row_snap[0] if row_snap else '') or nome).strip()
+            entrada_snap = str((row_snap[1] if row_snap else '') or entrada_antiga or '06:00').strip() or '06:00'
+            folga_sab_snap = int((row_snap[2] if row_snap else folga_sab_base) or 0)
+
             cur.execute("""
                 INSERT INTO colaborador_competencia_snapshot(
                     setor, ano, mes, chapa, nome, subgrupo, entrada, folga_sab, atualizado_em
-                )
-                SELECT
-                    ?, ?, ?, ?,
-                    COALESCE(NULLIF(nome, ''), ?),
-                    ?,
-                    COALESCE(NULLIF(entrada, ''), ?),
-                    COALESCE(folga_sab, 0),
-                    ?
-                FROM colaborador_competencia_snapshot
-                WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=?
-                UNION ALL
-                SELECT
-                    ?, ?, ?, ?,
-                    ?,
-                    ?,
-                    ?,
-                    COALESCE((SELECT folga_sab FROM colaboradores WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND TRIM(chapa)=? LIMIT 1), 0),
-                    ?
-                WHERE NOT EXISTS (
-                    SELECT 1 FROM colaborador_competencia_snapshot
-                    WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=?
-                )
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(setor, ano, mes, chapa) DO UPDATE SET
                     nome=excluded.nome,
                     subgrupo=excluded.subgrupo,
-                    entrada=COALESCE(NULLIF(excluded.entrada, ''), colaborador_competencia_snapshot.entrada),
-                    folga_sab=COALESCE(excluded.folga_sab, colaborador_competencia_snapshot.folga_sab),
+                    entrada=excluded.entrada,
+                    folga_sab=excluded.folga_sab,
                     atualizado_em=excluded.atualizado_em
             """, (
                 setor, ano, mes, chapa,
-                nome, novo_subgrupo, entrada_antiga or '06:00', agora_iso,
-                setor, ano, mes, chapa,
-                setor, ano, mes, chapa,
-                nome, novo_subgrupo, entrada_antiga or '06:00',
-                setor, chapa, agora_iso,
-                setor, ano, mes, chapa,
+                nome_snap,
+                novo_subgrupo,
+                entrada_snap,
+                folga_sab_snap,
+                agora_iso,
             ))
         con.commit()
     finally:
@@ -14089,7 +14093,6 @@ def page_app():
                                             usuario=str(st.session_state.get('auth_nome') or st.session_state.get('auth_chapa') or '')
                                         )
                                     st.success('Retificação salva com sucesso.')
-                                st.rerun()
                         df_ret_list = load_retificacoes_competencia(setor, ano, mes)
                         if df_ret_list is not None and not df_ret_list.empty:
                             st.markdown('#### Retificações já registradas nesta competência')
@@ -14400,7 +14403,6 @@ def page_app():
                                     usuario=str(st.session_state.get('auth_nome') or st.session_state.get('auth_chapa') or '')
                                 )
                             st.success('Retificação salva com sucesso.')
-                        st.rerun()
 
                 df_ret_list = load_retificacoes_competencia(setor, ano, mes)
                 if df_ret_list is not None and not df_ret_list.empty:
