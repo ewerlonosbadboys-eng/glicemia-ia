@@ -8244,9 +8244,13 @@ def _upsert_subgrupo_preview_competencia(setor: str, ano: int, mes: int, chapa: 
         )
         con.commit()
         return True
-    except Exception:
+    except Exception as e:
         try:
             con.rollback()
+        except Exception:
+            pass
+        try:
+            st.session_state["_rodizio_caixa_last_error"] = str(e)
         except Exception:
             pass
         return False
@@ -14056,13 +14060,24 @@ def page_app():
                                 tmp = dict(st.session_state.get(aprov_state_key, {}))
                                 chapa_ant = str(tmp.get(slot_key) or '').strip()
                                 chapa_eff = chapa_sel or str(s.get('origem_chapa') or '')
+                                ok_reset_ant = True
                                 if chapa_ant and chapa_ant != chapa_eff:
-                                    resetar_preview_aprovacao_rodizio_caixa(setor, ano_r, mes_r, s, chapa_ant, subgrupo_origem, subgrupo_destino)
-                                aplicar_preview_aprovacao_rodizio_caixa(setor, ano_r, mes_r, s, chapa_eff, subgrupo_origem, subgrupo_destino)
-                                tmp[slot_key] = chapa_eff
-                                st.session_state[aprov_state_key] = tmp
-                                st.session_state.pop(state_base + "::aplicado", None)
-                                st.rerun()
+                                    ok_reset_ant = bool(resetar_preview_aprovacao_rodizio_caixa(setor, ano_r, mes_r, s, chapa_ant, subgrupo_origem, subgrupo_destino))
+                                ok_prev = False
+                                if ok_reset_ant:
+                                    try:
+                                        st.session_state.pop("_rodizio_caixa_last_error", None)
+                                    except Exception:
+                                        pass
+                                    ok_prev = bool(aplicar_preview_aprovacao_rodizio_caixa(setor, ano_r, mes_r, s, chapa_eff, subgrupo_origem, subgrupo_destino))
+                                if ok_reset_ant and ok_prev:
+                                    tmp[slot_key] = chapa_eff
+                                    st.session_state[aprov_state_key] = tmp
+                                    st.session_state.pop(state_base + "::aplicado", None)
+                                    st.rerun()
+                                else:
+                                    err_txt = str(st.session_state.get("_rodizio_caixa_last_error") or "Falha ao salvar a troca no banco. A aprovação não foi aplicada.").strip()
+                                    bcol4.error(err_txt)
                             if bcol2.button('❌ Negar e chamar próximo da fila', key=f'rod_caixa_no_{slot_key}', use_container_width=True):
                                 negs = list(st.session_state.get(neg_key, []))
                                 chapa_neg = str(s.get('origem_chapa') or '').strip()
