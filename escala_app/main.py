@@ -5534,6 +5534,26 @@ def db_init():
     """)
 
     _safe_exec(cur, """
+    CREATE TABLE IF NOT EXISTS rodizio_caixa_prioridade_manual (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        setor TEXT NOT NULL,
+        ano INTEGER NOT NULL,
+        mes INTEGER NOT NULL,
+        slot_key TEXT NOT NULL,
+        chapa_origem TEXT NOT NULL,
+        chapa_destino TEXT NOT NULL,
+        nome_origem TEXT,
+        nome_destino TEXT,
+        entrada_origem TEXT,
+        entrada_destino TEXT,
+        subgrupo_origem TEXT NOT NULL,
+        subgrupo_destino TEXT NOT NULL,
+        aprovado_em TEXT NOT NULL,
+        UNIQUE(setor, ano, mes, slot_key)
+    )
+    """)
+
+    _safe_exec(cur, """
     CREATE TABLE IF NOT EXISTS overrides (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         setor TEXT NOT NULL,
@@ -7157,6 +7177,129 @@ def _clone_colaborador_base(c: dict) -> dict:
     }
 
 
+
+def _set_prioridade_manual_rodizio_caixa(setor: str, ano: int, mes: int, slot: dict, chapa_sel: str, subgrupo_origem: str, subgrupo_destino: str) -> bool:
+    ensure_competencia_runtime_tables()
+    setor = _norm_setor(setor)
+    chapa_sel = _norm_chapa(chapa_sel)
+    slot = dict(slot or {})
+    destino_chapa = _norm_chapa(slot.get('destino_chapa') or '')
+    slot_key = str(slot.get('slot_key') or '').strip()
+    if not setor or not chapa_sel or not destino_chapa or not slot_key:
+        return False
+
+    alt_sel = None
+    if chapa_sel == _norm_chapa(slot.get('origem_chapa') or ''):
+        alt_sel = dict(slot)
+    else:
+        for alt in list(slot.get('alternativas_opcoes') or []):
+            if _norm_chapa(alt.get('chapa') or '') == chapa_sel:
+                alt_sel = dict(alt)
+                break
+    if alt_sel is None:
+        alt_sel = dict(slot)
+
+    con = db_conn()
+    cur = con.cursor()
+    ts = datetime.now().isoformat()
+    try:
+        cur.execute(
+            """
+            INSERT INTO rodizio_caixa_prioridade_manual(
+                setor, ano, mes, slot_key, chapa_origem, chapa_destino,
+                nome_origem, nome_destino, entrada_origem, entrada_destino,
+                subgrupo_origem, subgrupo_destino, aprovado_em
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(setor, ano, mes, slot_key) DO UPDATE SET
+                chapa_origem=excluded.chapa_origem,
+                chapa_destino=excluded.chapa_destino,
+                nome_origem=excluded.nome_origem,
+                nome_destino=excluded.nome_destino,
+                entrada_origem=excluded.entrada_origem,
+                entrada_destino=excluded.entrada_destino,
+                subgrupo_origem=excluded.subgrupo_origem,
+                subgrupo_destino=excluded.subgrupo_destino,
+                aprovado_em=excluded.aprovado_em
+            """,
+            (
+                setor, int(ano), int(mes), slot_key, chapa_sel, destino_chapa,
+                str(alt_sel.get('nome') or slot.get('origem_nome') or '').strip(),
+                str(slot.get('destino_nome') or '').strip(),
+                str(alt_sel.get('entrada') or slot.get('origem_entrada') or '').strip(),
+                str(slot.get('destino_entrada') or '').strip(),
+                str(subgrupo_origem or 'OPERADOR DE CAIXA 01').strip(),
+                str(subgrupo_destino or 'OPERADOR DE CAIXA 02').strip(),
+                ts,
+            )
+        )
+        con.commit()
+        return True
+    except Exception:
+        try:
+            con.rollback()
+        except Exception:
+            pass
+        return False
+    finally:
+        con.close()
+
+
+def _clear_prioridade_manual_rodizio_caixa(setor: str, ano: int, mes: int, slot_key: str = '', chapa: str = '') -> None:
+    setor = _norm_setor(setor)
+    slot_key = str(slot_key or '').strip()
+    chapa = _norm_chapa(chapa)
+    con = db_conn()
+    cur = con.cursor()
+    try:
+        if slot_key:
+            cur.execute(
+                "DELETE FROM rodizio_caixa_prioridade_manual WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND slot_key=?",
+                (setor, int(ano), int(mes), slot_key)
+            )
+        elif chapa:
+            cur.execute(
+                "DELETE FROM rodizio_caixa_prioridade_manual WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND (TRIM(chapa_origem)=? OR TRIM(chapa_destino)=?)",
+                (setor, int(ano), int(mes), chapa, chapa)
+            )
+        con.commit()
+    finally:
+        con.close()
+
+
+def _listar_prioridades_manuais_rodizio_caixa(setor: str, ano: int, mes: int) -> list[dict]:
+    setor = _norm_setor(setor)
+    con = db_conn()
+    cur = con.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT slot_key, chapa_origem, chapa_destino, nome_origem, nome_destino,
+                   entrada_origem, entrada_destino, subgrupo_origem, subgrupo_destino, aprovado_em
+            FROM rodizio_caixa_prioridade_manual
+            WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=?
+            ORDER BY aprovado_em ASC, id ASC
+            """,
+            (setor, int(ano), int(mes))
+        )
+        rows = cur.fetchall() or []
+    finally:
+        con.close()
+    out = []
+    for r in rows:
+        out.append({
+            'slot_key': str(r[0] or '').strip(),
+            'chapa_origem': str(r[1] or '').strip(),
+            'chapa_destino': str(r[2] or '').strip(),
+            'nome_origem': str(r[3] or '').strip(),
+            'nome_destino': str(r[4] or '').strip(),
+            'entrada_origem': str(r[5] or '').strip(),
+            'entrada_destino': str(r[6] or '').strip(),
+            'subgrupo_origem': str(r[7] or '').strip(),
+            'subgrupo_destino': str(r[8] or '').strip(),
+            'aprovado_em': str(r[9] or '').strip(),
+        })
+    return out
+
 def load_colaboradores_setor_competencia(setor: str, ano: int, mes: int) -> list[dict]:
     """
     Lista base do setor com overlay da competência selecionada para exibição imediata.
@@ -7199,6 +7342,20 @@ def _rodizio_caixa_base_mes_anterior_congelado(setor: str, ano: int, mes: int) -
 
     for ch, base in list(mapa.items()):
         base['Subgrupo'] = get_subgrupo_competencia_ou_base(setor, ch, int(ano), int(mes), base.get('Subgrupo', ''))
+
+    prioridades = _listar_prioridades_manuais_rodizio_caixa(setor, int(ano), int(mes))
+    if prioridades:
+        for pr in prioridades:
+            ch_origem = str(pr.get('chapa_origem') or '').strip()
+            ch_destino = str(pr.get('chapa_destino') or '').strip()
+            if ch_origem in mapa:
+                mapa[ch_origem]['Subgrupo'] = str(pr.get('subgrupo_destino') or 'OPERADOR DE CAIXA 02').strip() or 'OPERADOR DE CAIXA 02'
+                mapa[ch_origem]['Entrada'] = str(pr.get('entrada_destino') or mapa[ch_origem].get('Entrada') or '').strip() or mapa[ch_origem].get('Entrada', '06:00')
+                mapa[ch_origem]['_prioridade_manual'] = True
+            if ch_destino in mapa:
+                mapa[ch_destino]['Subgrupo'] = str(pr.get('subgrupo_origem') or 'OPERADOR DE CAIXA 01').strip() or 'OPERADOR DE CAIXA 01'
+                mapa[ch_destino]['Entrada'] = str(pr.get('entrada_origem') or mapa[ch_destino].get('Entrada') or '').strip() or mapa[ch_destino].get('Entrada', '06:00')
+                mapa[ch_destino]['_prioridade_manual'] = True
 
     hist_rows = get_rodizio_caixa_hist_mes(setor, int(ano), int(mes))
     if hist_rows:
@@ -8391,6 +8548,7 @@ def aplicar_preview_aprovacao_rodizio_caixa(setor: str, ano: int, mes: int, slot
             VALUES (?, ?, ?, ?, ?, ?, 'SAI_DESTINO_PREVIEW', ?, ?, ?, ?, ?, ?, ?)
         """, (setor, int(ano), int(mes), ciclo, destino_chapa, nome_dest, subgrupo_destino, subgrupo_origem, entrada_destino_atual, entrada_sel_atual, compat, obs, ts))
 
+        _set_prioridade_manual_rodizio_caixa(setor, int(ano), int(mes), slot, chapa_sel, subgrupo_origem, subgrupo_destino)
         con.commit()
     except Exception as e:
         try:
@@ -8437,6 +8595,10 @@ def resetar_preview_aprovacao_rodizio_caixa(setor: str, ano: int, mes: int, slot
     if chapa_sel:
         _restaurar_subgrupo_preview_competencia(setor, ano, mes, chapa_sel, subgrupo_origem, entrada_sel_original)
     _restaurar_subgrupo_preview_competencia(setor, ano, mes, destino_chapa, subgrupo_destino, entrada_dest_original)
+    try:
+        _clear_prioridade_manual_rodizio_caixa(setor, int(ano), int(mes), slot_key=str(slot.get('slot_key') or ''), chapa=chapa_sel)
+    except Exception:
+        pass
 
     try:
         st.cache_data.clear()
@@ -14059,6 +14221,7 @@ def page_app():
                         'Domingos iguais folga': int(s.get('domingos_folga_iguais_qtd', 0) or 0),
                         'Dif. domingos': int(s.get('diff_domingos', 0) or 0),
                         'Alternativas no mesmo horário': int(s.get('alternativas_mesmo_horario', 0) or 0),
+                        'Prioridade manual': 'SIM' if str(aprovados_atuais.get(s.get('slot_key')) or '').strip() else 'NÃO',
                     } for s in slots])
                     st.dataframe(resumo_aprov, use_container_width=True, height=340)
 
@@ -14128,6 +14291,10 @@ def page_app():
                                 if ok_reset_ant and ok_prev:
                                     tmp[slot_key] = chapa_eff
                                     st.session_state[aprov_state_key] = tmp
+                                    try:
+                                        st.session_state[f'rod_caixa_pick_{slot_key}'] = chapa_eff
+                                    except Exception:
+                                        pass
                                     st.session_state.pop(state_base + "::aplicado", None)
                                     st.rerun()
                                 else:
