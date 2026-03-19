@@ -2667,7 +2667,10 @@ def render_app_like_top_nav(is_admin_area: bool, setor: str = ""):
     st.markdown("""
     <style>
     .app-top-nav-wrap{position:sticky;top:0;z-index:40;background:rgba(3,11,30,.96);padding:8px 0 10px 0;margin-bottom:10px;}
-    .app-top-nav-wrap .stButton > button{min-height:70px !important;white-space:normal !important;line-height:1.18 !important;font-size:1.05rem !important;border-radius:16px !important;}
+    .app-top-nav-wrap div[data-testid="stHorizontalBlock"]{gap:14px !important;align-items:stretch !important;}
+    .app-top-nav-wrap div[data-testid="stHorizontalBlock"] > div{flex:1 1 0 !important;min-width:0 !important;}
+    .app-top-nav-wrap .stButton{width:100% !important;}
+    .app-top-nav-wrap .stButton > button{width:100% !important;min-height:78px !important;white-space:normal !important;line-height:1.18 !important;font-size:1.06rem !important;border-radius:18px !important;padding:0.9rem 1rem !important;}
     </style>
     """, unsafe_allow_html=True)
     st.markdown('<div class="app-top-nav-wrap">', unsafe_allow_html=True)
@@ -2690,7 +2693,7 @@ def render_app_like_top_nav(is_admin_area: bool, setor: str = ""):
                 st.session_state["auth"] = None
                 st.rerun()
     else:
-        cols = st.columns([1.0, 1.0, 1.0, 1.0, 0.7])
+        cols = st.columns(5)
         for col, key in zip(cols[:4], main_keys):
             label = cfg[key]["label"]
             with col:
@@ -15221,7 +15224,7 @@ def _fast_restore_bundled_latest_before_start() -> None:
 
 # =========================================================
 # MAIN
-# ========================================================= 
+# =========================================================
 _fast_restore_bundled_latest_before_start()
 validar_contrato_sistema()
 
