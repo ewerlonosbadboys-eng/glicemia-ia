@@ -2722,15 +2722,8 @@ def resolve_app_like_route(is_admin_area: bool, setor: str = ""):
     current_sub = st.session_state.get("app_like_sub")
     if current_sub not in labels:
         current_sub = cfg[current_main]["default_sub"]
-        st.session_state["app_like_sub"] = current_sub
-
     route_map = {label: route for label, route in submenus}
     route = dict(route_map.get(current_sub, {}))
-
-    override = st.session_state.pop("app_like_route_override", None)
-    if isinstance(override, dict):
-        route.update(override)
-
     route["main_group"] = current_main
     route["sub_label"] = current_sub
     return route
@@ -12253,8 +12246,7 @@ def page_app():
                     label_btn, destino_btn, key_btn = botoes_colab[idx_btn_colab]
                     with col_btn:
                         if st.button(label_btn, key=key_btn, use_container_width=True):
-                            st.session_state["app_like_sub"] = label_btn
-                            st.session_state["app_like_route_override"] = destino_btn
+                            st.session_state["app_like_sub"] = destino_btn
                             st.rerun()
                     idx_btn_colab += 1
 
