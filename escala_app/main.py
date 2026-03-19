@@ -8153,16 +8153,39 @@ def resetar_rodizio_caixa_mes(setor: str, ano: int, mes: int, subgrupo_origem: s
 
 
 def _upsert_subgrupo_preview_competencia(setor: str, ano: int, mes: int, chapa: str, novo_subgrupo: str, nova_entrada: str | None = None):
-    chapa = str(chapa or '').strip()
+    """Aplica a troca de subgrupo no mês e também no cadastro base para refletir imediatamente em todas as telas."""
+    ensure_competencia_runtime_tables()
+    setor = _norm_setor(setor)
+    chapa = _norm_chapa(chapa)
     novo_subgrupo = str(novo_subgrupo or '').strip()
     nova_entrada = str(nova_entrada or '').strip()
     if not chapa or not novo_subgrupo:
-        return
+        return False
+
     ts = datetime.now().isoformat()
     con = db_conn()
     cur = con.cursor()
     try:
-        entrada_final = nova_entrada
+        try:
+            cur.execute("PRAGMA busy_timeout = 5000")
+        except Exception:
+            pass
+
+        cur.execute(
+            """
+            SELECT nome, subgrupo, entrada, COALESCE(folga_sab, 0)
+            FROM colaboradores
+            WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND TRIM(chapa)=?
+            LIMIT 1
+            """,
+            (setor, chapa)
+        )
+        row_col = cur.fetchone()
+        nome = str((row_col[0] if row_col else '') or '').strip()
+        entrada_base = str((row_col[2] if row_col else '') or '').strip()
+        folga_sab = int((row_col[3] if row_col else 0) or 0)
+
+        entrada_final = nova_entrada or entrada_base
         if not entrada_final:
             cur.execute(
                 "SELECT entrada FROM colaborador_competencia_snapshot WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=? LIMIT 1",
@@ -8171,15 +8194,7 @@ def _upsert_subgrupo_preview_competencia(setor: str, ano: int, mes: int, chapa: 
             row_snap = cur.fetchone()
             if row_snap and str(row_snap[0] or '').strip():
                 entrada_final = str(row_snap[0] or '').strip()
-        if not entrada_final:
-            cur.execute(
-                "SELECT entrada FROM colaboradores WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND TRIM(chapa)=? LIMIT 1",
-                (setor, chapa)
-            )
-            row_col = cur.fetchone()
-            if row_col and str(row_col[0] or '').strip():
-                entrada_final = str(row_col[0] or '').strip()
-        entrada_final = entrada_final or '06:00'
+        entrada_final = str(entrada_final or '06:00').strip() or '06:00'
 
         cur.execute(
             """
@@ -8191,21 +8206,30 @@ def _upsert_subgrupo_preview_competencia(setor: str, ano: int, mes: int, chapa: 
             """,
             (setor, int(ano), int(mes), chapa, novo_subgrupo, ts)
         )
+
         cur.execute(
             """
             INSERT INTO colaborador_competencia_snapshot(setor, ano, mes, chapa, nome, subgrupo, entrada, folga_sab, atualizado_em)
-            SELECT ?, ?, ?, ?, COALESCE(NULLIF(nome,''), ''), ?, ?, COALESCE(folga_sab, 0), ?
-            FROM colaboradores
-            WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND TRIM(chapa)=?
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(setor, ano, mes, chapa) DO UPDATE SET
-                nome=COALESCE(excluded.nome, colaborador_competencia_snapshot.nome),
+                nome=excluded.nome,
                 subgrupo=excluded.subgrupo,
-                entrada=COALESCE(NULLIF(excluded.entrada,''), colaborador_competencia_snapshot.entrada),
-                folga_sab=COALESCE(excluded.folga_sab, colaborador_competencia_snapshot.folga_sab),
+                entrada=excluded.entrada,
+                folga_sab=excluded.folga_sab,
                 atualizado_em=excluded.atualizado_em
             """,
-            (setor, int(ano), int(mes), chapa, novo_subgrupo, entrada_final, ts, setor, chapa)
+            (setor, int(ano), int(mes), chapa, nome, novo_subgrupo, entrada_final, folga_sab, ts)
         )
+
+        cur.execute(
+            """
+            UPDATE colaboradores
+            SET subgrupo=?, entrada=COALESCE(NULLIF(?, ''), entrada)
+            WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND TRIM(chapa)=?
+            """,
+            (novo_subgrupo, entrada_final, setor, chapa)
+        )
+
         cur.execute(
             "DELETE FROM escala_mes WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=?",
             (setor, int(ano), int(mes), chapa)
@@ -8219,20 +8243,33 @@ def _upsert_subgrupo_preview_competencia(setor: str, ano: int, mes: int, chapa: 
             (setor, int(ano), int(mes), chapa)
         )
         con.commit()
+        return True
+    except Exception:
+        try:
+            con.rollback()
+        except Exception:
+            pass
+        return False
     finally:
         con.close()
 
 
 def _restaurar_subgrupo_preview_competencia(setor: str, ano: int, mes: int, chapa: str, subgrupo_base: str, entrada_base: str | None = None):
-    chapa = str(chapa or '').strip()
+    chapa = _norm_chapa(chapa)
+    setor = _norm_setor(setor)
     subgrupo_base = str(subgrupo_base or '').strip()
-    entrada_base = str(entrada_base or '').strip()
+    entrada_base = str(entrada_base or '').strip() or '06:00'
     if not chapa:
-        return
+        return False
     ts = datetime.now().isoformat()
     con = db_conn()
     cur = con.cursor()
     try:
+        try:
+            cur.execute("PRAGMA busy_timeout = 5000")
+        except Exception:
+            pass
+
         if subgrupo_base:
             cur.execute(
                 """
@@ -8249,6 +8286,15 @@ def _restaurar_subgrupo_preview_competencia(setor: str, ano: int, mes: int, chap
                 "DELETE FROM subgrupo_competencia WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=?",
                 (setor, int(ano), int(mes), chapa)
             )
+
+        cur.execute(
+            """
+            UPDATE colaboradores
+            SET subgrupo=?, entrada=COALESCE(NULLIF(?, ''), entrada)
+            WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND TRIM(chapa)=?
+            """,
+            (subgrupo_base, entrada_base, setor, chapa)
+        )
 
         cur.execute(
             "DELETE FROM colaborador_competencia_snapshot WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=?",
@@ -8274,38 +8320,42 @@ def _restaurar_subgrupo_preview_competencia(setor: str, ano: int, mes: int, chap
         rebuild_colaborador_competencia_snapshot(setor, int(ano), int(mes))
     except Exception:
         pass
+    return True
 
 
 def aplicar_preview_aprovacao_rodizio_caixa(setor: str, ano: int, mes: int, slot: dict, chapa_sel: str, subgrupo_origem: str = 'OPERADOR DE CAIXA 01', subgrupo_destino: str = 'OPERADOR DE CAIXA 02'):
-    """Ao aprovar, já grava a troca do mês no subgrupo_competencia/snapshot para refletir imediatamente na competência."""
+    """Ao aprovar, grava imediatamente a troca no mês e no cadastro base do par selecionado."""
     slot = dict(slot or {})
-    chapa_sel = str(chapa_sel or slot.get('origem_chapa') or '').strip()
-    destino_chapa = str(slot.get('destino_chapa') or '').strip()
+    chapa_sel = _norm_chapa(chapa_sel or slot.get('origem_chapa') or '')
+    destino_chapa = _norm_chapa(slot.get('destino_chapa') or '')
+    setor = _norm_setor(setor)
     if not chapa_sel or not destino_chapa:
-        return None
+        return False
 
     alt_sel = None
-    if chapa_sel == str(slot.get('origem_chapa') or '').strip():
+    if chapa_sel == _norm_chapa(slot.get('origem_chapa') or ''):
         alt_sel = dict(slot)
     else:
         for alt in list(slot.get('alternativas_opcoes') or []):
-            if str(alt.get('chapa') or '').strip() == chapa_sel:
+            if _norm_chapa(alt.get('chapa') or '') == chapa_sel:
                 alt_sel = dict(alt)
                 break
     if alt_sel is None:
-        return None
+        return False
 
     entrada_sel_atual = str(alt_sel.get('entrada') or slot.get('origem_entrada') or '').strip() or '06:00'
     entrada_destino_atual = str(slot.get('destino_entrada') or '').strip() or '06:00'
 
-    _upsert_subgrupo_preview_competencia(setor, ano, mes, chapa_sel, subgrupo_destino, entrada_destino_atual)
-    _upsert_subgrupo_preview_competencia(setor, ano, mes, destino_chapa, subgrupo_origem, entrada_sel_atual)
+    ok_a = _upsert_subgrupo_preview_competencia(setor, ano, mes, chapa_sel, subgrupo_destino, entrada_destino_atual)
+    ok_b = _upsert_subgrupo_preview_competencia(setor, ano, mes, destino_chapa, subgrupo_origem, entrada_sel_atual)
 
+    clear_retificacao_related_caches()
+    _clear_preview_cache(setor, int(ano), int(mes))
     try:
         st.cache_data.clear()
     except Exception:
         pass
-    return None
+    return bool(ok_a and ok_b)
 
 
 def resetar_preview_aprovacao_rodizio_caixa(setor: str, ano: int, mes: int, slot: dict, chapa_sel: str, subgrupo_origem: str = 'OPERADOR DE CAIXA 01', subgrupo_destino: str = 'OPERADOR DE CAIXA 02'):
