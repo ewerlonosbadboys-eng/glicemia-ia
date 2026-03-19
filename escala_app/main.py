@@ -13480,14 +13480,11 @@ def page_app():
                 mes_r = int(st.session_state.get('cfg_mes', datetime.now().month))
                 _status_comp_rod = get_status_competencia(setor, ano_r, mes_r)
 
-                state_base = f"rod_caixa_aprov::{setor}::{ano_r}::{mes_r}::{subgrupo_origem}::{subgrupo_destino}"
-                force_reabrir_key = state_base + "::forcar_reabrir"
-                if st.session_state.get(force_reabrir_key):
-                    hist_mes = []
-                    rodizio_ja_aplicado_mes = False
-                else:
-                    hist_mes = get_rodizio_caixa_hist_mes(setor, ano_r, mes_r, subgrupo_origem, subgrupo_destino)
-                    rodizio_ja_aplicado_mes = bool(hist_mes)
+                hist_mes = get_rodizio_caixa_hist_mes(setor, ano_r, mes_r, subgrupo_origem, subgrupo_destino)
+                force_review_key = f"rod_caixa_force_review::{setor}::{ano_r}::{mes_r}::{subgrupo_origem}::{subgrupo_destino}"
+                if force_review_key not in st.session_state:
+                    st.session_state[force_review_key] = False
+                rodizio_ja_aplicado_mes = bool(hist_mes) and (not bool(st.session_state.get(force_review_key, False)))
 
                 bcfg1, bcfg2, _bcfg3 = st.columns([1, 1, 4])
                 if bcfg1.button("Salvar configuração do rodízio", key='rod_caixa_save_cfg', use_container_width=True, disabled=(_status_comp_rod == 'FECHADA')):
@@ -13504,8 +13501,8 @@ def page_app():
                                 base_reset = f"rod_caixa_aprov::{setor}::{ano_r}::{mes_r}::{subgrupo_origem}::{subgrupo_destino}"
                                 for suf in ["::aprovados", "::negados", "::aplicado", "::complementar_aprovados"]:
                                     st.session_state.pop(base_reset + suf, None)
-                                st.session_state[base_reset + "::forcar_reabrir"] = True
-                                st.success(res_reset.get('msg', 'Rodízio zerado com sucesso. A fila das 14 sugestões será reaberta para nova aprovação.'))
+                                st.session_state[force_review_key] = True
+                                st.success(res_reset.get('msg', 'Rodízio zerado com sucesso. A fila foi reaberta para nova aprovação manual.'))
                                 st.rerun()
                             else:
                                 st.warning(res_reset.get('msg', 'Não foi possível zerar o rodízio desta competência.'))
@@ -13517,10 +13514,12 @@ def page_app():
                         st.session_state['rod_caixa_qtd'] = 14
                         st.session_state['rod_caixa_tol'] = 20
                         set_rodizio_caixa_cfg(setor, 'OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02', 14, 20, True)
+                        st.session_state[force_review_key] = True
                         st.success('Configuração resetada para o padrão.')
                         st.rerun()
                 if _status_comp_rod == 'FECHADA':
                     st.error(f'🔒 Competência {mes_r:02d}/{ano_r} fechada: o rodízio deste mês fica somente para consulta.')
+                state_base = f"rod_caixa_aprov::{setor}::{ano_r}::{mes_r}::{subgrupo_origem}::{subgrupo_destino}"
                 aprov_key = state_base + "::aprovados"
                 neg_key = state_base + "::negados"
                 if aprov_key not in st.session_state:
@@ -13607,8 +13606,6 @@ def page_app():
                         aprovados_atuais = {}
                         aprovados_validos = 0
                 else:
-                    if st.session_state.get(force_reabrir_key):
-                        st.session_state.pop(force_reabrir_key, None)
                     slots = sim.get('slots') or []
                     aprov_state_key = aprov_key
                     neg_state_key = neg_key
@@ -13618,6 +13615,8 @@ def page_app():
                     top1.metric('Sugestões montadas', len(slots))
                     top2.metric('Aprovadas', aprovados_validos)
                     top3.metric('Pendentes', max(0, len(slots) - aprovados_validos))
+                    if st.session_state.get(force_review_key):
+                        st.warning(f"Revisão manual ativa em {mes_r:02d}/{ano_r}: trocar a pessoa no seletor NÃO aplica nada sozinho. Só aplica quando você clicar em 'Aplicar mudança de subgrupos agora'.")
 
                     a1, a2 = st.columns([1, 1])
                     if a1.button('Limpar aprovações e negativas', key='rod_caixa_clear_aprov', use_container_width=True):
@@ -13640,6 +13639,7 @@ def page_app():
                             res_apply = aplicar_rodizio_caixa_mes(setor, ano_r, mes_r, sim)
                             if res_apply.get('ok'):
                                 st.session_state[aplic_key] = True
+                                st.session_state[force_review_key] = False
                                 st.success(res_apply.get('msg', 'Rodízio aplicado com sucesso.'))
                                 st.rerun()
                             else:
