@@ -14465,6 +14465,7 @@ def page_app():
                 base_status = ''
                 base_ent = str(colab_ret.get('Entrada') or '06:00').strip()
                 base_sai = _saida_from_entrada(base_ent)
+                # Subgrupo é sempre mensal na competência, nunca diário.
                 base_sub = get_subgrupo_competencia_ou_base(setor, chapa_ret, int(ano), int(mes), str(colab_ret.get('Subgrupo') or '').strip())
                 if df_ret_hist is not None and len(df_ret_hist) >= dia_ret:
                     base_status = str(df_ret_hist.loc[dia_ret - 1, 'Status'] or '').strip()
@@ -14472,16 +14473,31 @@ def page_app():
                     base_sai = str(df_ret_hist.loc[dia_ret - 1, 'H_Saida'] or '').strip()
 
                 ret_exist = get_retificacao_competencia_por_chapa_dia(setor, ano, mes, chapa_ret, dia_ret) if chapa_ret else {}
+                df_ret_list_all = load_retificacoes_competencia(setor, ano, mes)
+                ret_outros_dias = []
+                if chapa_ret and df_ret_list_all is not None and not df_ret_list_all.empty and 'chapa' in df_ret_list_all.columns:
+                    _tmp = df_ret_list_all.copy()
+                    _tmp['chapa'] = _tmp['chapa'].astype(str).str.strip()
+                    if 'dia' in _tmp.columns:
+                        _tmp['dia'] = pd.to_numeric(_tmp['dia'], errors='coerce').fillna(0).astype(int)
+                    _tmp = _tmp[_tmp['chapa'] == chapa_ret]
+                    if not _tmp.empty:
+                        ret_outros_dias = sorted({int(x) for x in _tmp['dia'].tolist() if int(x) != int(dia_ret)})
+
                 valor_status = str(ret_exist.get('novo_status') or '').strip() or base_status
                 valor_ent = str(ret_exist.get('nova_entrada') or '').strip() or base_ent
                 valor_sai = str(ret_exist.get('nova_saida') or '').strip() or base_sai
-                valor_sub = get_subgrupo_competencia_ou_base(setor, chapa_ret, int(ano), int(mes), str(ret_exist.get('novo_subgrupo') or '').strip() or base_sub)
+                # Sempre prioriza o subgrupo mensal oficial da competência.
+                valor_sub = get_subgrupo_competencia_ou_base(setor, chapa_ret, int(ano), int(mes), base_sub)
                 valor_motivo = str(ret_exist.get('motivo') or '').strip()
 
                 if ret_exist:
                     st.success(f"Já existe retificação salva para {label_ret} no dia {dia_ret}. Os campos abaixo vieram preenchidos para atualização.")
                 else:
-                    st.info(f"Base do dia {dia_ret:02d}/{int(mes):02d}/{int(ano)} → Status: {base_status or '-'} | Entrada: {base_ent or '-'} | Saída: {base_sai or '-'} | Subgrupo mensal: {valor_sub or '-'}")
+                    st.info(f"Base do dia {dia_ret:02d}/{int(mes):02d}/{int(ano)} → Status: {base_status or '-'} | Entrada: {base_ent or '-'} | Saída: {base_sai or '-'} | Subgrupo mensal oficial: {valor_sub or '-'}")
+                    if ret_outros_dias:
+                        dias_txt = ', '.join(str(x) for x in ret_outros_dias[:12])
+                        st.caption(f"Esta pessoa já possui retificação em outros dias desta competência: {dias_txt}.")
 
                 colra, colrb, colrc, colrd = st.columns([1, 1, 1, 1])
                 status_opts = ['', 'Trabalho', 'Folga', 'Férias', 'Afastamento']
@@ -14546,9 +14562,10 @@ def page_app():
                 df_ret_list = load_retificacoes_competencia(setor, ano, mes)
                 if df_ret_list is not None and not df_ret_list.empty:
                     st.markdown('#### Retificações já registradas nesta competência')
+                    # Excluir aparece antes da tabela para ficar visível sem precisar rolar até o fim.
+                    render_excluir_retificacao_ui(setor, ano, mes, df_ret_list, key_sfx='ajustes_live')
                     cols_view = [c for c in ['dia', 'nome', 'chapa', 'novo_status', 'nova_entrada', 'nova_saida', 'novo_subgrupo', 'motivo', 'usuario', 'criado_em'] if c in df_ret_list.columns]
                     st.dataframe(df_ret_list[cols_view], use_container_width=True, hide_index=True)
-                    render_excluir_retificacao_ui(setor, ano, mes, df_ret_list, key_sfx='ajustes_live')
 
         if sec_aj == "✅ Preferência por subgrupo":
             st.markdown("### ✅ Preferência por subgrupo (Evitar folga se possível)")
