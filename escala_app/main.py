@@ -2244,6 +2244,37 @@ div[data-testid="stVerticalBlock"] > div:has(> .ax-section-head) {
   color: var(--ax-muted);
   font-size: 0.98rem;
 }
+.ax-hero-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.ax-hero-avatar {
+  width: 54px;
+  height: 54px;
+  min-width: 54px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1rem;
+  font-weight: 800;
+  color: #eef5ff;
+  border: 1px solid rgba(127,176,255,0.30);
+  background: linear-gradient(145deg, rgba(76,138,255,0.28), rgba(25,58,130,0.55));
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+}
+.ax-hero-copy {
+  min-width: 0;
+}
+.ax-hero-anim {
+  animation: axHeroFloat 4.8s ease-in-out infinite;
+}
+@keyframes axHeroFloat {
+  0% { transform: translateY(0px); }
+  50% { transform: translateY(-3px); }
+  100% { transform: translateY(0px); }
+}
 .ax-badge {
   display: inline-flex;
   align-items: center;
@@ -2535,11 +2566,15 @@ def ui_section(title: str, subtitle: str = ""):
     )
 
 
-def ui_hero(title: str, subtitle: str = "", badge: str = ""):
-    badge_html = f"<div class='ax-badge'>{badge}</div>" if badge else ""
-    sub_html = f"<div class='ax-hero-sub'>{subtitle}</div>" if subtitle else ""
+def ui_hero(title: str, subtitle: str = "", badge: str = "", avatar: str = "", animate: bool = False):
+    import html
+
+    badge_html = f"<div class='ax-badge'>{html.escape(str(badge))}</div>" if badge else ""
+    sub_html = f"<div class='ax-hero-sub'>{html.escape(str(subtitle))}</div>" if subtitle else ""
+    avatar_html = f"<div class='ax-hero-avatar'>{html.escape(str(avatar))}</div>" if avatar else ""
+    anim_class = " ax-hero-anim" if animate else ""
     st.markdown(
-        f"<div class='ax-hero'>{badge_html}<h1 class='ax-hero-title'>{title}</h1>{sub_html}</div>",
+        f"<div class='ax-hero{anim_class}'>{badge_html}<div class='ax-hero-row'>{avatar_html}<div class='ax-hero-copy'><h1 class='ax-hero-title'>{html.escape(str(title))}</h1>{sub_html}</div></div></div>",
         unsafe_allow_html=True,
     )
 
@@ -10765,11 +10800,51 @@ def page_login():
         finally:
             con.close()
 
+    @st.cache_data(ttl=30, show_spinner=False)
+    def _cache_login_nome(setor: str, chapa: str) -> str:
+        setor = _norm_setor(setor)
+        chapa = str(chapa or "").strip()
+        if not setor or not chapa:
+            return ""
+        con = db_conn()
+        try:
+            try:
+                row = pd.read_sql_query(
+                    "SELECT nome FROM usuarios_sistema WHERE UPPER(TRIM(setor)) = ? AND TRIM(chapa) = ? LIMIT 1",
+                    con,
+                    params=[setor, chapa],
+                )
+            except Exception:
+                row = pd.DataFrame()
+            if row.empty:
+                try:
+                    row = pd.read_sql_query(
+                        "SELECT nome FROM colaboradores WHERE UPPER(TRIM(setor)) = ? AND TRIM(chapa) = ? LIMIT 1",
+                        con,
+                        params=[setor, chapa],
+                    )
+                except Exception:
+                    row = pd.DataFrame()
+            if row.empty:
+                return ""
+            return str(row.iloc[0].get("nome", "") or "").strip()
+        finally:
+            con.close()
+
     st.title("ESCALA AUTOMATIZADA")
+    _setor_login_preview = _norm_setor(st.session_state.get("lg_setor_txt", ""))
+    _chapa_login_preview = str(st.session_state.get("lg_chapa", "") or "").strip()
+    _nome_login_preview = _cache_login_nome(_setor_login_preview, _chapa_login_preview)
+    _primeiro_nome = str(_nome_login_preview).strip().split()[0] if str(_nome_login_preview).strip() else ""
+    _hero_title = f"Olá, {_primeiro_nome}" if _primeiro_nome else "Olá, bem-vindo de volta"
+    _iniciais_nome = "".join([p[0] for p in str(_nome_login_preview).strip().split()[:2] if p]).upper()
+    _hero_avatar = _iniciais_nome or "AX"
     ui_hero(
-        "Olá, bem-vindo de volta",
+        _hero_title,
         "",
-        "🔵 Layout premium leve",
+        "",
+        avatar=_hero_avatar,
+        animate=True,
     )
     ui_section("Acesso ao sistema", "Entre com setor, chapa e senha para abrir o painel certo sem alterar a lógica já existente.")
 
