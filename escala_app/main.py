@@ -840,71 +840,17 @@ def ensure_competencia_runtime_tables() -> None:
         con.close()
 
 
-def competencia_deve_estar_fechada_por_data(ano: int, mes: int, hoje: datetime | None = None) -> bool:
-    hoje = hoje or datetime.now()
-    return (int(ano), int(mes)) <= (int(hoje.year), int(hoje.month))
-
-
-def auto_fechar_competencias_ate_mes_vigente() -> None:
-    ensure_competencia_runtime_tables()
-    hoje = datetime.now()
-    ano_atual = int(hoje.year)
-    mes_atual = int(hoje.month)
-
-    con = db_conn()
-    cur = con.cursor()
-    rows = []
-    try:
-        cur.execute(
-            """
-            SELECT DISTINCT setor, ano, mes
-            FROM escala_mes
-            WHERE (ano < ?) OR (ano = ? AND mes <= ?)
-            ORDER BY setor, ano, mes
-            """,
-            (ano_atual, ano_atual, mes_atual),
-        )
-        rows = cur.fetchall() or []
-
-        agora = datetime.now().isoformat()
-        for setor_db, ano_db, mes_db in rows:
-            cur.execute(
-                """
-                INSERT INTO competencia_status(setor, ano, mes, status, atualizado_em)
-                VALUES (?, ?, ?, 'FECHADA', ?)
-                ON CONFLICT(setor, ano, mes) DO UPDATE SET
-                    status='FECHADA',
-                    atualizado_em=excluded.atualizado_em
-                """,
-                (str(setor_db or '').strip(), int(ano_db), int(mes_db), agora),
-            )
-        con.commit()
-    finally:
-        con.close()
-
-    for setor_db, ano_db, mes_db in rows:
-        try:
-            rebuild_colaborador_competencia_snapshot(str(setor_db or '').strip(), int(ano_db), int(mes_db))
-        except Exception:
-            pass
-
-
 def get_status_competencia(setor: str, ano: int, mes: int) -> str:
     ensure_competencia_runtime_tables()
-    if competencia_deve_estar_fechada_por_data(int(ano), int(mes)):
-        return 'FECHADA'
     con = db_conn()
     cur = con.cursor()
     try:
-        cur.execute(
-            """
+        cur.execute("""
             SELECT status
             FROM competencia_status
             WHERE UPPER(TRIM(setor)) = UPPER(TRIM(?)) AND ano=? AND mes=?
             LIMIT 1
-            """,
-            (setor, int(ano), int(mes)),
-        )
+        """, (setor, int(ano), int(mes)))
         row = cur.fetchone()
         return str((row[0] if row else 'ABERTA') or 'ABERTA').strip().upper()
     finally:
@@ -916,21 +862,16 @@ def set_status_competencia(setor: str, ano: int, mes: int, status: str) -> None:
     novo = str(status or 'ABERTA').strip().upper()
     if novo not in ('ABERTA', 'FECHADA'):
         novo = 'ABERTA'
-    if competencia_deve_estar_fechada_por_data(int(ano), int(mes)):
-        novo = 'FECHADA'
     con = db_conn()
     cur = con.cursor()
     try:
-        cur.execute(
-            """
+        cur.execute("""
             INSERT INTO competencia_status(setor, ano, mes, status, atualizado_em)
             VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(setor, ano, mes) DO UPDATE SET
                 status=excluded.status,
                 atualizado_em=excluded.atualizado_em
-            """,
-            (setor, int(ano), int(mes), novo, datetime.now().isoformat()),
-        )
+        """, (setor, int(ano), int(mes), novo, datetime.now().isoformat()))
         con.commit()
     finally:
         con.close()
@@ -6733,6 +6674,64 @@ def list_rodizio_caixa_hist(setor: str, limit: int = 120):
         'Entrada antiga': str(r[8] or ''), 'Entrada nova': str(r[9] or ''), 'Compatibilidade': str(r[10] or ''),
         'Observação': str(r[11] or ''), 'Criado em': str(r[12] or ''),
     } for r in rows]
+
+
+@st.cache_data(show_spinner=False, ttl=180)
+def get_rodizio_caixa_hist_mes(setor: str, ano: int, mes: int, subgrupo_origem: str = 'OPERADOR DE CAIXA 01', subgrupo_destino: str = 'OPERADOR DE CAIXA 02'):
+    con = db_conn()
+    cur = con.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT id, ciclo_ref, chapa, nome, movimento, subgrupo_origem, subgrupo_destino,
+                   entrada_antiga, entrada_nova, compat_status, observacao, criado_em
+            FROM rodizio_caixa_hist
+            WHERE setor=? AND ano=? AND mes=?
+              AND ((movimento='ENTRA_DESTINO' AND subgrupo_origem=? AND subgrupo_destino=?)
+                   OR (movimento='SAI_DESTINO' AND subgrupo_origem=? AND subgrupo_destino=?))
+            ORDER BY id ASC
+            """,
+            (setor, int(ano), int(mes), subgrupo_origem, subgrupo_destino, subgrupo_destino, subgrupo_origem)
+        )
+        rows = cur.fetchall() or []
+    finally:
+        con.close()
+    return [{
+        'id': int(r[0]),
+        'ciclo_ref': str(r[1] or ''),
+        'chapa': str(r[2] or ''),
+        'nome': str(r[3] or ''),
+        'movimento': str(r[4] or ''),
+        'subgrupo_origem': str(r[5] or ''),
+        'subgrupo_destino': str(r[6] or ''),
+        'entrada_antiga': str(r[7] or ''),
+        'entrada_nova': str(r[8] or ''),
+        'compat_status': str(r[9] or ''),
+        'observacao': str(r[10] or ''),
+        'criado_em': str(r[11] or ''),
+    } for r in rows]
+
+
+def build_rodizio_caixa_aplicado_pairs(hist_rows: list[dict]):
+    enters = [r for r in (hist_rows or []) if str(r.get('movimento') or '').upper() == 'ENTRA_DESTINO']
+    exits = [r for r in (hist_rows or []) if str(r.get('movimento') or '').upper() == 'SAI_DESTINO']
+    pares = []
+    for ent, sai in zip(enters, exits):
+        pares.append({
+            'origem_nome': str(ent.get('nome') or ''),
+            'origem_chapa': str(ent.get('chapa') or ''),
+            'origem_entrada': str(ent.get('entrada_antiga') or ''),
+            'origem_nova_entrada': str(ent.get('entrada_nova') or ''),
+            'destino_nome': str(sai.get('nome') or ''),
+            'destino_chapa': str(sai.get('chapa') or ''),
+            'destino_entrada': str(sai.get('entrada_antiga') or ''),
+            'destino_nova_entrada': str(sai.get('entrada_nova') or ''),
+            'compatibilidade': str(ent.get('compat_status') or sai.get('compat_status') or ''),
+            'observacao': str(ent.get('observacao') or sai.get('observacao') or ''),
+            'criado_em': str(ent.get('criado_em') or sai.get('criado_em') or ''),
+            'ciclo_ref': str(ent.get('ciclo_ref') or sai.get('ciclo_ref') or ''),
+        })
+    return pares
 
 
 def _rodizio_last_move_map(setor: str, subgrupo_destino: str) -> dict[str, int]:
@@ -12920,6 +12919,9 @@ def page_app():
                 if neg_key not in st.session_state:
                     st.session_state[neg_key] = []
 
+                hist_mes = get_rodizio_caixa_hist_mes(setor, ano_r, mes_r, subgrupo_origem, subgrupo_destino)
+                rodizio_ja_aplicado_mes = bool(hist_mes)
+
                 sim = simular_rodizio_caixa_mes(
                     setor,
                     ano_r,
@@ -12935,43 +12937,77 @@ def page_app():
                 st.info(f"{subgrupo_destino}: {sim.get('qtd_destino_atual', 0)} pessoa(s) hoje. Rodízio planejado: {sim.get('qtd_troca', 0)} troca(s). Quantidade obrigatória: {sim.get('qtd_destino_obrigatoria', 14)}.")
                 st.caption("Na sugestão do mês, o sistema prioriza: 1) horário fixo da cota, 2) domingo mais parecido, 3) quem está há mais tempo sem ir para o Caixa 02.")
 
-                slots = sim.get('slots') or []
-                aprovados_atuais = st.session_state.get(aprov_key, {})
-                aprovados_validos = sum(1 for s in slots if aprovados_atuais.get(s.get('slot_key')) == s.get('origem_chapa'))
-                top1, top2, top3 = st.columns(3)
-                top1.metric('Sugestões montadas', len(slots))
-                top2.metric('Aprovadas', aprovados_validos)
-                top3.metric('Pendentes', max(0, len(slots) - aprovados_validos))
+                if rodizio_ja_aplicado_mes:
+                    pares_aplicados = build_rodizio_caixa_aplicado_pairs(hist_mes)
+                    top1, top2, top3 = st.columns(3)
+                    top1.metric('Trocas aplicadas no mês', len(pares_aplicados))
+                    top2.metric('Competência', f"{mes_r:02d}/{ano_r}")
+                    top3.metric('Status', 'APLICADO')
+                    st.success(f"Rodízio já aplicado em {mes_r:02d}/{ano_r}. Os nomes desta competência ficam congelados e só mudam na próxima competência.")
 
-                a1, a2 = st.columns([1, 1])
-                if a1.button('Limpar aprovações e negativas', key='rod_caixa_clear_aprov', use_container_width=True):
-                    st.session_state[aprov_key] = {}
-                    st.session_state[neg_key] = []
-                    st.session_state.pop(state_base + "::aplicado", None)
-                    st.rerun()
-                if a2.button('Aprovar todas as sugestões atuais', key='rod_caixa_aprov_all', use_container_width=True):
-                    st.session_state[aprov_key] = {str(s.get('slot_key')): str(s.get('origem_chapa')) for s in slots}
-                    st.session_state.pop(state_base + "::aplicado", None)
-                    st.rerun()
+                    if pares_aplicados:
+                        df_pares_aplicados = pd.DataFrame([{
+                            'Entra no ' + subgrupo_destino: p['origem_nome'],
+                            'Chapa entra': p['origem_chapa'],
+                            'Horário atual entra': p['origem_entrada'],
+                            'Novo horário entra': p['origem_nova_entrada'],
+                            'Sai do ' + subgrupo_destino: p['destino_nome'],
+                            'Chapa sai': p['destino_chapa'],
+                            'Horário atual sai': p['destino_entrada'],
+                            'Novo horário sai': p['destino_nova_entrada'],
+                            'Compatibilidade': p['compatibilidade'],
+                            'Observação': p['observacao'] or '-',
+                            'Aplicado em': p['criado_em'],
+                        } for p in pares_aplicados])
+                        st.markdown("### Rodízio já aplicado na competência")
+                        st.dataframe(df_pares_aplicados, use_container_width=True, height=380)
+                    else:
+                        st.warning('Foi encontrado histórico do rodízio nesta competência, mas sem pares completos para exibir.')
 
-                aplic_key = state_base + "::aplicado"
-                qtd_obrigatoria = int(sim.get('qtd_destino_obrigatoria', 14) or 14)
-                pronto_aplicar = bool(slots) and int(aprovados_validos) >= int(qtd_obrigatoria) and int(max(0, len(slots) - aprovados_validos)) == 0
+                    st.info('Para ver nomes novos, troque a competência para o próximo mês. Nesta competência o sistema mostra o que já foi aplicado.')
+                    slots = []
+                    aprovados_atuais = {}
+                    aprovados_validos = 0
+                    aplic_key = state_base + "::aplicado"
+                    qtd_obrigatoria = int(sim.get('qtd_destino_obrigatoria', 14) or 14)
+                else:
+                    slots = sim.get('slots') or []
+                    aprovados_atuais = st.session_state.get(aprov_key, {})
+                    aprovados_validos = sum(1 for s in slots if aprovados_atuais.get(s.get('slot_key')) == s.get('origem_chapa'))
+                    top1, top2, top3 = st.columns(3)
+                    top1.metric('Sugestões montadas', len(slots))
+                    top2.metric('Aprovadas', aprovados_validos)
+                    top3.metric('Pendentes', max(0, len(slots) - aprovados_validos))
 
-                if pronto_aplicar:
-                    st.success(f"Todas as {qtd_obrigatoria} sugestões foram aprovadas. Agora falta aplicar o rodízio no mês {mes_r:02d}/{ano_r}.")
-                    if st.button('🔁 Aplicar mudança de subgrupos agora (antes da escala)', key='rod_caixa_apply_now', use_container_width=True, disabled=(_status_comp_rod == 'FECHADA')):
-                        res_apply = aplicar_rodizio_caixa_mes(setor, ano_r, mes_r, sim)
-                        if res_apply.get('ok'):
-                            st.session_state[aplic_key] = True
-                            st.success(res_apply.get('msg', 'Rodízio aplicado com sucesso.'))
-                            st.rerun()
-                        else:
-                            st.error(res_apply.get('msg', 'Não foi possível aplicar o rodízio.'))
-                elif st.session_state.get(aplic_key):
-                    st.success(f"Rodízio já aplicado na competência {mes_r:02d}/{ano_r}. Gere a escala novamente para refletir a troca.")
-                elif slots:
-                    st.info(f"Para aplicar de verdade no mês {mes_r:02d}/{ano_r}, todas as {qtd_obrigatoria} sugestões precisam estar aprovadas e depois você deve clicar em 'Aplicar mudança de subgrupos agora (antes da escala)'.")
+                    a1, a2 = st.columns([1, 1])
+                    if a1.button('Limpar aprovações e negativas', key='rod_caixa_clear_aprov', use_container_width=True):
+                        st.session_state[aprov_key] = {}
+                        st.session_state[neg_key] = []
+                        st.session_state.pop(state_base + "::aplicado", None)
+                        st.rerun()
+                    if a2.button('Aprovar todas as sugestões atuais', key='rod_caixa_aprov_all', use_container_width=True):
+                        st.session_state[aprov_key] = {str(s.get('slot_key')): str(s.get('origem_chapa')) for s in slots}
+                        st.session_state.pop(state_base + "::aplicado", None)
+                        st.rerun()
+
+                    aplic_key = state_base + "::aplicado"
+                    qtd_obrigatoria = int(sim.get('qtd_destino_obrigatoria', 14) or 14)
+                    pronto_aplicar = bool(slots) and int(aprovados_validos) >= int(qtd_obrigatoria) and int(max(0, len(slots) - aprovados_validos)) == 0
+
+                    if pronto_aplicar:
+                        st.success(f"Todas as {qtd_obrigatoria} sugestões foram aprovadas. Agora falta aplicar o rodízio no mês {mes_r:02d}/{ano_r}.")
+                        if st.button('🔁 Aplicar mudança de subgrupos agora (antes da escala)', key='rod_caixa_apply_now', use_container_width=True, disabled=(_status_comp_rod == 'FECHADA')):
+                            res_apply = aplicar_rodizio_caixa_mes(setor, ano_r, mes_r, sim)
+                            if res_apply.get('ok'):
+                                st.session_state[aplic_key] = True
+                                st.success(res_apply.get('msg', 'Rodízio aplicado com sucesso.'))
+                                st.rerun()
+                            else:
+                                st.error(res_apply.get('msg', 'Não foi possível aplicar o rodízio.'))
+                    elif st.session_state.get(aplic_key):
+                        st.success(f"Rodízio já aplicado na competência {mes_r:02d}/{ano_r}. Gere a escala novamente para refletir a troca.")
+                    elif slots:
+                        st.info(f"Para aplicar de verdade no mês {mes_r:02d}/{ano_r}, todas as {qtd_obrigatoria} sugestões precisam estar aprovadas e depois você deve clicar em 'Aplicar mudança de subgrupos agora (antes da escala)'.")
 
                 if slots:
                     st.markdown('### Aprovação das 14 pessoas sugeridas')
@@ -15460,7 +15496,6 @@ if st.session_state["auth"] is None and QUICK_LOGIN_BOOT:
 else:
     if not st.session_state.get("_full_boot_done", False):
         db_init()
-        auto_fechar_competencias_ate_mes_vigente()
         if not FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP:
             auto_backup_if_due()
         st.session_state["_full_boot_done"] = True
