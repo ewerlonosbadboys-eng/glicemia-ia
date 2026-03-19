@@ -8152,125 +8152,6 @@ def resetar_rodizio_caixa_mes(setor: str, ano: int, mes: int, subgrupo_origem: s
     }
 
 
-
-
-def _voltar_rodizio_caixa_zero_mes(setor: str, ano: int, mes: int, subgrupo_origem: str = 'OPERADOR DE CAIXA 01', subgrupo_destino: str = 'OPERADOR DE CAIXA 02'):
-    """
-    Move todos que estão no subgrupo destino de volta para o subgrupo origem
-    no cadastro base e no espelho da competência atual. Também limpa o histórico
-    do rodízio do mês para recomeçar do zero.
-    """
-    ensure_competencia_runtime_tables()
-    setor = _norm_setor(setor)
-    ano = int(ano)
-    mes = int(mes)
-    subgrupo_origem = str(subgrupo_origem or 'OPERADOR DE CAIXA 01').strip() or 'OPERADOR DE CAIXA 01'
-    subgrupo_destino = str(subgrupo_destino or 'OPERADOR DE CAIXA 02').strip() or 'OPERADOR DE CAIXA 02'
-    agora = datetime.now().isoformat()
-
-    con = db_conn()
-    cur = con.cursor()
-    try:
-        try:
-            cur.execute("PRAGMA busy_timeout = 5000")
-        except Exception:
-            pass
-
-        # pega todos que estão hoje no destino (base) e também quem ficou gravado no mês
-        cur.execute(
-            """
-            SELECT DISTINCT TRIM(chapa)
-            FROM colaboradores
-            WHERE UPPER(TRIM(setor))=UPPER(TRIM(?))
-              AND UPPER(TRIM(subgrupo))=UPPER(TRIM(?))
-            UNION
-            SELECT DISTINCT TRIM(chapa)
-            FROM subgrupo_competencia
-            WHERE UPPER(TRIM(setor))=UPPER(TRIM(?))
-              AND ano=? AND mes=?
-              AND UPPER(TRIM(subgrupo))=UPPER(TRIM(?))
-            UNION
-            SELECT DISTINCT TRIM(chapa)
-            FROM colaborador_competencia_snapshot
-            WHERE UPPER(TRIM(setor))=UPPER(TRIM(?))
-              AND ano=? AND mes=?
-              AND UPPER(TRIM(subgrupo))=UPPER(TRIM(?))
-            """,
-            (setor, subgrupo_destino, setor, ano, mes, subgrupo_destino, setor, ano, mes, subgrupo_destino)
-        )
-        chapas = [str(r[0] or '').strip() for r in (cur.fetchall() or []) if str(r[0] or '').strip()]
-
-        if not chapas:
-            return {'ok': True, 'msg': 'Nenhum colaborador estava no Caixa 02 para voltar ao Caixa 01.', 'afetados': 0}
-
-        cur.execute('BEGIN')
-        for ch in chapas:
-            cur.execute(
-                """
-                SELECT nome, COALESCE(NULLIF(entrada,''), '06:00'), COALESCE(folga_sab, 0)
-                FROM colaboradores
-                WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND TRIM(chapa)=?
-                LIMIT 1
-                """,
-                (setor, ch)
-            )
-            row = cur.fetchone()
-            nome = str((row[0] if row else '') or '').strip()
-            entrada = str((row[1] if row else '06:00') or '06:00').strip() or '06:00'
-            folga_sab = int((row[2] if row else 0) or 0)
-
-            cur.execute(
-                "UPDATE colaboradores SET subgrupo=? WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND TRIM(chapa)=?",
-                (subgrupo_origem, setor, ch)
-            )
-
-            cur.execute(
-                """
-                INSERT INTO subgrupo_competencia(setor, ano, mes, chapa, subgrupo, atualizado_em)
-                VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(setor, ano, mes, chapa) DO UPDATE SET
-                    subgrupo=excluded.subgrupo,
-                    atualizado_em=excluded.atualizado_em
-                """,
-                (setor, ano, mes, ch, subgrupo_origem, agora)
-            )
-
-            cur.execute(
-                """
-                INSERT INTO colaborador_competencia_snapshot(
-                    setor, ano, mes, chapa, nome, subgrupo, entrada, folga_sab, atualizado_em
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(setor, ano, mes, chapa) DO UPDATE SET
-                    nome=excluded.nome,
-                    subgrupo=excluded.subgrupo,
-                    entrada=excluded.entrada,
-                    folga_sab=excluded.folga_sab,
-                    atualizado_em=excluded.atualizado_em
-                """,
-                (setor, ano, mes, ch, nome, subgrupo_origem, entrada, folga_sab, agora)
-            )
-
-        # limpa histórico do rodízio do mês para permitir reconstrução limpa
-        cur.execute(
-            "DELETE FROM rodizio_caixa_hist WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=?",
-            (setor, ano, mes)
-        )
-
-        con.commit()
-    except Exception:
-        con.rollback()
-        raise
-    finally:
-        con.close()
-
-    try:
-        st.cache_data.clear()
-    except Exception:
-        pass
-
-    return {'ok': True, 'msg': f'Todos do {subgrupo_destino} voltaram para {subgrupo_origem} em {mes:02d}/{ano}.', 'afetados': len(chapas)}
-
-
 def _upsert_subgrupo_preview_competencia(setor: str, ano: int, mes: int, chapa: str, novo_subgrupo: str, nova_entrada: str | None = None):
     """Aplica a troca de subgrupo no mês e também no cadastro base para refletir imediatamente em todas as telas."""
     ensure_competencia_runtime_tables()
@@ -13995,23 +13876,27 @@ def page_app():
                     st.rerun()
                 label_reset = "Zerar o que foi aplicado neste mês" if rodizio_ja_aplicado_mes else "Voltar do zero"
                 if bcfg2.button(label_reset, key='rod_caixa_reset_cfg', use_container_width=True, disabled=(_status_comp_rod == 'FECHADA')):
-                    try:
-                        # sempre volta todo mundo do destino para a origem nesta competência
-                        # e também reseta a configuração visual para o padrão.
-                        res_reset = _voltar_rodizio_caixa_zero_mes(setor, ano_r, mes_r, 'OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02')
-                        base_reset = f"rod_caixa_aprov::{setor}::{ano_r}::{mes_r}::{subgrupo_origem}::{subgrupo_destino}"
-                        for suf in ["::aprovados", "::negados", "::aplicado", "::complementar_aprovados"]:
-                            st.session_state.pop(base_reset + suf, None)
+                    if rodizio_ja_aplicado_mes:
+                        try:
+                            res_reset = resetar_rodizio_caixa_mes(setor, ano_r, mes_r, subgrupo_origem, subgrupo_destino)
+                            if res_reset.get('ok'):
+                                # limpa aprovações/negações da rodada para permitir nova escolha
+                                base_reset = f"rod_caixa_aprov::{setor}::{ano_r}::{mes_r}::{subgrupo_origem}::{subgrupo_destino}"
+                                for suf in ["::aprovados", "::negados", "::aplicado", "::complementar_aprovados"]:
+                                    st.session_state.pop(base_reset + suf, None)
+                                st.session_state[force_review_key] = True
+                                st.success(res_reset.get('msg', 'Rodízio zerado com sucesso. A fila foi reaberta para nova aprovação manual.'))
+                                st.rerun()
+                            else:
+                                st.warning(res_reset.get('msg', 'Não foi possível zerar o rodízio desta competência.'))
+                        except Exception as e:
+                            st.error(f'Falha ao zerar rodízio da competência: {e}')
+                    else:
                         st.session_state[_rod_caixa_reset_defaults_key] = True
                         set_rodizio_caixa_cfg(setor, 'OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02', 14, 20, True)
                         st.session_state[force_review_key] = True
-                        if res_reset.get('ok'):
-                            st.success(res_reset.get('msg', 'Todos do Caixa 02 voltaram para Caixa 01.'))
-                        else:
-                            st.warning(res_reset.get('msg', 'Não foi possível voltar do zero nesta competência.'))
+                        st.success('Configuração resetada para o padrão.')
                         st.rerun()
-                    except Exception as e:
-                        st.error(f'Falha ao voltar do zero: {e}')
                 if _status_comp_rod == 'FECHADA':
                     st.error(f'🔒 Competência {mes_r:02d}/{ano_r} fechada: o rodízio deste mês fica somente para consulta.')
                 state_base = f"rod_caixa_aprov::{setor}::{ano_r}::{mes_r}::{subgrupo_origem}::{subgrupo_destino}"
