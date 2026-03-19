@@ -2667,24 +2667,48 @@ def render_app_like_top_nav(is_admin_area: bool, setor: str = ""):
     st.markdown("""
     <style>
     .app-top-nav-wrap{position:sticky;top:0;z-index:40;background:rgba(3,11,30,.96);padding:8px 0 10px 0;margin-bottom:10px;}
-    .app-top-nav-wrap .stButton > button{min-height:52px !important;white-space:normal !important;line-height:1.18 !important;font-size:1rem !important;}
+    .app-top-nav-wrap .stButton > button{min-height:70px !important;white-space:normal !important;line-height:1.18 !important;font-size:1.05rem !important;border-radius:16px !important;}
     </style>
     """, unsafe_allow_html=True)
     st.markdown('<div class="app-top-nav-wrap">', unsafe_allow_html=True)
-    cols = st.columns(len(main_keys))
-    for col, key in zip(cols, main_keys):
-        label = cfg[key]["label"]
-        with col:
+
+    if is_admin_area:
+        cols = st.columns([1.0, 0.7])
+        with cols[0]:
             clicked = st.button(
-                label,
-                key=f"app_like_top_btn::{key}",
+                cfg["admin"]["label"],
+                key="app_like_top_btn::admin",
                 use_container_width=True,
-                type="primary" if current_main == key else "secondary",
+                type="primary" if current_main == "admin" else "secondary",
             )
             if clicked:
-                st.session_state["app_like_main"] = key
-                st.session_state["app_like_sub"] = cfg[key]["default_sub"]
+                st.session_state["app_like_main"] = "admin"
+                st.session_state["app_like_sub"] = cfg["admin"]["default_sub"]
                 st.rerun()
+        with cols[1]:
+            if st.button("🚪 Sair", key="app_like_top_btn::logout", use_container_width=True, type="secondary"):
+                st.session_state["auth"] = None
+                st.rerun()
+    else:
+        cols = st.columns([1.0, 1.0, 1.0, 1.0, 0.7])
+        for col, key in zip(cols[:4], main_keys):
+            label = cfg[key]["label"]
+            with col:
+                clicked = st.button(
+                    label,
+                    key=f"app_like_top_btn::{key}",
+                    use_container_width=True,
+                    type="primary" if current_main == key else "secondary",
+                )
+                if clicked:
+                    st.session_state["app_like_main"] = key
+                    st.session_state["app_like_sub"] = cfg[key]["default_sub"]
+                    st.rerun()
+        with cols[4]:
+            if st.button("🚪 Sair", key="app_like_top_btn::logout", use_container_width=True, type="secondary"):
+                st.session_state["auth"] = None
+                st.rerun()
+
     st.markdown('</div>', unsafe_allow_html=True)
 
 
@@ -15197,7 +15221,7 @@ def _fast_restore_bundled_latest_before_start() -> None:
 
 # =========================================================
 # MAIN
-# ========================================================= 
+# =========================================================
 _fast_restore_bundled_latest_before_start()
 validar_contrato_sistema()
 
