@@ -8113,30 +8113,41 @@ def _upsert_subgrupo_preview_competencia(setor: str, ano: int, mes: int, chapa: 
         con.close()
 
 
+def _rodizio_preview_state_key(setor: str, ano: int, mes: int, subgrupo_origem: str, subgrupo_destino: str) -> str:
+    return f"rodizio_preview_subgrupo::{str(setor).strip().upper()}::{int(ano):04d}-{int(mes):02d}::{str(subgrupo_origem).strip().upper()}::{str(subgrupo_destino).strip().upper()}"
+
+
 def aplicar_preview_aprovacao_rodizio_caixa(setor: str, ano: int, mes: int, slot: dict, chapa_sel: str, subgrupo_origem: str = 'OPERADOR DE CAIXA 01', subgrupo_destino: str = 'OPERADOR DE CAIXA 02'):
+    """
+    Aprovação rápida: guarda apenas o preview em memória.
+    Não grava no banco e não limpa cache global a cada clique.
+    A gravação definitiva ocorre apenas no botão final de aplicar.
+    """
     chapa_sel = str(chapa_sel or '').strip() or str(slot.get('origem_chapa') or '').strip()
     chapa_sai = str(slot.get('destino_chapa') or '').strip()
+    key = _rodizio_preview_state_key(setor, ano, mes, subgrupo_origem, subgrupo_destino)
+    preview = dict(st.session_state.get(key, {}))
     if chapa_sel:
-        _upsert_subgrupo_preview_competencia(setor, ano, mes, chapa_sel, subgrupo_destino)
+        preview[chapa_sel] = str(subgrupo_destino or '').strip() or 'OPERADOR DE CAIXA 02'
     if chapa_sai:
-        _upsert_subgrupo_preview_competencia(setor, ano, mes, chapa_sai, subgrupo_origem)
-    try:
-        st.cache_data.clear()
-    except Exception:
-        pass
+        preview[chapa_sai] = str(subgrupo_origem or '').strip() or 'OPERADOR DE CAIXA 01'
+    st.session_state[key] = preview
 
 
 def resetar_preview_aprovacao_rodizio_caixa(setor: str, ano: int, mes: int, slot: dict, chapa_sel: str, subgrupo_origem: str = 'OPERADOR DE CAIXA 01', subgrupo_destino: str = 'OPERADOR DE CAIXA 02'):
+    """
+    Desfaz somente o preview em memória para a linha aprovada.
+    Não faz escrita em banco durante a revisão manual.
+    """
     chapa_sel = str(chapa_sel or '').strip() or str(slot.get('origem_chapa') or '').strip()
     chapa_sai = str(slot.get('destino_chapa') or '').strip()
+    key = _rodizio_preview_state_key(setor, ano, mes, subgrupo_origem, subgrupo_destino)
+    preview = dict(st.session_state.get(key, {}))
     if chapa_sel:
-        _upsert_subgrupo_preview_competencia(setor, ano, mes, chapa_sel, subgrupo_origem)
+        preview.pop(chapa_sel, None)
     if chapa_sai:
-        _upsert_subgrupo_preview_competencia(setor, ano, mes, chapa_sai, subgrupo_destino)
-    try:
-        st.cache_data.clear()
-    except Exception:
-        pass
+        preview.pop(chapa_sai, None)
+    st.session_state[key] = preview
 
 
 # =========================================================
