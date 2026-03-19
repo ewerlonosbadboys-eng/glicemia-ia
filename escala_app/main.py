@@ -10832,18 +10832,14 @@ def page_login():
             con.close()
 
     st.title("ESCALA AUTOMATIZADA")
-    _setor_login_preview = _norm_setor(st.session_state.get("lg_setor_txt", ""))
-    _chapa_login_preview = str(st.session_state.get("lg_chapa", "") or "").strip()
-    _nome_login_preview = _cache_login_nome(_setor_login_preview, _chapa_login_preview)
-    _primeiro_nome = str(_nome_login_preview).strip().split()[0] if str(_nome_login_preview).strip() else ""
-    _hero_title = f"Olá, {_primeiro_nome}" if _primeiro_nome else "Olá, bem-vindo de volta"
-    _iniciais_nome = "".join([p[0] for p in str(_nome_login_preview).strip().split()[:2] if p]).upper()
-    _hero_avatar = _iniciais_nome or "AX"
+    # Otimização segura do login:
+    # evita consulta extra no banco a cada digitação de setor/chapa antes da autenticação.
+    # Mantém o layout, avatar e animação sem alterar regras do sistema.
     ui_hero(
-        _hero_title,
+        "Olá, bem-vindo de volta",
         "",
         "",
-        avatar=_hero_avatar,
+        avatar="AX",
         animate=True,
     )
     ui_section("Acesso ao sistema", "Entre com setor, chapa e senha para abrir o painel certo sem alterar a lógica já existente.")
