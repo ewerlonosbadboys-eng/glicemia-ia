@@ -7742,6 +7742,27 @@ def simular_rodizio_caixa_mes(
         'negados_chapas': sorted(list(negados_set)),
     }
 
+def montar_simulacao_com_aprovacoes_rodizio_caixa(simulacao: dict, aprovados_map: dict) -> dict:
+    sim2 = dict(simulacao or {})
+    pares = []
+    for p in list((simulacao or {}).get('pares') or []):
+        novo = dict(p)
+        slot_key = str(novo.get('slot_key') or '')
+        chapa_sel = str((aprovados_map or {}).get(slot_key) or '').strip()
+        if chapa_sel:
+            for alt in list(novo.get('alternativas_opcoes') or []):
+                if str(alt.get('chapa') or '').strip() == chapa_sel:
+                    novo['origem_chapa'] = str(alt.get('chapa') or '').strip()
+                    novo['origem_nome'] = str(alt.get('nome') or novo.get('origem_nome') or '').strip()
+                    novo['origem_entrada'] = str(alt.get('entrada') or novo.get('origem_entrada') or '').strip()
+                    novo['origem_domingos'] = int(alt.get('domingos', novo.get('origem_domingos', 0)) or 0)
+                    novo['origem_domingos_label'] = str(alt.get('domingos_label') or novo.get('origem_domingos_label') or '').strip()
+                    novo['origem_ultimo_mes_destino_label'] = str(alt.get('ultimo_mes_destino_label') or novo.get('origem_ultimo_mes_destino_label') or '').strip()
+                    break
+        pares.append(novo)
+    sim2['pares'] = pares
+    return sim2
+
 def aplicar_rodizio_caixa_mes(setor: str, ano: int, mes: int, simulacao: dict):
     pares = list((simulacao or {}).get('pares') or [])
     if not pares:
@@ -8113,41 +8134,17 @@ def _upsert_subgrupo_preview_competencia(setor: str, ano: int, mes: int, chapa: 
         con.close()
 
 
-def _rodizio_preview_state_key(setor: str, ano: int, mes: int, subgrupo_origem: str, subgrupo_destino: str) -> str:
-    return f"rodizio_preview_subgrupo::{str(setor).strip().upper()}::{int(ano):04d}-{int(mes):02d}::{str(subgrupo_origem).strip().upper()}::{str(subgrupo_destino).strip().upper()}"
-
-
 def aplicar_preview_aprovacao_rodizio_caixa(setor: str, ano: int, mes: int, slot: dict, chapa_sel: str, subgrupo_origem: str = 'OPERADOR DE CAIXA 01', subgrupo_destino: str = 'OPERADOR DE CAIXA 02'):
     """
-    Aprovação rápida: guarda apenas o preview em memória.
-    Não grava no banco e não limpa cache global a cada clique.
-    A gravação definitiva ocorre apenas no botão final de aplicar.
+    Preview leve: não grava banco nem troca subgrupo definitivo durante a aprovação.
+    A aprovação fica em memória e a aplicação real ocorre só no botão final.
     """
-    chapa_sel = str(chapa_sel or '').strip() or str(slot.get('origem_chapa') or '').strip()
-    chapa_sai = str(slot.get('destino_chapa') or '').strip()
-    key = _rodizio_preview_state_key(setor, ano, mes, subgrupo_origem, subgrupo_destino)
-    preview = dict(st.session_state.get(key, {}))
-    if chapa_sel:
-        preview[chapa_sel] = str(subgrupo_destino or '').strip() or 'OPERADOR DE CAIXA 02'
-    if chapa_sai:
-        preview[chapa_sai] = str(subgrupo_origem or '').strip() or 'OPERADOR DE CAIXA 01'
-    st.session_state[key] = preview
+    return None
 
 
 def resetar_preview_aprovacao_rodizio_caixa(setor: str, ano: int, mes: int, slot: dict, chapa_sel: str, subgrupo_origem: str = 'OPERADOR DE CAIXA 01', subgrupo_destino: str = 'OPERADOR DE CAIXA 02'):
-    """
-    Desfaz somente o preview em memória para a linha aprovada.
-    Não faz escrita em banco durante a revisão manual.
-    """
-    chapa_sel = str(chapa_sel or '').strip() or str(slot.get('origem_chapa') or '').strip()
-    chapa_sai = str(slot.get('destino_chapa') or '').strip()
-    key = _rodizio_preview_state_key(setor, ano, mes, subgrupo_origem, subgrupo_destino)
-    preview = dict(st.session_state.get(key, {}))
-    if chapa_sel:
-        preview.pop(chapa_sel, None)
-    if chapa_sai:
-        preview.pop(chapa_sai, None)
-    st.session_state[key] = preview
+    """Reset de preview leve: apenas mantém a UI em memória, sem tocar no banco."""
+    return None
 
 
 # =========================================================
@@ -13703,8 +13700,7 @@ def page_app():
                                 continue
                             chapa_sel_tmp = str(aprov_tmp.get(slot_key_tmp) or '').strip()
                             if chapa_sel_tmp:
-                                resetar_preview_aprovacao_rodizio_caixa(setor, ano_r, mes_r, s, chapa_sel_tmp, subgrupo_origem, subgrupo_destino)
-                        st.session_state[aprov_key] = {}
+                                st.session_state[aprov_key] = {}
                         st.session_state[neg_key] = []
                         st.session_state.pop(state_base + "::aplicado", None)
                         st.rerun()
@@ -13715,7 +13711,6 @@ def page_app():
                             chapa_sel_tmp = str(st.session_state.get(f'rod_caixa_pick_{slot_key_tmp}', str(s.get('origem_chapa') or '')) or '').strip()
                             if slot_key_tmp and chapa_sel_tmp:
                                 aprov_all[slot_key_tmp] = chapa_sel_tmp
-                                aplicar_preview_aprovacao_rodizio_caixa(setor, ano_r, mes_r, s, chapa_sel_tmp, subgrupo_origem, subgrupo_destino)
                         st.session_state[aprov_key] = aprov_all
                         st.session_state.pop(state_base + "::aplicado", None)
                         st.rerun()
@@ -13727,7 +13722,8 @@ def page_app():
                     if pronto_aplicar:
                         st.success(f"Todas as {qtd_obrigatoria} sugestões foram aprovadas. Agora falta aplicar o rodízio no mês {mes_r:02d}/{ano_r}.")
                         if st.button('🔁 Aplicar mudança de subgrupos agora (antes da escala)', key='rod_caixa_apply_now', use_container_width=True, disabled=(_status_comp_rod == 'FECHADA')):
-                            res_apply = aplicar_rodizio_caixa_mes(setor, ano_r, mes_r, sim)
+                            sim_apply = montar_simulacao_com_aprovacoes_rodizio_caixa(sim, st.session_state.get(aprov_key, {}))
+                            res_apply = aplicar_rodizio_caixa_mes(setor, ano_r, mes_r, sim_apply)
                             if res_apply.get('ok'):
                                 st.session_state[aplic_key] = True
                                 st.session_state[force_review_key] = False
@@ -13761,7 +13757,7 @@ def page_app():
 
                     for i, s in enumerate(slots, start=1):
                         slot_key = str(s.get('slot_key') or '')
-                        aprovado = aprovados_atuais.get(slot_key) == s.get('origem_chapa')
+                        aprovado = bool(str(aprovados_atuais.get(slot_key) or '').strip())
                         with st.container(border=True):
                             cinfo1, cinfo2, cinfo3 = st.columns([3.2, 2.1, 2.2])
                             cinfo1.markdown(
@@ -13811,12 +13807,9 @@ def page_app():
                                 chapa_sel = str(st.session_state.get(f'rod_caixa_pick_{slot_key}', str(s.get('origem_chapa') or '')) or '').strip()
                                 tmp = dict(st.session_state.get(aprov_state_key, {}))
                                 chapa_ant = str(tmp.get(slot_key) or '').strip()
-                                if chapa_ant and chapa_ant != chapa_sel:
-                                    resetar_preview_aprovacao_rodizio_caixa(setor, ano_r, mes_r, s, chapa_ant, subgrupo_origem, subgrupo_destino)
                                 chapa_eff = chapa_sel or str(s.get('origem_chapa') or '')
                                 tmp[slot_key] = chapa_eff
                                 st.session_state[aprov_state_key] = tmp
-                                aplicar_preview_aprovacao_rodizio_caixa(setor, ano_r, mes_r, s, chapa_eff, subgrupo_origem, subgrupo_destino)
                                 st.session_state.pop(state_base + "::aplicado", None)
                                 st.rerun()
                             if bcol2.button('❌ Negar e chamar próximo da fila', key=f'rod_caixa_no_{slot_key}', use_container_width=True):
@@ -13826,8 +13819,6 @@ def page_app():
                                     negs.append(chapa_neg)
                                 tmp = dict(st.session_state.get(aprov_state_key, {}))
                                 chapa_ant = str(tmp.get(slot_key) or '').strip()
-                                if chapa_ant:
-                                    resetar_preview_aprovacao_rodizio_caixa(setor, ano_r, mes_r, s, chapa_ant, subgrupo_origem, subgrupo_destino)
                                 tmp.pop(slot_key, None)
                                 st.session_state[aprov_state_key] = tmp
                                 st.session_state[neg_state_key] = negs
@@ -13836,8 +13827,6 @@ def page_app():
                             if bcol3.button('🔄 Resetar aprovação', key=f'rod_caixa_reset_{slot_key}', use_container_width=True, disabled=(not aprovado)):
                                 tmp = dict(st.session_state.get(aprov_state_key, {}))
                                 chapa_ant = str(tmp.get(slot_key) or '').strip()
-                                if chapa_ant:
-                                    resetar_preview_aprovacao_rodizio_caixa(setor, ano_r, mes_r, s, chapa_ant, subgrupo_origem, subgrupo_destino)
                                 tmp.pop(slot_key, None)
                                 st.session_state[aprov_state_key] = tmp
                                 st.session_state.pop(state_base + "::aplicado", None)
