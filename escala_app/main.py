@@ -840,17 +840,71 @@ def ensure_competencia_runtime_tables() -> None:
         con.close()
 
 
+def competencia_deve_estar_fechada_por_data(ano: int, mes: int, hoje: datetime | None = None) -> bool:
+    hoje = hoje or datetime.now()
+    return (int(ano), int(mes)) <= (int(hoje.year), int(hoje.month))
+
+
+def auto_fechar_competencias_ate_mes_vigente() -> None:
+    ensure_competencia_runtime_tables()
+    hoje = datetime.now()
+    ano_atual = int(hoje.year)
+    mes_atual = int(hoje.month)
+
+    con = db_conn()
+    cur = con.cursor()
+    rows = []
+    try:
+        cur.execute(
+            """
+            SELECT DISTINCT setor, ano, mes
+            FROM escala_mes
+            WHERE (ano < ?) OR (ano = ? AND mes <= ?)
+            ORDER BY setor, ano, mes
+            """,
+            (ano_atual, ano_atual, mes_atual),
+        )
+        rows = cur.fetchall() or []
+
+        agora = datetime.now().isoformat()
+        for setor_db, ano_db, mes_db in rows:
+            cur.execute(
+                """
+                INSERT INTO competencia_status(setor, ano, mes, status, atualizado_em)
+                VALUES (?, ?, ?, 'FECHADA', ?)
+                ON CONFLICT(setor, ano, mes) DO UPDATE SET
+                    status='FECHADA',
+                    atualizado_em=excluded.atualizado_em
+                """,
+                (str(setor_db or '').strip(), int(ano_db), int(mes_db), agora),
+            )
+        con.commit()
+    finally:
+        con.close()
+
+    for setor_db, ano_db, mes_db in rows:
+        try:
+            rebuild_colaborador_competencia_snapshot(str(setor_db or '').strip(), int(ano_db), int(mes_db))
+        except Exception:
+            pass
+
+
 def get_status_competencia(setor: str, ano: int, mes: int) -> str:
     ensure_competencia_runtime_tables()
+    if competencia_deve_estar_fechada_por_data(int(ano), int(mes)):
+        return 'FECHADA'
     con = db_conn()
     cur = con.cursor()
     try:
-        cur.execute("""
+        cur.execute(
+            """
             SELECT status
             FROM competencia_status
             WHERE UPPER(TRIM(setor)) = UPPER(TRIM(?)) AND ano=? AND mes=?
             LIMIT 1
-        """, (setor, int(ano), int(mes)))
+            """,
+            (setor, int(ano), int(mes)),
+        )
         row = cur.fetchone()
         return str((row[0] if row else 'ABERTA') or 'ABERTA').strip().upper()
     finally:
@@ -862,16 +916,21 @@ def set_status_competencia(setor: str, ano: int, mes: int, status: str) -> None:
     novo = str(status or 'ABERTA').strip().upper()
     if novo not in ('ABERTA', 'FECHADA'):
         novo = 'ABERTA'
+    if competencia_deve_estar_fechada_por_data(int(ano), int(mes)):
+        novo = 'FECHADA'
     con = db_conn()
     cur = con.cursor()
     try:
-        cur.execute("""
+        cur.execute(
+            """
             INSERT INTO competencia_status(setor, ano, mes, status, atualizado_em)
             VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(setor, ano, mes) DO UPDATE SET
                 status=excluded.status,
                 atualizado_em=excluded.atualizado_em
-        """, (setor, int(ano), int(mes), novo, datetime.now().isoformat()))
+            """,
+            (setor, int(ano), int(mes), novo, datetime.now().isoformat()),
+        )
         con.commit()
     finally:
         con.close()
@@ -15401,6 +15460,7 @@ if st.session_state["auth"] is None and QUICK_LOGIN_BOOT:
 else:
     if not st.session_state.get("_full_boot_done", False):
         db_init()
+        auto_fechar_competencias_ate_mes_vigente()
         if not FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP:
             auto_backup_if_due()
         st.session_state["_full_boot_done"] = True
