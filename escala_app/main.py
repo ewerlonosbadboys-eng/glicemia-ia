@@ -8202,85 +8202,135 @@ def sincronizar_subgrupos_base_rodizio_caixa(setor: str, ano: int, mes: int, sub
 
 def resetar_rodizio_caixa_mes(setor: str, ano: int, mes: int, subgrupo_origem: str = 'OPERADOR DE CAIXA 01', subgrupo_destino: str = 'OPERADOR DE CAIXA 02'):
     """
-    Zera o rodízio aplicado da competência atual para permitir nova rodada de aprovação.
-    - reverte colaboradores afetados para o subgrupo/entrada anteriores ao rodízio
-    - apaga o histórico do rodízio da competência
-    - limpa desenho salvo/overrides de horário/status dos afetados para regeneração limpa
+    Volta do zero do rodízio da competência atual.
+    Regras deste reset:
+    - TODO colaborador que estiver no subgrupo destino (na base, competência ou snapshot) volta para o subgrupo origem
+    - limpa histórico do rodízio da competência
+    - limpa escala/overrides do mês dos afetados para regeneração limpa
     """
+    setor = str(setor or '').strip()
+    ano = int(ano)
+    mes = int(mes)
+    subgrupo_origem = str(subgrupo_origem or 'OPERADOR DE CAIXA 01').strip() or 'OPERADOR DE CAIXA 01'
+    subgrupo_destino = str(subgrupo_destino or 'OPERADOR DE CAIXA 02').strip() or 'OPERADOR DE CAIXA 02'
+
     con = db_conn()
     cur = con.cursor()
     try:
-        cur.execute(
-            """
-            SELECT chapa, nome, movimento, subgrupo_origem, subgrupo_destino, entrada_antiga, entrada_nova
-            FROM rodizio_caixa_hist
-            WHERE setor=? AND ano=? AND mes=?
-              AND (
-                    (UPPER(movimento) LIKE 'ENTRA_DESTINO%' AND subgrupo_origem=? AND subgrupo_destino=?)
-                 OR (UPPER(movimento) LIKE 'SAI_DESTINO%' AND subgrupo_origem=? AND subgrupo_destino=?)
-              )
-            ORDER BY criado_em DESC, id DESC
-            """,
-            (setor, int(ano), int(mes), subgrupo_origem, subgrupo_destino, subgrupo_destino, subgrupo_origem)
-        )
-        rows = cur.fetchall() or []
-        if not rows:
-            return {'ok': False, 'msg': f'Nenhum rodízio aplicado foi encontrado em {int(mes):02d}/{int(ano)} para zerar.'}
-
-        # usa a origem histórica como fonte da verdade para voltar o cadastro base
-        atualizacoes = {}
-        for chapa, nome, movimento, sg_origem_hist, sg_destino_hist, entrada_antiga, entrada_nova in rows:
-            ch = str(chapa or '').strip()
-            if not ch or ch in atualizacoes:
-                continue
-            atualizacoes[ch] = {
-                'subgrupo': str(sg_origem_hist or '').strip() or subgrupo_origem,
-                'entrada': str(entrada_antiga or '').strip() or '06:00',
-            }
-
-        chapas_afetadas = sorted(atualizacoes.keys())
         cur.execute('BEGIN')
-        for ch in chapas_afetadas:
-            info = atualizacoes[ch]
-            cur.execute(
-                "UPDATE colaboradores SET subgrupo=?, entrada=? WHERE setor=? AND chapa=?",
-                (info['subgrupo'], info['entrada'], setor, ch)
-            )
 
-        # apaga o histórico do rodízio desta competência (inclusive complementar)
+        # união de todos os afetados no mês/base
+        chapas = set()
+        consultas = [
+            (
+                "SELECT chapa FROM colaboradores WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND UPPER(TRIM(subgrupo))=UPPER(TRIM(?))",
+                (setor, subgrupo_destino),
+            ),
+            (
+                "SELECT chapa FROM subgrupo_competencia WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND UPPER(TRIM(subgrupo))=UPPER(TRIM(?))",
+                (setor, ano, mes, subgrupo_destino),
+            ),
+            (
+                "SELECT chapa FROM colaborador_competencia_snapshot WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND UPPER(TRIM(subgrupo))=UPPER(TRIM(?))",
+                (setor, ano, mes, subgrupo_destino),
+            ),
+            (
+                "SELECT chapa FROM rodizio_caixa_hist WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND (UPPER(TRIM(subgrupo_destino))=UPPER(TRIM(?)) OR UPPER(TRIM(subgrupo_origem))=UPPER(TRIM(?)))",
+                (setor, ano, mes, subgrupo_destino, subgrupo_destino),
+            ),
+        ]
+        for sql, params in consultas:
+            try:
+                cur.execute(sql, params)
+                chapas.update(str(r[0]).strip() for r in (cur.fetchall() or []) if str(r[0] or '').strip())
+            except Exception:
+                pass
+
+        chapas_afetadas = sorted(chapas)
+        if not chapas_afetadas:
+            con.rollback()
+            return {'ok': False, 'msg': f'Nenhum colaborador em {subgrupo_destino} foi encontrado em {mes:02d}/{ano} para zerar.'}
+
+        marks = ','.join(['?'] * len(chapas_afetadas))
+        agora = datetime.now().isoformat()
+
+        # cadastro base
         cur.execute(
-            """
-            DELETE FROM rodizio_caixa_hist
-            WHERE setor=? AND ano=? AND mes=?
-              AND (
-                    (UPPER(movimento) LIKE 'ENTRA_DESTINO%' AND subgrupo_origem=? AND subgrupo_destino=?)
-                 OR (UPPER(movimento) LIKE 'SAI_DESTINO%' AND subgrupo_origem=? AND subgrupo_destino=?)
-              )
-            """,
-            (setor, int(ano), int(mes), subgrupo_origem, subgrupo_destino, subgrupo_destino, subgrupo_origem)
+            f"UPDATE colaboradores SET subgrupo=? WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND TRIM(chapa) IN ({marks})",
+            [subgrupo_origem, setor, *chapas_afetadas]
         )
 
-        # remove espelho mensal do rodízio para os afetados; o usuário pode sincronizar manualmente depois, se quiser
-        if chapas_afetadas:
-            marks = ','.join(['?'] * len(chapas_afetadas))
-            params_base = [setor, int(ano), int(mes), *chapas_afetadas]
+        # competência do mês -> força volta para origem
+        cur.execute(
+            f"DELETE FROM subgrupo_competencia WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa) IN ({marks})",
+            [setor, ano, mes, *chapas_afetadas]
+        )
+        for ch in chapas_afetadas:
             cur.execute(
-                f"DELETE FROM subgrupo_competencia WHERE setor=? AND ano=? AND mes=? AND chapa IN ({marks})",
-                params_base
-            )
-            cur.execute(
-                f"DELETE FROM escala_mes WHERE setor=? AND ano=? AND mes=? AND chapa IN ({marks})",
-                params_base
-            )
-            cur.execute(
-                f"""
-                DELETE FROM overrides
-                WHERE setor=? AND ano=? AND mes=?
-                  AND chapa IN ({marks})
-                  AND campo IN ('H_Entrada', 'H_Saida', 'Status')
+                """
+                INSERT INTO subgrupo_competencia(setor, ano, mes, chapa, subgrupo, atualizado_em)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(setor, ano, mes, chapa) DO UPDATE SET
+                    subgrupo=excluded.subgrupo,
+                    atualizado_em=excluded.atualizado_em
                 """,
-                params_base
+                (setor, ano, mes, ch, subgrupo_origem, agora)
             )
+
+        # snapshot do mês -> força volta para origem e preserva nome/entrada/folga_sab
+        for ch in chapas_afetadas:
+            cur.execute(
+                "SELECT nome, entrada, folga_sab FROM colaborador_competencia_snapshot WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=? LIMIT 1",
+                (setor, ano, mes, ch)
+            )
+            row = cur.fetchone()
+            nome_snap = entrada_snap = None
+            folga_sab_snap = 0
+            if row:
+                nome_snap = str(row[0] or '').strip()
+                entrada_snap = str(row[1] or '').strip()
+                folga_sab_snap = int(row[2] or 0)
+            if not nome_snap or not entrada_snap:
+                cur.execute(
+                    "SELECT nome, entrada, COALESCE(folga_sab,0) FROM colaboradores WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND TRIM(chapa)=? LIMIT 1",
+                    (setor, ch)
+                )
+                rowb = cur.fetchone()
+                if rowb:
+                    if not nome_snap:
+                        nome_snap = str(rowb[0] or '').strip()
+                    if not entrada_snap:
+                        entrada_snap = str(rowb[1] or '').strip()
+                    folga_sab_snap = int(rowb[2] or 0)
+            cur.execute(
+                """
+                INSERT INTO colaborador_competencia_snapshot(setor, ano, mes, chapa, nome, subgrupo, entrada, folga_sab, atualizado_em)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(setor, ano, mes, chapa) DO UPDATE SET
+                    nome=excluded.nome,
+                    subgrupo=excluded.subgrupo,
+                    entrada=excluded.entrada,
+                    folga_sab=excluded.folga_sab,
+                    atualizado_em=excluded.atualizado_em
+                """,
+                (setor, ano, mes, ch, nome_snap or '', subgrupo_origem, entrada_snap or '06:00', int(folga_sab_snap or 0), agora)
+            )
+
+        # limpa histórico do rodízio inteiro do mês
+        cur.execute(
+            "DELETE FROM rodizio_caixa_hist WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=?",
+            (setor, ano, mes)
+        )
+
+        # limpa desenho/overrides do mês dos afetados
+        cur.execute(
+            f"DELETE FROM escala_mes WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa) IN ({marks})",
+            [setor, ano, mes, *chapas_afetadas]
+        )
+        cur.execute(
+            f"DELETE FROM overrides WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa) IN ({marks}) AND campo IN ('H_Entrada','H_Saida','Status')",
+            [setor, ano, mes, *chapas_afetadas]
+        )
 
         con.commit()
     except Exception:
@@ -8296,7 +8346,7 @@ def resetar_rodizio_caixa_mes(setor: str, ano: int, mes: int, subgrupo_origem: s
 
     return {
         'ok': True,
-        'msg': f'Rodízio de {int(mes):02d}/{int(ano)} zerado. Agora você pode aprovar/negar novamente e sincronizar a base manualmente depois.'
+        'msg': f'Volta do zero concluído em {mes:02d}/{ano}. Todos que estavam em {subgrupo_destino} voltaram para {subgrupo_origem}.'
     }
 
 
