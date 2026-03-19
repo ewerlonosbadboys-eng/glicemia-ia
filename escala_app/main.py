@@ -643,60 +643,6 @@ def aplicar_ultra_visual_empresa_total(sidebar_compact: bool = False):
         animation: ax-loading-move 1.4s linear infinite;
     }}
 
-
-    .ax-hero-premium {
-        display: flex;
-        align-items: center;
-        gap: 18px;
-        margin-top: 6px;
-    }
-
-    .ax-hero-avatar {
-        width: 72px;
-        height: 72px;
-        min-width: 72px;
-        border-radius: 18px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 1.4rem;
-        font-weight: 900;
-        color: #ffffff;
-        background: linear-gradient(180deg, rgba(79,140,255,0.34), rgba(29,78,216,0.26));
-        border: 1px solid rgba(96,165,250,0.32);
-        box-shadow: 0 18px 30px rgba(0,0,0,0.26);
-    }
-
-    .ax-hero-copy {
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
-    }
-
-    .ax-hero-kicker {
-        color: #cddcff;
-        font-size: 0.92rem;
-        font-weight: 700;
-        letter-spacing: .03em;
-        text-transform: uppercase;
-    }
-
-    .ax-hero-role {
-        display: inline-flex;
-        align-items: center;
-        width: fit-content;
-        padding: 5px 10px;
-        border-radius: 999px;
-        background: rgba(255,255,255,0.06);
-        border: 1px solid rgba(255,255,255,0.10);
-        color: #eef5ff;
-        font-size: 0.82rem;
-        font-weight: 800;
-        letter-spacing: .04em;
-        text-transform: uppercase;
-        margin-bottom: 4px;
-    }
-
     @keyframes ax-loading-move {{
         0% {{ left: -30%; }}
         100% {{ left: 102%; }}
@@ -12097,37 +12043,14 @@ def page_app():
         page_portal_colaborador(auth, int(st.session_state["cfg_ano"]), int(st.session_state["cfg_mes"]))
         return
 
-    _nome_hero_full = str(auth.get("nome") or auth.get("usuario") or "Usuário").strip()
-    _primeiro_nome_hero = (_nome_hero_full.split()[0] if _nome_hero_full else "Usuário").strip().title()
-    _iniciais_hero = "".join([p[:1].upper() for p in _nome_hero_full.split()[:2] if p.strip()]) or _primeiro_nome_hero[:2].upper()
-    _hora_hero = datetime.now().hour
-    if _hora_hero < 12:
-        _saudacao_hero = "Bom dia"
-    elif _hora_hero < 18:
-        _saudacao_hero = "Boa tarde"
-    else:
-        _saudacao_hero = "Boa noite"
-    if bool(auth.get("is_admin", False)):
-        _cargo_hero = "ADMIN"
-    elif bool(auth.get("is_lider", False)) or bool(auth.get("is_ax_lider", False)) or colaborador_eh_lideranca(setor, auth.get("chapa", "")):
-        _cargo_hero = "LÍDER"
-    else:
-        _cargo_hero = str(perfil_label or "USUÁRIO").strip().upper()
-
-    st.markdown(f"""
-    <div class='ax-hero'>
-        <div class='ax-badge'>⚡ Painel executivo</div>
-        <div class='ax-hero-premium'>
-            <div class='ax-hero-avatar'>{_iniciais_hero}</div>
-            <div class='ax-hero-copy'>
-                <div class='ax-hero-kicker'>{_saudacao_hero}</div>
-                <h1 class='ax-hero-title' style='margin-bottom:6px;'>{_primeiro_nome_hero}</h1>
-                <div class='ax-hero-role'>{_cargo_hero}</div>
-                <div class='ax-hero-sub'>Perfil: {perfil_label} • Setor: {setor} • Chapa: {auth.get('chapa','-')} • Subgrupo: {_subgrupo_auth} • Competência {int(st.session_state['cfg_mes']):02d}/{int(st.session_state['cfg_ano'])}</div>
-            </div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    ui_hero(
+        f"Olá, {auth.get('nome','Usuário')}",
+        (
+            f"Perfil: {perfil_label} • Setor: {setor} • Chapa: {auth.get('chapa','-')} • "
+            f"Subgrupo: {_subgrupo_auth} • Competência {int(st.session_state['cfg_mes']):02d}/{int(st.session_state['cfg_ano'])}"
+        ),
+        "⚡ Painel executivo",
+    )
     ui_section("Navegação principal", "As abas e fluxos abaixo continuam seguindo as mesmas permissões, aprovações e regras já definidas no sistema.")
 
     nav_sp1, nav_sp2, nav_mes_col, nav_ano_col = st.columns([4.2, 0.2, 1.0, 1.0])
