@@ -8095,15 +8095,35 @@ def resetar_rodizio_caixa_mes(setor: str, ano: int, mes: int, subgrupo_origem: s
     }
 
 
-def _upsert_subgrupo_preview_competencia(setor: str, ano: int, mes: int, chapa: str, novo_subgrupo: str):
+def _upsert_subgrupo_preview_competencia(setor: str, ano: int, mes: int, chapa: str, novo_subgrupo: str, nova_entrada: str | None = None):
     chapa = str(chapa or '').strip()
     novo_subgrupo = str(novo_subgrupo or '').strip()
+    nova_entrada = str(nova_entrada or '').strip()
     if not chapa or not novo_subgrupo:
         return
     ts = datetime.now().isoformat()
     con = db_conn()
     cur = con.cursor()
     try:
+        entrada_final = nova_entrada
+        if not entrada_final:
+            cur.execute(
+                "SELECT entrada FROM colaborador_competencia_snapshot WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=? LIMIT 1",
+                (setor, int(ano), int(mes), chapa)
+            )
+            row_snap = cur.fetchone()
+            if row_snap and str(row_snap[0] or '').strip():
+                entrada_final = str(row_snap[0] or '').strip()
+        if not entrada_final:
+            cur.execute(
+                "SELECT entrada FROM colaboradores WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND TRIM(chapa)=? LIMIT 1",
+                (setor, chapa)
+            )
+            row_col = cur.fetchone()
+            if row_col and str(row_col[0] or '').strip():
+                entrada_final = str(row_col[0] or '').strip()
+        entrada_final = entrada_final or '06:00'
+
         cur.execute(
             """
             INSERT INTO subgrupo_competencia(setor, ano, mes, chapa, subgrupo, atualizado_em)
@@ -8117,7 +8137,7 @@ def _upsert_subgrupo_preview_competencia(setor: str, ano: int, mes: int, chapa: 
         cur.execute(
             """
             INSERT INTO colaborador_competencia_snapshot(setor, ano, mes, chapa, nome, subgrupo, entrada, folga_sab, atualizado_em)
-            SELECT ?, ?, ?, ?, COALESCE(NULLIF(nome,''), ''), ?, COALESCE(NULLIF(entrada,''), '06:00'), COALESCE(folga_sab, 0), ?
+            SELECT ?, ?, ?, ?, COALESCE(NULLIF(nome,''), ''), ?, ?, COALESCE(folga_sab, 0), ?
             FROM colaboradores
             WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND TRIM(chapa)=?
             ON CONFLICT(setor, ano, mes, chapa) DO UPDATE SET
@@ -8127,23 +8147,138 @@ def _upsert_subgrupo_preview_competencia(setor: str, ano: int, mes: int, chapa: 
                 folga_sab=COALESCE(excluded.folga_sab, colaborador_competencia_snapshot.folga_sab),
                 atualizado_em=excluded.atualizado_em
             """,
-            (setor, int(ano), int(mes), chapa, novo_subgrupo, ts, setor, chapa)
+            (setor, int(ano), int(mes), chapa, novo_subgrupo, entrada_final, ts, setor, chapa)
+        )
+        cur.execute(
+            "DELETE FROM escala_mes WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=?",
+            (setor, int(ano), int(mes), chapa)
+        )
+        cur.execute(
+            """
+            DELETE FROM overrides
+            WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=?
+              AND campo IN ('H_Entrada', 'H_Saida', 'Status')
+            """,
+            (setor, int(ano), int(mes), chapa)
         )
         con.commit()
     finally:
         con.close()
 
 
+def _restaurar_subgrupo_preview_competencia(setor: str, ano: int, mes: int, chapa: str, subgrupo_base: str, entrada_base: str | None = None):
+    chapa = str(chapa or '').strip()
+    subgrupo_base = str(subgrupo_base or '').strip()
+    entrada_base = str(entrada_base or '').strip()
+    if not chapa:
+        return
+    ts = datetime.now().isoformat()
+    con = db_conn()
+    cur = con.cursor()
+    try:
+        if subgrupo_base:
+            cur.execute(
+                """
+                INSERT INTO subgrupo_competencia(setor, ano, mes, chapa, subgrupo, atualizado_em)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(setor, ano, mes, chapa) DO UPDATE SET
+                    subgrupo=excluded.subgrupo,
+                    atualizado_em=excluded.atualizado_em
+                """,
+                (setor, int(ano), int(mes), chapa, subgrupo_base, ts)
+            )
+        else:
+            cur.execute(
+                "DELETE FROM subgrupo_competencia WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=?",
+                (setor, int(ano), int(mes), chapa)
+            )
+
+        cur.execute(
+            "DELETE FROM colaborador_competencia_snapshot WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=?",
+            (setor, int(ano), int(mes), chapa)
+        )
+        cur.execute(
+            "DELETE FROM escala_mes WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=?",
+            (setor, int(ano), int(mes), chapa)
+        )
+        cur.execute(
+            """
+            DELETE FROM overrides
+            WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=?
+              AND campo IN ('H_Entrada', 'H_Saida', 'Status')
+            """,
+            (setor, int(ano), int(mes), chapa)
+        )
+        con.commit()
+    finally:
+        con.close()
+
+    try:
+        rebuild_colaborador_competencia_snapshot(setor, int(ano), int(mes))
+    except Exception:
+        pass
+
+
 def aplicar_preview_aprovacao_rodizio_caixa(setor: str, ano: int, mes: int, slot: dict, chapa_sel: str, subgrupo_origem: str = 'OPERADOR DE CAIXA 01', subgrupo_destino: str = 'OPERADOR DE CAIXA 02'):
-    """
-    Preview leve: não grava banco nem troca subgrupo definitivo durante a aprovação.
-    A aprovação fica em memória e a aplicação real ocorre só no botão final.
-    """
+    """Ao aprovar, já grava a troca do mês no subgrupo_competencia/snapshot para refletir imediatamente na competência."""
+    slot = dict(slot or {})
+    chapa_sel = str(chapa_sel or slot.get('origem_chapa') or '').strip()
+    destino_chapa = str(slot.get('destino_chapa') or '').strip()
+    if not chapa_sel or not destino_chapa:
+        return None
+
+    alt_sel = None
+    if chapa_sel == str(slot.get('origem_chapa') or '').strip():
+        alt_sel = dict(slot)
+    else:
+        for alt in list(slot.get('alternativas_opcoes') or []):
+            if str(alt.get('chapa') or '').strip() == chapa_sel:
+                alt_sel = dict(alt)
+                break
+    if alt_sel is None:
+        return None
+
+    entrada_sel_atual = str(alt_sel.get('entrada') or slot.get('origem_entrada') or '').strip() or '06:00'
+    entrada_destino_atual = str(slot.get('destino_entrada') or '').strip() or '06:00'
+
+    _upsert_subgrupo_preview_competencia(setor, ano, mes, chapa_sel, subgrupo_destino, entrada_destino_atual)
+    _upsert_subgrupo_preview_competencia(setor, ano, mes, destino_chapa, subgrupo_origem, entrada_sel_atual)
+
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
     return None
 
 
 def resetar_preview_aprovacao_rodizio_caixa(setor: str, ano: int, mes: int, slot: dict, chapa_sel: str, subgrupo_origem: str = 'OPERADOR DE CAIXA 01', subgrupo_destino: str = 'OPERADOR DE CAIXA 02'):
-    """Reset de preview leve: apenas mantém a UI em memória, sem tocar no banco."""
+    """Desfaz a aprovação do slot e recompõe o espelho do mês para o estado original do par."""
+    slot = dict(slot or {})
+    chapa_sel = str(chapa_sel or slot.get('origem_chapa') or '').strip()
+    destino_chapa = str(slot.get('destino_chapa') or '').strip()
+    if not destino_chapa:
+        return None
+
+    alt_sel = None
+    if chapa_sel == str(slot.get('origem_chapa') or '').strip():
+        alt_sel = dict(slot)
+    else:
+        for alt in list(slot.get('alternativas_opcoes') or []):
+            if str(alt.get('chapa') or '').strip() == chapa_sel:
+                alt_sel = dict(alt)
+                break
+
+    entrada_sel_original = str((alt_sel or {}).get('entrada') or slot.get('origem_entrada') or '').strip() or '06:00'
+    entrada_dest_original = str(slot.get('destino_entrada') or '').strip() or '06:00'
+
+    if chapa_sel:
+        _restaurar_subgrupo_preview_competencia(setor, ano, mes, chapa_sel, subgrupo_origem, entrada_sel_original)
+    _restaurar_subgrupo_preview_competencia(setor, ano, mes, destino_chapa, subgrupo_destino, entrada_dest_original)
+
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
     return None
 
 
@@ -13808,6 +13943,9 @@ def page_app():
                                 tmp = dict(st.session_state.get(aprov_state_key, {}))
                                 chapa_ant = str(tmp.get(slot_key) or '').strip()
                                 chapa_eff = chapa_sel or str(s.get('origem_chapa') or '')
+                                if chapa_ant and chapa_ant != chapa_eff:
+                                    resetar_preview_aprovacao_rodizio_caixa(setor, ano_r, mes_r, s, chapa_ant, subgrupo_origem, subgrupo_destino)
+                                aplicar_preview_aprovacao_rodizio_caixa(setor, ano_r, mes_r, s, chapa_eff, subgrupo_origem, subgrupo_destino)
                                 tmp[slot_key] = chapa_eff
                                 st.session_state[aprov_state_key] = tmp
                                 st.session_state.pop(state_base + "::aplicado", None)
@@ -13819,6 +13957,8 @@ def page_app():
                                     negs.append(chapa_neg)
                                 tmp = dict(st.session_state.get(aprov_state_key, {}))
                                 chapa_ant = str(tmp.get(slot_key) or '').strip()
+                                if chapa_ant:
+                                    resetar_preview_aprovacao_rodizio_caixa(setor, ano_r, mes_r, s, chapa_ant, subgrupo_origem, subgrupo_destino)
                                 tmp.pop(slot_key, None)
                                 st.session_state[aprov_state_key] = tmp
                                 st.session_state[neg_state_key] = negs
@@ -13827,6 +13967,8 @@ def page_app():
                             if bcol3.button('🔄 Resetar aprovação', key=f'rod_caixa_reset_{slot_key}', use_container_width=True, disabled=(not aprovado)):
                                 tmp = dict(st.session_state.get(aprov_state_key, {}))
                                 chapa_ant = str(tmp.get(slot_key) or '').strip()
+                                if chapa_ant:
+                                    resetar_preview_aprovacao_rodizio_caixa(setor, ano_r, mes_r, s, chapa_ant, subgrupo_origem, subgrupo_destino)
                                 tmp.pop(slot_key, None)
                                 st.session_state[aprov_state_key] = tmp
                                 st.session_state.pop(state_base + "::aplicado", None)
