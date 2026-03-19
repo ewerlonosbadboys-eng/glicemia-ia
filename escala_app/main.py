@@ -2668,6 +2668,46 @@ def render_app_like_sidebar_nav(is_admin_area: bool, setor: str = ""):
         st.markdown(f"<div class='app-nav-note'>Atual: {st.session_state.get('app_like_sub', chosen)}</div>", unsafe_allow_html=True)
 
 
+def render_app_like_top_nav(is_admin_area: bool, setor: str = ""):
+    cfg = get_app_like_nav_config(is_admin_area, setor)
+    main_keys = ["admin"] if is_admin_area else ["dashboard", "colaboradores", "escala", "gestao"]
+    default_main = main_keys[0]
+    if st.session_state.get("app_like_main") not in main_keys:
+        st.session_state["app_like_main"] = default_main
+    current_main = st.session_state["app_like_main"]
+
+    st.markdown("""
+    <style>
+    .app-top-nav-wrap{position:sticky;top:0;z-index:40;background:rgba(3,11,30,.96);padding:8px 0 10px 0;margin-bottom:10px;}
+    .app-top-nav-wrap .stButton > button{min-height:72px !important;white-space:pre-line !important;line-height:1.28 !important;font-size:1.02rem !important;}
+    </style>
+    """, unsafe_allow_html=True)
+    st.markdown('<div class="app-top-nav-wrap">', unsafe_allow_html=True)
+    cols = st.columns(len(main_keys))
+    subtitles = {
+        "dashboard": "Visão geral do app.",
+        "colaboradores": "Cadastros, perfil, senha e aprovações AX.",
+        "escala": "Gerar, consultar e imprimir a escala do mês.",
+        "gestao": "Ajustes, férias, assinaturas e solicitações.",
+        "admin": "Configurações administrativas.",
+    }
+    for col, key in zip(cols, main_keys):
+        label = cfg[key]["label"]
+        full_label = f"{label}\n{subtitles.get(key, '')}" if subtitles.get(key) else label
+        with col:
+            clicked = st.button(
+                full_label,
+                key=f"app_like_top_btn::{key}",
+                use_container_width=True,
+                type="primary" if current_main == key else "secondary",
+            )
+            if clicked:
+                st.session_state["app_like_main"] = key
+                st.session_state["app_like_sub"] = cfg[key]["default_sub"]
+                st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
 def resolve_app_like_route(is_admin_area: bool, setor: str = ""):
     cfg = get_app_like_nav_config(is_admin_area, setor)
     main_keys = ["admin"] if is_admin_area else ["dashboard", "colaboradores", "escala", "gestao"]
@@ -12097,9 +12137,10 @@ def page_app():
     st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
 
     # =========================
-    # APP / NAVEGAÇÃO LATERAL
+    # APP / NAVEGAÇÃO PRINCIPAL
     # =========================
     is_admin_area = bool(auth.get("is_admin", False)) and setor == "ADMIN"
+    render_app_like_top_nav(is_admin_area, setor)
     app_route = resolve_app_like_route(is_admin_area, setor)
     sec_main = app_route.get("sec_main", "dashboard")
     sec_col = app_route.get("sec_col", "👥 Colaboradores")
@@ -12108,37 +12149,7 @@ def page_app():
     sec_imp = app_route.get("sec_imp", "📊 Excel modelo")
 
     if sec_main == "dashboard":
-        ui_section("Dashboard", f"Área inicial do app. Clique nas áreas abaixo para abrir cada fluxo sem mudar a lógica do sistema.")
-        st.markdown("""
-        <style>
-        div.stButton > button[kind="secondary"],
-        div.stButton > button {
-            white-space: pre-line !important;
-            min-height: 84px !important;
-            text-align: left !important;
-            justify-content: flex-start !important;
-            line-height: 1.35 !important;
-            font-size: 1.05rem !important;
-        }
-        </style>
-        """, unsafe_allow_html=True)
-        d1, d2, d3 = st.columns(3)
-        with d1:
-            if st.button("👥 Colaboradores\nCadastros, perfil, senha e aprovações AX.", key="goto_colab_dashboard", use_container_width=True):
-                st.session_state["app_like_main"] = "colaboradores"
-                st.session_state["app_like_sub"] = "👥 Colaboradores"
-                st.rerun()
-        with d2:
-            if st.button("📅 Escala\nGerar, consultar e imprimir a escala do mês.", key="goto_escala_dashboard", use_container_width=True):
-                st.session_state["app_like_main"] = "escala"
-                st.session_state["app_like_sub"] = "📂 Menu Escala"
-                st.rerun()
-        with d3:
-            if st.button("⚙️ Gestão\nAjustes, férias, assinaturas e solicitações.", key="goto_gestao_dashboard", use_container_width=True):
-                st.session_state["app_like_main"] = "gestao"
-                st.session_state["app_like_sub"] = "📂 Menu Gestão"
-                st.rerun()
-
+        ui_section("Dashboard", "Área inicial do app.")
         st.markdown("<div class='ax-loading'></div>", unsafe_allow_html=True)
         st.markdown("#### 📈 Painel rápido")
         g1, g2 = st.columns([1.2, 1])
