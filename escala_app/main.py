@@ -2566,7 +2566,7 @@ def get_app_like_nav_config(is_admin_area: bool, setor: str = ""):
         ("👥 Colaboradores", {"sec_main": "👥 Colaboradores", "sec_col": "👥 Colaboradores"}),
         ("➕ Cadastrar colaborador", {"sec_main": "👥 Colaboradores", "sec_col": "➕ Cadastrar colaborador"}),
         ("✏️ Editar perfil", {"sec_main": "👥 Colaboradores", "sec_col": "✏️ Editar perfil"}),
-        ("🔑 Alterar senha", {"sec_main": "👥 Colaboradores", "sec_col": "🔑 Alterar senha"}),
+        ("🔑 Alterar senha", {"sec_main": "👥 Colaboradores", "sec_col": "🔑 Alterar senha colaborador"}),
         ("🗑️ Excluir colaborador", {"sec_main": "👥 Colaboradores", "sec_col": "🗑️ Excluir colaborador"}),
         ("🧾 Aprovações AX", {"sec_main": "👥 Colaboradores", "sec_col": "🧾 Aprovações AX"}),
     ]
@@ -12037,25 +12037,10 @@ def page_app():
 
         st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
 
-        st.subheader("🗓️ Competência")
         if not _perfil_gestao:
             hoje = datetime.now()
             st.session_state["cfg_mes"] = int(hoje.month)
             st.session_state["cfg_ano"] = int(hoje.year)
-            st.write(f"**Mês vigente:** {hoje.month:02d}")
-            st.write(f"**Ano vigente:** {hoje.year}")
-            prox_mes = hoje.month + 1
-            prox_ano = hoje.year
-            if prox_mes > 12:
-                prox_mes = 1
-                prox_ano += 1
-            st.write(f"**Pré-escala:** {prox_mes:02d}/{prox_ano}")
-        else:
-            m1, m2 = st.columns(2)
-            mes_cfg = m1.selectbox("Mês", list(range(1, 13)), index=mes_cfg - 1, key="sb_mes")
-            ano_cfg = m2.number_input("Ano", value=ano_cfg, step=1, key="sb_ano")
-            st.session_state["cfg_mes"] = int(mes_cfg)
-            st.session_state["cfg_ano"] = int(ano_cfg)
 
         st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
 
@@ -12091,6 +12076,24 @@ def page_app():
         "⚡ Painel executivo",
     )
     ui_section("Navegação principal", "As abas e fluxos abaixo continuam seguindo as mesmas permissões, aprovações e regras já definidas no sistema.")
+
+    nav_sp1, nav_sp2, nav_mes_col, nav_ano_col = st.columns([4.2, 0.2, 1.0, 1.0])
+    with nav_mes_col:
+        mes_cfg_topo = st.selectbox(
+            "Mês",
+            list(range(1, 13)),
+            index=int(st.session_state.get("cfg_mes", datetime.now().month)) - 1,
+            key="topo_cfg_mes",
+        )
+    with nav_ano_col:
+        ano_cfg_topo = st.number_input(
+            "Ano",
+            value=int(st.session_state.get("cfg_ano", datetime.now().year)),
+            step=1,
+            key="topo_cfg_ano",
+        )
+    st.session_state["cfg_mes"] = int(mes_cfg_topo)
+    st.session_state["cfg_ano"] = int(ano_cfg_topo)
 
     # =========================
     # KPIs
@@ -12180,7 +12183,7 @@ def page_app():
             botoes_colab = [
                 ("➕ Cadastrar colaborador", "➕ Cadastrar colaborador", "col_menu_cadastro"),
                 ("✏️ Editar perfil", "✏️ Editar perfil", "col_menu_perfil"),
-                ("🔑 Alterar senha", "🔑 Alterar senha", "col_menu_senha"),
+                ("🔑 Alterar senha", "🔑 Alterar senha colaborador", "col_menu_senha"),
                 ("🗑️ Excluir colaborador", "🗑️ Excluir colaborador", "col_menu_excluir"),
                 ("🧾 Aprovações AX", "🧾 Aprovações AX", "col_menu_ax"),
             ]
@@ -12195,7 +12198,6 @@ def page_app():
                     label_btn, destino_btn, key_btn = botoes_colab[idx_btn_colab]
                     with col_btn:
                         if st.button(label_btn, key=key_btn, use_container_width=True):
-                            st.session_state["app_like_main"] = "colaboradores"
                             st.session_state["app_like_sub"] = destino_btn
                             st.rerun()
                     idx_btn_colab += 1
@@ -12356,9 +12358,9 @@ def page_app():
 
                 st.markdown("---")
 
-        elif sec_col == "🔑 Alterar senha":
+        elif sec_col == "🔑 Alterar senha colaborador":
             colaboradores = load_colaboradores_setor(setor)
-            ui_back_header("🔑 Alterar senha", "colaboradores", "👥 Colaboradores")
+            ui_back_header("🔑 Alterar senha colaborador", "colaboradores", "👥 Colaboradores")
             if colaboradores:
                 chapas = [c["Chapa"] for c in colaboradores]
                 nome_by_chapa = {c["Chapa"]: c.get("Nome", "") for c in colaboradores}
@@ -12912,7 +12914,6 @@ def page_app():
                 label_btn, destino_btn, key_btn = botoes_escala[idx_btn_esc]
                 with col_btn:
                     if st.button(label_btn, key=key_btn, use_container_width=True):
-                        st.session_state["app_like_main"] = "escala"
                         st.session_state["app_like_sub"] = destino_btn
                         st.rerun()
                 idx_btn_esc += 1
@@ -12942,7 +12943,6 @@ def page_app():
                 label_btn, destino_btn, key_btn = botoes_gestao[idx_btn_ges]
                 with col_btn:
                     if st.button(label_btn, key=key_btn, use_container_width=True):
-                        st.session_state["app_like_main"] = "gestao"
                         st.session_state["app_like_sub"] = destino_btn
                         st.rerun()
                 idx_btn_ges += 1
