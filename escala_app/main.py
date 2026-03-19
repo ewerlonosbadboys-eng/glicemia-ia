@@ -13585,7 +13585,7 @@ def page_app():
                         aprov_state_key = comp_aprov_key
                         neg_state_key = neg_key
                         aprovados_atuais = st.session_state.get(aprov_state_key, {})
-                        aprovados_validos = sum(1 for s in slots if aprovados_atuais.get(s.get('slot_key')) == s.get('origem_chapa'))
+                        aprovados_validos = sum(1 for s in slots if str(aprovados_atuais.get(s.get('slot_key')) or '').strip())
                         topa, topb, topc = st.columns(3)
                         topa.metric('Faltam no Caixa 02', faltam)
                         topb.metric('Sugestões complementares', len(slots))
@@ -13610,7 +13610,7 @@ def page_app():
                     aprov_state_key = aprov_key
                     neg_state_key = neg_key
                     aprovados_atuais = st.session_state.get(aprov_state_key, {})
-                    aprovados_validos = sum(1 for s in slots if aprovados_atuais.get(s.get('slot_key')) == s.get('origem_chapa'))
+                    aprovados_validos = sum(1 for s in slots if str(aprovados_atuais.get(s.get('slot_key')) or '').strip())
                     top1, top2, top3 = st.columns(3)
                     top1.metric('Sugestões montadas', len(slots))
                     top2.metric('Aprovadas', aprovados_validos)
@@ -13652,12 +13652,13 @@ def page_app():
                 if slots:
                     st.markdown('### Aprovação das pessoas sugeridas para esta competência')
                     resumo_aprov = pd.DataFrame([{
-                        'Status': 'APROVADO' if aprovados_atuais.get(s.get('slot_key')) == s.get('origem_chapa') else 'PENDENTE',
+                        'Status': 'APROVADO' if str(aprovados_atuais.get(s.get('slot_key')) or '').strip() else 'PENDENTE',
                         'Nome sugerido': s.get('origem_nome', ''),
                         'Chapa': s.get('origem_chapa', ''),
                         'Horário Caixa 01': s.get('origem_entrada', ''),
                         'Domingos origem': s.get('origem_domingos_label', ''),
                         'Última vez que foi para o Caixa 02': s.get('origem_ultimo_mes_destino_label', ''),
+                        'Selecionado agora': str(aprovados_atuais.get(s.get('slot_key')) or '').strip(),
                         'Sai do Caixa 02': s.get('destino_nome', ''),
                         'Domingos destino': s.get('destino_domingos_label', ''),
                         'Domingos iguais trabalho': int(s.get('domingos_trabalho_iguais_qtd', 0) or 0),
@@ -13714,12 +13715,13 @@ def page_app():
                                     format_func=lambda ch: mapa_alt.get(ch, ch),
                                 )
 
-                            bcol1, bcol2, bcol3 = st.columns([1, 1, 3])
-                            if bcol1.button('✅ Aprovar seleção', key=f'rod_caixa_ok_{slot_key}', use_container_width=True, disabled=aprovado and chapa_aprovada_slot == str(s.get('origem_chapa') or '').strip()):
+                            bcol1, bcol2, bcol3, bcol4 = st.columns([1, 1, 1, 3])
+                            if bcol1.button('✅ Aprovar seleção', key=f'rod_caixa_ok_{slot_key}', use_container_width=True):
                                 chapa_sel = str(st.session_state.get(f'rod_caixa_pick_{slot_key}', str(s.get('origem_chapa') or '')) or '').strip()
                                 tmp = dict(st.session_state.get(aprov_state_key, {}))
                                 tmp[slot_key] = chapa_sel or str(s.get('origem_chapa') or '')
                                 st.session_state[aprov_state_key] = tmp
+                                st.session_state.pop(state_base + "::aplicado", None)
                                 st.rerun()
                             if bcol2.button('❌ Negar e chamar próximo da fila', key=f'rod_caixa_no_{slot_key}', use_container_width=True):
                                 negs = list(st.session_state.get(neg_key, []))
@@ -13730,11 +13732,20 @@ def page_app():
                                 tmp.pop(slot_key, None)
                                 st.session_state[aprov_state_key] = tmp
                                 st.session_state[neg_state_key] = negs
+                                st.session_state.pop(state_base + "::aplicado", None)
+                                st.rerun()
+                            if bcol3.button('🔄 Resetar aprovação', key=f'rod_caixa_reset_{slot_key}', use_container_width=True, disabled=(not aprovado)):
+                                tmp = dict(st.session_state.get(aprov_state_key, {}))
+                                tmp.pop(slot_key, None)
+                                st.session_state[aprov_state_key] = tmp
+                                st.session_state.pop(state_base + "::aplicado", None)
                                 st.rerun()
                             if aprovado:
-                                bcol3.success('Aprovado para aplicação quando todas as 14 estiverem aprovadas.')
+                                chapa_sel_txt = str(aprovados_atuais.get(slot_key) or '').strip()
+                                nome_sel_txt = mapa_alt.get(chapa_sel_txt, chapa_sel_txt)
+                                bcol4.success(f'Aprovado manualmente. Seleção atual: {nome_sel_txt}')
                             else:
-                                bcol3.warning('Pendente de aprovação manual.')
+                                bcol4.warning('Pendente de aprovação manual.')
                 else:
                     st.warning("Nenhuma troca encontrada para aplicar neste mês.")
 
