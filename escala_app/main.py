@@ -886,81 +886,6 @@ def set_status_competencia(setor: str, ano: int, mes: int, status: str) -> None:
 def competencia_fechada(setor: str, ano: int, mes: int) -> bool:
     return get_status_competencia(setor, int(ano), int(mes)) == 'FECHADA'
 
-def _listar_setores_com_escala_ou_cadastro() -> list[str]:
-    setores = []
-    con = db_conn()
-    cur = con.cursor()
-    try:
-        cur.execute("""
-            SELECT DISTINCT UPPER(TRIM(setor)) AS setor
-            FROM colaboradores
-            WHERE TRIM(COALESCE(setor, '')) <> ''
-        """)
-        for row in cur.fetchall() or []:
-            s = str((row[0] if row else '') or '').strip().upper()
-            if s and s not in ('ADMIN',):
-                setores.append(s)
-
-        cur.execute("""
-            SELECT DISTINCT UPPER(TRIM(setor)) AS setor
-            FROM escala_mes
-            WHERE TRIM(COALESCE(setor, '')) <> ''
-        """)
-        for row in cur.fetchall() or []:
-            s = str((row[0] if row else '') or '').strip().upper()
-            if s and s not in ('ADMIN',):
-                setores.append(s)
-    except Exception:
-        pass
-    finally:
-        con.close()
-    return sorted(set(setores))
-
-
-def auto_congelar_competencia_mes_anterior() -> None:
-    """
-    Quando vira o mês, fecha automaticamente a competência anterior
-    para todos os setores que tenham escala gerada naquele mês.
-    É idempotente: pode rodar várias vezes sem quebrar nada.
-    """
-    ensure_competencia_runtime_tables()
-
-    hoje = datetime.now()
-    ano_ref = int(hoje.year)
-    mes_ref = int(hoje.month) - 1
-    if mes_ref <= 0:
-        mes_ref = 12
-        ano_ref -= 1
-
-    con = db_conn()
-    cur = con.cursor()
-    try:
-        for setor in _listar_setores_com_escala_ou_cadastro():
-            try:
-                cur.execute(
-                    """
-                    SELECT COUNT(1)
-                    FROM escala_mes
-                    WHERE UPPER(TRIM(setor)) = UPPER(TRIM(?)) AND ano = ? AND mes = ?
-                    """,
-                    (setor, int(ano_ref), int(mes_ref)),
-                )
-                qtd = int((cur.fetchone() or [0])[0] or 0)
-            except Exception:
-                qtd = 0
-
-            if qtd <= 0:
-                continue
-
-            try:
-                if not competencia_fechada(setor, int(ano_ref), int(mes_ref)):
-                    set_status_competencia(setor, int(ano_ref), int(mes_ref), 'FECHADA')
-            except Exception:
-                pass
-    finally:
-        con.close()
-
-
 
 def _snapshot_primeira_entrada(df_hist: pd.DataFrame, entrada_base: str = '06:00') -> str:
     try:
@@ -6148,6 +6073,72 @@ def admin_get_logins_leve_all() -> pd.DataFrame:
             FROM usuarios_sistema
             """,
             con,
+        )
+    finally:
+        con.close()
+
+
+@st.cache_data(show_spinner=False, ttl=300)
+def admin_get_setores_funcionarios() -> list[str]:
+    con = db_conn()
+    try:
+        df = pd.read_sql_query(
+            """
+            SELECT DISTINCT UPPER(TRIM(COALESCE(setor,''))) AS setor
+            FROM colaboradores
+            WHERE TRIM(COALESCE(setor,'')) <> ''
+            ORDER BY setor ASC
+            """,
+            con,
+        )
+    finally:
+        con.close()
+    return [str(x).strip() for x in df.get('setor', pd.Series(dtype=str)).tolist() if str(x).strip()]
+
+
+@st.cache_data(show_spinner=False, ttl=300)
+def admin_get_funcionarios_leve_setor(setor: str) -> pd.DataFrame:
+    setor = _norm_setor(setor)
+    con = db_conn()
+    try:
+        return pd.read_sql_query(
+            """
+            SELECT
+                COALESCE(nome,'') AS nome,
+                UPPER(TRIM(COALESCE(setor,''))) AS setor,
+                TRIM(COALESCE(chapa,'')) AS chapa,
+                COALESCE(subgrupo,'') AS subgrupo,
+                COALESCE(entrada,'06:00') AS entrada,
+                COALESCE(folga_sab,0) AS folga_sab
+            FROM colaboradores
+            WHERE UPPER(TRIM(COALESCE(setor,''))) = ?
+            ORDER BY nome ASC
+            """,
+            con,
+            params=(setor,),
+        )
+    finally:
+        con.close()
+
+
+@st.cache_data(show_spinner=False, ttl=300)
+def admin_get_logins_leve_setor(setor: str) -> pd.DataFrame:
+    setor = _norm_setor(setor)
+    con = db_conn()
+    try:
+        return pd.read_sql_query(
+            """
+            SELECT
+                UPPER(TRIM(COALESCE(setor,''))) AS setor,
+                TRIM(COALESCE(chapa,'')) AS chapa,
+                COALESCE(is_admin,0) AS is_admin,
+                COALESCE(is_lider,0) AS is_lider,
+                COALESCE(is_ax_lider,0) AS is_ax_lider
+            FROM usuarios_sistema
+            WHERE UPPER(TRIM(COALESCE(setor,''))) = ?
+            """,
+            con,
+            params=(setor,),
         )
     finally:
         con.close()
@@ -14859,23 +14850,41 @@ def page_app():
             st.warning("NOVO BLOCO ADMIN ATIVO: aqui você altera subgrupo e perfil do sistema do funcionário.")
             st.caption("Aqui o ADMIN pode alterar nome, subgrupo e perfil do colaborador em qualquer setor. O perfil sincroniza o login do sistema.")
             try:
-                df_func_adm = admin_get_funcionarios_leve_all()
-                df_login_adm = admin_get_logins_leve_all()
+                setores_func = admin_get_setores_funcionarios()
             except Exception:
-                df_func_adm = pd.DataFrame(columns=['nome','setor','chapa','subgrupo','entrada','folga_sab'])
-                df_login_adm = pd.DataFrame(columns=['setor','chapa','is_admin','is_lider','is_ax_lider'])
+                setores_func = []
 
-            if df_func_adm.empty:
+            if not setores_func:
                 st.info("Nenhum colaborador cadastrado para atualizar.")
             else:
-                setores_func = sorted({_norm_setor(x) for x in df_func_adm['setor'].dropna().tolist() if str(x).strip()})
                 admf1, admf2 = st.columns([1, 1.7])
                 with admf1:
                     setor_func = st.selectbox("Setor do funcionário", setores_func, key="adm_func_setor")
-                df_func_setor = df_func_adm[df_func_adm['setor'].astype(str).str.strip().str.upper() == _norm_setor(setor_func)].copy()
+                try:
+                    df_func_setor = admin_get_funcionarios_leve_setor(setor_func)
+                    df_login_adm = admin_get_logins_leve_setor(setor_func)
+                except Exception:
+                    df_func_setor = pd.DataFrame(columns=['nome','setor','chapa','subgrupo','entrada','folga_sab'])
+                    df_login_adm = pd.DataFrame(columns=['setor','chapa','is_admin','is_lider','is_ax_lider'])
+
+                busca_func = admf2.text_input("Buscar funcionário (nome, chapa ou subgrupo)", key="adm_func_busca")
+                if busca_func and not df_func_setor.empty:
+                    termo = str(busca_func or '').strip().lower()
+                    mask = (
+                        df_func_setor['nome'].astype(str).str.lower().str.contains(termo, na=False)
+                        | df_func_setor['chapa'].astype(str).str.lower().str.contains(termo, na=False)
+                        | df_func_setor['subgrupo'].astype(str).str.lower().str.contains(termo, na=False)
+                    )
+                    df_func_setor = df_func_setor.loc[mask].copy()
+
+                total_func_setor = len(df_func_setor)
+                limite_func = 200
+                if total_func_setor > limite_func:
+                    st.caption(f"Exibindo os primeiros {limite_func} de {total_func_setor} colaboradores para não travar a tela. Use a busca para filtrar.")
+                    df_func_setor = df_func_setor.head(limite_func).copy()
+
                 opts_func = [f"{str(r['nome']).strip()} ({str(r['chapa']).strip()})" for _, r in df_func_setor.iterrows()]
-                with admf2:
-                    pick_func = st.selectbox("Funcionário", opts_func, key="adm_func_pick") if opts_func else None
+                pick_func = st.selectbox("Funcionário", opts_func, key="adm_func_pick") if opts_func else None
 
                 rec_func = None
                 chapa_func = ""
@@ -15392,7 +15401,6 @@ if st.session_state["auth"] is None and QUICK_LOGIN_BOOT:
 else:
     if not st.session_state.get("_full_boot_done", False):
         db_init()
-        auto_congelar_competencia_mes_anterior()
         if not FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP:
             auto_backup_if_due()
         st.session_state["_full_boot_done"] = True
