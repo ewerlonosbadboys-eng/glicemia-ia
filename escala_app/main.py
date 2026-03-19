@@ -1228,6 +1228,111 @@ def salvar_retificacao_competencia(setor: str, ano: int, mes: int, chapa: str, d
     clear_retificacao_related_caches()
 
 
+def excluir_retificacao_competencia(setor: str, ano: int, mes: int, chapa: str, dia: int) -> bool:
+    """Exclui uma retificação errada da competência e recompõe os espelhos do mês."""
+    setor = str(setor or '').strip()
+    ano = int(ano)
+    mes = int(mes)
+    chapa = str(chapa or '').strip()
+    dia = int(dia)
+
+    con = db_conn()
+    cur = con.cursor()
+    try:
+        try:
+            cur.execute("PRAGMA busy_timeout = 5000")
+        except Exception:
+            pass
+
+        cur.execute(
+            "SELECT id, COALESCE(NULLIF(novo_subgrupo,''), '') FROM retificacoes_competencia WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=? AND dia=? LIMIT 1",
+            (setor, ano, mes, chapa, dia)
+        )
+        row = cur.fetchone()
+        if not row:
+            return False
+
+        cur.execute(
+            "DELETE FROM retificacoes_competencia WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=? AND dia=?",
+            (setor, ano, mes, chapa, dia)
+        )
+
+        cur.execute(
+            "SELECT COALESCE(NULLIF(novo_subgrupo,''), '') FROM retificacoes_competencia WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=? AND COALESCE(NULLIF(novo_subgrupo,''), '')<>'' ORDER BY criado_em DESC LIMIT 1",
+            (setor, ano, mes, chapa)
+        )
+        row_sub = cur.fetchone()
+        if row_sub and str(row_sub[0] or '').strip():
+            cur.execute(
+                """
+                INSERT INTO subgrupo_competencia(setor, ano, mes, chapa, subgrupo, atualizado_em)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(setor, ano, mes, chapa) DO UPDATE SET
+                    subgrupo=excluded.subgrupo,
+                    atualizado_em=excluded.atualizado_em
+                """,
+                (setor, ano, mes, chapa, str(row_sub[0]).strip(), datetime.now().isoformat())
+            )
+        else:
+            cur.execute(
+                "DELETE FROM subgrupo_competencia WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=?",
+                (setor, ano, mes, chapa)
+            )
+
+        cur.execute(
+            "DELETE FROM colaborador_competencia_snapshot WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=?",
+            (setor, ano, mes, chapa)
+        )
+
+        con.commit()
+    finally:
+        con.close()
+
+    try:
+        rebuild_colaborador_competencia_snapshot(setor, ano, mes)
+    except Exception:
+        pass
+
+    clear_retificacao_related_caches()
+    return True
+
+
+def render_excluir_retificacao_ui(setor: str, ano: int, mes: int, df_ret_list: pd.DataFrame, key_sfx: str = '') -> None:
+    try:
+        if df_ret_list is None or df_ret_list.empty:
+            return
+        opcoes = []
+        mapa = {}
+        for _, r in df_ret_list.iterrows():
+            dia = int(r.get('dia') or 0)
+            nome = str(r.get('nome') or '').strip()
+            chapa = str(r.get('chapa') or '').strip()
+            sub = str(r.get('novo_subgrupo') or '').strip()
+            stx = str(r.get('novo_status') or '').strip()
+            label = f"Dia {dia} | {nome} ({chapa}) | Status: {stx or '-'} | Subgrupo: {sub or '-'}"
+            opcoes.append(label)
+            mapa[label] = {'dia': dia, 'chapa': chapa, 'nome': nome}
+
+        st.markdown('##### Excluir retificação errada')
+        alvo = st.selectbox('Escolha a retificação para excluir', options=opcoes, key=f'excluir_ret_sel::{setor}::{ano}::{mes}::{key_sfx}')
+        info = mapa.get(alvo or '') or {}
+        cols_exc = st.columns([1, 2])
+        if cols_exc[0].button('🗑️ Excluir retificação selecionada', key=f'excluir_ret_btn::{setor}::{ano}::{mes}::{key_sfx}', use_container_width=True):
+            if not info.get('chapa') or not int(info.get('dia') or 0):
+                st.warning('Selecione uma retificação válida para excluir.')
+            else:
+                with st.spinner('Excluindo retificação...'):
+                    ok = excluir_retificacao_competencia(setor, ano, mes, str(info.get('chapa')), int(info.get('dia')))
+                if ok:
+                    st.success('Retificação excluída com sucesso.')
+                    st.rerun()
+                else:
+                    st.warning('Não foi possível excluir a retificação selecionada.')
+        cols_exc[1].caption('A exclusão remove a retificação desta competência e recompõe o espelho congelado do mês.')
+    except Exception as e:
+        st.warning(f'Falha ao abrir exclusão de retificação: {e}')
+
+
 @st.cache_data(show_spinner=False, ttl=120)
 def load_retificacoes_competencia(setor: str, ano: int, mes: int) -> pd.DataFrame:
     con = db_conn()
@@ -14097,6 +14202,7 @@ def page_app():
                         if df_ret_list is not None and not df_ret_list.empty:
                             st.markdown('#### Retificações já registradas nesta competência')
                             st.dataframe(df_ret_list[[c for c in ['dia','nome','chapa','novo_status','nova_entrada','nova_saida','novo_subgrupo','motivo','usuario','criado_em'] if c in df_ret_list.columns]], use_container_width=True, hide_index=True)
+                            render_excluir_retificacao_ui(setor, ano, mes, df_ret_list, key_sfx='ajustes_hist')
 
                 elif sec_aj == "📊 Contagens por dia":
                     st.markdown("### 📊 Contagens por dia")
@@ -14409,6 +14515,7 @@ def page_app():
                     st.markdown('#### Retificações já registradas nesta competência')
                     cols_view = [c for c in ['dia', 'nome', 'chapa', 'novo_status', 'nova_entrada', 'nova_saida', 'novo_subgrupo', 'motivo', 'usuario', 'criado_em'] if c in df_ret_list.columns]
                     st.dataframe(df_ret_list[cols_view], use_container_width=True, hide_index=True)
+                    render_excluir_retificacao_ui(setor, ano, mes, df_ret_list, key_sfx='ajustes_live')
 
         if sec_aj == "✅ Preferência por subgrupo":
             st.markdown("### ✅ Preferência por subgrupo (Evitar folga se possível)")
