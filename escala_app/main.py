@@ -677,6 +677,100 @@ def aplicar_ultra_visual_empresa_total(sidebar_compact: bool = False):
     </style>
     """, unsafe_allow_html=True)
 
+
+def aplicar_tabelas_premium_total():
+    st.markdown("""
+    <style>
+    /* TABELAS DO APP — visual unificado premium */
+    .stDataFrame,
+    div[data-testid="stDataFrame"],
+    div[data-testid="stTable"] {
+        background: linear-gradient(180deg, rgba(6,18,39,0.98), rgba(3,10,24,0.98)) !important;
+        border: 1px solid rgba(96,165,250,0.28) !important;
+        border-radius: 22px !important;
+        box-shadow: 0 22px 52px rgba(0,0,0,0.34) !important;
+        overflow: hidden !important;
+    }
+
+    div[data-testid="stTable"] table,
+    [data-testid="stDataFrameResizable"] table {
+        width: 100% !important;
+        border-collapse: separate !important;
+        border-spacing: 0 !important;
+        background: transparent !important;
+    }
+
+    div[data-testid="stTable"] thead tr,
+    div[data-testid="stTable"] thead th,
+    [data-testid="stDataFrameResizable"] thead tr,
+    [data-testid="stDataFrameResizable"] th {
+        background: linear-gradient(180deg, rgba(18,47,104,1), rgba(9,24,53,1)) !important;
+        color: #f4f8ff !important;
+        text-transform: uppercase !important;
+        letter-spacing: .045em !important;
+        font-size: 11px !important;
+        font-weight: 800 !important;
+        border-bottom: 1px solid rgba(96,165,250,0.34) !important;
+        padding-top: 12px !important;
+        padding-bottom: 12px !important;
+    }
+
+    div[data-testid="stTable"] tbody td,
+    [data-testid="stDataFrameResizable"] td {
+        background: rgba(3,11,25,0.97) !important;
+        color: #f5f9ff !important;
+        border-bottom: 1px solid rgba(255,255,255,0.06) !important;
+        padding-top: 10px !important;
+        padding-bottom: 10px !important;
+    }
+
+    div[data-testid="stTable"] tbody tr:nth-child(odd) td,
+    [data-testid="stDataFrameResizable"] tbody tr:nth-child(odd) td {
+        background: rgba(4,13,29,0.98) !important;
+    }
+
+    div[data-testid="stTable"] tbody tr:nth-child(even) td,
+    [data-testid="stDataFrameResizable"] tbody tr:nth-child(even) td {
+        background: rgba(8,18,38,0.98) !important;
+    }
+
+    div[data-testid="stTable"] tbody tr:hover td,
+    [data-testid="stDataFrameResizable"] tbody tr:hover td {
+        background: linear-gradient(90deg, rgba(10,32,71,0.99), rgba(8,22,48,0.99)) !important;
+        box-shadow: inset 0 1px 0 rgba(96,165,250,0.12), inset 0 -1px 0 rgba(96,165,250,0.12) !important;
+    }
+
+    [data-testid="stDataFrameResizable"] > div {
+        background: transparent !important;
+    }
+
+    .stDataFrame [data-testid="stVerticalBlock"],
+    div[data-testid="stTable"] [data-testid="stVerticalBlock"] {
+        background: transparent !important;
+    }
+
+    /* scrollbar elegante em todas as tabelas */
+    [data-testid="stDataFrameResizable"] *::-webkit-scrollbar,
+    div[data-testid="stTable"] *::-webkit-scrollbar {
+        width: 10px;
+        height: 10px;
+    }
+
+    [data-testid="stDataFrameResizable"] *::-webkit-scrollbar-track,
+    div[data-testid="stTable"] *::-webkit-scrollbar-track {
+        background: rgba(255,255,255,0.04);
+        border-radius: 999px;
+    }
+
+    [data-testid="stDataFrameResizable"] *::-webkit-scrollbar-thumb,
+    div[data-testid="stTable"] *::-webkit-scrollbar-thumb {
+        background: linear-gradient(180deg, rgba(96,165,250,0.85), rgba(37,99,235,0.85));
+        border-radius: 999px;
+        border: 2px solid rgba(5,14,30,0.65);
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
 VERSAO_ACESSO_LIDER = "ACESSO_LIDER_FIX_2026_03_14_v2"
 
 # =========================================================
@@ -11965,6 +12059,7 @@ def page_app():
     aplicar_tema_premium_etapa1()
     aplicar_reforco_visual_etapa5()
     aplicar_ultra_visual_empresa_total(bool(st.session_state.get("ultra_sidebar_compact", False)))
+    aplicar_tabelas_premium_total()
     auth = st.session_state.get("auth") or {}
     setor = auth.get("setor", "GERAL")
     _lideranca_ok_nav = bool(auth.get('is_lider', False)) or bool(auth.get('is_ax_lider', False)) or colaborador_eh_lideranca(setor, auth.get('chapa',''))
@@ -15240,7 +15335,7 @@ def _fast_restore_bundled_latest_before_start() -> None:
 
 # =========================================================
 # MAIN
-# ========================================================= 
+# =========================================================
 _fast_restore_bundled_latest_before_start()
 validar_contrato_sistema()
 
