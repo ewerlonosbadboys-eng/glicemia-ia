@@ -12079,7 +12079,7 @@ def page_app():
     # SIDEBAR — Sessão + Competência
     # =========================
     with st.sidebar:
-        st.title("⚡ Painel")
+        st.title("ESCALA 5X2 AUTOMATIZADA")
 
         _ano_sb = int(st.session_state.get('cfg_ano') or datetime.now().year)
         _mes_sb = int(st.session_state.get('cfg_mes') or datetime.now().month)
@@ -12130,7 +12130,7 @@ def page_app():
             f"Perfil: {perfil_label} • Setor: {setor} • Chapa: {auth.get('chapa','-')} • "
             f"Subgrupo: {_subgrupo_auth} • Competência {int(st.session_state['cfg_mes']):02d}/{int(st.session_state['cfg_ano'])}"
         ),
-        "⚡ Painel executivo",
+        "ESCALA 5X2 AUTOMATIZADA",
     )
     ui_section("Navegação principal", "As abas e fluxos abaixo continuam seguindo as mesmas permissões, aprovações e regras já definidas no sistema.")
 
