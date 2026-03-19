@@ -2552,6 +2552,7 @@ def get_app_like_nav_config(is_admin_area: bool, setor: str = ""):
     setor_norm = str(setor or "").strip().upper()
     colabs = [
         ("👥 Colaboradores", {"sec_main": "👥 Colaboradores", "sec_col": "👥 Colaboradores"}),
+        ("👥 Colaborador", {"sec_main": "👥 Colaboradores", "sec_col": "👥 Colaborador"}),
         ("➕ Cadastrar colaborador", {"sec_main": "👥 Colaboradores", "sec_col": "➕ Cadastrar colaborador"}),
         ("✏️ Editar perfil", {"sec_main": "👥 Colaboradores", "sec_col": "✏️ Editar perfil"}),
         ("🔑 Alterar senha", {"sec_main": "👥 Colaboradores", "sec_col": "🔑 Alterar senha colaborador"}),
@@ -2667,48 +2668,23 @@ def render_app_like_top_nav(is_admin_area: bool, setor: str = ""):
     st.markdown("""
     <style>
     .app-top-nav-wrap{position:sticky;top:0;z-index:40;background:rgba(3,11,30,.96);padding:8px 0 10px 0;margin-bottom:10px;}
-    .app-top-nav-wrap div[data-testid="stHorizontalBlock"]{gap:14px !important;align-items:stretch !important;}
-    .app-top-nav-wrap div[data-testid="stHorizontalBlock"] > div{min-width:0 !important;}
-    .app-top-nav-wrap .stButton{width:100% !important;}
-    .app-top-nav-wrap .stButton > button{width:100% !important;min-height:96px !important;white-space:normal !important;line-height:1.18 !important;font-size:1.08rem !important;border-radius:18px !important;padding:1.05rem 1rem !important;}
+    .app-top-nav-wrap .stButton > button{min-height:52px !important;white-space:normal !important;line-height:1.18 !important;font-size:1rem !important;}
     </style>
     """, unsafe_allow_html=True)
     st.markdown('<div class="app-top-nav-wrap">', unsafe_allow_html=True)
-    if is_admin_area:
-        cols = st.columns([1.0, 0.8])
-        with cols[0]:
+    cols = st.columns(len(main_keys))
+    for col, key in zip(cols, main_keys):
+        label = cfg[key]["label"]
+        with col:
             clicked = st.button(
-                cfg["admin"]["label"],
-                key="app_like_top_btn::admin",
+                label,
+                key=f"app_like_top_btn::{key}",
                 use_container_width=True,
-                type="primary" if current_main == "admin" else "secondary",
+                type="primary" if current_main == key else "secondary",
             )
             if clicked:
-                st.session_state["app_like_main"] = "admin"
-                st.session_state["app_like_sub"] = cfg["admin"]["default_sub"]
-                st.rerun()
-        with cols[1]:
-            if st.button("🚪 Sair", key="app_like_top_btn::logout", use_container_width=True, type="secondary"):
-                st.session_state["auth"] = None
-                st.rerun()
-    else:
-        cols = st.columns([1, 1, 1, 1, 0.8])
-        for col, key in zip(cols[:4], main_keys):
-            label = cfg[key]["label"]
-            with col:
-                clicked = st.button(
-                    label,
-                    key=f"app_like_top_btn::{key}",
-                    use_container_width=True,
-                    type="primary" if current_main == key else "secondary",
-                )
-                if clicked:
-                    st.session_state["app_like_main"] = key
-                    st.session_state["app_like_sub"] = cfg[key]["default_sub"]
-                    st.rerun()
-        with cols[4]:
-            if st.button("🚪 Sair", key="app_like_top_btn::logout", use_container_width=True, type="secondary"):
-                st.session_state["auth"] = None
+                st.session_state["app_like_main"] = key
+                st.session_state["app_like_sub"] = cfg[key]["default_sub"]
                 st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -12194,6 +12170,7 @@ def page_app():
 
             setor_norm = str(setor or "").strip().upper()
             botoes_colab = [
+                ("👥 Colaborador", "👥 Colaborador", "col_menu_colaborador"),
                 ("➕ Cadastrar colaborador", "➕ Cadastrar colaborador", "col_menu_cadastro"),
                 ("✏️ Editar perfil", "✏️ Editar perfil", "col_menu_perfil"),
                 ("🔑 Alterar senha", "🔑 Alterar senha colaborador", "col_menu_senha"),
@@ -12216,6 +12193,43 @@ def page_app():
                     idx_btn_colab += 1
 
             st.info("Clique em uma das opções acima para abrir o conteúdo de Colaboradores.")
+
+        elif sec_col == "👥 Colaborador":
+            ui_back_header("👥 Colaborador", "colaboradores", "👥 Colaboradores")
+            colaboradores = load_colaboradores_setor(setor)
+            if colaboradores:
+                df_col = pd.DataFrame([{
+                    "Nome": c.get("Nome", ""),
+                    "Chapa": c.get("Chapa", ""),
+                    "Subgrupo": c.get("Subgrupo", "") or "SEM SUBGRUPO",
+                    "Entrada": c.get("Entrada", ""),
+                    "Folga Sábado": "Sim" if c.get("Folga_Sab", False) else "Não",
+                } for c in colaboradores])
+
+                cbus1, cbus2, cbus3 = st.columns([2, 1, 1])
+                termo = cbus1.text_input("Buscar nome/chapa/subgrupo", key="col_busca_fast")
+                tam_pagina = cbus2.selectbox("Por página", [10, 15, 20, 30, 50], index=1, key="col_page_size_fast")
+
+                if termo:
+                    termo_n = str(termo).strip().lower()
+                    mask = (
+                        df_col["Nome"].astype(str).str.lower().str.contains(termo_n, na=False)
+                        | df_col["Chapa"].astype(str).str.lower().str.contains(termo_n, na=False)
+                        | df_col["Subgrupo"].astype(str).str.lower().str.contains(termo_n, na=False)
+                    )
+                    df_view = df_col.loc[mask].reset_index(drop=True)
+                else:
+                    df_view = df_col.reset_index(drop=True)
+
+                total_regs = len(df_view)
+                total_pag = max(1, (total_regs + int(tam_pagina) - 1) // int(tam_pagina))
+                pagina = cbus3.number_input("Página", min_value=1, max_value=total_pag, value=1, step=1, key="col_page_fast")
+                ini = (int(pagina) - 1) * int(tam_pagina)
+                fim = ini + int(tam_pagina)
+                st.caption(f"Mostrando {min(total_regs, 0 if total_regs == 0 else ini + 1)}–{min(total_regs, fim)} de {total_regs} registro(s).")
+                st.dataframe(df_view.iloc[ini:fim], use_container_width=True, height=420)
+            else:
+                st.info("Sem colaboradores.")
 
         elif sec_col == "➕ Cadastrar colaborador":
             colaboradores = load_colaboradores_setor(setor)
@@ -15222,7 +15236,7 @@ def _fast_restore_bundled_latest_before_start() -> None:
 
 # =========================================================
 # MAIN
-# ========================================================= 
+# =========================================================
 _fast_restore_bundled_latest_before_start()
 validar_contrato_sistema()
 
