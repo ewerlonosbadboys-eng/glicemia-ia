@@ -886,6 +886,81 @@ def set_status_competencia(setor: str, ano: int, mes: int, status: str) -> None:
 def competencia_fechada(setor: str, ano: int, mes: int) -> bool:
     return get_status_competencia(setor, int(ano), int(mes)) == 'FECHADA'
 
+def _listar_setores_com_escala_ou_cadastro() -> list[str]:
+    setores = []
+    con = db_conn()
+    cur = con.cursor()
+    try:
+        cur.execute("""
+            SELECT DISTINCT UPPER(TRIM(setor)) AS setor
+            FROM colaboradores
+            WHERE TRIM(COALESCE(setor, '')) <> ''
+        """)
+        for row in cur.fetchall() or []:
+            s = str((row[0] if row else '') or '').strip().upper()
+            if s and s not in ('ADMIN',):
+                setores.append(s)
+
+        cur.execute("""
+            SELECT DISTINCT UPPER(TRIM(setor)) AS setor
+            FROM escala_mes
+            WHERE TRIM(COALESCE(setor, '')) <> ''
+        """)
+        for row in cur.fetchall() or []:
+            s = str((row[0] if row else '') or '').strip().upper()
+            if s and s not in ('ADMIN',):
+                setores.append(s)
+    except Exception:
+        pass
+    finally:
+        con.close()
+    return sorted(set(setores))
+
+
+def auto_congelar_competencia_mes_anterior() -> None:
+    """
+    Quando vira o mês, fecha automaticamente a competência anterior
+    para todos os setores que tenham escala gerada naquele mês.
+    É idempotente: pode rodar várias vezes sem quebrar nada.
+    """
+    ensure_competencia_runtime_tables()
+
+    hoje = datetime.now()
+    ano_ref = int(hoje.year)
+    mes_ref = int(hoje.month) - 1
+    if mes_ref <= 0:
+        mes_ref = 12
+        ano_ref -= 1
+
+    con = db_conn()
+    cur = con.cursor()
+    try:
+        for setor in _listar_setores_com_escala_ou_cadastro():
+            try:
+                cur.execute(
+                    """
+                    SELECT COUNT(1)
+                    FROM escala_mes
+                    WHERE UPPER(TRIM(setor)) = UPPER(TRIM(?)) AND ano = ? AND mes = ?
+                    """,
+                    (setor, int(ano_ref), int(mes_ref)),
+                )
+                qtd = int((cur.fetchone() or [0])[0] or 0)
+            except Exception:
+                qtd = 0
+
+            if qtd <= 0:
+                continue
+
+            try:
+                if not competencia_fechada(setor, int(ano_ref), int(mes_ref)):
+                    set_status_competencia(setor, int(ano_ref), int(mes_ref), 'FECHADA')
+            except Exception:
+                pass
+    finally:
+        con.close()
+
+
 
 def _snapshot_primeira_entrada(df_hist: pd.DataFrame, entrada_base: str = '06:00') -> str:
     try:
@@ -15317,6 +15392,7 @@ if st.session_state["auth"] is None and QUICK_LOGIN_BOOT:
 else:
     if not st.session_state.get("_full_boot_done", False):
         db_init()
+        auto_congelar_competencia_mes_anterior()
         if not FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP:
             auto_backup_if_due()
         st.session_state["_full_boot_done"] = True
