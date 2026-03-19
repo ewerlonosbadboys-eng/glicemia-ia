@@ -2722,8 +2722,15 @@ def resolve_app_like_route(is_admin_area: bool, setor: str = ""):
     current_sub = st.session_state.get("app_like_sub")
     if current_sub not in labels:
         current_sub = cfg[current_main]["default_sub"]
+        st.session_state["app_like_sub"] = current_sub
+
     route_map = {label: route for label, route in submenus}
     route = dict(route_map.get(current_sub, {}))
+
+    override = st.session_state.pop("app_like_route_override", None)
+    if isinstance(override, dict):
+        route.update(override)
+
     route["main_group"] = current_main
     route["sub_label"] = current_sub
     return route
@@ -6437,35 +6444,23 @@ def update_colaborador_perfil(setor: str, chapa_antiga: str, chapa_nova: str, no
 
 @st.cache_data(show_spinner=False, ttl=120)
 def load_colaboradores_setor(setor: str):
-    setor_raw = str(setor or '').strip()
-    setor_norm = _norm_setor(setor_raw)
     con = db_conn()
     cur = con.cursor()
-    try:
-        cur.execute("""
-            SELECT nome, chapa, subgrupo, entrada, folga_sab, setor
-            FROM colaboradores
-            WHERE UPPER(TRIM(setor))=?
-            ORDER BY nome ASC
-        """, (setor_norm,))
-        rows = cur.fetchall()
-        if not rows and setor_raw:
-            cur.execute("""
-                SELECT nome, chapa, subgrupo, entrada, folga_sab, setor
-                FROM colaboradores
-                WHERE TRIM(setor)=?
-                ORDER BY nome ASC
-            """, (setor_raw,))
-            rows = cur.fetchall()
-    finally:
-        con.close()
+    cur.execute("""
+        SELECT nome, chapa, subgrupo, entrada, folga_sab
+        FROM colaboradores
+        WHERE setor=?
+        ORDER BY nome ASC
+    """, (setor,))
+    rows = cur.fetchall()
+    con.close()
     return [{
         "Nome": r[0],
         "Chapa": r[1],
         "Subgrupo": (r[2] or "").strip(),
         "Entrada": (r[3] or "06:00").strip(),
         "Folga_Sab": bool(r[4]),
-        "Setor": str((r[5] if len(r) > 5 else setor_raw) or setor_raw).strip(),
+        "Setor": setor,
     } for r in rows]
 
 
@@ -12258,7 +12253,8 @@ def page_app():
                     label_btn, destino_btn, key_btn = botoes_colab[idx_btn_colab]
                     with col_btn:
                         if st.button(label_btn, key=key_btn, use_container_width=True):
-                            st.session_state["app_like_sub"] = destino_btn
+                            st.session_state["app_like_sub"] = label_btn
+                            st.session_state["app_like_route_override"] = destino_btn
                             st.rerun()
                     idx_btn_colab += 1
 
@@ -12456,11 +12452,8 @@ def page_app():
                 st.markdown("---")
 
         elif sec_col == "🔑 Alterar senha colaborador":
-            colaboradores = load_colaboradores_setor(setor) or []
+            colaboradores = load_colaboradores_setor(setor)
             ui_back_header("🔑 Alterar senha colaborador", "colaboradores", "👥 Colaboradores")
-            if not colaboradores:
-                st.warning("Nenhum colaborador foi encontrado para este setor na tela de alteração de senha.")
-                st.caption(f"Setor atual do login: {str(setor or '').strip()}")
             if colaboradores:
                 chapas = [c["Chapa"] for c in colaboradores]
                 nome_by_chapa = {c["Chapa"]: c.get("Nome", "") for c in colaboradores}
