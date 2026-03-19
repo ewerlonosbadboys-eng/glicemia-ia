@@ -2590,7 +2590,7 @@ def get_app_like_nav_config(is_admin_area: bool, setor: str = ""):
         ("👥 Colaborador", {"sec_main": "👥 Colaboradores", "sec_col": "👥 Colaborador"}),
         ("➕ Cadastrar colaborador", {"sec_main": "👥 Colaboradores", "sec_col": "➕ Cadastrar colaborador"}),
         ("✏️ Editar perfil", {"sec_main": "👥 Colaboradores", "sec_col": "✏️ Editar perfil"}),
-        ("🔑 Alterar senha", {"sec_main": "👥 Colaboradores", "sec_col": "🔑 Alterar senha colaborador"}),
+        ("🔑 Alterar senha", {"sec_main": "👥 Colaboradores", "sec_col": "🔑 Alterar senha"}),
         ("🗑️ Excluir colaborador", {"sec_main": "👥 Colaboradores", "sec_col": "🗑️ Excluir colaborador"}),
         ("🧾 Aprovações AX", {"sec_main": "👥 Colaboradores", "sec_col": "🧾 Aprovações AX"}),
     ]
@@ -12241,7 +12241,7 @@ def page_app():
                 ("👥 Colaborador", "👥 Colaborador", "col_menu_colaborador"),
                 ("➕ Cadastrar colaborador", "➕ Cadastrar colaborador", "col_menu_cadastro"),
                 ("✏️ Editar perfil", "✏️ Editar perfil", "col_menu_perfil"),
-                ("🔑 Alterar senha", "🔑 Alterar senha colaborador", "col_menu_senha"),
+                ("🔑 Alterar senha", "🔑 Alterar senha", "col_menu_senha"),
                 ("🗑️ Excluir colaborador", "🗑️ Excluir colaborador", "col_menu_excluir"),
                 ("🧾 Aprovações AX", "🧾 Aprovações AX", "col_menu_ax"),
             ]
@@ -12453,7 +12453,7 @@ def page_app():
 
                 st.markdown("---")
 
-        elif sec_col == "🔑 Alterar senha colaborador":
+        elif sec_col in ["🔑 Alterar senha", "🔑 Alterar senha colaborador"]:
             colaboradores = load_colaboradores_setor(setor) or []
             ui_back_header("🔑 Alterar senha colaborador", "colaboradores", "👥 Colaboradores")
             if not colaboradores:
@@ -15307,7 +15307,7 @@ def _fast_restore_bundled_latest_before_start() -> None:
 
 # =========================================================
 # MAIN
-# ========================================================= 
+# =========================================================
 _fast_restore_bundled_latest_before_start()
 validar_contrato_sistema()
 
