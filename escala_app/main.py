@@ -7157,6 +7157,30 @@ def _clone_colaborador_base(c: dict) -> dict:
     }
 
 
+def load_colaboradores_setor_competencia(setor: str, ano: int, mes: int) -> list[dict]:
+    """
+    Lista base do setor com overlay da competência selecionada para exibição imediata.
+    Não altera o cadastro base; apenas mostra Subgrupo/Entrada/Folga_Sab do mês quando existirem.
+    """
+    atuais = [_clone_colaborador_base(c) for c in (load_colaboradores_setor(setor) or [])]
+    if not atuais:
+        return []
+
+    ano = int(ano)
+    mes = int(mes)
+    for base in atuais:
+        ch = str(base.get('Chapa') or '').strip()
+        if not ch:
+            continue
+        snap = get_colaborador_competencia_snapshot(setor, ch, ano, mes)
+        base['Subgrupo'] = get_subgrupo_competencia_ou_base(setor, ch, ano, mes, base.get('Subgrupo', ''))
+        if snap:
+            base['Nome'] = str(snap.get('Nome') or base.get('Nome') or '').strip()
+            base['Entrada'] = str(snap.get('Entrada') or base.get('Entrada') or '').strip() or '06:00'
+            base['Folga_Sab'] = bool(snap.get('Folga_Sab', base.get('Folga_Sab', False)))
+    return atuais
+
+
 def _rodizio_caixa_base_mes_anterior_congelado(setor: str, ano: int, mes: int) -> list[dict]:
     atuais = [_clone_colaborador_base(c) for c in (load_colaboradores_setor(setor) or [])]
     mapa = {str(c.get('Chapa') or '').strip(): c for c in atuais if str(c.get('Chapa') or '').strip()}
@@ -13213,7 +13237,10 @@ def page_app():
 
         elif sec_col == "👥 Colaborador":
             ui_back_header("👥 Colaborador", "colaboradores", "👥 Colaboradores")
-            colaboradores = load_colaboradores_setor(setor)
+            ano_vis = int(st.session_state.get("cfg_ano", datetime.now().year))
+            mes_vis = int(st.session_state.get("cfg_mes", datetime.now().month))
+            colaboradores = load_colaboradores_setor_competencia(setor, ano_vis, mes_vis)
+            st.caption(f"Exibindo Subgrupo/Entrada conforme a competência {mes_vis:02d}/{ano_vis}.")
             if colaboradores:
                 df_col = pd.DataFrame([{
                     "Nome": c.get("Nome", ""),
@@ -13334,8 +13361,11 @@ def page_app():
             st.markdown("---")
 
         elif sec_col == "✏️ Editar perfil":
-            colaboradores = load_colaboradores_setor(setor)
+            ano_vis = int(st.session_state.get("cfg_ano", datetime.now().year))
+            mes_vis = int(st.session_state.get("cfg_mes", datetime.now().month))
+            colaboradores = load_colaboradores_setor_competencia(setor, ano_vis, mes_vis)
             ui_back_header("✏️ Editar perfil do colaborador", "colaboradores", "👥 Colaboradores")
+            st.caption(f"Valores exibidos conforme a competência {mes_vis:02d}/{ano_vis}.")
             if colaboradores:
                 chapas = [c["Chapa"] for c in colaboradores]
                 nome_by_chapa = {c["Chapa"]: c.get("Nome", "") for c in colaboradores}
