@@ -7972,6 +7972,108 @@ def sincronizar_subgrupos_base_rodizio_caixa(setor: str, ano: int, mes: int, sub
         'msg': f'Subgrupos base sincronizados manualmente para {len(chapas_afetadas)} colaborador(es) em {int(mes):02d}/{int(ano)}. Gere a escala novamente para refletir a troca.'
     }
 
+
+
+def resetar_rodizio_caixa_mes(setor: str, ano: int, mes: int, subgrupo_origem: str = 'OPERADOR DE CAIXA 01', subgrupo_destino: str = 'OPERADOR DE CAIXA 02'):
+    """
+    Zera o rodízio aplicado da competência atual para permitir nova rodada de aprovação.
+    - reverte colaboradores afetados para o subgrupo/entrada anteriores ao rodízio
+    - apaga o histórico do rodízio da competência
+    - limpa desenho salvo/overrides de horário/status dos afetados para regeneração limpa
+    """
+    con = db_conn()
+    cur = con.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT chapa, nome, movimento, subgrupo_origem, subgrupo_destino, entrada_antiga, entrada_nova
+            FROM rodizio_caixa_hist
+            WHERE setor=? AND ano=? AND mes=?
+              AND (
+                    (UPPER(movimento) LIKE 'ENTRA_DESTINO%' AND subgrupo_origem=? AND subgrupo_destino=?)
+                 OR (UPPER(movimento) LIKE 'SAI_DESTINO%' AND subgrupo_origem=? AND subgrupo_destino=?)
+              )
+            ORDER BY criado_em DESC, id DESC
+            """,
+            (setor, int(ano), int(mes), subgrupo_origem, subgrupo_destino, subgrupo_destino, subgrupo_origem)
+        )
+        rows = cur.fetchall() or []
+        if not rows:
+            return {'ok': False, 'msg': f'Nenhum rodízio aplicado foi encontrado em {int(mes):02d}/{int(ano)} para zerar.'}
+
+        # usa a origem histórica como fonte da verdade para voltar o cadastro base
+        atualizacoes = {}
+        for chapa, nome, movimento, sg_origem_hist, sg_destino_hist, entrada_antiga, entrada_nova in rows:
+            ch = str(chapa or '').strip()
+            if not ch or ch in atualizacoes:
+                continue
+            atualizacoes[ch] = {
+                'subgrupo': str(sg_origem_hist or '').strip() or subgrupo_origem,
+                'entrada': str(entrada_antiga or '').strip() or '06:00',
+            }
+
+        chapas_afetadas = sorted(atualizacoes.keys())
+        cur.execute('BEGIN')
+        for ch in chapas_afetadas:
+            info = atualizacoes[ch]
+            cur.execute(
+                "UPDATE colaboradores SET subgrupo=?, entrada=? WHERE setor=? AND chapa=?",
+                (info['subgrupo'], info['entrada'], setor, ch)
+            )
+
+        # apaga o histórico do rodízio desta competência (inclusive complementar)
+        cur.execute(
+            """
+            DELETE FROM rodizio_caixa_hist
+            WHERE setor=? AND ano=? AND mes=?
+              AND (
+                    (UPPER(movimento) LIKE 'ENTRA_DESTINO%' AND subgrupo_origem=? AND subgrupo_destino=?)
+                 OR (UPPER(movimento) LIKE 'SAI_DESTINO%' AND subgrupo_origem=? AND subgrupo_destino=?)
+              )
+            """,
+            (setor, int(ano), int(mes), subgrupo_origem, subgrupo_destino, subgrupo_destino, subgrupo_origem)
+        )
+
+        # remove espelho mensal do rodízio para os afetados; o usuário pode sincronizar manualmente depois, se quiser
+        if chapas_afetadas:
+            marks = ','.join(['?'] * len(chapas_afetadas))
+            params_base = [setor, int(ano), int(mes), *chapas_afetadas]
+            cur.execute(
+                f"DELETE FROM subgrupo_competencia WHERE setor=? AND ano=? AND mes=? AND chapa IN ({marks})",
+                params_base
+            )
+            cur.execute(
+                f"DELETE FROM escala_mes WHERE setor=? AND ano=? AND mes=? AND chapa IN ({marks})",
+                params_base
+            )
+            cur.execute(
+                f"""
+                DELETE FROM overrides
+                WHERE setor=? AND ano=? AND mes=?
+                  AND chapa IN ({marks})
+                  AND campo IN ('H_Entrada', 'H_Saida', 'Status')
+                """,
+                params_base
+            )
+
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        con.close()
+
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+
+    return {
+        'ok': True,
+        'msg': f'Rodízio de {int(mes):02d}/{int(ano)} zerado. Agora você pode aprovar/negar novamente e sincronizar a base manualmente depois.'
+    }
+
+
 # =========================================================
 # SUBGRUPOS + REGRAS
 # =========================================================
@@ -13378,19 +13480,38 @@ def page_app():
                 mes_r = int(st.session_state.get('cfg_mes', datetime.now().month))
                 _status_comp_rod = get_status_competencia(setor, ano_r, mes_r)
 
+                hist_mes = get_rodizio_caixa_hist_mes(setor, ano_r, mes_r, subgrupo_origem, subgrupo_destino)
+                rodizio_ja_aplicado_mes = bool(hist_mes)
+
                 bcfg1, bcfg2, _bcfg3 = st.columns([1, 1, 4])
                 if bcfg1.button("Salvar configuração do rodízio", key='rod_caixa_save_cfg', use_container_width=True, disabled=(_status_comp_rod == 'FECHADA')):
                     set_rodizio_caixa_cfg(setor, subgrupo_origem, subgrupo_destino, qtd_destino, tolerancia, True)
                     st.success("Configuração salva.")
                     st.rerun()
-                if bcfg2.button("Voltar do zero", key='rod_caixa_reset_cfg', use_container_width=True, disabled=(_status_comp_rod == 'FECHADA')):
-                    st.session_state['rod_caixa_origem'] = 'OPERADOR DE CAIXA 01'
-                    st.session_state['rod_caixa_destino'] = 'OPERADOR DE CAIXA 02'
-                    st.session_state['rod_caixa_qtd'] = 14
-                    st.session_state['rod_caixa_tol'] = 20
-                    set_rodizio_caixa_cfg(setor, 'OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02', 14, 20, True)
-                    st.success('Configuração resetada para o padrão.')
-                    st.rerun()
+                label_reset = "Zerar o que foi aplicado neste mês" if rodizio_ja_aplicado_mes else "Voltar do zero"
+                if bcfg2.button(label_reset, key='rod_caixa_reset_cfg', use_container_width=True, disabled=(_status_comp_rod == 'FECHADA')):
+                    if rodizio_ja_aplicado_mes:
+                        try:
+                            res_reset = resetar_rodizio_caixa_mes(setor, ano_r, mes_r, subgrupo_origem, subgrupo_destino)
+                            if res_reset.get('ok'):
+                                # limpa aprovações/negações da rodada para permitir nova escolha
+                                base_reset = f"rod_caixa_aprov::{setor}::{ano_r}::{mes_r}::{subgrupo_origem}::{subgrupo_destino}"
+                                for suf in ["::aprovados", "::negados", "::aplicado", "::complementar_aprovados"]:
+                                    st.session_state.pop(base_reset + suf, None)
+                                st.success(res_reset.get('msg', 'Rodízio zerado com sucesso.'))
+                                st.rerun()
+                            else:
+                                st.warning(res_reset.get('msg', 'Não foi possível zerar o rodízio desta competência.'))
+                        except Exception as e:
+                            st.error(f'Falha ao zerar rodízio da competência: {e}')
+                    else:
+                        st.session_state['rod_caixa_origem'] = 'OPERADOR DE CAIXA 01'
+                        st.session_state['rod_caixa_destino'] = 'OPERADOR DE CAIXA 02'
+                        st.session_state['rod_caixa_qtd'] = 14
+                        st.session_state['rod_caixa_tol'] = 20
+                        set_rodizio_caixa_cfg(setor, 'OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02', 14, 20, True)
+                        st.success('Configuração resetada para o padrão.')
+                        st.rerun()
                 if _status_comp_rod == 'FECHADA':
                     st.error(f'🔒 Competência {mes_r:02d}/{ano_r} fechada: o rodízio deste mês fica somente para consulta.')
                 state_base = f"rod_caixa_aprov::{setor}::{ano_r}::{mes_r}::{subgrupo_origem}::{subgrupo_destino}"
@@ -13400,9 +13521,6 @@ def page_app():
                     st.session_state[aprov_key] = {}
                 if neg_key not in st.session_state:
                     st.session_state[neg_key] = []
-
-                hist_mes = get_rodizio_caixa_hist_mes(setor, ano_r, mes_r, subgrupo_origem, subgrupo_destino)
-                rodizio_ja_aplicado_mes = bool(hist_mes)
 
                 sim = simular_rodizio_caixa_mes(
                     setor,
@@ -14465,7 +14583,6 @@ def page_app():
                 base_status = ''
                 base_ent = str(colab_ret.get('Entrada') or '06:00').strip()
                 base_sai = _saida_from_entrada(base_ent)
-                # Subgrupo é sempre mensal na competência, nunca diário.
                 base_sub = get_subgrupo_competencia_ou_base(setor, chapa_ret, int(ano), int(mes), str(colab_ret.get('Subgrupo') or '').strip())
                 if df_ret_hist is not None and len(df_ret_hist) >= dia_ret:
                     base_status = str(df_ret_hist.loc[dia_ret - 1, 'Status'] or '').strip()
@@ -14473,31 +14590,16 @@ def page_app():
                     base_sai = str(df_ret_hist.loc[dia_ret - 1, 'H_Saida'] or '').strip()
 
                 ret_exist = get_retificacao_competencia_por_chapa_dia(setor, ano, mes, chapa_ret, dia_ret) if chapa_ret else {}
-                df_ret_list_all = load_retificacoes_competencia(setor, ano, mes)
-                ret_outros_dias = []
-                if chapa_ret and df_ret_list_all is not None and not df_ret_list_all.empty and 'chapa' in df_ret_list_all.columns:
-                    _tmp = df_ret_list_all.copy()
-                    _tmp['chapa'] = _tmp['chapa'].astype(str).str.strip()
-                    if 'dia' in _tmp.columns:
-                        _tmp['dia'] = pd.to_numeric(_tmp['dia'], errors='coerce').fillna(0).astype(int)
-                    _tmp = _tmp[_tmp['chapa'] == chapa_ret]
-                    if not _tmp.empty:
-                        ret_outros_dias = sorted({int(x) for x in _tmp['dia'].tolist() if int(x) != int(dia_ret)})
-
                 valor_status = str(ret_exist.get('novo_status') or '').strip() or base_status
                 valor_ent = str(ret_exist.get('nova_entrada') or '').strip() or base_ent
                 valor_sai = str(ret_exist.get('nova_saida') or '').strip() or base_sai
-                # Sempre prioriza o subgrupo mensal oficial da competência.
-                valor_sub = get_subgrupo_competencia_ou_base(setor, chapa_ret, int(ano), int(mes), base_sub)
+                valor_sub = get_subgrupo_competencia_ou_base(setor, chapa_ret, int(ano), int(mes), str(ret_exist.get('novo_subgrupo') or '').strip() or base_sub)
                 valor_motivo = str(ret_exist.get('motivo') or '').strip()
 
                 if ret_exist:
                     st.success(f"Já existe retificação salva para {label_ret} no dia {dia_ret}. Os campos abaixo vieram preenchidos para atualização.")
                 else:
-                    st.info(f"Base do dia {dia_ret:02d}/{int(mes):02d}/{int(ano)} → Status: {base_status or '-'} | Entrada: {base_ent or '-'} | Saída: {base_sai or '-'} | Subgrupo mensal oficial: {valor_sub or '-'}")
-                    if ret_outros_dias:
-                        dias_txt = ', '.join(str(x) for x in ret_outros_dias[:12])
-                        st.caption(f"Esta pessoa já possui retificação em outros dias desta competência: {dias_txt}.")
+                    st.info(f"Base do dia {dia_ret:02d}/{int(mes):02d}/{int(ano)} → Status: {base_status or '-'} | Entrada: {base_ent or '-'} | Saída: {base_sai or '-'} | Subgrupo mensal: {valor_sub or '-'}")
 
                 colra, colrb, colrc, colrd = st.columns([1, 1, 1, 1])
                 status_opts = ['', 'Trabalho', 'Folga', 'Férias', 'Afastamento']
@@ -14562,10 +14664,9 @@ def page_app():
                 df_ret_list = load_retificacoes_competencia(setor, ano, mes)
                 if df_ret_list is not None and not df_ret_list.empty:
                     st.markdown('#### Retificações já registradas nesta competência')
-                    # Excluir aparece antes da tabela para ficar visível sem precisar rolar até o fim.
-                    render_excluir_retificacao_ui(setor, ano, mes, df_ret_list, key_sfx='ajustes_live')
                     cols_view = [c for c in ['dia', 'nome', 'chapa', 'novo_status', 'nova_entrada', 'nova_saida', 'novo_subgrupo', 'motivo', 'usuario', 'criado_em'] if c in df_ret_list.columns]
                     st.dataframe(df_ret_list[cols_view], use_container_width=True, hide_index=True)
+                    render_excluir_retificacao_ui(setor, ano, mes, df_ret_list, key_sfx='ajustes_live')
 
         if sec_aj == "✅ Preferência por subgrupo":
             st.markdown("### ✅ Preferência por subgrupo (Evitar folga se possível)")
