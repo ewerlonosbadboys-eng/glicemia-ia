@@ -7731,6 +7731,154 @@ def simular_rodizio_caixa_mes(
         pares.append(dict(row))
         cont_slot_por_horario[horario_ref] = int(cont_slot_por_horario.get(horario_ref, 0)) + 1
 
+    # Completa até a quantidade obrigatória com entrada direta no Caixa 02,
+    # sem depender de existir uma saída correspondente no destino.
+    if len(pares) < int(qtd_obrigatoria):
+        selecionados_horario = {}
+        for p in pares:
+            hh = str(p.get('horario_ref') or '')
+            selecionados_horario[hh] = int(selecionados_horario.get(hh, 0)) + 1
+
+        def _pool_complemento(horario_ref: str) -> list[dict]:
+            ref_min = _hora_to_min(horario_ref)
+            ranked = []
+            for cand in candidatos or []:
+                ch = str(cand.get('Chapa') or '').strip()
+                ent = str(cand.get('Entrada') or '').strip()
+                ent_min = _hora_to_min(ent)
+                if not ch or ch in usados_origem or ch in negados_set or ent_min is None or ref_min is None:
+                    continue
+                diff_hor = abs(int(ent_min) - int(ref_min))
+                if diff_hor > 60:
+                    continue
+                domingos_orig = int(domingos_map.get(ch, 0) or 0)
+                last_move = int(last_move_map.get(ch, 0) or 0)
+                ranked.append((0 if ent == horario_ref else 1, diff_hor, domingos_orig, last_move, str(cand.get('Nome') or '').upper(), cand))
+            ranked.sort(key=lambda x: (x[0], x[1], x[2], x[3], x[4]))
+            return [x[-1] for x in ranked]
+
+        for cota_info in _rodizio_caixa_cotas_custom(setor, subgrupo_destino):
+            if len(pares) >= int(qtd_obrigatoria):
+                break
+            horario_ref = str(cota_info.get('horario_ref') or '')
+            qtd_horario = int(cota_info.get('qtd_final') or 0)
+            faltam_h = max(0, int(qtd_horario) - int(selecionados_horario.get(horario_ref, 0)))
+            while faltam_h > 0 and len(pares) < int(qtd_obrigatoria):
+                pool = _pool_complemento(horario_ref)
+                if not pool:
+                    break
+                cand = pool[0]
+                ch = str(cand.get('Chapa') or '').strip()
+                ent = str(cand.get('Entrada') or '').strip()
+                usados_origem.add(ch)
+                domingos_orig = int(domingos_map.get(ch, 0) or 0)
+                diff_hor = abs(int((_hora_to_min(ent) or 0)) - int((_hora_to_min(horario_ref) or 0)))
+                row = {
+                    'slot_key': f'entrada_direta|{horario_ref}|{len(slots)}|{ch}',
+                    'origem_chapa': ch,
+                    'origem_nome': str(cand.get('Nome') or ''),
+                    'origem_subgrupo': subgrupo_origem,
+                    'origem_entrada': ent,
+                    'origem_nova_entrada': horario_ref,
+                    'origem_domingos': int(domingos_orig),
+                    'origem_domingos_label': _rodizio_domingos_label(domingos_detalhe_map.get(ch)),
+                    'origem_ultimo_mes_destino': int(last_move_map.get(ch, 0) or 0),
+                    'origem_ultimo_mes_destino_label': _rodizio_format_ym(int(last_move_map.get(ch, 0) or 0)),
+                    'destino_chapa': '',
+                    'destino_nome': '',
+                    'destino_subgrupo': subgrupo_destino,
+                    'destino_entrada': '',
+                    'destino_domingos': 0,
+                    'destino_domingos_label': '-',
+                    'diff_domingos': 0,
+                    'domingos_trabalho_iguais_qtd': 0,
+                    'domingos_folga_iguais_qtd': 0,
+                    'domingos_trabalho_iguais_label': '-',
+                    'domingos_folga_iguais_label': '-',
+                    'compatibilidade': _classificar_compat_horario(ent, horario_ref, tolerancia_min=max(60, int(tolerancia_min or 0))),
+                    'observacao': f'Entrada direta complementar para fechar as {qtd_obrigatoria} vagas do {subgrupo_destino}, respeitando regra fixa por horário ({horario_ref}) com fallback de até 1 hora.',
+                    'horario_ref': horario_ref,
+                    'alternativas_mesmo_horario': max(0, sum(1 for c in candidatos if str(c.get('Entrada') or '').strip() == horario_ref and str(c.get('Chapa') or '').strip() not in negados_set) - 1),
+                    'alternativas_ate_1h': max(0, len(_pool_complemento(horario_ref)) - 1),
+                    'fallback_horario_proximo': bool(ent != horario_ref),
+                    'fallback_destino_horario_proximo': False,
+                    'diff_horario_ref_min': int(diff_hor),
+                    'diff_destino_ref_min': 0,
+                    'aprovado_manual': False,
+                    'alternativas_opcoes': [],
+                }
+                slots.append(dict(row))
+                pares.append(dict(row))
+                selecionados_horario[horario_ref] = int(selecionados_horario.get(horario_ref, 0)) + 1
+                faltam_h -= 1
+
+        # Último fallback: se ainda faltar, completa com os melhores restantes por qualquer horário de regra.
+        if len(pares) < int(qtd_obrigatoria):
+            horarios_ref = [str(c.get('horario_ref') or '') for c in _rodizio_caixa_cotas_custom(setor, subgrupo_destino)]
+            candidatos_rest = []
+            for cand in candidatos or []:
+                ch = str(cand.get('Chapa') or '').strip()
+                ent = str(cand.get('Entrada') or '').strip()
+                ent_min = _hora_to_min(ent)
+                if not ch or ch in usados_origem or ch in negados_set or ent_min is None:
+                    continue
+                melhor_h = None
+                melhor_diff = None
+                for h in horarios_ref:
+                    hmin = _hora_to_min(h)
+                    if hmin is None:
+                        continue
+                    diff = abs(int(ent_min) - int(hmin))
+                    if diff <= 60 and (melhor_diff is None or diff < melhor_diff):
+                        melhor_diff = diff
+                        melhor_h = h
+                if melhor_h is None:
+                    continue
+                candidatos_rest.append((int(melhor_diff), int(last_move_map.get(ch, 0) or 0), str(cand.get('Nome') or '').upper(), cand, melhor_h))
+            candidatos_rest.sort(key=lambda x: (x[0], x[1], x[2]))
+            for diff_hor, _last, _nm, cand, horario_ref in candidatos_rest:
+                if len(pares) >= int(qtd_obrigatoria):
+                    break
+                ch = str(cand.get('Chapa') or '').strip()
+                ent = str(cand.get('Entrada') or '').strip()
+                usados_origem.add(ch)
+                row = {
+                    'slot_key': f'entrada_direta_final|{horario_ref}|{len(slots)}|{ch}',
+                    'origem_chapa': ch,
+                    'origem_nome': str(cand.get('Nome') or ''),
+                    'origem_subgrupo': subgrupo_origem,
+                    'origem_entrada': ent,
+                    'origem_nova_entrada': horario_ref,
+                    'origem_domingos': int(domingos_map.get(ch, 0) or 0),
+                    'origem_domingos_label': _rodizio_domingos_label(domingos_detalhe_map.get(ch)),
+                    'origem_ultimo_mes_destino': int(last_move_map.get(ch, 0) or 0),
+                    'origem_ultimo_mes_destino_label': _rodizio_format_ym(int(last_move_map.get(ch, 0) or 0)),
+                    'destino_chapa': '',
+                    'destino_nome': '',
+                    'destino_subgrupo': subgrupo_destino,
+                    'destino_entrada': '',
+                    'destino_domingos': 0,
+                    'destino_domingos_label': '-',
+                    'diff_domingos': 0,
+                    'domingos_trabalho_iguais_qtd': 0,
+                    'domingos_folga_iguais_qtd': 0,
+                    'domingos_trabalho_iguais_label': '-',
+                    'domingos_folga_iguais_label': '-',
+                    'compatibilidade': _classificar_compat_horario(ent, horario_ref, tolerancia_min=max(60, int(tolerancia_min or 0))),
+                    'observacao': f'Entrada direta complementar final para fechar as {qtd_obrigatoria} vagas do {subgrupo_destino}.',
+                    'horario_ref': horario_ref,
+                    'alternativas_mesmo_horario': 0,
+                    'alternativas_ate_1h': 0,
+                    'fallback_horario_proximo': bool(ent != horario_ref),
+                    'fallback_destino_horario_proximo': False,
+                    'diff_horario_ref_min': int(diff_hor),
+                    'diff_destino_ref_min': 0,
+                    'aprovado_manual': False,
+                    'alternativas_opcoes': [],
+                }
+                slots.append(dict(row))
+                pares.append(dict(row))
+
     ordem_horarios = {str(c.get('horario_ref') or ''): i for i, c in enumerate(_rodizio_caixa_cotas_custom(setor, subgrupo_destino))}
     slots = sorted(slots, key=lambda x: (ordem_horarios.get(str(x.get('horario_ref') or ''), 999), str(x.get('origem_entrada') or ''), str(x.get('origem_nome') or '').upper(), str(x.get('origem_chapa') or '')))
     pares = sorted(pares, key=lambda x: (ordem_horarios.get(str(x.get('horario_ref') or ''), 999), str(x.get('origem_entrada') or ''), str(x.get('origem_nome') or '').upper(), str(x.get('origem_chapa') or '')))
@@ -8153,39 +8301,16 @@ def resetar_rodizio_caixa_mes(setor: str, ano: int, mes: int, subgrupo_origem: s
 
 
 def _upsert_subgrupo_preview_competencia(setor: str, ano: int, mes: int, chapa: str, novo_subgrupo: str, nova_entrada: str | None = None):
-    """Aplica a troca de subgrupo no mês e também no cadastro base para refletir imediatamente em todas as telas."""
-    ensure_competencia_runtime_tables()
-    setor = _norm_setor(setor)
-    chapa = _norm_chapa(chapa)
+    chapa = str(chapa or '').strip()
     novo_subgrupo = str(novo_subgrupo or '').strip()
     nova_entrada = str(nova_entrada or '').strip()
     if not chapa or not novo_subgrupo:
-        return False
-
+        return
     ts = datetime.now().isoformat()
     con = db_conn()
     cur = con.cursor()
     try:
-        try:
-            cur.execute("PRAGMA busy_timeout = 5000")
-        except Exception:
-            pass
-
-        cur.execute(
-            """
-            SELECT nome, subgrupo, entrada, COALESCE(folga_sab, 0)
-            FROM colaboradores
-            WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND TRIM(chapa)=?
-            LIMIT 1
-            """,
-            (setor, chapa)
-        )
-        row_col = cur.fetchone()
-        nome = str((row_col[0] if row_col else '') or '').strip()
-        entrada_base = str((row_col[2] if row_col else '') or '').strip()
-        folga_sab = int((row_col[3] if row_col else 0) or 0)
-
-        entrada_final = nova_entrada or entrada_base
+        entrada_final = nova_entrada
         if not entrada_final:
             cur.execute(
                 "SELECT entrada FROM colaborador_competencia_snapshot WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=? LIMIT 1",
@@ -8194,7 +8319,15 @@ def _upsert_subgrupo_preview_competencia(setor: str, ano: int, mes: int, chapa: 
             row_snap = cur.fetchone()
             if row_snap and str(row_snap[0] or '').strip():
                 entrada_final = str(row_snap[0] or '').strip()
-        entrada_final = str(entrada_final or '06:00').strip() or '06:00'
+        if not entrada_final:
+            cur.execute(
+                "SELECT entrada FROM colaboradores WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND TRIM(chapa)=? LIMIT 1",
+                (setor, chapa)
+            )
+            row_col = cur.fetchone()
+            if row_col and str(row_col[0] or '').strip():
+                entrada_final = str(row_col[0] or '').strip()
+        entrada_final = entrada_final or '06:00'
 
         cur.execute(
             """
@@ -8206,30 +8339,21 @@ def _upsert_subgrupo_preview_competencia(setor: str, ano: int, mes: int, chapa: 
             """,
             (setor, int(ano), int(mes), chapa, novo_subgrupo, ts)
         )
-
         cur.execute(
             """
             INSERT INTO colaborador_competencia_snapshot(setor, ano, mes, chapa, nome, subgrupo, entrada, folga_sab, atualizado_em)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            SELECT ?, ?, ?, ?, COALESCE(NULLIF(nome,''), ''), ?, ?, COALESCE(folga_sab, 0), ?
+            FROM colaboradores
+            WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND TRIM(chapa)=?
             ON CONFLICT(setor, ano, mes, chapa) DO UPDATE SET
-                nome=excluded.nome,
+                nome=COALESCE(excluded.nome, colaborador_competencia_snapshot.nome),
                 subgrupo=excluded.subgrupo,
-                entrada=excluded.entrada,
-                folga_sab=excluded.folga_sab,
+                entrada=COALESCE(NULLIF(excluded.entrada,''), colaborador_competencia_snapshot.entrada),
+                folga_sab=COALESCE(excluded.folga_sab, colaborador_competencia_snapshot.folga_sab),
                 atualizado_em=excluded.atualizado_em
             """,
-            (setor, int(ano), int(mes), chapa, nome, novo_subgrupo, entrada_final, folga_sab, ts)
+            (setor, int(ano), int(mes), chapa, novo_subgrupo, entrada_final, ts, setor, chapa)
         )
-
-        cur.execute(
-            """
-            UPDATE colaboradores
-            SET subgrupo=?, entrada=COALESCE(NULLIF(?, ''), entrada)
-            WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND TRIM(chapa)=?
-            """,
-            (novo_subgrupo, entrada_final, setor, chapa)
-        )
-
         cur.execute(
             "DELETE FROM escala_mes WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=?",
             (setor, int(ano), int(mes), chapa)
@@ -8243,33 +8367,20 @@ def _upsert_subgrupo_preview_competencia(setor: str, ano: int, mes: int, chapa: 
             (setor, int(ano), int(mes), chapa)
         )
         con.commit()
-        return True
-    except Exception:
-        try:
-            con.rollback()
-        except Exception:
-            pass
-        return False
     finally:
         con.close()
 
 
 def _restaurar_subgrupo_preview_competencia(setor: str, ano: int, mes: int, chapa: str, subgrupo_base: str, entrada_base: str | None = None):
-    chapa = _norm_chapa(chapa)
-    setor = _norm_setor(setor)
+    chapa = str(chapa or '').strip()
     subgrupo_base = str(subgrupo_base or '').strip()
-    entrada_base = str(entrada_base or '').strip() or '06:00'
+    entrada_base = str(entrada_base or '').strip()
     if not chapa:
-        return False
+        return
     ts = datetime.now().isoformat()
     con = db_conn()
     cur = con.cursor()
     try:
-        try:
-            cur.execute("PRAGMA busy_timeout = 5000")
-        except Exception:
-            pass
-
         if subgrupo_base:
             cur.execute(
                 """
@@ -8286,15 +8397,6 @@ def _restaurar_subgrupo_preview_competencia(setor: str, ano: int, mes: int, chap
                 "DELETE FROM subgrupo_competencia WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=?",
                 (setor, int(ano), int(mes), chapa)
             )
-
-        cur.execute(
-            """
-            UPDATE colaboradores
-            SET subgrupo=?, entrada=COALESCE(NULLIF(?, ''), entrada)
-            WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND TRIM(chapa)=?
-            """,
-            (subgrupo_base, entrada_base, setor, chapa)
-        )
 
         cur.execute(
             "DELETE FROM colaborador_competencia_snapshot WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=?",
@@ -8320,42 +8422,39 @@ def _restaurar_subgrupo_preview_competencia(setor: str, ano: int, mes: int, chap
         rebuild_colaborador_competencia_snapshot(setor, int(ano), int(mes))
     except Exception:
         pass
-    return True
 
 
 def aplicar_preview_aprovacao_rodizio_caixa(setor: str, ano: int, mes: int, slot: dict, chapa_sel: str, subgrupo_origem: str = 'OPERADOR DE CAIXA 01', subgrupo_destino: str = 'OPERADOR DE CAIXA 02'):
-    """Ao aprovar, grava imediatamente a troca no mês e no cadastro base do par selecionado."""
+    """Ao aprovar, já grava a troca do mês no subgrupo_competencia/snapshot para refletir imediatamente na competência."""
     slot = dict(slot or {})
-    chapa_sel = _norm_chapa(chapa_sel or slot.get('origem_chapa') or '')
-    destino_chapa = _norm_chapa(slot.get('destino_chapa') or '')
-    setor = _norm_setor(setor)
-    if not chapa_sel or not destino_chapa:
-        return False
+    chapa_sel = str(chapa_sel or slot.get('origem_chapa') or '').strip()
+    destino_chapa = str(slot.get('destino_chapa') or '').strip()
+    if not chapa_sel:
+        return None
 
     alt_sel = None
-    if chapa_sel == _norm_chapa(slot.get('origem_chapa') or ''):
+    if chapa_sel == str(slot.get('origem_chapa') or '').strip():
         alt_sel = dict(slot)
     else:
         for alt in list(slot.get('alternativas_opcoes') or []):
-            if _norm_chapa(alt.get('chapa') or '') == chapa_sel:
+            if str(alt.get('chapa') or '').strip() == chapa_sel:
                 alt_sel = dict(alt)
                 break
     if alt_sel is None:
-        return False
+        return None
 
     entrada_sel_atual = str(alt_sel.get('entrada') or slot.get('origem_entrada') or '').strip() or '06:00'
-    entrada_destino_atual = str(slot.get('destino_entrada') or '').strip() or '06:00'
+    entrada_destino_atual = str(slot.get('destino_entrada') or '').strip() or str(slot.get('horario_ref') or '').strip() or '06:00'
 
-    ok_a = _upsert_subgrupo_preview_competencia(setor, ano, mes, chapa_sel, subgrupo_destino, entrada_destino_atual)
-    ok_b = _upsert_subgrupo_preview_competencia(setor, ano, mes, destino_chapa, subgrupo_origem, entrada_sel_atual)
+    _upsert_subgrupo_preview_competencia(setor, ano, mes, chapa_sel, subgrupo_destino, entrada_destino_atual)
+    if destino_chapa:
+        _upsert_subgrupo_preview_competencia(setor, ano, mes, destino_chapa, subgrupo_origem, entrada_sel_atual)
 
-    clear_retificacao_related_caches()
-    _clear_preview_cache(setor, int(ano), int(mes))
     try:
         st.cache_data.clear()
     except Exception:
         pass
-    return bool(ok_a and ok_b)
+    return None
 
 
 def resetar_preview_aprovacao_rodizio_caixa(setor: str, ano: int, mes: int, slot: dict, chapa_sel: str, subgrupo_origem: str = 'OPERADOR DE CAIXA 01', subgrupo_destino: str = 'OPERADOR DE CAIXA 02'):
@@ -8363,8 +8462,6 @@ def resetar_preview_aprovacao_rodizio_caixa(setor: str, ano: int, mes: int, slot
     slot = dict(slot or {})
     chapa_sel = str(chapa_sel or slot.get('origem_chapa') or '').strip()
     destino_chapa = str(slot.get('destino_chapa') or '').strip()
-    if not destino_chapa:
-        return None
 
     alt_sel = None
     if chapa_sel == str(slot.get('origem_chapa') or '').strip():
@@ -8376,11 +8473,12 @@ def resetar_preview_aprovacao_rodizio_caixa(setor: str, ano: int, mes: int, slot
                 break
 
     entrada_sel_original = str((alt_sel or {}).get('entrada') or slot.get('origem_entrada') or '').strip() or '06:00'
-    entrada_dest_original = str(slot.get('destino_entrada') or '').strip() or '06:00'
+    entrada_dest_original = str(slot.get('destino_entrada') or '').strip() or str(slot.get('horario_ref') or '').strip() or '06:00'
 
     if chapa_sel:
         _restaurar_subgrupo_preview_competencia(setor, ano, mes, chapa_sel, subgrupo_origem, entrada_sel_original)
-    _restaurar_subgrupo_preview_competencia(setor, ano, mes, destino_chapa, subgrupo_destino, entrada_dest_original)
+    if destino_chapa:
+        _restaurar_subgrupo_preview_competencia(setor, ano, mes, destino_chapa, subgrupo_destino, entrada_dest_original)
 
     try:
         st.cache_data.clear()
