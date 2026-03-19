@@ -6584,6 +6584,76 @@ def _rodizio_caixa_qtd_total() -> int:
     return int(sum(q for _, q in _rodizio_caixa_cotas_ordenadas()))
 
 
+def list_rodizio_caixa_regras_extras(setor: str, subgrupo_destino: str = 'OPERADOR DE CAIXA 02') -> list[dict]:
+    con = db_conn()
+    cur = con.cursor()
+    try:
+        cur.execute("""
+            SELECT horario_ref, qtd_extra, atualizado_em
+            FROM rodizio_caixa_regra_extra
+            WHERE setor=? AND subgrupo_destino=? AND COALESCE(qtd_extra, 0) > 0
+            ORDER BY horario_ref ASC
+        """, (setor, subgrupo_destino))
+        rows = cur.fetchall() or []
+    except Exception:
+        rows = []
+    finally:
+        con.close()
+    return [{
+        'Horário': str(r[0] or '').strip(),
+        'Qtd extra': int(r[1] or 0),
+        'Atualizado em': str(r[2] or ''),
+    } for r in rows]
+
+
+def set_rodizio_caixa_regra_extra(setor: str, horario_ref: str, qtd_extra: int, subgrupo_destino: str = 'OPERADOR DE CAIXA 02'):
+    horario_ref = str(horario_ref or '').strip()
+    qtd_extra = int(qtd_extra or 0)
+    con = db_conn()
+    cur = con.cursor()
+    try:
+        if qtd_extra <= 0:
+            cur.execute("DELETE FROM rodizio_caixa_regra_extra WHERE setor=? AND subgrupo_destino=? AND horario_ref=?", (setor, subgrupo_destino, horario_ref))
+        else:
+            ts = datetime.now().isoformat()
+            cur.execute("""
+                INSERT INTO rodizio_caixa_regra_extra(setor, subgrupo_destino, horario_ref, qtd_extra, criado_em, atualizado_em)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(setor, subgrupo_destino, horario_ref) DO UPDATE SET
+                    qtd_extra=excluded.qtd_extra,
+                    atualizado_em=excluded.atualizado_em
+            """, (setor, subgrupo_destino, horario_ref, qtd_extra, ts, ts))
+        con.commit()
+    finally:
+        con.close()
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+
+
+def _rodizio_caixa_cotas_custom(setor: str, subgrupo_destino: str = 'OPERADOR DE CAIXA 02') -> list[dict]:
+    base = {str(h): int(q) for h, q in _rodizio_caixa_cotas_ordenadas()}
+    extras_rows = list_rodizio_caixa_regras_extras(setor, subgrupo_destino)
+    extras = {str(r.get('Horário') or '').strip(): int(r.get('Qtd extra') or 0) for r in extras_rows}
+    horarios = sorted(set(list(base.keys()) + [h for h, q in extras.items() if int(q or 0) > 0]), key=lambda x: _hora_to_min(x) if _hora_to_min(x) is not None else 99999)
+    out = []
+    for h in horarios:
+        regra_base = int(base.get(h, 0) or 0)
+        qtd_extra = int(extras.get(h, 0) or 0)
+        regra_final = int(regra_base + qtd_extra)
+        if regra_final <= 0:
+            continue
+        out.append({
+            'horario_ref': h,
+            'regra_base': regra_base,
+            'qtd_extra': qtd_extra,
+            'qtd_final': regra_final,
+            'manual_extra': bool(qtd_extra > 0),
+        })
+    return out
+
+
 def _rodizio_caixa_candidatos_por_horario(candidatos_origem: list[dict], subgrupo_destino: str) -> dict[str, list[dict]]:
     grupos: dict[str, list[dict]] = {}
     for c in candidatos_origem or []:
@@ -6984,7 +7054,9 @@ def simular_ajuste_complementar_rodizio_caixa_mes(
         return [x[-1] for x in ranked]
 
     faltam_rest = int(faltam_total)
-    for horario_ref, qtd_regra in _rodizio_caixa_cotas_ordenadas():
+    for cota_info in _rodizio_caixa_cotas_custom(setor, subgrupo_destino):
+        horario_ref = str(cota_info.get('horario_ref') or '')
+        qtd_regra = int(cota_info.get('qtd_final') or 0)
         atual_h = int(cont_dest.get(horario_ref, 0) or 0)
         falta_h = max(0, int(qtd_regra) - atual_h)
         while falta_h > 0 and faltam_rest > 0:
@@ -7110,7 +7182,9 @@ def simular_rodizio_caixa_mes(
     cotas_resumo = []
 
     cotas_processamento = []
-    for horario_ref, qtd_horario in _rodizio_caixa_cotas_ordenadas():
+    for cota_info in _rodizio_caixa_cotas_custom(setor, subgrupo_destino):
+        horario_ref = str(cota_info.get('horario_ref') or '')
+        qtd_horario = int(cota_info.get('qtd_final') or 0)
         exatos_origem_tmp = [c for c in candidatos if str(c.get('Entrada') or '').strip() == horario_ref and str(c.get('Chapa') or '').strip() not in negados_set]
         exatos_destino_tmp = [d for d in destino_sel if str(d.get('Entrada') or '').strip() == horario_ref]
         pool_origem_tmp = _pool_horario_proximo(candidatos, horario_ref, set(), negados_set, 60)
@@ -7160,7 +7234,9 @@ def simular_rodizio_caixa_mes(
         qtd_slots = min(int(qtd_horario), len(pool_origem_inicio), len(pool_destino_inicio))
         cotas_resumo.append({
             'Horário': horario_ref,
-            'Regra': int(qtd_horario),
+            'Regra base': int(cota_info.get('regra_base') or 0),
+            'Extra manual': int(cota_info.get('qtd_extra') or 0),
+            'Regra final': int(qtd_horario),
             'Disponível origem': len(exatos_origem),
             'Disponível destino': len(exatos_destino),
             'Selecionados': int(qtd_slots),
@@ -7325,7 +7401,8 @@ def simular_rodizio_caixa_mes(
     # preenchimento final para fechar as 14 sugestões obrigatórias, usando qualquer horário até 1h a menos/mais
     while len(slots) < qtd_obrigatoria:
         melhor = None
-        for horario_ref, _qtd in _rodizio_caixa_cotas_ordenadas():
+        for cota_info in _rodizio_caixa_cotas_custom(setor, subgrupo_destino):
+            horario_ref = str(cota_info.get('horario_ref') or '')
             pool_destino = _pool_horario_proximo(destino_sel, horario_ref, usados_destino, set(), 60)
             pool_origem = _pool_horario_proximo(candidatos, horario_ref, usados_origem, negados_set, 60)
             if not pool_destino or not pool_origem:
@@ -7426,7 +7503,7 @@ def simular_rodizio_caixa_mes(
         pares.append(dict(row))
         cont_slot_por_horario[horario_ref] = int(cont_slot_por_horario.get(horario_ref, 0)) + 1
 
-    ordem_horarios = {h: i for i, (h, _q) in enumerate(_rodizio_caixa_cotas_ordenadas())}
+    ordem_horarios = {str(c.get('horario_ref') or ''): i for i, c in enumerate(_rodizio_caixa_cotas_custom(setor, subgrupo_destino))}
     slots = sorted(slots, key=lambda x: (ordem_horarios.get(str(x.get('horario_ref') or ''), 999), str(x.get('origem_entrada') or ''), str(x.get('origem_nome') or '').upper(), str(x.get('origem_chapa') or '')))
     pares = sorted(pares, key=lambda x: (ordem_horarios.get(str(x.get('horario_ref') or ''), 999), str(x.get('origem_entrada') or ''), str(x.get('origem_nome') or '').upper(), str(x.get('origem_chapa') or '')))
 
@@ -7435,19 +7512,24 @@ def simular_rodizio_caixa_mes(
         h = str(s.get('horario_ref') or '')
         resumo_por_horario[h] = int(resumo_por_horario.get(h, 0)) + 1
     cotas_resumo = []
-    for horario_ref, qtd_horario in _rodizio_caixa_cotas_ordenadas():
+    for cota_info in _rodizio_caixa_cotas_custom(setor, subgrupo_destino):
+        horario_ref = str(cota_info.get('horario_ref') or '')
+        qtd_horario = int(cota_info.get('qtd_final') or 0)
         exatos_origem = [c for c in candidatos if str(c.get('Entrada') or '').strip() == horario_ref and str(c.get('Chapa') or '').strip() not in negados_set]
         exatos_destino = [d for d in destino_sel if str(d.get('Entrada') or '').strip() == horario_ref]
         cotas_resumo.append({
             'Horário': horario_ref,
-            'Regra': int(qtd_horario),
+            'Regra base': int(cota_info.get('regra_base') or 0),
+            'Extra manual': int(cota_info.get('qtd_extra') or 0),
+            'Regra final': int(qtd_horario),
             'Disponível origem': len(exatos_origem),
             'Disponível destino': len(exatos_destino),
             'Selecionados': int(resumo_por_horario.get(horario_ref, 0)),
         })
 
     proximos = []
-    for horario_ref, _qtd in _rodizio_caixa_cotas_ordenadas():
+    for cota_info in _rodizio_caixa_cotas_custom(setor, subgrupo_destino):
+        horario_ref = str(cota_info.get('horario_ref') or '')
         fila_pool = _pool_horario_proximo(candidatos, horario_ref, usados_origem, negados_set, 60)
         for o in fila_pool:
             ch = str(o.get('Chapa') or '').strip()
@@ -13381,9 +13463,40 @@ def page_app():
                     st.dataframe(df_pares, use_container_width=True, height=380)
 
                 cotas_horario = sim.get('cotas_horario') or []
+                st.markdown("### Regra fixa por horário")
+                with st.expander("➕ Adicionar exceção manual por horário", expanded=False):
+                    cex1, cex2, cex3 = st.columns([1, 1, 2])
+                    horarios_base = [str(h) for h, _q in _rodizio_caixa_cotas_ordenadas()]
+                    horario_extra = cex1.selectbox('Horário da exceção', options=horarios_base, key=f'rod_extra_horario::{setor}::{ano_r}::{mes_r}')
+                    qtd_extra = cex2.number_input('Qtd extra manual', min_value=1, max_value=20, value=1, step=1, key=f'rod_extra_qtd::{setor}::{ano_r}::{mes_r}')
+                    cex3.caption('A regra automática continua em 14 pessoas. O extra manual serve só para você autorizar pessoas acima da regra automática.')
+                    a1, a2 = st.columns([1,2])
+                    if a1.button('Salvar exceção manual', key=f'rod_extra_save::{setor}::{ano_r}::{mes_r}', use_container_width=True):
+                        try:
+                            set_rodizio_caixa_regra_extra(setor, horario_extra, int(qtd_extra), subgrupo_destino)
+                            st.success(f'Exceção manual salva para {horario_extra}: +{int(qtd_extra)} pessoa(s).')
+                            st.rerun()
+                        except Exception as e:
+                            st.error(str(e))
+                    extras_ativas = list_rodizio_caixa_regras_extras(setor, subgrupo_destino)
+                    if extras_ativas:
+                        st.markdown('#### Extras manuais ativos')
+                        for extra in extras_ativas:
+                            ex1, ex2, ex3 = st.columns([1,1,1])
+                            ex1.write(f"Horário: {extra.get('Horário')}")
+                            ex2.write(f"Qtd extra: {extra.get('Qtd extra')}")
+                            if ex3.button('Remover', key=f"rod_extra_del::{setor}::{subgrupo_destino}::{extra.get('Horário')}", use_container_width=True):
+                                try:
+                                    set_rodizio_caixa_regra_extra(setor, str(extra.get('Horário') or ''), 0, subgrupo_destino)
+                                    st.success(f"Exceção removida do horário {extra.get('Horário')}.")
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(str(e))
+
                 if cotas_horario:
-                    st.markdown("### Regra fixa por horário")
                     st.dataframe(pd.DataFrame(cotas_horario), use_container_width=True, height=240)
+                    if any(int(r.get('Extra manual', 0) or 0) > 0 for r in cotas_horario):
+                        st.info('A coluna Extra manual mostra pessoas acima da regra automática. O automático segue 14; acima disso só entra por exceção manual.')
 
                 alertas = sim.get('alertas') or []
                 if alertas:
