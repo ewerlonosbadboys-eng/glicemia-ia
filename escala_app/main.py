@@ -14146,16 +14146,46 @@ def page_app():
                         base_status = ''
                         base_ent = str(colab_ret.get('Entrada') or '06:00').strip()
                         base_sai = _saida_from_entrada(base_ent)
+                        base_subgrupo = str(colab_ret.get('Subgrupo') or '').strip()
                         if df_ret_hist is not None and len(df_ret_hist) >= dia_ret:
                             base_status = str(df_ret_hist.loc[dia_ret - 1, 'Status'] or '').strip()
                             base_ent = str(df_ret_hist.loc[dia_ret - 1, 'H_Entrada'] or '').strip()
                             base_sai = str(df_ret_hist.loc[dia_ret - 1, 'H_Saida'] or '').strip()
+                            try:
+                                if 'Subgrupo' in df_ret_hist.columns:
+                                    base_subgrupo = str(df_ret_hist.loc[dia_ret - 1, 'Subgrupo'] or '').strip() or base_subgrupo
+                            except Exception:
+                                pass
+                        df_ret_exist = load_retificacoes_competencia(setor, ano, mes)
+                        ret_exist = None
+                        if df_ret_exist is not None and not df_ret_exist.empty:
+                            _mask = (
+                                df_ret_exist['chapa'].astype(str).str.strip().eq(chapa_ret)
+                                & pd.to_numeric(df_ret_exist['dia'], errors='coerce').fillna(0).astype(int).eq(int(dia_ret))
+                            )
+                            _found = df_ret_exist.loc[_mask].copy()
+                            if not _found.empty:
+                                if 'criado_em' in _found.columns:
+                                    _found = _found.sort_values('criado_em', ascending=False)
+                                ret_exist = _found.iloc[0].to_dict()
+                        val_status = str((ret_exist or {}).get('novo_status') or '').strip()
+                        val_ent = str((ret_exist or {}).get('nova_entrada') or base_ent).strip()
+                        val_sai = str((ret_exist or {}).get('nova_saida') or base_sai).strip()
+                        val_sub = str((ret_exist or {}).get('novo_subgrupo') or base_subgrupo).strip()
+                        val_motivo = str((ret_exist or {}).get('motivo') or '').strip()
+                        if ret_exist:
+                            st.info('Já existe retificação salva para este funcionário neste dia. Os campos abaixo foram carregados para atualização.')
+                        status_opts = ['', 'Trabalho', 'Folga', 'Férias', 'Afastamento']
+                        idx_status = status_opts.index(val_status) if val_status in status_opts else 0
+                        sub_opts = [''] + sorted(set(['OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02'] + [str(c.get('Subgrupo') or '').strip() for c in colaboradores_ret if str(c.get('Subgrupo') or '').strip()]))
+                        idx_sub = sub_opts.index(val_sub) if val_sub in sub_opts else 0
+                        _ret_key_base = f"{setor}::{ano}::{mes}::{chapa_ret}::{dia_ret}"
                         colra, colrb, colrc, colrd = st.columns([1,1,1,1])
-                        novo_status = colra.selectbox("Novo status", options=['', 'Trabalho', 'Folga', 'Férias', 'Afastamento'], index=0, key=f"ret_status::{setor}::{ano}::{mes}")
-                        nova_entrada = colrb.text_input("Nova entrada", value=base_ent, key=f"ret_ent::{setor}::{ano}::{mes}")
-                        nova_saida = colrc.text_input("Nova saída", value=base_sai, key=f"ret_sai::{setor}::{ano}::{mes}")
-                        novo_subgrupo = colrd.selectbox("Novo subgrupo", options=['', 'OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02'] + sorted({str(c.get('Subgrupo') or '').strip() for c in colaboradores_ret if str(c.get('Subgrupo') or '').strip()}), index=0, key=f"ret_sub::{setor}::{ano}::{mes}")
-                        motivo_ret = st.text_area("Motivo da retificação", key=f"ret_motivo::{setor}::{ano}::{mes}")
+                        novo_status = colra.selectbox("Novo status", options=status_opts, index=idx_status, key=f"ret_status::{_ret_key_base}")
+                        nova_entrada = colrb.text_input("Nova entrada", value=val_ent, key=f"ret_ent::{_ret_key_base}")
+                        nova_saida = colrc.text_input("Nova saída", value=val_sai, key=f"ret_sai::{_ret_key_base}")
+                        novo_subgrupo = colrd.selectbox("Novo subgrupo", options=sub_opts, index=idx_sub, key=f"ret_sub::{_ret_key_base}")
+                        motivo_ret = st.text_area("Motivo da retificação", value=val_motivo, key=f"ret_motivo::{_ret_key_base}")
                         if st.button("💾 Salvar retificação", key=f"ret_save::{setor}::{ano}::{mes}", use_container_width=True):
                             if not chapa_ret:
                                 st.warning('Selecione um funcionário válido.')
@@ -14450,22 +14480,42 @@ def page_app():
                     except Exception:
                         pass
 
+                df_ret_exist = load_retificacoes_competencia(setor, ano, mes)
+                ret_exist = None
+                if df_ret_exist is not None and not df_ret_exist.empty:
+                    _mask = (
+                        df_ret_exist['chapa'].astype(str).str.strip().eq(chapa_ret)
+                        & pd.to_numeric(df_ret_exist['dia'], errors='coerce').fillna(0).astype(int).eq(int(dia_ret))
+                    )
+                    _found = df_ret_exist.loc[_mask].copy()
+                    if not _found.empty:
+                        if 'criado_em' in _found.columns:
+                            _found = _found.sort_values('criado_em', ascending=False)
+                        ret_exist = _found.iloc[0].to_dict()
+                val_status = str((ret_exist or {}).get('novo_status') or base_status).strip()
+                val_ent = str((ret_exist or {}).get('nova_entrada') or base_ent).strip()
+                val_sai = str((ret_exist or {}).get('nova_saida') or base_sai).strip()
+                val_sub = str((ret_exist or {}).get('novo_subgrupo') or base_sub).strip()
+                val_motivo = str((ret_exist or {}).get('motivo') or '').strip()
                 st.info(f"Base do dia {dia_ret:02d}/{int(mes):02d}/{int(ano)} → Status: {base_status or '-'} | Entrada: {base_ent or '-'} | Saída: {base_sai or '-'} | Subgrupo: {base_sub or '-'}")
+                if ret_exist:
+                    st.info('Já existe retificação salva para este funcionário neste dia. Os campos abaixo foram carregados para atualização.')
                 colra, colrb, colrc, colrd = st.columns([1, 1, 1, 1])
                 status_opts = ['', 'Trabalho', 'Folga', 'Férias', 'Afastamento']
-                idx_status = status_opts.index(base_status) if base_status in status_opts else 0
-                novo_status = colra.selectbox("Novo status", options=status_opts, index=idx_status, key=f"ret_status_live::{setor}::{ano}::{mes}")
-                nova_entrada = colrb.text_input("Nova entrada", value=base_ent, key=f"ret_ent_live::{setor}::{ano}::{mes}")
-                nova_saida = colrc.text_input("Nova saída", value=base_sai, key=f"ret_sai_live::{setor}::{ano}::{mes}")
+                idx_status = status_opts.index(val_status) if val_status in status_opts else 0
+                _ret_key_base = f"{setor}::{ano}::{mes}::{chapa_ret}::{dia_ret}"
+                novo_status = colra.selectbox("Novo status", options=status_opts, index=idx_status, key=f"ret_status_live::{_ret_key_base}")
+                nova_entrada = colrb.text_input("Nova entrada", value=val_ent, key=f"ret_ent_live::{_ret_key_base}")
+                nova_saida = colrc.text_input("Nova saída", value=val_sai, key=f"ret_sai_live::{_ret_key_base}")
                 sub_opts = [''] + sorted({str(c.get('Subgrupo') or '').strip() for c in colaboradores_ret if str(c.get('Subgrupo') or '').strip()})
                 if 'OPERADOR DE CAIXA 01' not in sub_opts:
                     sub_opts.append('OPERADOR DE CAIXA 01')
                 if 'OPERADOR DE CAIXA 02' not in sub_opts:
                     sub_opts.append('OPERADOR DE CAIXA 02')
                 sub_opts = [''] + sorted({x for x in sub_opts if x})
-                idx_sub = sub_opts.index(base_sub) if base_sub in sub_opts else 0
-                novo_subgrupo = colrd.selectbox("Novo subgrupo", options=sub_opts, index=idx_sub, key=f"ret_sub_live::{setor}::{ano}::{mes}")
-                motivo_ret = st.text_area("Motivo da retificação", key=f"ret_motivo_live::{setor}::{ano}::{mes}")
+                idx_sub = sub_opts.index(val_sub) if val_sub in sub_opts else 0
+                novo_subgrupo = colrd.selectbox("Novo subgrupo", options=sub_opts, index=idx_sub, key=f"ret_sub_live::{_ret_key_base}")
+                motivo_ret = st.text_area("Motivo da retificação", value=val_motivo, key=f"ret_motivo_live::{_ret_key_base}")
 
                 if st.button("💾 Salvar retificação", key=f"ret_save_live::{setor}::{ano}::{mes}", use_container_width=True):
                     if not chapa_ret:
