@@ -6687,8 +6687,8 @@ def get_rodizio_caixa_hist_mes(setor: str, ano: int, mes: int, subgrupo_origem: 
                    entrada_antiga, entrada_nova, compat_status, observacao, criado_em
             FROM rodizio_caixa_hist
             WHERE setor=? AND ano=? AND mes=?
-              AND ((movimento='ENTRA_DESTINO' AND subgrupo_origem=? AND subgrupo_destino=?)
-                   OR (movimento='SAI_DESTINO' AND subgrupo_origem=? AND subgrupo_destino=?))
+              AND ((UPPER(movimento) LIKE 'ENTRA_DESTINO%' AND subgrupo_origem=? AND subgrupo_destino=?)
+                   OR (UPPER(movimento) LIKE 'SAI_DESTINO%' AND subgrupo_origem=? AND subgrupo_destino=?))
             ORDER BY id ASC
             """,
             (setor, int(ano), int(mes), subgrupo_origem, subgrupo_destino, subgrupo_destino, subgrupo_origem)
@@ -6713,23 +6713,33 @@ def get_rodizio_caixa_hist_mes(setor: str, ano: int, mes: int, subgrupo_origem: 
 
 
 def build_rodizio_caixa_aplicado_pairs(hist_rows: list[dict]):
-    enters = [r for r in (hist_rows or []) if str(r.get('movimento') or '').upper() == 'ENTRA_DESTINO']
-    exits = [r for r in (hist_rows or []) if str(r.get('movimento') or '').upper() == 'SAI_DESTINO']
+    enters = [r for r in (hist_rows or []) if str(r.get('movimento') or '').upper().startswith('ENTRA_DESTINO')]
+    exits = [r for r in (hist_rows or []) if str(r.get('movimento') or '').upper().startswith('SAI_DESTINO')]
     pares = []
-    for ent, sai in zip(enters, exits):
+    usados_exit = set()
+    for ent in enters:
+        sai = None
+        ciclo_ent = str(ent.get('ciclo_ref') or '')
+        for idx, cand in enumerate(exits):
+            if idx in usados_exit:
+                continue
+            if str(cand.get('ciclo_ref') or '') == ciclo_ent:
+                sai = cand
+                usados_exit.add(idx)
+                break
         pares.append({
             'origem_nome': str(ent.get('nome') or ''),
             'origem_chapa': str(ent.get('chapa') or ''),
             'origem_entrada': str(ent.get('entrada_antiga') or ''),
             'origem_nova_entrada': str(ent.get('entrada_nova') or ''),
-            'destino_nome': str(sai.get('nome') or ''),
-            'destino_chapa': str(sai.get('chapa') or ''),
-            'destino_entrada': str(sai.get('entrada_antiga') or ''),
-            'destino_nova_entrada': str(sai.get('entrada_nova') or ''),
-            'compatibilidade': str(ent.get('compat_status') or sai.get('compat_status') or ''),
-            'observacao': str(ent.get('observacao') or sai.get('observacao') or ''),
-            'criado_em': str(ent.get('criado_em') or sai.get('criado_em') or ''),
-            'ciclo_ref': str(ent.get('ciclo_ref') or sai.get('ciclo_ref') or ''),
+            'destino_nome': str((sai or {}).get('nome') or ''),
+            'destino_chapa': str((sai or {}).get('chapa') or ''),
+            'destino_entrada': str((sai or {}).get('entrada_antiga') or ''),
+            'destino_nova_entrada': str((sai or {}).get('entrada_nova') or ''),
+            'compatibilidade': str(ent.get('compat_status') or (sai or {}).get('compat_status') or ''),
+            'observacao': str(ent.get('observacao') or (sai or {}).get('observacao') or ''),
+            'criado_em': str(ent.get('criado_em') or (sai or {}).get('criado_em') or ''),
+            'ciclo_ref': str(ent.get('ciclo_ref') or (sai or {}).get('ciclo_ref') or ''),
         })
     return pares
 
@@ -6854,6 +6864,180 @@ def _rodizio_match_domingos(orig_info: dict | None, dest_info: dict | None) -> d
 
 
 
+def _competencia_anterior(ano: int, mes: int) -> tuple[int, int]:
+    ano = int(ano)
+    mes = int(mes)
+    if mes <= 1:
+        return ano - 1, 12
+    return ano, mes - 1
+
+
+def _clone_colaborador_base(c: dict) -> dict:
+    return {
+        'Nome': str(c.get('Nome') or c.get('nome') or '').strip(),
+        'Chapa': str(c.get('Chapa') or c.get('chapa') or '').strip(),
+        'Subgrupo': str(c.get('Subgrupo') or c.get('subgrupo') or '').strip() or 'SEM SUBGRUPO',
+        'Entrada': str(c.get('Entrada') or c.get('entrada') or '').strip() or '06:00',
+        'Folga_Sab': bool(c.get('Folga_Sab', c.get('folga_sab', False))),
+        'Setor': str(c.get('Setor') or c.get('setor') or '').strip(),
+    }
+
+
+def _rodizio_caixa_base_mes_anterior_congelado(setor: str, ano: int, mes: int) -> list[dict]:
+    atuais = [_clone_colaborador_base(c) for c in (load_colaboradores_setor(setor) or [])]
+    mapa = {str(c.get('Chapa') or '').strip(): c for c in atuais if str(c.get('Chapa') or '').strip()}
+    ano_ant, mes_ant = _competencia_anterior(int(ano), int(mes))
+
+    if competencia_fechada(setor, ano_ant, mes_ant):
+        for ch in list(mapa.keys()):
+            snap = get_colaborador_competencia_snapshot(setor, ch, ano_ant, mes_ant)
+            if not snap:
+                continue
+            base = mapa[ch]
+            base['Nome'] = str(snap.get('Nome') or base.get('Nome') or '').strip()
+            base['Subgrupo'] = str(snap.get('Subgrupo') or base.get('Subgrupo') or '').strip() or 'SEM SUBGRUPO'
+            base['Entrada'] = str(snap.get('Entrada') or base.get('Entrada') or '').strip() or '06:00'
+            base['Folga_Sab'] = bool(snap.get('Folga_Sab', base.get('Folga_Sab', False)))
+
+    for ch, base in list(mapa.items()):
+        base['Subgrupo'] = get_subgrupo_competencia_ou_base(setor, ch, int(ano), int(mes), base.get('Subgrupo', ''))
+
+    hist_rows = get_rodizio_caixa_hist_mes(setor, int(ano), int(mes))
+    if hist_rows:
+        for row in hist_rows:
+            ch = str(row.get('chapa') or '').strip()
+            if not ch or ch not in mapa:
+                continue
+            mov = str(row.get('movimento') or '').upper()
+            if mov.startswith('ENTRA_DESTINO'):
+                mapa[ch]['Subgrupo'] = 'OPERADOR DE CAIXA 02'
+                mapa[ch]['Entrada'] = str(row.get('entrada_nova') or mapa[ch].get('Entrada') or '').strip() or mapa[ch].get('Entrada', '06:00')
+            elif mov.startswith('SAI_DESTINO'):
+                mapa[ch]['Subgrupo'] = 'OPERADOR DE CAIXA 01'
+                mapa[ch]['Entrada'] = str(row.get('entrada_nova') or mapa[ch].get('Entrada') or '').strip() or mapa[ch].get('Entrada', '06:00')
+
+    return list(mapa.values())
+
+
+def _rodizio_caixa_estado_efetivo(setor: str, ano: int, mes: int, subgrupo_origem: str, subgrupo_destino: str):
+    colaboradores = _rodizio_caixa_base_mes_anterior_congelado(setor, int(ano), int(mes))
+    origem = [c for c in colaboradores if str(c.get('Subgrupo') or '').strip().upper() == str(subgrupo_origem).strip().upper()]
+    destino = [c for c in colaboradores if str(c.get('Subgrupo') or '').strip().upper() == str(subgrupo_destino).strip().upper()]
+    return colaboradores, origem, destino
+
+
+def simular_ajuste_complementar_rodizio_caixa_mes(
+    setor: str,
+    ano: int,
+    mes: int,
+    subgrupo_origem: str = 'OPERADOR DE CAIXA 01',
+    subgrupo_destino: str = 'OPERADOR DE CAIXA 02',
+):
+    colaboradores, origem, destino = _rodizio_caixa_estado_efetivo(setor, int(ano), int(mes), subgrupo_origem, subgrupo_destino)
+    qtd_alvo = int(_rodizio_caixa_qtd_total())
+    qtd_atual = int(len(destino))
+    faltam_total = max(0, qtd_alvo - qtd_atual)
+
+    cont_dest = {}
+    for d in destino:
+        h = str(d.get('Entrada') or '').strip()
+        cont_dest[h] = int(cont_dest.get(h, 0)) + 1
+
+    domingos_map = _rodizio_domingos_trabalhados_map(setor, ano, mes)
+    domingos_detalhe_map = _rodizio_domingos_detalhe_map(setor, ano, mes)
+    last_move_map = _rodizio_last_move_map(setor, subgrupo_destino)
+
+    usados = set()
+    slots = []
+    alertas = []
+
+    def _pool_cands(horario_ref: str):
+        ref_min = _hora_to_min(horario_ref)
+        ranked = []
+        for cand in origem:
+            ch = str(cand.get('Chapa') or '').strip()
+            ent = str(cand.get('Entrada') or '').strip()
+            ent_min = _hora_to_min(ent)
+            if not ch or ch in usados or ent_min is None or ref_min is None:
+                continue
+            diff = abs(int(ent_min) - int(ref_min))
+            if diff > 60:
+                continue
+            dom_info_o = domingos_detalhe_map.get(ch, {'trab': tuple(), 'folga': tuple()})
+            dest_refs = [x for x in destino if str(x.get('Entrada') or '').strip() == horario_ref]
+            match_score = 0
+            diff_dom = 999
+            if dest_refs:
+                best = None
+                for d in dest_refs:
+                    dch = str(d.get('Chapa') or '').strip()
+                    m = _rodizio_match_domingos(dom_info_o, domingos_detalhe_map.get(dch, {'trab': tuple(), 'folga': tuple()}))
+                    dd = abs(int(domingos_map.get(ch, 0) or 0) - int(domingos_map.get(dch, 0) or 0))
+                    cand_best = (-int(m.get('trab_iguais_qtd', 0) or 0), -int(m.get('folga_iguais_qtd', 0) or 0), dd)
+                    if best is None or cand_best < best:
+                        best = cand_best
+                if best is not None:
+                    match_score = int((-best[0]) * 100 + (-best[1]) * 10)
+                    diff_dom = int(best[2])
+            ranked.append((0 if ent == horario_ref else 1, diff, -match_score, diff_dom, int(last_move_map.get(ch, 0) or 0), str(cand.get('Nome') or '').upper(), cand))
+        ranked.sort(key=lambda x: (x[0], x[1], x[2], x[3], x[4], x[5]))
+        return [x[-1] for x in ranked]
+
+    faltam_rest = int(faltam_total)
+    for horario_ref, qtd_regra in _rodizio_caixa_cotas_ordenadas():
+        atual_h = int(cont_dest.get(horario_ref, 0) or 0)
+        falta_h = max(0, int(qtd_regra) - atual_h)
+        while falta_h > 0 and faltam_rest > 0:
+            pool = _pool_cands(horario_ref)
+            if not pool:
+                alertas.append(f'Não há candidato para completar o horário {horario_ref} no {subgrupo_destino} dentro da tolerância de até 1 hora.')
+                break
+            cand = pool[0]
+            ch = str(cand.get('Chapa') or '').strip()
+            ent = str(cand.get('Entrada') or '').strip()
+            usados.add(ch)
+            diff = abs(int((_hora_to_min(ent) or 0)) - int((_hora_to_min(horario_ref) or 0)))
+            slots.append({
+                'slot_key': f'complemento|{horario_ref}|{len(slots)}|{ch}',
+                'origem_nome': str(cand.get('Nome') or ''),
+                'origem_chapa': ch,
+                'origem_entrada': ent,
+                'origem_nova_entrada': horario_ref,
+                'origem_domingos': int(domingos_map.get(ch, 0) or 0),
+                'origem_domingos_label': _rodizio_domingos_label(domingos_detalhe_map.get(ch)),
+                'origem_ultimo_mes_destino_label': _rodizio_format_ym(int(last_move_map.get(ch, 0) or 0)),
+                'destino_nome': '',
+                'destino_chapa': '',
+                'destino_entrada': '',
+                'destino_nova_entrada': '',
+                'destino_domingos_label': '-',
+                'compatibilidade': _classificar_compat_horario(ent, horario_ref, tolerancia_min=60),
+                'observacao': f'Ajuste complementar após retificação. Completa vaga do horário {horario_ref} usando base congelada da competência anterior + retificações do mês atual.',
+                'horario_ref': horario_ref,
+                'alternativas_mesmo_horario': max(0, sum(1 for c in origem if str(c.get('Entrada') or '').strip() == horario_ref) - 1),
+                'alternativas_ate_1h': max(0, len(_pool_cands(horario_ref)) - 1),
+                'fallback_horario_proximo': bool(ent != horario_ref),
+                'fallback_destino_horario_proximo': False,
+                'diff_horario_ref_min': int(diff),
+                'diff_destino_ref_min': 0,
+                'aprovado_manual': False,
+                'alternativas_opcoes': [],
+                'domingos_trabalho_iguais_qtd': 0,
+                'domingos_folga_iguais_qtd': 0,
+                'diff_domingos': 0,
+            })
+            falta_h -= 1
+            faltam_rest -= 1
+
+    return {
+        'qtd_destino_atual': int(qtd_atual),
+        'qtd_destino_obrigatoria': int(qtd_alvo),
+        'faltam': int(max(0, qtd_alvo - qtd_atual)),
+        'slots': slots,
+        'alertas': alertas,
+    }
+
+
 def simular_rodizio_caixa_mes(
     setor: str,
     ano: int,
@@ -6865,19 +7049,11 @@ def simular_rodizio_caixa_mes(
     aprovados_por_slot: dict | None = None,
     negados_chapas: list[str] | None = None,
 ):
-    colaboradores = load_colaboradores_setor(setor)
-    origem = [c for c in colaboradores if (c.get('Subgrupo') or '').strip().upper() == str(subgrupo_origem).strip().upper()]
-    destino = [c for c in colaboradores if (c.get('Subgrupo') or '').strip().upper() == str(subgrupo_destino).strip().upper()]
+    colaboradores, origem, destino = _rodizio_caixa_estado_efetivo(setor, int(ano), int(mes), subgrupo_origem, subgrupo_destino)
 
     qtd_obrigatoria = int(_rodizio_caixa_qtd_total())
     qtd_cfg = int(qtd_destino or qtd_obrigatoria)
-    qtd_alvo = int(max(qtd_obrigatoria, qtd_cfg))
-
-    try:
-        origem = _colaboradores_com_rodizio_aplicado_frentecaixa(setor, int(ano), int(mes), origem)
-        destino = _colaboradores_com_rodizio_aplicado_frentecaixa(setor, int(ano), int(mes), destino)
-    except Exception:
-        pass
+    qtd_alvo = int(qtd_obrigatoria)
 
     destino_sorted = sorted(destino, key=lambda c: (str(c.get('Entrada') or ''), str(c.get('Nome') or '').upper()))
     # Usa todo o grupo de destino na simulação e deixa as cotas/seleção escolherem
@@ -7404,6 +7580,59 @@ def aplicar_rodizio_caixa_mes(setor: str, ano: int, mes: int, simulacao: dict):
 
 
 
+def aplicar_ajuste_complementar_rodizio_caixa_mes(setor: str, ano: int, mes: int, slots: list[dict], subgrupo_origem: str = 'OPERADOR DE CAIXA 01', subgrupo_destino: str = 'OPERADOR DE CAIXA 02'):
+    slots = list(slots or [])
+    if not slots:
+        return {'ok': False, 'msg': 'Nenhuma sugestão complementar para aplicar.'}
+
+    con = db_conn()
+    cur = con.cursor()
+    ciclo = _mes_ref_str(ano, mes) + '|ajuste'
+    ts = datetime.now().isoformat()
+    try:
+        cur.execute('BEGIN')
+        for s in slots:
+            ch = str(s.get('origem_chapa') or '').strip()
+            if not ch:
+                continue
+            ent_ant = str(s.get('origem_entrada') or '').strip()
+            ent_nova = str(s.get('origem_nova_entrada') or s.get('horario_ref') or ent_ant).strip() or ent_ant or '06:00'
+            cur.execute(
+                "UPDATE colaboradores SET subgrupo=?, entrada=? WHERE setor=? AND chapa=?",
+                (subgrupo_destino, ent_nova, setor, ch)
+            )
+            cur.execute(
+                """
+                INSERT INTO subgrupo_competencia(setor, ano, mes, chapa, subgrupo, atualizado_em)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(setor, ano, mes, chapa) DO UPDATE SET
+                    subgrupo=excluded.subgrupo,
+                    atualizado_em=excluded.atualizado_em
+                """,
+                (setor, int(ano), int(mes), ch, subgrupo_destino, ts)
+            )
+            cur.execute(
+                """
+                INSERT OR REPLACE INTO rodizio_caixa_hist(setor, ano, mes, ciclo_ref, chapa, nome, movimento, subgrupo_origem, subgrupo_destino, entrada_antiga, entrada_nova, compat_status, observacao, criado_em)
+                VALUES (?, ?, ?, ?, ?, ?, 'ENTRA_DESTINO_COMPLEMENTAR', ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (setor, int(ano), int(mes), ciclo, ch, str(s.get('origem_nome') or ''), subgrupo_origem, subgrupo_destino, ent_ant, ent_nova, str(s.get('compatibilidade') or 'QUASE IGUAL'), str(s.get('observacao') or ''), ts)
+            )
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        con.close()
+
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+
+    return {'ok': True, 'msg': f'Ajuste complementar aplicado com {len(slots)} entrada(s) no {subgrupo_destino}.'}
+
+
 def sincronizar_subgrupos_base_rodizio_caixa(setor: str, ano: int, mes: int, subgrupo_origem: str = 'OPERADOR DE CAIXA 01', subgrupo_destino: str = 'OPERADOR DE CAIXA 02'):
     """
     Reaplica manualmente na base de colaboradores o resultado já aprovado/aplicado
@@ -7418,8 +7647,8 @@ def sincronizar_subgrupos_base_rodizio_caixa(setor: str, ano: int, mes: int, sub
             SELECT chapa, nome, movimento, subgrupo_origem, subgrupo_destino, entrada_antiga, entrada_nova
             FROM rodizio_caixa_hist
             WHERE setor=? AND ano=? AND mes=?
-              AND ((movimento='ENTRA_DESTINO' AND subgrupo_origem=? AND subgrupo_destino=?)
-                   OR (movimento='SAI_DESTINO' AND subgrupo_origem=? AND subgrupo_destino=?))
+              AND ((UPPER(movimento) LIKE 'ENTRA_DESTINO%' AND subgrupo_origem=? AND subgrupo_destino=?)
+                   OR (UPPER(movimento) LIKE 'SAI_DESTINO%' AND subgrupo_origem=? AND subgrupo_destino=?))
             ORDER BY criado_em ASC, chapa ASC
             """,
             (setor, int(ano), int(mes), subgrupo_origem, subgrupo_destino, subgrupo_destino, subgrupo_origem)
@@ -12964,15 +13193,47 @@ def page_app():
                     else:
                         st.warning('Foi encontrado histórico do rodízio nesta competência, mas sem pares completos para exibir.')
 
-                    st.info('Para ver nomes novos, troque a competência para o próximo mês. Nesta competência o sistema mostra o que já foi aplicado.')
-                    slots = []
-                    aprovados_atuais = {}
-                    aprovados_validos = 0
-                    aplic_key = state_base + "::aplicado"
+                    comp_sim = simular_ajuste_complementar_rodizio_caixa_mes(setor, ano_r, mes_r, subgrupo_origem, subgrupo_destino)
                     qtd_obrigatoria = int(sim.get('qtd_destino_obrigatoria', 14) or 14)
+                    aplic_key = state_base + "::aplicado"
+                    comp_aprov_key = state_base + "::complementar_aprovados"
+                    if comp_aprov_key not in st.session_state:
+                        st.session_state[comp_aprov_key] = {}
+
+                    if int(comp_sim.get('qtd_destino_atual', 0) or 0) < int(qtd_obrigatoria):
+                        faltam = int(comp_sim.get('faltam', 0) or 0)
+                        st.warning(f'Após retificação/subgrupo atual do mês, o {subgrupo_destino} ficou com {int(comp_sim.get("qtd_destino_atual", 0) or 0)} pessoa(s). A regra fixa exige {qtd_obrigatoria}. O sistema desceu {len(comp_sim.get("slots") or [])} nova(s) sugestão(ões) para completar {faltam} vaga(s).')
+                        for alerta in (comp_sim.get('alertas') or []):
+                            st.warning(alerta)
+                        slots = list(comp_sim.get('slots') or [])
+                        aprov_state_key = comp_aprov_key
+                        neg_state_key = neg_key
+                        aprovados_atuais = st.session_state.get(aprov_state_key, {})
+                        aprovados_validos = sum(1 for s in slots if aprovados_atuais.get(s.get('slot_key')) == s.get('origem_chapa'))
+                        topa, topb, topc = st.columns(3)
+                        topa.metric('Faltam no Caixa 02', faltam)
+                        topb.metric('Sugestões complementares', len(slots))
+                        topc.metric('Aprovadas agora', aprovados_validos)
+                        if slots and int(aprovados_validos) >= int(len(slots)):
+                            if st.button('➕ Aplicar ajuste complementar agora', key='rod_caixa_apply_complementar', use_container_width=True, disabled=(_status_comp_rod == 'FECHADA')):
+                                res_comp = aplicar_ajuste_complementar_rodizio_caixa_mes(setor, ano_r, mes_r, slots, subgrupo_origem, subgrupo_destino)
+                                if res_comp.get('ok'):
+                                    st.success(res_comp.get('msg', 'Ajuste complementar aplicado.'))
+                                    st.rerun()
+                                else:
+                                    st.error(res_comp.get('msg', 'Não foi possível aplicar o ajuste complementar.'))
+                    else:
+                        st.info('Para ver nomes novos, troque a competência para o próximo mês. Nesta competência o sistema mostra o que já foi aplicado.')
+                        slots = []
+                        aprov_state_key = aprov_key
+                        neg_state_key = neg_key
+                        aprovados_atuais = {}
+                        aprovados_validos = 0
                 else:
                     slots = sim.get('slots') or []
-                    aprovados_atuais = st.session_state.get(aprov_key, {})
+                    aprov_state_key = aprov_key
+                    neg_state_key = neg_key
+                    aprovados_atuais = st.session_state.get(aprov_state_key, {})
                     aprovados_validos = sum(1 for s in slots if aprovados_atuais.get(s.get('slot_key')) == s.get('origem_chapa'))
                     top1, top2, top3 = st.columns(3)
                     top1.metric('Sugestões montadas', len(slots))
@@ -13010,7 +13271,7 @@ def page_app():
                         st.info(f"Para aplicar de verdade no mês {mes_r:02d}/{ano_r}, todas as {qtd_obrigatoria} sugestões precisam estar aprovadas e depois você deve clicar em 'Aplicar mudança de subgrupos agora (antes da escala)'.")
 
                 if slots:
-                    st.markdown('### Aprovação das 14 pessoas sugeridas')
+                    st.markdown('### Aprovação das pessoas sugeridas para esta competência')
                     resumo_aprov = pd.DataFrame([{
                         'Status': 'APROVADO' if aprovados_atuais.get(s.get('slot_key')) == s.get('origem_chapa') else 'PENDENTE',
                         'Nome sugerido': s.get('origem_nome', ''),
@@ -13077,19 +13338,19 @@ def page_app():
                             bcol1, bcol2, bcol3 = st.columns([1, 1, 3])
                             if bcol1.button('✅ Aprovar seleção', key=f'rod_caixa_ok_{slot_key}', use_container_width=True, disabled=aprovado and chapa_aprovada_slot == str(s.get('origem_chapa') or '').strip()):
                                 chapa_sel = str(st.session_state.get(f'rod_caixa_pick_{slot_key}', str(s.get('origem_chapa') or '')) or '').strip()
-                                tmp = dict(st.session_state.get(aprov_key, {}))
+                                tmp = dict(st.session_state.get(aprov_state_key, {}))
                                 tmp[slot_key] = chapa_sel or str(s.get('origem_chapa') or '')
-                                st.session_state[aprov_key] = tmp
+                                st.session_state[aprov_state_key] = tmp
                                 st.rerun()
                             if bcol2.button('❌ Negar e chamar próximo da fila', key=f'rod_caixa_no_{slot_key}', use_container_width=True):
                                 negs = list(st.session_state.get(neg_key, []))
                                 chapa_neg = str(s.get('origem_chapa') or '').strip()
                                 if chapa_neg and chapa_neg not in negs:
                                     negs.append(chapa_neg)
-                                tmp = dict(st.session_state.get(aprov_key, {}))
+                                tmp = dict(st.session_state.get(aprov_state_key, {}))
                                 tmp.pop(slot_key, None)
-                                st.session_state[aprov_key] = tmp
-                                st.session_state[neg_key] = negs
+                                st.session_state[aprov_state_key] = tmp
+                                st.session_state[neg_state_key] = negs
                                 st.rerun()
                             if aprovado:
                                 bcol3.success('Aprovado para aplicação quando todas as 14 estiverem aprovadas.')
@@ -13135,12 +13396,19 @@ def page_app():
                     st.markdown("### Próximos da fila para o próximo mês")
                     st.dataframe(pd.DataFrame(proximos[:50]), use_container_width=True, height=260)
 
-                todos_aprovados = bool(slots) and aprovados_validos == len(slots) and len(slots) >= int(sim.get('qtd_destino_obrigatoria', 14))
+                qtd_meta_aprov = len(slots) if rodizio_ja_aplicado_mes else int(sim.get('qtd_destino_obrigatoria', 14))
+                todos_aprovados = bool(slots) and aprovados_validos == len(slots) and len(slots) >= int(qtd_meta_aprov)
                 b1, b2 = st.columns([1, 2])
                 if not todos_aprovados:
-                    b2.info('Para aplicar o rodízio, aprove manualmente todas as 14 sugestões atuais.')
+                    if rodizio_ja_aplicado_mes:
+                        b2.info('Para aplicar o ajuste complementar, aprove manualmente todas as sugestões complementares atuais.')
+                    else:
+                        b2.info('Para aplicar o rodízio, aprove manualmente todas as 14 sugestões atuais.')
                 else:
-                    b2.success('As 14 aprovações já estão prontas. Use o botão principal acima para aplicar. Se a base não refletir, use a sincronização manual abaixo.')
+                    if rodizio_ja_aplicado_mes:
+                        b2.success('As sugestões complementares já estão prontas. Use o botão de ajuste complementar acima para aplicar.')
+                    else:
+                        b2.success('As 14 aprovações já estão prontas. Use o botão principal acima para aplicar. Se a base não refletir, use a sincronização manual abaixo.')
                 if b1.button("🛠️ Sincronizar subgrupos base manualmente", key='rod_caixa_sync_manual', use_container_width=True):
                     try:
                         res = sincronizar_subgrupos_base_rodizio_caixa(setor, ano_r, mes_r, subgrupo_origem, subgrupo_destino)
