@@ -2566,7 +2566,7 @@ def get_app_like_nav_config(is_admin_area: bool, setor: str = ""):
         ("👥 Colaboradores", {"sec_main": "👥 Colaboradores", "sec_col": "👥 Colaboradores"}),
         ("➕ Cadastrar colaborador", {"sec_main": "👥 Colaboradores", "sec_col": "➕ Cadastrar colaborador"}),
         ("✏️ Editar perfil", {"sec_main": "👥 Colaboradores", "sec_col": "✏️ Editar perfil"}),
-        ("🔑 Alterar senha", {"sec_main": "👥 Colaboradores", "sec_col": "🔑 Alterar senha colaborador"}),
+        ("🔑 Alterar senha", {"sec_main": "👥 Colaboradores", "sec_col": "🔑 Alterar senha"}),
         ("🗑️ Excluir colaborador", {"sec_main": "👥 Colaboradores", "sec_col": "🗑️ Excluir colaborador"}),
         ("🧾 Aprovações AX", {"sec_main": "👥 Colaboradores", "sec_col": "🧾 Aprovações AX"}),
     ]
@@ -12180,7 +12180,7 @@ def page_app():
             botoes_colab = [
                 ("➕ Cadastrar colaborador", "➕ Cadastrar colaborador", "col_menu_cadastro"),
                 ("✏️ Editar perfil", "✏️ Editar perfil", "col_menu_perfil"),
-                ("🔑 Alterar senha", "🔑 Alterar senha colaborador", "col_menu_senha"),
+                ("🔑 Alterar senha", "🔑 Alterar senha", "col_menu_senha"),
                 ("🗑️ Excluir colaborador", "🗑️ Excluir colaborador", "col_menu_excluir"),
                 ("🧾 Aprovações AX", "🧾 Aprovações AX", "col_menu_ax"),
             ]
@@ -12195,6 +12195,7 @@ def page_app():
                     label_btn, destino_btn, key_btn = botoes_colab[idx_btn_colab]
                     with col_btn:
                         if st.button(label_btn, key=key_btn, use_container_width=True):
+                            st.session_state["app_like_main"] = "colaboradores"
                             st.session_state["app_like_sub"] = destino_btn
                             st.rerun()
                     idx_btn_colab += 1
@@ -12355,9 +12356,9 @@ def page_app():
 
                 st.markdown("---")
 
-        elif sec_col == "🔑 Alterar senha colaborador":
+        elif sec_col == "🔑 Alterar senha":
             colaboradores = load_colaboradores_setor(setor)
-            ui_back_header("🔑 Alterar senha colaborador", "colaboradores", "👥 Colaboradores")
+            ui_back_header("🔑 Alterar senha", "colaboradores", "👥 Colaboradores")
             if colaboradores:
                 chapas = [c["Chapa"] for c in colaboradores]
                 nome_by_chapa = {c["Chapa"]: c.get("Nome", "") for c in colaboradores}
@@ -12911,6 +12912,7 @@ def page_app():
                 label_btn, destino_btn, key_btn = botoes_escala[idx_btn_esc]
                 with col_btn:
                     if st.button(label_btn, key=key_btn, use_container_width=True):
+                        st.session_state["app_like_main"] = "escala"
                         st.session_state["app_like_sub"] = destino_btn
                         st.rerun()
                 idx_btn_esc += 1
@@ -12940,6 +12942,7 @@ def page_app():
                 label_btn, destino_btn, key_btn = botoes_gestao[idx_btn_ges]
                 with col_btn:
                     if st.button(label_btn, key=key_btn, use_container_width=True):
+                        st.session_state["app_like_main"] = "gestao"
                         st.session_state["app_like_sub"] = destino_btn
                         st.rerun()
                 idx_btn_ges += 1
