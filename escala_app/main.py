@@ -2679,24 +2679,16 @@ def render_app_like_top_nav(is_admin_area: bool, setor: str = ""):
     st.markdown("""
     <style>
     .app-top-nav-wrap{position:sticky;top:0;z-index:40;background:rgba(3,11,30,.96);padding:8px 0 10px 0;margin-bottom:10px;}
-    .app-top-nav-wrap .stButton > button{min-height:72px !important;white-space:pre-line !important;line-height:1.28 !important;font-size:1.02rem !important;}
+    .app-top-nav-wrap .stButton > button{min-height:52px !important;white-space:normal !important;line-height:1.18 !important;font-size:1rem !important;}
     </style>
     """, unsafe_allow_html=True)
     st.markdown('<div class="app-top-nav-wrap">', unsafe_allow_html=True)
     cols = st.columns(len(main_keys))
-    subtitles = {
-        "dashboard": "Visão geral do app.",
-        "colaboradores": "Cadastros, perfil, senha e aprovações AX.",
-        "escala": "Gerar, consultar e imprimir a escala do mês.",
-        "gestao": "Ajustes, férias, assinaturas e solicitações.",
-        "admin": "Configurações administrativas.",
-    }
     for col, key in zip(cols, main_keys):
         label = cfg[key]["label"]
-        full_label = f"{label}\n{subtitles.get(key, '')}" if subtitles.get(key) else label
         with col:
             clicked = st.button(
-                full_label,
+                label,
                 key=f"app_like_top_btn::{key}",
                 use_container_width=True,
                 type="primary" if current_main == key else "secondary",
