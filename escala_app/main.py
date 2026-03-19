@@ -13881,6 +13881,13 @@ def page_app():
             else:
                 cfg = get_rodizio_caixa_cfg(setor)
                 c1, c2, c3, c4 = st.columns([1.4, 1.4, 1, 1])
+                _rod_reset_defaults_key = f"rod_caixa_reset_defaults::{setor}"
+                if st.session_state.get(_rod_reset_defaults_key, False):
+                    st.session_state['rod_caixa_origem'] = 'OPERADOR DE CAIXA 01'
+                    st.session_state['rod_caixa_destino'] = 'OPERADOR DE CAIXA 02'
+                    st.session_state['rod_caixa_qtd'] = 14
+                    st.session_state['rod_caixa_tol'] = 20
+                    st.session_state[_rod_reset_defaults_key] = False
                 if 'rod_caixa_origem' not in st.session_state:
                     st.session_state['rod_caixa_origem'] = str(cfg.get('subgrupo_origem') or 'OPERADOR DE CAIXA 01')
                 if 'rod_caixa_destino' not in st.session_state:
@@ -13928,11 +13935,8 @@ def page_app():
                         except Exception as e:
                             st.error(f'Falha ao zerar rodízio da competência: {e}')
                     else:
-                        st.session_state['rod_caixa_origem'] = 'OPERADOR DE CAIXA 01'
-                        st.session_state['rod_caixa_destino'] = 'OPERADOR DE CAIXA 02'
-                        st.session_state['rod_caixa_qtd'] = 14
-                        st.session_state['rod_caixa_tol'] = 20
                         set_rodizio_caixa_cfg(setor, 'OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02', 14, 20, True)
+                        st.session_state[_rod_reset_defaults_key] = True
                         st.session_state[force_review_key] = True
                         st.success('Configuração resetada para o padrão.')
                         st.rerun()
