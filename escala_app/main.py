@@ -10765,10 +10765,10 @@ def page_login():
         finally:
             con.close()
 
-    st.title("ESCALA 5x2 DO FUTURO")
+    st.title("ESCALA AUTOMATIZADA")
     ui_hero(
         "Olá, bem-vindo de volta",
-        "Acesse sua escala com visual mais moderno, sem mexer nas regras centrais do sistema.",
+        "",
         "🔵 Layout premium leve",
     )
     ui_section("Acesso ao sistema", "Entre com setor, chapa e senha para abrir o painel certo sem alterar a lógica já existente.")
