@@ -2545,19 +2545,7 @@ def ui_hero(title: str, subtitle: str = "", badge: str = ""):
 
 
 def ui_back_header(title: str, main_key: str, sub_label: str):
-    c1, c2, c3 = st.columns([1.2, 1.35, 7])
-    with c1:
-        if st.button("← Voltar", key=f"back::{main_key}::{sub_label}::{title}", use_container_width=True):
-            st.session_state["app_like_main"] = main_key
-            st.session_state["app_like_sub"] = sub_label
-            st.rerun()
-    with c2:
-        if st.button("🏠 Dashboard", key=f"dash::{main_key}::{sub_label}::{title}", use_container_width=True):
-            st.session_state["app_like_main"] = "dashboard"
-            st.session_state["app_like_sub"] = "Visão geral"
-            st.rerun()
-    with c3:
-        st.markdown(f"## {title}")
+    st.markdown(f"## {title}")
 
 
 def get_app_like_nav_config(is_admin_area: bool, setor: str = ""):
