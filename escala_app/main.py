@@ -4258,6 +4258,39 @@ def listar_setores_db() -> list:
     return sorted(list(base_set.union({(x or "").strip().upper() for x in rows if x})))
 
 
+def listar_setores_com_competencia() -> list:
+    """Lista setores do cadastro base + setores que já existem nas tabelas operacionais.
+    Isso evita sumir setor fechado no painel do ADMIN só porque ele não está em `setores`.
+    """
+    conn = _app_db_connect(DB_PATH)
+    cur = conn.cursor()
+    nomes = {"ADMIN", "GERAL"}
+    try:
+        try:
+            cur.execute("CREATE TABLE IF NOT EXISTS setores (nome TEXT PRIMARY KEY)")
+            cur.execute("SELECT nome FROM setores")
+            nomes.update({str(r[0] or '').strip().upper() for r in cur.fetchall() if str(r[0] or '').strip()})
+        except Exception:
+            pass
+
+        for tabela, coluna in [
+            ('competencia_status', 'setor'),
+            ('colaboradores', 'setor'),
+            ('escala_mes', 'setor'),
+            ('retificacoes_competencia', 'setor'),
+            ('subgrupo_competencia', 'setor'),
+            ('colaborador_competencia_snapshot', 'setor'),
+        ]:
+            try:
+                cur.execute(f"SELECT DISTINCT {coluna} FROM {tabela}")
+                nomes.update({str(r[0] or '').strip().upper() for r in cur.fetchall() if str(r[0] or '').strip()})
+            except Exception:
+                pass
+    finally:
+        conn.close()
+    return sorted(nomes)
+
+
 def list_setores() -> list:
     """Alias de compatibilidade: algumas telas chamam list_setores()."""
     try:
@@ -16082,7 +16115,7 @@ def page_app():
             st.markdown("---")
             st.subheader("🧊 Competência do setor (fechar / reabrir)")
             st.caption("Use este painel do ADMIN para congelar ou descongelar a competência de qualquer setor.")
-            setores_comp = listar_setores_db()
+            setores_comp = listar_setores_com_competencia()
             ac1, ac2, ac3 = st.columns([1.4, 1, 1])
             with ac1:
                 setor_comp_admin = st.selectbox("Setor da competência", setores_comp, key="adm_comp_setor") if setores_comp else st.text_input("Setor da competência", value="FLV", key="adm_comp_setor_txt")
