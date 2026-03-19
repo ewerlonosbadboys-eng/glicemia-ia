@@ -1098,17 +1098,54 @@ def get_colaborador_competencia_snapshot(setor: str, chapa: str, ano: int, mes: 
     }
 
 
+def clear_retificacao_related_caches() -> None:
+    """
+    Limpa somente os caches realmente afetados pela retificação.
+    Evita st.cache_data.clear() global, que deixa a tela inteira pesada.
+    """
+    for fn_name in [
+        'load_retificacoes_competencia',
+        'get_hist_mes_com_overrides_cached',
+        'get_colaborador_competencia_snapshot',
+        'get_status_competencia',
+    ]:
+        try:
+            fn = globals().get(fn_name)
+            if fn is not None and hasattr(fn, 'clear'):
+                fn.clear()
+        except Exception:
+            pass
+
+
 def salvar_retificacao_competencia(setor: str, ano: int, mes: int, chapa: str, dia: int,
                                   novo_status: str = '', novo_entrada: str = '', novo_saida: str = '',
                                   novo_subgrupo: str = '', motivo: str = '', usuario: str = '') -> None:
+    setor = str(setor or '').strip()
+    ano = int(ano)
+    mes = int(mes)
+    chapa = str(chapa or '').strip()
+    dia = int(dia)
+    novo_status = str(novo_status or '').strip()
+    novo_entrada = str(novo_entrada or '').strip()
+    novo_saida = str(novo_saida or '').strip()
+    novo_subgrupo = str(novo_subgrupo or '').strip()
+    motivo = str(motivo or '').strip()
+    usuario = str(usuario or '').strip()
+    agora_iso = datetime.now().isoformat()
+
     con = db_conn()
     cur = con.cursor()
     try:
-        cur.execute("SELECT nome, subgrupo, entrada FROM colaboradores WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND TRIM(chapa)=? LIMIT 1", (setor, str(chapa).strip()))
+        try:
+            cur.execute("PRAGMA busy_timeout = 5000")
+        except Exception:
+            pass
+
+        cur.execute("SELECT nome, subgrupo, entrada FROM colaboradores WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND TRIM(chapa)=? LIMIT 1", (setor, chapa))
         row = cur.fetchone()
         nome = str(row[0] or '').strip() if row else ''
-        subgrupo_antigo = str(row[1] or '').strip() if row else ''
         entrada_antiga = str(row[2] or '').strip() if row else ''
+
         cur.execute("""
             INSERT INTO retificacoes_competencia(
                 setor, ano, mes, chapa, nome, dia, novo_status, nova_entrada, nova_saida,
@@ -1124,19 +1161,20 @@ def salvar_retificacao_competencia(setor: str, ano: int, mes: int, chapa: str, d
                 usuario=excluded.usuario,
                 criado_em=excluded.criado_em
         """, (
-            setor, int(ano), int(mes), str(chapa).strip(), nome, int(dia),
-            str(novo_status or '').strip(), str(novo_entrada or '').strip(), str(novo_saida or '').strip(),
-            str(novo_subgrupo or '').strip(), str(motivo or '').strip(), str(usuario or '').strip(), datetime.now().isoformat()
+            setor, ano, mes, chapa, nome, dia,
+            novo_status, novo_entrada, novo_saida,
+            novo_subgrupo, motivo, usuario, agora_iso
         ))
+
         # se vier subgrupo, grava também o espelho mensal para leitura histórica
-        if str(novo_subgrupo or '').strip():
+        if novo_subgrupo:
             cur.execute("""
                 INSERT INTO subgrupo_competencia(setor, ano, mes, chapa, subgrupo, atualizado_em)
                 VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT(setor, ano, mes, chapa) DO UPDATE SET
                     subgrupo=excluded.subgrupo,
                     atualizado_em=excluded.atualizado_em
-            """, (setor, int(ano), int(mes), str(chapa).strip(), str(novo_subgrupo).strip(), datetime.now().isoformat()))
+            """, (setor, ano, mes, chapa, novo_subgrupo, agora_iso))
 
             # mantém o snapshot congelado alinhado com a retificação do mês
             cur.execute("""
@@ -1171,21 +1209,19 @@ def salvar_retificacao_competencia(setor: str, ano: int, mes: int, chapa: str, d
                     folga_sab=COALESCE(excluded.folga_sab, colaborador_competencia_snapshot.folga_sab),
                     atualizado_em=excluded.atualizado_em
             """, (
-                setor, int(ano), int(mes), str(chapa).strip(),
-                nome, str(novo_subgrupo).strip(), entrada_antiga or '06:00', datetime.now().isoformat(),
-                setor, int(ano), int(mes), str(chapa).strip(),
-                setor, int(ano), int(mes), str(chapa).strip(),
-                nome, str(novo_subgrupo).strip(), entrada_antiga or '06:00',
-                setor, str(chapa).strip(), datetime.now().isoformat(),
-                setor, int(ano), int(mes), str(chapa).strip(),
+                setor, ano, mes, chapa,
+                nome, novo_subgrupo, entrada_antiga or '06:00', agora_iso,
+                setor, ano, mes, chapa,
+                setor, ano, mes, chapa,
+                nome, novo_subgrupo, entrada_antiga or '06:00',
+                setor, chapa, agora_iso,
+                setor, ano, mes, chapa,
             ))
         con.commit()
     finally:
         con.close()
-    try:
-        st.cache_data.clear()
-    except Exception:
-        pass
+
+    clear_retificacao_related_caches()
 
 
 @st.cache_data(show_spinner=False, ttl=120)
@@ -14042,15 +14078,16 @@ def page_app():
                                     )
                                     st.success('Retificação enviada para aprovação do líder.')
                                 else:
-                                    salvar_retificacao_competencia(
-                                        setor, ano, mes, chapa_ret, dia_ret,
-                                        novo_status=novo_status or base_status,
-                                        novo_entrada=nova_entrada,
-                                        novo_saida=nova_saida,
-                                        novo_subgrupo=novo_subgrupo,
-                                        motivo=motivo_ret,
-                                        usuario=str(st.session_state.get('auth_nome') or st.session_state.get('auth_chapa') or '')
-                                    )
+                                    with st.spinner('Salvando retificação...'):
+                                        salvar_retificacao_competencia(
+                                            setor, ano, mes, chapa_ret, dia_ret,
+                                            novo_status=novo_status or base_status,
+                                            novo_entrada=nova_entrada,
+                                            novo_saida=nova_saida,
+                                            novo_subgrupo=novo_subgrupo,
+                                            motivo=motivo_ret,
+                                            usuario=str(st.session_state.get('auth_nome') or st.session_state.get('auth_chapa') or '')
+                                        )
                                     st.success('Retificação salva com sucesso.')
                                 st.rerun()
                         df_ret_list = load_retificacoes_competencia(setor, ano, mes)
@@ -14352,15 +14389,16 @@ def page_app():
                             )
                             st.success('Retificação enviada para aprovação do líder.')
                         else:
-                            salvar_retificacao_competencia(
-                                setor, ano, mes, chapa_ret, dia_ret,
-                                novo_status=novo_status or base_status,
-                                novo_entrada=nova_entrada,
-                                novo_saida=nova_saida,
-                                novo_subgrupo=novo_subgrupo or base_sub,
-                                motivo=motivo_ret,
-                                usuario=str(st.session_state.get('auth_nome') or st.session_state.get('auth_chapa') or '')
-                            )
+                            with st.spinner('Salvando retificação...'):
+                                salvar_retificacao_competencia(
+                                    setor, ano, mes, chapa_ret, dia_ret,
+                                    novo_status=novo_status or base_status,
+                                    novo_entrada=nova_entrada,
+                                    novo_saida=nova_saida,
+                                    novo_subgrupo=novo_subgrupo or base_sub,
+                                    motivo=motivo_ret,
+                                    usuario=str(st.session_state.get('auth_nome') or st.session_state.get('auth_chapa') or '')
+                                )
                             st.success('Retificação salva com sucesso.')
                         st.rerun()
 
