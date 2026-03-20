@@ -7234,6 +7234,48 @@ def _rodizio_caixa_estado_efetivo(setor: str, ano: int, mes: int, subgrupo_orige
     return colaboradores, origem, destino
 
 
+
+
+def montar_painel_conferencia_rodizio_caixa_mes(
+    setor: str,
+    ano: int,
+    mes: int,
+    subgrupo_origem: str = 'OPERADOR DE CAIXA 01',
+    subgrupo_destino: str = 'OPERADOR DE CAIXA 02',
+):
+    colaboradores, origem, destino = _rodizio_caixa_estado_efetivo(setor, int(ano), int(mes), subgrupo_origem, subgrupo_destino)
+    domingos_map = _rodizio_domingos_trabalhados_map(setor, int(ano), int(mes))
+
+    def _to_df(lista: list[dict]) -> pd.DataFrame:
+        rows = []
+        for c in sorted(lista or [], key=lambda x: (str(x.get('Entrada') or '').strip(), str(x.get('Nome') or '').upper(), str(x.get('Chapa') or '').strip())):
+            ch = str(c.get('Chapa') or '').strip()
+            rows.append({
+                'Nome': str(c.get('Nome') or '').strip(),
+                'Chapa': ch,
+                'Horário': str(c.get('Entrada') or '').strip(),
+                'Subgrupo': str(c.get('Subgrupo') or '').strip(),
+                'Domingos': int(domingos_map.get(ch, 0) or 0),
+            })
+        return pd.DataFrame(rows) if rows else pd.DataFrame(columns=['Nome', 'Chapa', 'Horário', 'Subgrupo', 'Domingos'])
+
+    qtd_alvo_destino = int(_rodizio_caixa_qtd_total())
+    qtd_destino = int(len(destino))
+    faltam_destino = max(0, int(qtd_alvo_destino) - int(qtd_destino))
+    excesso_destino = max(0, int(qtd_destino) - int(qtd_alvo_destino))
+
+    return {
+        'qtd_origem': int(len(origem)),
+        'qtd_destino': qtd_destino,
+        'qtd_alvo_destino': qtd_alvo_destino,
+        'faltam_destino': int(faltam_destino),
+        'excesso_destino': int(excesso_destino),
+        'df_origem': _to_df(origem),
+        'df_destino': _to_df(destino),
+        'colaboradores': colaboradores,
+    }
+
+
 def simular_ajuste_complementar_rodizio_caixa_mes(
     setor: str,
     ano: int,
