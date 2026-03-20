@@ -2766,7 +2766,7 @@ def get_app_like_nav_config(is_admin_area: bool, setor: str = ""):
         ("🧾 Aprovações AX", {"sec_main": "👥 Colaboradores", "sec_col": "🧾 Aprovações AX"}),
     ]
     if setor_norm.replace(" ", "").startswith("FRENTECAIXA"):
-        colabs.append(("🔄 Rodízio Caixa", {"sec_main": "👥 Colaboradores", "sec_col": "🔄 Rodízio Caixa"}))
+        colabs.append(("🔁 Transferência", {"sec_main": "👥 Colaboradores", "sec_col": "🔁 Transferência"}))
 
     return {
         "dashboard": {
@@ -13491,7 +13491,7 @@ def page_app():
                 ("🧾 Aprovações AX", "🧾 Aprovações AX", "col_menu_ax"),
             ]
             if setor_norm.replace(" ", "").startswith("FRENTECAIXA"):
-                botoes_colab.append(("🔄 Rodízio Caixa", "🔄 Rodízio Caixa", "col_menu_rodizio_caixa"))
+                botoes_colab.append(("🔁 Transferência", "🔁 Transferência", "col_menu_transferencia"))
 
             total_botoes_colab = len(botoes_colab)
             idx_btn_colab = 0
@@ -13998,11 +13998,13 @@ def page_app():
                         histg['resumo'] = histg['modulo'].astype(str) + ' / ' + histg['acao'].astype(str)
                         st.dataframe(histg[['id','setor','resumo','status','observacao','criado_em','aprovado_por','aprovado_em']], use_container_width=True, height=220)
 
-        elif sec_col == "🔄 Rodízio Caixa":
-            ui_back_header("🔄 Rodízio mensal Caixa 01 ↔ Caixa 02", "colaboradores", "👥 Colaboradores")
+        elif sec_col in ["🔄 Rodízio Caixa", "🔁 Transferência"]:
+            ui_back_header("🔁 Transferência — Caixa 01 ↔ Caixa 02", "colaboradores", "👥 Colaboradores")
             if not str(setor).strip().upper().startswith("FRENTECAIXA"):
-                st.info("Rodízio disponível somente para setores FRENTECAIXA.")
+                st.info("A subaba Transferência está disponível somente para setores FRENTECAIXA.")
             else:
+                st.markdown("### 🔁 Subaba Transferência")
+                st.caption("Regra fixa: 14 operadores no Caixa 02, com prioridade para horários 06:50×4, 07:30×1, 08:00×1, 09:00×1, 10:00×1, 11:00×1, 12:00×1 e 12:40×4. O sistema tenta domingos iguais primeiro; quando não houver, ele avisa e segue para o mais próximo.")
                 cfg = get_rodizio_caixa_cfg(setor)
                 c1, c2, c3, c4 = st.columns([1.4, 1.4, 1, 1])
                 _rod_reset_defaults_key = f"rod_caixa_reset_defaults::{setor}"
@@ -14040,11 +14042,11 @@ def page_app():
                 rodizio_ja_aplicado_mes = bool(hist_mes) and (not bool(st.session_state.get(force_review_key, False)))
 
                 bcfg1, bcfg2, _bcfg3 = st.columns([1, 1, 4])
-                if bcfg1.button("Salvar configuração do rodízio", key='rod_caixa_save_cfg', use_container_width=True, disabled=(_status_comp_rod == 'FECHADA')):
+                if bcfg1.button("Salvar configuração da transferência", key='rod_caixa_save_cfg', use_container_width=True, disabled=(_status_comp_rod == 'FECHADA')):
                     set_rodizio_caixa_cfg(setor, subgrupo_origem, subgrupo_destino, qtd_destino, tolerancia, True)
                     st.success("Configuração salva.")
                     st.rerun()
-                label_reset = "Zerar o que foi aplicado neste mês" if rodizio_ja_aplicado_mes else "Voltar do zero"
+                label_reset = "Remanejar tudo para Operador de Caixa 01" if rodizio_ja_aplicado_mes else "Recriar do zero"
                 if bcfg2.button(label_reset, key='rod_caixa_reset_cfg', use_container_width=True, disabled=(_status_comp_rod == 'FECHADA')):
                     if rodizio_ja_aplicado_mes:
                         try:
@@ -14109,11 +14111,11 @@ def page_app():
                 st.caption("Na sugestão do mês, o sistema prioriza: 1) horário fixo da cota, 2) domingo mais parecido, 3) quem está há mais tempo sem ir para o Caixa 02.")
 
                 painel_conf = montar_painel_conferencia_rodizio_caixa_mes(setor, ano_r, mes_r, subgrupo_origem, subgrupo_destino)
-                st.markdown("### Conferência do mês por subgrupo")
+                st.markdown("### Verificar transferência do mês por subgrupo")
                 k1, k2, k3 = st.columns(3)
                 k1.metric(subgrupo_origem, int(painel_conf.get('qtd_origem', 0) or 0))
                 k2.metric(subgrupo_destino, int(painel_conf.get('qtd_destino', 0) or 0))
-                k3.metric('Meta fixa Caixa 02', int(painel_conf.get('qtd_alvo_destino', 14) or 14))
+                k3.metric('Meta fixa Caixa 02 (14)', int(painel_conf.get('qtd_alvo_destino', 14) or 14))
                 cc1, cc2 = st.columns(2)
                 with cc1:
                     st.markdown(f"#### {subgrupo_origem}")
@@ -14137,7 +14139,7 @@ def page_app():
                 elif falt_dest > 0:
                     st.warning(f"O {subgrupo_destino} está com {falt_dest} pessoa(s) abaixo da meta fixa de 14.")
                 else:
-                    st.success(f"Conferência OK: o {subgrupo_destino} está exatamente com 14 pessoas.")
+                    st.success(f"Verificação OK: o {subgrupo_destino} está exatamente com 14 pessoas.")
 
                 if rodizio_ja_aplicado_mes:
                     pares_aplicados = build_rodizio_caixa_aplicado_pairs(hist_mes)
@@ -14145,7 +14147,7 @@ def page_app():
                     top1.metric('Trocas aplicadas no mês', len(pares_aplicados))
                     top2.metric('Competência', f"{mes_r:02d}/{ano_r}")
                     top3.metric('Status', 'APLICADO')
-                    st.success(f"Rodízio já aplicado em {mes_r:02d}/{ano_r}. Os nomes desta competência ficam congelados e só mudam na próxima competência.")
+                    st.success(f"Transferências já aplicadas em {mes_r:02d}/{ano_r}. Os nomes desta competência ficam congelados e só mudam na próxima competência.")
 
                     if pares_aplicados:
                         df_pares_aplicados = pd.DataFrame([{
@@ -14161,7 +14163,7 @@ def page_app():
                             'Observação': p['observacao'] or '-',
                             'Aplicado em': p['criado_em'],
                         } for p in pares_aplicados])
-                        st.markdown("### Rodízio já aplicado na competência")
+                        st.markdown("### Transferências já aplicadas na competência")
                         st.dataframe(df_pares_aplicados, use_container_width=True, height=380)
                     else:
                         st.warning('Foi encontrado histórico do rodízio nesta competência, mas sem pares completos para exibir.')
@@ -14216,7 +14218,7 @@ def page_app():
                         st.warning(f"Revisão manual ativa em {mes_r:02d}/{ano_r}: trocar a pessoa no seletor NÃO aplica nada sozinho. Só aplica quando você clicar em 'Aplicar mudança de subgrupos agora'.")
 
                     a1, a2 = st.columns([1, 1])
-                    if a1.button('Limpar aprovações e negativas', key='rod_caixa_clear_aprov', use_container_width=True):
+                    if a1.button('Limpar aprovações e negativas da fila', key='rod_caixa_clear_aprov', use_container_width=True):
                         aprov_tmp = dict(st.session_state.get(aprov_key, {}))
                         for s in slots:
                             slot_key_tmp = str(s.get('slot_key') or '')
@@ -14228,7 +14230,7 @@ def page_app():
                         st.session_state[neg_key] = []
                         st.session_state.pop(state_base + "::aplicado", None)
                         st.rerun()
-                    if a2.button('Aprovar todas as sugestões atuais', key='rod_caixa_aprov_all', use_container_width=True):
+                    if a2.button('Aprovar as 14 sugestões atuais', key='rod_caixa_aprov_all', use_container_width=True):
                         aprov_all = {}
                         for s in slots:
                             slot_key_tmp = str(s.get('slot_key') or '')
@@ -14245,13 +14247,13 @@ def page_app():
 
                     if pronto_aplicar:
                         st.success(f"Todas as {qtd_obrigatoria} sugestões foram aprovadas. Agora falta aplicar o rodízio no mês {mes_r:02d}/{ano_r}.")
-                        if st.button('🔁 Aplicar mudança de subgrupos agora (antes da escala)', key='rod_caixa_apply_now', use_container_width=True, disabled=(_status_comp_rod == 'FECHADA')):
+                        if st.button('🔁 Aplicar transferências agora e jogar para Caixa 02', key='rod_caixa_apply_now', use_container_width=True, disabled=(_status_comp_rod == 'FECHADA')):
                             sim_apply = montar_simulacao_com_aprovacoes_rodizio_caixa(sim, st.session_state.get(aprov_key, {}))
                             res_apply = aplicar_rodizio_caixa_mes(setor, ano_r, mes_r, sim_apply)
                             if res_apply.get('ok'):
                                 st.session_state[aplic_key] = True
                                 st.session_state[force_review_key] = False
-                                st.success(res_apply.get('msg', 'Rodízio aplicado com sucesso.'))
+                                st.success(res_apply.get('msg', 'Transferências aplicadas com sucesso.'))
                                 st.rerun()
                             else:
                                 st.error(res_apply.get('msg', 'Não foi possível aplicar o rodízio.'))
@@ -14261,7 +14263,7 @@ def page_app():
                         st.info(f"Para aplicar de verdade no mês {mes_r:02d}/{ano_r}, todas as {qtd_obrigatoria} sugestões precisam estar aprovadas e depois você deve clicar em 'Aplicar mudança de subgrupos agora (antes da escala)'.")
 
                 if slots:
-                    st.markdown('### Aprovação das pessoas sugeridas para esta competência')
+                    st.markdown('### Sugestões de transferência por vez para esta competência')
                     resumo_aprov = pd.DataFrame([{
                         'Status': 'APROVADO' if str(aprovados_atuais.get(s.get('slot_key')) or '').strip() else 'PENDENTE',
                         'Nome sugerido': s.get('origem_nome', ''),
@@ -14319,7 +14321,7 @@ def page_app():
 
                             if opcoes_alt:
                                 st.selectbox(
-                                    'Escolha quem está mais próximo para este rodízio:',
+                                    'Escolha quem está mais próximo para entrar no Operador de Caixa 02:',
                                     options=opcoes_alt,
                                     index=idx_padrao_slot,
                                     key=f'rod_caixa_pick_{slot_key}',
@@ -14327,7 +14329,7 @@ def page_app():
                                 )
 
                             bcol1, bcol2, bcol3, bcol4 = st.columns([1, 1, 1, 3])
-                            if bcol1.button('✅ Aprovar seleção', key=f'rod_caixa_ok_{slot_key}', use_container_width=True):
+                            if bcol1.button('✅ Aprovar e jogar para Caixa 02', key=f'rod_caixa_ok_{slot_key}', use_container_width=True):
                                 chapa_sel = str(st.session_state.get(f'rod_caixa_pick_{slot_key}', str(s.get('origem_chapa') or '')) or '').strip()
                                 tmp = dict(st.session_state.get(aprov_state_key, {}))
                                 chapa_ant = str(tmp.get(slot_key) or '').strip()
@@ -14339,7 +14341,7 @@ def page_app():
                                 st.session_state[aprov_state_key] = tmp
                                 st.session_state.pop(state_base + "::aplicado", None)
                                 st.rerun()
-                            if bcol2.button('❌ Negar e chamar próximo da fila', key=f'rod_caixa_no_{slot_key}', use_container_width=True):
+                            if bcol2.button('❌ Negar e chamar próximo', key=f'rod_caixa_no_{slot_key}', use_container_width=True):
                                 negs = list(st.session_state.get(neg_key, []))
                                 chapa_escolhida_agora = str(st.session_state.get(f'rod_caixa_pick_{slot_key}', str(s.get('origem_chapa') or '')) or '').strip()
                                 chapa_neg = chapa_escolhida_agora or str(s.get('origem_chapa') or '').strip()
@@ -14354,7 +14356,7 @@ def page_app():
                                 st.session_state[neg_state_key] = negs
                                 st.session_state.pop(state_base + "::aplicado", None)
                                 st.rerun()
-                            if bcol3.button('🔄 Resetar aprovação', key=f'rod_caixa_reset_{slot_key}', use_container_width=True, disabled=(not aprovado)):
+                            if bcol3.button('🔄 Resetar esta vaga', key=f'rod_caixa_reset_{slot_key}', use_container_width=True, disabled=(not aprovado)):
                                 tmp = dict(st.session_state.get(aprov_state_key, {}))
                                 chapa_ant = str(tmp.get(slot_key) or '').strip()
                                 if chapa_ant:
@@ -14368,7 +14370,7 @@ def page_app():
                                 nome_sel_txt = mapa_alt.get(chapa_sel_txt, chapa_sel_txt)
                                 bcol4.success(f'Aprovado manualmente. Seleção atual: {nome_sel_txt}')
                             else:
-                                bcol4.warning('Pendente de aprovação manual.')
+                                bcol4.warning('Pendente. Ao negar, o sistema chama a próxima pessoa da fila desse horário.')
                 else:
                     st.warning("Nenhuma troca encontrada para aplicar neste mês.")
 
