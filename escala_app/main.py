@@ -7227,8 +7227,46 @@ def _rodizio_caixa_base_mes_anterior_congelado(setor: str, ano: int, mes: int) -
     return list(mapa.values())
 
 
+def _transferencia_colaboradores_mes_atual(setor: str, ano: int, mes: int) -> list[dict]:
+    """
+    Fonte oficial da aba Transferência.
+    Lê somente o estado atual da competência:
+    1) colaboradores base do setor
+    2) sobrescreve com subgrupo_competencia do mês, quando existir
+
+    Não usa rodizio_caixa_hist e não reconstrói pelo mês anterior.
+    """
+    atuais = [_clone_colaborador_base(c) for c in (load_colaboradores_setor(setor) or [])]
+    mapa = {str(c.get('Chapa') or '').strip(): c for c in atuais if str(c.get('Chapa') or '').strip()}
+
+    con = db_conn()
+    try:
+        cur = con.cursor()
+        cur.execute(
+            """
+            SELECT chapa, subgrupo
+            FROM subgrupo_competencia
+            WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=?
+            """,
+            (str(setor or '').strip(), int(ano), int(mes))
+        )
+        rows = cur.fetchall() or []
+    finally:
+        con.close()
+
+    for row in rows:
+        ch = str((row[0] if row else '') or '').strip()
+        sg = str((row[1] if row else '') or '').strip()
+        if not ch or ch not in mapa:
+            continue
+        if sg:
+            mapa[ch]['Subgrupo'] = sg
+
+    return list(mapa.values())
+
+
 def _rodizio_caixa_estado_efetivo(setor: str, ano: int, mes: int, subgrupo_origem: str, subgrupo_destino: str):
-    colaboradores = _rodizio_caixa_base_mes_anterior_congelado(setor, int(ano), int(mes))
+    colaboradores = _transferencia_colaboradores_mes_atual(setor, int(ano), int(mes))
     origem = [c for c in colaboradores if str(c.get('Subgrupo') or '').strip().upper() == str(subgrupo_origem).strip().upper()]
     destino = [c for c in colaboradores if str(c.get('Subgrupo') or '').strip().upper() == str(subgrupo_destino).strip().upper()]
     return colaboradores, origem, destino
@@ -8292,10 +8330,6 @@ def transferencia_suprema_caixa_02_para_01(setor: str, ano: int, mes: int, subgr
             ),
             (
                 "SELECT chapa FROM colaborador_competencia_snapshot WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND UPPER(TRIM(subgrupo))=UPPER(TRIM(?))",
-                (setor, ano, mes, subgrupo_destino),
-            ),
-            (
-                "SELECT chapa FROM rodizio_caixa_hist WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND UPPER(TRIM(subgrupo_destino))=UPPER(TRIM(?))",
                 (setor, ano, mes, subgrupo_destino),
             ),
         ]
