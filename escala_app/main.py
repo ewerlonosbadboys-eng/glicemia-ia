@@ -5130,31 +5130,6 @@ def _norm_setor(v: str) -> str:
 def _norm_chapa(v: str) -> str:
     return str(v or "").strip()
 
-def _norm_chapa_match(v: str) -> str:
-    s = str(v or '').strip()
-    somente_digitos = re.sub(r'\D+', '', s)
-    return somente_digitos or s.upper()
-
-def _resolver_chapa_real_setor(setor: str, chapa: str) -> str:
-    setor = _norm_setor(setor)
-    chapa = _norm_chapa(chapa)
-    if not chapa:
-        return ''
-    alvo_keys = {_norm_chapa(chapa), _norm_chapa_match(chapa)}
-    con = db_conn()
-    cur = con.cursor()
-    try:
-        cur.execute("SELECT chapa FROM colaboradores WHERE UPPER(TRIM(setor))=?", (setor,))
-        for (ch_db,) in (cur.fetchall() or []):
-            ch_db = _norm_chapa(ch_db)
-            if not ch_db:
-                continue
-            if ch_db in alvo_keys or _norm_chapa_match(ch_db) in alvo_keys:
-                return ch_db
-    finally:
-        con.close()
-    return chapa
-
 def hash_password(password: str, salt: str) -> str:
     password = (password or "").strip()
     salt = (salt or "").strip()
@@ -7082,19 +7057,6 @@ def _rodizio_format_ym(ym: int) -> str:
     return f'{mes:02d}/{ano}'
 
 
-def _rodizio_prioridade_historico_destino(last_move_ym: int) -> tuple[int, int]:
-    """
-    Prioridade da fila para transferência:
-    - quem nunca foi para o Caixa 02 vem primeiro
-    - quem já foi fica depois
-    - entre quem já foi, quem foi há mais tempo vem antes
-    """
-    ym = int(last_move_ym or 0)
-    if ym <= 0:
-        return (0, 0)
-    return (1, ym)
-
-
 def _rodizio_rank_origem(setor: str, candidatos_origem: list[dict], subgrupo_destino: str):
     last_move = _rodizio_last_move_map(setor, subgrupo_destino)
     out = []
@@ -7265,65 +7227,8 @@ def _rodizio_caixa_base_mes_anterior_congelado(setor: str, ano: int, mes: int) -
     return list(mapa.values())
 
 
-def _transferencia_colaboradores_mes_atual(setor: str, ano: int, mes: int) -> list[dict]:
-    """
-    Fonte oficial da aba Transferência.
-    Lê o estado oficial do mês atual e faz o match da chapa de forma tolerante,
-    para refletir as mudanças mesmo quando a formatação da chapa varia.
-    """
-    atuais = [_clone_colaborador_base(c) for c in (load_colaboradores_setor(setor) or [])]
-    mapa: dict[str, dict] = {}
-    for c in atuais:
-        ch = _norm_chapa(c.get('Chapa'))
-        if not ch:
-            continue
-        mapa[ch] = c
-        mapa[_norm_chapa_match(ch)] = c
-
-    con = db_conn()
-    try:
-        cur = con.cursor()
-        cur.execute(
-            """
-            SELECT chapa, subgrupo
-            FROM subgrupo_competencia
-            WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=?
-            """,
-            (str(setor or '').strip(), int(ano), int(mes))
-        )
-        rows = cur.fetchall() or []
-    finally:
-        con.close()
-
-    for row in rows:
-        ch = _norm_chapa((row[0] if row else '') or '')
-        sg = str((row[1] if row else '') or '').strip()
-        if not ch or not sg:
-            continue
-        base = mapa.get(ch) or mapa.get(_norm_chapa_match(ch))
-        if base is None:
-            real = get_colaborador_record(setor, _resolver_chapa_real_setor(setor, ch))
-            if real:
-                base = _clone_colaborador_base(real)
-                real_ch = _norm_chapa(base.get('Chapa'))
-                mapa[real_ch] = base
-                mapa[_norm_chapa_match(real_ch)] = base
-                atuais.append(base)
-        if base is not None:
-            base['Subgrupo'] = sg
-
-    vistos = set()
-    out = []
-    for c in atuais:
-        ch = _norm_chapa(c.get('Chapa'))
-        if ch and ch not in vistos:
-            vistos.add(ch)
-            out.append(c)
-    return out
-
-
 def _rodizio_caixa_estado_efetivo(setor: str, ano: int, mes: int, subgrupo_origem: str, subgrupo_destino: str):
-    colaboradores = _transferencia_colaboradores_mes_atual(setor, int(ano), int(mes))
+    colaboradores = _rodizio_caixa_base_mes_anterior_congelado(setor, int(ano), int(mes))
     origem = [c for c in colaboradores if str(c.get('Subgrupo') or '').strip().upper() == str(subgrupo_origem).strip().upper()]
     destino = [c for c in colaboradores if str(c.get('Subgrupo') or '').strip().upper() == str(subgrupo_destino).strip().upper()]
     return colaboradores, origem, destino
@@ -7424,8 +7329,8 @@ def simular_ajuste_complementar_rodizio_caixa_mes(
                 if best is not None:
                     match_score = int((-best[0]) * 100 + (-best[1]) * 10)
                     diff_dom = int(best[2])
-            ranked.append((0 if ent == horario_ref else 1, *_rodizio_prioridade_historico_destino(int(last_move_map.get(ch, 0) or 0)), diff, -match_score, diff_dom, str(cand.get('Nome') or '').upper(), cand))
-        ranked.sort(key=lambda x: (x[0], x[1], x[2], x[3], x[4], x[5], x[6]))
+            ranked.append((0 if ent == horario_ref else 1, diff, -match_score, diff_dom, int(last_move_map.get(ch, 0) or 0), str(cand.get('Nome') or '').upper(), cand))
+        ranked.sort(key=lambda x: (x[0], x[1], x[2], x[3], x[4], x[5]))
         return [x[-1] for x in ranked]
 
     faltam_rest = int(faltam_total)
@@ -7649,32 +7554,32 @@ def simular_rodizio_caixa_mes(
                 last_move = int(last_move_map.get(ch, 0) or 0)
                 scored.append((
                     0 if ent == horario_ref else 1,
-                    *_rodizio_prioridade_historico_destino(last_move),
                     diff_hor,
                     -int(match_info.get('trab_iguais_qtd', 0) or 0),
                     -int(match_info.get('folga_iguais_qtd', 0) or 0),
                     sunday_diff,
+                    last_move,
                     pos,
                     str(cand.get('Nome') or '').upper(),
                     cand,
                     match_info,
                     domingos_orig,
                 ))
-            scored.sort(key=lambda x: (x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8]))
+            scored.sort(key=lambda x: (x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7]))
 
             alternativas_opcoes = []
             for item in scored[:20]:
-                cand = item[8]
-                match_item = item[9]
-                domingos_item = int(item[10] or 0)
+                cand = item[9]
+                match_item = item[10]
+                domingos_item = int(item[11] or 0)
                 last_move_item = int(last_move_map.get(str(cand.get('Chapa') or '').strip(), 0) or 0)
                 alternativas_opcoes.append({
                     'chapa': str(cand.get('Chapa') or '').strip(),
                     'nome': str(cand.get('Nome') or ''),
                     'entrada': str(cand.get('Entrada') or '').strip(),
-                    'diff_horario_ref_min': int(item[1] or 0),
+                    'diff_horario_ref_min': int(item[3] or 0),
                     'domingos': int(domingos_item),
-                    'diff_domingos': int(item[4] or 0),
+                    'diff_domingos': int(item[6] or 0),
                     'domingos_trabalho_iguais_qtd': int(match_item.get('trab_iguais_qtd', 0) or 0),
                     'domingos_folga_iguais_qtd': int(match_item.get('folga_iguais_qtd', 0) or 0),
                     'ultimo_mes_destino_label': _rodizio_format_ym(last_move_item),
@@ -7682,14 +7587,14 @@ def simular_rodizio_caixa_mes(
 
             if locked_chapa:
                 for item in scored:
-                    cand = item[8]
+                    cand = item[9]
                     if str(cand.get('Chapa') or '').strip() == locked_chapa:
                         chosen = cand
                         escolha_fallback = (str(cand.get('Entrada') or '').strip() != horario_ref)
                         break
 
             if chosen is None and scored:
-                chosen = scored[0][8]
+                chosen = scored[0][9]
                 escolha_fallback = (str(chosen.get('Entrada') or '').strip() != horario_ref)
 
             ch = str(chosen.get('Chapa') or '').strip()
@@ -7900,8 +7805,8 @@ def simular_rodizio_caixa_mes(
                     continue
                 domingos_orig = int(domingos_map.get(ch, 0) or 0)
                 last_move = int(last_move_map.get(ch, 0) or 0)
-                ranked.append((0 if ent == horario_ref else 1, *_rodizio_prioridade_historico_destino(last_move), diff_hor, domingos_orig, str(cand.get('Nome') or '').upper(), cand))
-            ranked.sort(key=lambda x: (x[0], x[1], x[2], x[3], x[4], x[5]))
+                ranked.append((0 if ent == horario_ref else 1, diff_hor, domingos_orig, last_move, str(cand.get('Nome') or '').upper(), cand))
+            ranked.sort(key=lambda x: (x[0], x[1], x[2], x[3], x[4]))
             return [x[-1] for x in ranked]
 
         for cota_info in _rodizio_caixa_cotas_custom(setor, subgrupo_destino):
@@ -7981,10 +7886,9 @@ def simular_rodizio_caixa_mes(
                         melhor_h = h
                 if melhor_h is None:
                     continue
-                _prio_hist = _rodizio_prioridade_historico_destino(int(last_move_map.get(ch, 0) or 0))
-                candidatos_rest.append((int(melhor_diff), _prio_hist[0], _prio_hist[1], str(cand.get('Nome') or '').upper(), cand, melhor_h))
-            candidatos_rest.sort(key=lambda x: (x[0], x[1], x[2], x[3]))
-            for diff_hor, _flag_hist, _last, _nm, cand, horario_ref in candidatos_rest:
+                candidatos_rest.append((int(melhor_diff), int(last_move_map.get(ch, 0) or 0), str(cand.get('Nome') or '').upper(), cand, melhor_h))
+            candidatos_rest.sort(key=lambda x: (x[0], x[1], x[2]))
+            for diff_hor, _last, _nm, cand, horario_ref in candidatos_rest:
                 if len(pares) >= int(qtd_obrigatoria):
                     break
                 ch = str(cand.get('Chapa') or '').strip()
@@ -8358,154 +8262,6 @@ def sincronizar_subgrupos_base_rodizio_caixa(setor: str, ano: int, mes: int, sub
 
 
 
-
-def transferencia_suprema_caixa_02_para_01(setor: str, ano: int, mes: int, subgrupo_origem: str = 'OPERADOR DE CAIXA 01', subgrupo_destino: str = 'OPERADOR DE CAIXA 02'):
-    """
-    Transferência manual suprema.
-    Quando acionada manualmente pelo usuário, IGNORA a regra de manter 14 no Caixa 02
-    e esvazia completamente o subgrupo destino na competência selecionada.
-    """
-    setor = str(setor or '').strip()
-    ano = int(ano)
-    mes = int(mes)
-    subgrupo_origem = str(subgrupo_origem or 'OPERADOR DE CAIXA 01').strip() or 'OPERADOR DE CAIXA 01'
-    subgrupo_destino = str(subgrupo_destino or 'OPERADOR DE CAIXA 02').strip() or 'OPERADOR DE CAIXA 02'
-
-    colaboradores, _, destino = _rodizio_caixa_estado_efetivo(setor, ano, mes, subgrupo_origem, subgrupo_destino)
-    chapas = {str(c.get('Chapa') or '').strip() for c in (destino or []) if str(c.get('Chapa') or '').strip()}
-
-    con = db_conn()
-    cur = con.cursor()
-    try:
-        consultas = [
-            (
-                "SELECT chapa FROM colaboradores WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND UPPER(TRIM(subgrupo))=UPPER(TRIM(?))",
-                (setor, subgrupo_destino),
-            ),
-            (
-                "SELECT chapa FROM subgrupo_competencia WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND UPPER(TRIM(subgrupo))=UPPER(TRIM(?))",
-                (setor, ano, mes, subgrupo_destino),
-            ),
-            (
-                "SELECT chapa FROM colaborador_competencia_snapshot WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND UPPER(TRIM(subgrupo))=UPPER(TRIM(?))",
-                (setor, ano, mes, subgrupo_destino),
-            ),
-        ]
-        for sql, params in consultas:
-            try:
-                cur.execute(sql, params)
-                chapas.update(str(r[0]).strip() for r in (cur.fetchall() or []) if str(r[0] or '').strip())
-            except Exception:
-                pass
-
-        chapas_afetadas = sorted(chapas)
-        if not chapas_afetadas:
-            con.close()
-            return {'ok': True, 'qtd': 0, 'msg': f'Nenhum colaborador estava em {subgrupo_destino} em {mes:02d}/{ano}.'}
-
-        cur.execute('BEGIN')
-        marks = ','.join(['?'] * len(chapas_afetadas))
-        agora = datetime.now().isoformat()
-
-        cur.execute(
-            f"UPDATE colaboradores SET subgrupo=? WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND TRIM(chapa) IN ({marks})",
-            [subgrupo_origem, setor, *chapas_afetadas]
-        )
-
-        cur.execute(
-            f"DELETE FROM subgrupo_competencia WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa) IN ({marks})",
-            [setor, ano, mes, *chapas_afetadas]
-        )
-        for ch in chapas_afetadas:
-            cur.execute(
-                """
-                INSERT INTO subgrupo_competencia(setor, ano, mes, chapa, subgrupo, atualizado_em)
-                VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(setor, ano, mes, chapa) DO UPDATE SET
-                    subgrupo=excluded.subgrupo,
-                    atualizado_em=excluded.atualizado_em
-                """,
-                (setor, ano, mes, ch, subgrupo_origem, agora)
-            )
-
-        for ch in chapas_afetadas:
-            cur.execute(
-                "SELECT nome, entrada, folga_sab FROM colaborador_competencia_snapshot WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=? LIMIT 1",
-                (setor, ano, mes, ch)
-            )
-            row = cur.fetchone()
-            nome_snap = entrada_snap = None
-            folga_sab_snap = 0
-            if row:
-                nome_snap = str(row[0] or '').strip()
-                entrada_snap = str(row[1] or '').strip()
-                folga_sab_snap = int(row[2] or 0)
-            if not nome_snap or not entrada_snap:
-                cur.execute(
-                    "SELECT nome, entrada, COALESCE(folga_sab,0) FROM colaboradores WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND TRIM(chapa)=? LIMIT 1",
-                    (setor, ch)
-                )
-                rowb = cur.fetchone()
-                if rowb:
-                    if not nome_snap:
-                        nome_snap = str(rowb[0] or '').strip()
-                    if not entrada_snap:
-                        entrada_snap = str(rowb[1] or '').strip()
-                    folga_sab_snap = int(rowb[2] or 0)
-            cur.execute(
-                """
-                INSERT INTO colaborador_competencia_snapshot(setor, ano, mes, chapa, nome, subgrupo, entrada, folga_sab, atualizado_em)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(setor, ano, mes, chapa) DO UPDATE SET
-                    nome=excluded.nome,
-                    subgrupo=excluded.subgrupo,
-                    entrada=excluded.entrada,
-                    folga_sab=excluded.folga_sab,
-                    atualizado_em=excluded.atualizado_em
-                """,
-                (setor, ano, mes, ch, nome_snap or '', subgrupo_origem, entrada_snap or '06:00', int(folga_sab_snap or 0), agora)
-            )
-
-        try:
-            cur.execute(
-                f"DELETE FROM retificacoes_competencia WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa) IN ({marks})",
-                [setor, ano, mes, *chapas_afetadas]
-            )
-        except Exception:
-            pass
-
-        try:
-            cur.execute(
-                "DELETE FROM rodizio_caixa_hist WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=?",
-                (setor, ano, mes)
-            )
-        except Exception:
-            pass
-
-        con.commit()
-    except Exception:
-        con.rollback()
-        raise
-    finally:
-        con.close()
-
-    try:
-        rebuild_colaborador_competencia_snapshot(setor, int(ano), int(mes))
-    except Exception:
-        pass
-
-    try:
-        st.cache_data.clear()
-    except Exception:
-        pass
-
-    return {
-        'ok': True,
-        'qtd': len(chapas_afetadas),
-        'msg': f'Transferência suprema concluída em {mes:02d}/{ano}. {len(chapas_afetadas)} pessoa(s) voltaram de {subgrupo_destino} para {subgrupo_origem} e o Caixa 02 ficou vazio.'
-    }
-
-
 def resetar_rodizio_caixa_mes(setor: str, ano: int, mes: int, subgrupo_origem: str = 'OPERADOR DE CAIXA 01', subgrupo_destino: str = 'OPERADOR DE CAIXA 02'):
     """
     Volta do zero do rodízio da competência atual.
@@ -8669,7 +8425,7 @@ def resetar_rodizio_caixa_mes(setor: str, ano: int, mes: int, subgrupo_origem: s
 
 
 def _upsert_subgrupo_preview_competencia(setor: str, ano: int, mes: int, chapa: str, novo_subgrupo: str, nova_entrada: str | None = None):
-    chapa = _resolver_chapa_real_setor(setor, chapa)
+    chapa = str(chapa or '').strip()
     novo_subgrupo = str(novo_subgrupo or '').strip()
     nova_entrada = str(nova_entrada or '').strip()
     if not chapa or not novo_subgrupo:
@@ -8740,7 +8496,7 @@ def _upsert_subgrupo_preview_competencia(setor: str, ano: int, mes: int, chapa: 
 
 
 def _restaurar_subgrupo_preview_competencia(setor: str, ano: int, mes: int, chapa: str, subgrupo_base: str, entrada_base: str | None = None):
-    chapa = _resolver_chapa_real_setor(setor, chapa)
+    chapa = str(chapa or '').strip()
     subgrupo_base = str(subgrupo_base or '').strip()
     entrada_base = str(entrada_base or '').strip()
     if not chapa:
@@ -14242,13 +13998,13 @@ def page_app():
                         histg['resumo'] = histg['modulo'].astype(str) + ' / ' + histg['acao'].astype(str)
                         st.dataframe(histg[['id','setor','resumo','status','observacao','criado_em','aprovado_por','aprovado_em']], use_container_width=True, height=220)
 
-        elif sec_col in ["🔄 Rodízio Caixa", "🔁 Transferência"]:
+        elif sec_col == "🔁 Transferência":
             ui_back_header("🔁 Transferência — Caixa 01 ↔ Caixa 02", "colaboradores", "👥 Colaboradores")
             if not str(setor).strip().upper().startswith("FRENTECAIXA"):
                 st.info("A subaba Transferência está disponível somente para setores FRENTECAIXA.")
             else:
                 st.markdown("### 🔁 Subaba Transferência")
-                st.caption("Regra fixa: 14 operadores no Caixa 02, com prioridade para horários 06:50×4, 07:30×1, 08:00×1, 09:00×1, 10:00×1, 11:00×1, 12:00×1 e 12:40×4. O sistema tenta domingos iguais primeiro; quando não houver, ele avisa e segue para o mais próximo.")
+                st.caption("Nova aba Transferência: meta fixa de 14 operadores no Caixa 02, priorizando horários 06:50×4, 07:30×1, 08:00×1, 09:00×1, 10:00×1, 11:00×1, 12:00×1 e 12:40×4. Primeiro tenta domingos iguais; quando não houver, avisa e segue com a opção mais próxima.")
                 cfg = get_rodizio_caixa_cfg(setor)
                 c1, c2, c3, c4 = st.columns([1.4, 1.4, 1, 1])
                 _rod_reset_defaults_key = f"rod_caixa_reset_defaults::{setor}"
@@ -14292,15 +14048,14 @@ def page_app():
                     st.rerun()
                 if bcfg2.button("🚨 Transferir TODOS do Caixa 02 para Caixa 01", key='rod_caixa_move_all_back', use_container_width=True, disabled=(_status_comp_rod == 'FECHADA')):
                     try:
-                        st.warning('Modo supremo: esta ação manual ignora a regra de manter 14 pessoas no Caixa 02 e esvazia o subgrupo destino nesta competência.')
-                        res_mass = transferencia_suprema_caixa_02_para_01(setor, ano_r, mes_r, 'OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02')
+                        res_mass = resetar_rodizio_caixa_mes(setor, ano_r, mes_r, 'OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02')
                         base_reset = f"rod_caixa_aprov::{setor}::{ano_r}::{mes_r}::{subgrupo_origem}::{subgrupo_destino}"
                         for suf in ["::aprovados", "::negados", "::aplicado", "::complementar_aprovados"]:
                             st.session_state.pop(base_reset + suf, None)
                         st.session_state[_rod_reset_defaults_key] = True
                         st.session_state[force_review_key] = True
                         set_rodizio_caixa_cfg(setor, 'OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02', 14, 20, True)
-                        st.success(res_mass.get('msg', 'Transferência manual concluída. O Caixa 02 foi esvaziado nesta competência.'))
+                        st.success(res_mass.get('msg', 'Todos do Caixa 02 foram transferidos para o Caixa 01 nesta competência.'))
                         st.rerun()
                     except Exception as e:
                         st.error(f'Falha ao transferir todos do Caixa 02 para o Caixa 01: {e}')
@@ -14315,12 +14070,12 @@ def page_app():
                                 for suf in ["::aprovados", "::negados", "::aplicado", "::complementar_aprovados"]:
                                     st.session_state.pop(base_reset + suf, None)
                                 st.session_state[force_review_key] = True
-                                st.success(res_reset.get('msg', 'Rodízio zerado com sucesso. A fila foi reaberta para nova aprovação manual.'))
+                                st.success(res_reset.get('msg', 'Transferência zerada com sucesso. A fila foi reaberta para nova aprovação manual.'))
                                 st.rerun()
                             else:
-                                st.warning(res_reset.get('msg', 'Não foi possível zerar o rodízio desta competência.'))
+                                st.warning(res_reset.get('msg', 'Não foi possível zerar a transferência desta competência.'))
                         except Exception as e:
-                            st.error(f'Falha ao zerar rodízio da competência: {e}')
+                            st.error(f'Falha ao zerar transferência da competência: {e}')
                     else:
                         try:
                             res_reset = resetar_rodizio_caixa_mes(setor, ano_r, mes_r, 'OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02')
@@ -14344,7 +14099,7 @@ def page_app():
                         except Exception as e:
                             st.error(f'Falha ao executar volta do zero: {e}')
                 if _status_comp_rod == 'FECHADA':
-                    st.error(f'🔒 Competência {mes_r:02d}/{ano_r} fechada: o rodízio deste mês fica somente para consulta.')
+                    st.error(f'🔒 Competência {mes_r:02d}/{ano_r} fechada: a transferência deste mês fica somente para consulta.')
                 state_base = f"rod_caixa_aprov::{setor}::{ano_r}::{mes_r}::{subgrupo_origem}::{subgrupo_destino}"
                 aprov_key = state_base + "::aprovados"
                 neg_key = state_base + "::negados"
@@ -14364,9 +14119,9 @@ def page_app():
                     aprovados_por_slot=st.session_state.get(aprov_key, {}),
                     negados_chapas=st.session_state.get(neg_key, []),
                 )
-                st.caption(f"Competência ativa: {mes_r:02d}/{ano_r}. Regra fixa do rodízio: 14 trocas por mês, respeitando as cotas por horário do Caixa 01.")
-                st.info(f"{subgrupo_destino}: {sim.get('qtd_destino_atual', 0)} pessoa(s) hoje. Rodízio planejado: {sim.get('qtd_troca', 0)} troca(s). Quantidade obrigatória: {sim.get('qtd_destino_obrigatoria', 14)}.")
-                st.caption("Na sugestão do mês, o sistema prioriza: 1) quem nunca foi para o Caixa 02, 2) horário fixo da cota, 3) domingo mais parecido, 4) entre quem já foi, quem está há mais tempo sem ir.")
+                st.caption(f"Competência ativa: {mes_r:02d}/{ano_r}. Regra fixa da transferência: 14 posições no Caixa 02, respeitando as cotas por horário do Caixa 01.")
+                st.info(f"{subgrupo_destino}: {sim.get('qtd_destino_atual', 0)} pessoa(s) hoje. Transferência planejada: {sim.get('qtd_troca', 0)} pessoa(s). Quantidade obrigatória: {sim.get('qtd_destino_obrigatoria', 14)}.")
+                st.caption("Na sugestão do mês, o sistema prioriza: 1) horário fixo da cota, 2) domingo mais parecido, 3) quem está há mais tempo sem ir para o Caixa 02.")
 
                 painel_conf = montar_painel_conferencia_rodizio_caixa_mes(setor, ano_r, mes_r, subgrupo_origem, subgrupo_destino)
                 st.markdown("### Verificar transferência do mês por subgrupo")
@@ -14424,7 +14179,7 @@ def page_app():
                         st.markdown("### Transferências já aplicadas na competência")
                         st.dataframe(df_pares_aplicados, use_container_width=True, height=380)
                     else:
-                        st.warning('Foi encontrado histórico do rodízio nesta competência, mas sem pares completos para exibir.')
+                        st.warning('Foi encontrado histórico da transferência nesta competência, mas sem pares completos para exibir.')
 
                     comp_sim = simular_ajuste_complementar_rodizio_caixa_mes(setor, ano_r, mes_r, subgrupo_origem, subgrupo_destino)
                     qtd_obrigatoria = int(sim.get('qtd_destino_obrigatoria', 14) or 14)
@@ -14472,6 +14227,9 @@ def page_app():
                     top1.metric('Sugestões montadas', len(slots))
                     top2.metric('Aprovadas', aprovados_validos)
                     top3.metric('Pendentes', max(0, len(slots) - aprovados_validos))
+                    if st.session_state.get(force_review_key):
+                        st.warning(f"Revisão manual ativa em {mes_r:02d}/{ano_r}: trocar a pessoa no seletor NÃO aplica nada sozinho. Só aplica quando você clicar em 'Aplicar mudança de subgrupos agora'.")
+
                     a1, a2 = st.columns([1, 1])
                     if a1.button('Limpar aprovações e negativas da fila', key='rod_caixa_clear_aprov', use_container_width=True):
                         aprov_tmp = dict(st.session_state.get(aprov_key, {}))
@@ -14481,30 +14239,41 @@ def page_app():
                                 continue
                             chapa_sel_tmp = str(aprov_tmp.get(slot_key_tmp) or '').strip()
                             if chapa_sel_tmp:
-                                resetar_preview_aprovacao_rodizio_caixa(setor, ano_r, mes_r, s, chapa_sel_tmp, subgrupo_origem, subgrupo_destino)
-                        st.session_state[aprov_key] = {}
+                                st.session_state[aprov_key] = {}
                         st.session_state[neg_key] = []
                         st.session_state.pop(state_base + "::aplicado", None)
                         st.rerun()
-                    if a2.button('Aprovar as 14 sugestões atuais direto', key='rod_caixa_aprov_all', use_container_width=True, disabled=(_status_comp_rod == 'FECHADA')):
+                    if a2.button('Aprovar as 14 sugestões atuais', key='rod_caixa_aprov_all', use_container_width=True):
                         aprov_all = {}
                         for s in slots:
                             slot_key_tmp = str(s.get('slot_key') or '')
                             chapa_sel_tmp = str(st.session_state.get(f'rod_caixa_pick_{slot_key_tmp}', str(s.get('origem_chapa') or '')) or '').strip()
-                            if not (slot_key_tmp and chapa_sel_tmp):
-                                continue
-                            aplicar_preview_aprovacao_rodizio_caixa(setor, ano_r, mes_r, s, chapa_sel_tmp, subgrupo_origem, subgrupo_destino)
-                            aprov_all[slot_key_tmp] = chapa_sel_tmp
+                            if slot_key_tmp and chapa_sel_tmp:
+                                aprov_all[slot_key_tmp] = chapa_sel_tmp
                         st.session_state[aprov_key] = aprov_all
                         st.session_state.pop(state_base + "::aplicado", None)
-                        st.success(f"As {len(aprov_all)} transferência(s) selecionadas foram gravadas direto na competência {mes_r:02d}/{ano_r}.")
                         st.rerun()
 
+                    aplic_key = state_base + "::aplicado"
                     qtd_obrigatoria = int(sim.get('qtd_destino_obrigatoria', 14) or 14)
-                    if int(aprovados_validos) >= int(qtd_obrigatoria):
-                        st.success(f"As {qtd_obrigatoria} vagas já estão gravadas direto no mês {mes_r:02d}/{ano_r}. O painel acima já reflete o Caixa 02 sem botão final de aplicar.")
+                    pronto_aplicar = bool(slots) and int(aprovados_validos) >= int(qtd_obrigatoria) and int(max(0, len(slots) - aprovados_validos)) == 0
+
+                    if pronto_aplicar:
+                        st.success(f"Todas as {qtd_obrigatoria} sugestões foram aprovadas. Agora falta aplicar a transferência no mês {mes_r:02d}/{ano_r}.")
+                        if st.button('🔁 Aplicar transferências agora e jogar para Caixa 02', key='rod_caixa_apply_now', use_container_width=True, disabled=(_status_comp_rod == 'FECHADA')):
+                            sim_apply = montar_simulacao_com_aprovacoes_rodizio_caixa(sim, st.session_state.get(aprov_key, {}))
+                            res_apply = aplicar_rodizio_caixa_mes(setor, ano_r, mes_r, sim_apply)
+                            if res_apply.get('ok'):
+                                st.session_state[aplic_key] = True
+                                st.session_state[force_review_key] = False
+                                st.success(res_apply.get('msg', 'Transferências aplicadas com sucesso.'))
+                                st.rerun()
+                            else:
+                                st.error(res_apply.get('msg', 'Não foi possível aplicar a transferência.'))
+                    elif st.session_state.get(aplic_key):
+                        st.success(f"Transferência já aplicada na competência {mes_r:02d}/{ano_r}. Gere a escala novamente para refletir a troca.")
                     elif slots:
-                        st.info(f"Aprovação individual agora grava direto no mês {mes_r:02d}/{ano_r}. Não existe mais etapa final de aplicar.")
+                        st.info(f"Para aplicar de verdade no mês {mes_r:02d}/{ano_r}, todas as {qtd_obrigatoria} sugestões precisam estar aprovadas e depois você deve clicar em 'Aplicar mudança de subgrupos agora (antes da escala)'.")
 
                 if slots:
                     st.markdown('### Sugestões de transferência por vez para esta competência')
@@ -14516,7 +14285,7 @@ def page_app():
                         'Domingos origem': s.get('origem_domingos_label', ''),
                         'Última vez que foi para o Caixa 02': s.get('origem_ultimo_mes_destino_label', ''),
                         'Selecionado agora': str(aprovados_atuais.get(s.get('slot_key')) or '').strip(),
-                        'Vaga de referência': s.get('destino_entrada', ''),
+                        'Sai do Caixa 02': s.get('destino_nome', ''),
                         'Domingos destino': s.get('destino_domingos_label', ''),
                         'Domingos iguais trabalho': int(s.get('domingos_trabalho_iguais_qtd', 0) or 0),
                         'Domingos iguais folga': int(s.get('domingos_folga_iguais_qtd', 0) or 0),
@@ -14612,9 +14381,9 @@ def page_app():
                             if aprovado:
                                 chapa_sel_txt = str(aprovados_atuais.get(slot_key) or '').strip()
                                 nome_sel_txt = mapa_alt.get(chapa_sel_txt, chapa_sel_txt)
-                                bcol4.success(f'Transferência gravada no mês. Seleção atual: {nome_sel_txt}')
+                                bcol4.success(f'Aprovado manualmente. Seleção atual: {nome_sel_txt}')
                             else:
-                                bcol4.warning('Pendente. Ao negar, a pessoa volta para Caixa 01 e o sistema chama a próxima da fila desse horário.')
+                                bcol4.warning('Pendente. Ao negar, o sistema chama a próxima pessoa da fila desse horário.')
                 else:
                     st.warning("Nenhuma troca encontrada para aplicar neste mês.")
 
@@ -14640,13 +14409,13 @@ def page_app():
                     st.dataframe(df_pares, use_container_width=True, height=380)
 
                 cotas_horario = sim.get('cotas_horario') or []
-                st.markdown("### Regra fixa por horário")
+                st.markdown("### Regras da transferência por horário")
                 with st.expander("➕ Adicionar exceção manual por horário", expanded=False):
                     cex1, cex2, cex3 = st.columns([1, 1, 2])
                     horarios_base = [str(h) for h, _q in _rodizio_caixa_cotas_ordenadas()]
                     horario_extra = cex1.selectbox('Horário da exceção', options=horarios_base, key=f'rod_extra_horario::{setor}::{ano_r}::{mes_r}')
                     qtd_extra = cex2.number_input('Qtd extra manual', min_value=1, max_value=20, value=1, step=1, key=f'rod_extra_qtd::{setor}::{ano_r}::{mes_r}')
-                    cex3.caption('A regra automática continua em 14 pessoas. O extra manual serve só para você autorizar pessoas acima da regra automática.')
+                    cex3.caption('A regra automática continua em 14 pessoas. O extra manual serve só para você autorizar pessoas acima da regra padrão da transferência.')
                     a1, a2 = st.columns([1,2])
                     if a1.button('Salvar exceção manual', key=f'rod_extra_save::{setor}::{ano_r}::{mes_r}', use_container_width=True):
                         try:
@@ -14673,7 +14442,7 @@ def page_app():
                 if cotas_horario:
                     st.dataframe(pd.DataFrame(cotas_horario), use_container_width=True, height=240)
                     if any(int(r.get('Extra manual', 0) or 0) > 0 for r in cotas_horario):
-                        st.info('A coluna Extra manual mostra pessoas acima da regra automática. O automático segue 14; acima disso só entra por exceção manual.')
+                        st.info('A coluna Extra manual mostra pessoas acima da regra padrão. O automático segue 14; acima disso só entra por exceção manual.')
 
                 alertas = sim.get('alertas') or []
                 if alertas:
@@ -14683,7 +14452,7 @@ def page_app():
 
                 proximos = sim.get('proximos') or []
                 if proximos:
-                    st.markdown("### Próximos da fila para o próximo mês")
+                    st.markdown("### Próximos nomes da fila")
                     st.dataframe(pd.DataFrame(proximos[:50]), use_container_width=True, height=260)
 
                 qtd_meta_aprov = len(slots) if rodizio_ja_aplicado_mes else int(sim.get('qtd_destino_obrigatoria', 14))
@@ -14691,9 +14460,9 @@ def page_app():
                 b1, b2 = st.columns([1, 2])
                 if not todos_aprovados:
                     if rodizio_ja_aplicado_mes:
-                        b2.info('Para aplicar o ajuste complementar, aprove manualmente todas as sugestões complementares atuais.')
+                        b2.info('Para aplicar o ajuste complementar, aprove manualmente todas as sugestões complementares atuais da transferência.')
                     else:
-                        b2.info('Para aplicar o rodízio, aprove manualmente todas as 14 sugestões atuais.')
+                        b2.info('Para aplicar a transferência, aprove manualmente todas as 14 sugestões atuais.')
                 else:
                     if rodizio_ja_aplicado_mes:
                         b2.success('As sugestões complementares já estão prontas. Use o botão de ajuste complementar acima para aplicar.')
@@ -14712,7 +14481,7 @@ def page_app():
 
                 hist = list_rodizio_caixa_hist(setor, limit=120)
                 if hist:
-                    st.markdown("### Relatório de trocas já aplicadas")
+                    st.markdown("### Relatório de transferências já aplicadas")
                     st.dataframe(pd.DataFrame(hist), use_container_width=True, height=320)
 
     elif sec_main == "📂 Menu Escala":
