@@ -7057,6 +7057,19 @@ def _rodizio_format_ym(ym: int) -> str:
     return f'{mes:02d}/{ano}'
 
 
+def _rodizio_prioridade_historico_destino(last_move_ym: int) -> tuple[int, int]:
+    """
+    Prioridade da fila para transferência:
+    - quem nunca foi para o Caixa 02 vem primeiro
+    - quem já foi fica depois
+    - entre quem já foi, quem foi há mais tempo vem antes
+    """
+    ym = int(last_move_ym or 0)
+    if ym <= 0:
+        return (0, 0)
+    return (1, ym)
+
+
 def _rodizio_rank_origem(setor: str, candidatos_origem: list[dict], subgrupo_destino: str):
     last_move = _rodizio_last_move_map(setor, subgrupo_destino)
     out = []
@@ -7367,8 +7380,8 @@ def simular_ajuste_complementar_rodizio_caixa_mes(
                 if best is not None:
                     match_score = int((-best[0]) * 100 + (-best[1]) * 10)
                     diff_dom = int(best[2])
-            ranked.append((0 if ent == horario_ref else 1, diff, -match_score, diff_dom, int(last_move_map.get(ch, 0) or 0), str(cand.get('Nome') or '').upper(), cand))
-        ranked.sort(key=lambda x: (x[0], x[1], x[2], x[3], x[4], x[5]))
+            ranked.append((0 if ent == horario_ref else 1, *_rodizio_prioridade_historico_destino(int(last_move_map.get(ch, 0) or 0)), diff, -match_score, diff_dom, str(cand.get('Nome') or '').upper(), cand))
+        ranked.sort(key=lambda x: (x[0], x[1], x[2], x[3], x[4], x[5], x[6]))
         return [x[-1] for x in ranked]
 
     faltam_rest = int(faltam_total)
@@ -7592,18 +7605,18 @@ def simular_rodizio_caixa_mes(
                 last_move = int(last_move_map.get(ch, 0) or 0)
                 scored.append((
                     0 if ent == horario_ref else 1,
+                    *_rodizio_prioridade_historico_destino(last_move),
                     diff_hor,
                     -int(match_info.get('trab_iguais_qtd', 0) or 0),
                     -int(match_info.get('folga_iguais_qtd', 0) or 0),
                     sunday_diff,
-                    last_move,
                     pos,
                     str(cand.get('Nome') or '').upper(),
                     cand,
                     match_info,
                     domingos_orig,
                 ))
-            scored.sort(key=lambda x: (x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7]))
+            scored.sort(key=lambda x: (x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8]))
 
             alternativas_opcoes = []
             for item in scored[:20]:
@@ -7843,8 +7856,8 @@ def simular_rodizio_caixa_mes(
                     continue
                 domingos_orig = int(domingos_map.get(ch, 0) or 0)
                 last_move = int(last_move_map.get(ch, 0) or 0)
-                ranked.append((0 if ent == horario_ref else 1, diff_hor, domingos_orig, last_move, str(cand.get('Nome') or '').upper(), cand))
-            ranked.sort(key=lambda x: (x[0], x[1], x[2], x[3], x[4]))
+                ranked.append((0 if ent == horario_ref else 1, *_rodizio_prioridade_historico_destino(last_move), diff_hor, domingos_orig, str(cand.get('Nome') or '').upper(), cand))
+            ranked.sort(key=lambda x: (x[0], x[1], x[2], x[3], x[4], x[5]))
             return [x[-1] for x in ranked]
 
         for cota_info in _rodizio_caixa_cotas_custom(setor, subgrupo_destino):
@@ -7924,9 +7937,10 @@ def simular_rodizio_caixa_mes(
                         melhor_h = h
                 if melhor_h is None:
                     continue
-                candidatos_rest.append((int(melhor_diff), int(last_move_map.get(ch, 0) or 0), str(cand.get('Nome') or '').upper(), cand, melhor_h))
-            candidatos_rest.sort(key=lambda x: (x[0], x[1], x[2]))
-            for diff_hor, _last, _nm, cand, horario_ref in candidatos_rest:
+                _prio_hist = _rodizio_prioridade_historico_destino(int(last_move_map.get(ch, 0) or 0))
+                candidatos_rest.append((int(melhor_diff), _prio_hist[0], _prio_hist[1], str(cand.get('Nome') or '').upper(), cand, melhor_h))
+            candidatos_rest.sort(key=lambda x: (x[0], x[1], x[2], x[3]))
+            for diff_hor, _flag_hist, _last, _nm, cand, horario_ref in candidatos_rest:
                 if len(pares) >= int(qtd_obrigatoria):
                     break
                 ch = str(cand.get('Chapa') or '').strip()
@@ -14308,7 +14322,7 @@ def page_app():
                 )
                 st.caption(f"Competência ativa: {mes_r:02d}/{ano_r}. Regra fixa do rodízio: 14 trocas por mês, respeitando as cotas por horário do Caixa 01.")
                 st.info(f"{subgrupo_destino}: {sim.get('qtd_destino_atual', 0)} pessoa(s) hoje. Rodízio planejado: {sim.get('qtd_troca', 0)} troca(s). Quantidade obrigatória: {sim.get('qtd_destino_obrigatoria', 14)}.")
-                st.caption("Na sugestão do mês, o sistema prioriza: 1) horário fixo da cota, 2) domingo mais parecido, 3) quem está há mais tempo sem ir para o Caixa 02.")
+                st.caption("Na sugestão do mês, o sistema prioriza: 1) quem nunca foi para o Caixa 02, 2) horário fixo da cota, 3) domingo mais parecido, 4) entre quem já foi, quem está há mais tempo sem ir.")
 
                 painel_conf = montar_painel_conferencia_rodizio_caixa_mes(setor, ano_r, mes_r, subgrupo_origem, subgrupo_destino)
                 st.markdown("### Verificar transferência do mês por subgrupo")
