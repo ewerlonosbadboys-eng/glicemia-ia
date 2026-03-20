@@ -8055,7 +8055,9 @@ def sincronizar_subgrupos_base_rodizio_caixa(setor: str, ano: int, mes: int, sub
 
 
 def transferir_todos_caixa02_para_caixa01(setor: str, ano: int, mes: int, subgrupo_origem: str = 'OPERADOR DE CAIXA 01', subgrupo_destino: str = 'OPERADOR DE CAIXA 02'):
-    """Transfere todos do Caixa 02 para Caixa 01 no mês atual, limpando fontes mensais que possam regravar o destino."""
+    """Transfere TODOS do Caixa 02 para Caixa 01 no mês atual.
+    Faz UPDATE direto nas fontes do mês e na base, sem depender só das chapas encontradas no histórico.
+    """
     setor = _norm_setor(setor)
     ano = int(ano)
     mes = int(mes)
@@ -8069,6 +8071,7 @@ def transferir_todos_caixa02_para_caixa01(setor: str, ano: int, mes: int, subgru
             cur.execute("PRAGMA busy_timeout = 5000")
         except Exception:
             pass
+
         chapas = set()
         fontes = [
             ("SELECT TRIM(chapa) FROM colaboradores WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND UPPER(TRIM(subgrupo))=UPPER(TRIM(?))", (setor, subgrupo_destino)),
@@ -8076,6 +8079,7 @@ def transferir_todos_caixa02_para_caixa01(setor: str, ano: int, mes: int, subgru
             ("SELECT TRIM(chapa) FROM colaborador_competencia_snapshot WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND UPPER(TRIM(subgrupo))=UPPER(TRIM(?))", (setor, ano, mes, subgrupo_destino)),
             ("SELECT TRIM(chapa) FROM retificacoes_competencia WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND UPPER(TRIM(COALESCE(novo_subgrupo,'')))=UPPER(TRIM(?))", (setor, ano, mes, subgrupo_destino)),
             ("SELECT TRIM(chapa_entrada) FROM rodizio_caixa_hist WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND UPPER(TRIM(subgrupo_destino))=UPPER(TRIM(?))", (setor, ano, mes, subgrupo_destino)),
+            ("SELECT TRIM(chapa_saida) FROM rodizio_caixa_hist WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND UPPER(TRIM(subgrupo_origem))=UPPER(TRIM(?))", (setor, ano, mes, subgrupo_origem)),
         ]
         for sql, params in fontes:
             try:
@@ -8083,8 +8087,17 @@ def transferir_todos_caixa02_para_caixa01(setor: str, ano: int, mes: int, subgru
                 chapas.update(str(r[0]).strip() for r in cur.fetchall() if r and str(r[0]).strip())
             except Exception:
                 pass
-        cur.execute("DELETE FROM retificacoes_competencia WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND UPPER(TRIM(COALESCE(novo_subgrupo,'')))=UPPER(TRIM(?))", (setor, ano, mes, subgrupo_destino))
+
+        # UPDATE em massa em todas as fontes do mês
+        cur.execute("UPDATE colaboradores SET subgrupo=? WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND UPPER(TRIM(subgrupo))=UPPER(TRIM(?))", (subgrupo_origem, setor, subgrupo_destino))
+        cur.execute("UPDATE subgrupo_competencia SET subgrupo=?, atualizado_em=? WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND UPPER(TRIM(subgrupo))=UPPER(TRIM(?))", (subgrupo_origem, ts, setor, ano, mes, subgrupo_destino))
+        cur.execute("UPDATE colaborador_competencia_snapshot SET subgrupo=?, atualizado_em=? WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND UPPER(TRIM(subgrupo))=UPPER(TRIM(?))", (subgrupo_origem, ts, setor, ano, mes, subgrupo_destino))
+        cur.execute("UPDATE retificacoes_competencia SET novo_subgrupo=? WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND UPPER(TRIM(COALESCE(novo_subgrupo,'')))=UPPER(TRIM(?))", (subgrupo_origem, setor, ano, mes, subgrupo_destino))
+
+        # Limpa histórico do rodízio do mês para não regravar Caixa 02 depois
         cur.execute("DELETE FROM rodizio_caixa_hist WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=?", (setor, ano, mes))
+
+        # Reforça por chapa encontrada e limpa desenhos do mês
         total = 0
         for chapa in sorted(chapas):
             cur.execute("SELECT COALESCE(NULLIF(nome,''), ''), COALESCE(NULLIF(entrada,''), '06:00'), COALESCE(folga_sab, 0) FROM colaboradores WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND TRIM(chapa)=? LIMIT 1", (setor, chapa))
@@ -8098,12 +8111,17 @@ def transferir_todos_caixa02_para_caixa01(setor: str, ano: int, mes: int, subgru
             cur.execute("DELETE FROM escala_mes WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=?", (setor, ano, mes, chapa))
             cur.execute("DELETE FROM overrides WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=?", (setor, ano, mes, chapa))
             total += 1
+
         con.commit()
+        try:
+            rebuild_colaborador_competencia_snapshot(setor, ano, mes)
+        except Exception:
+            pass
         try:
             clear_retificacao_related_caches()
         except Exception:
             pass
-        return {'ok': True, 'total': total, 'msg': f'{total} pessoa(s) transferida(s) de {subgrupo_destino} para {subgrupo_origem}.'}
+        return {'ok': True, 'total': max(total, len(chapas)), 'msg': f'Transferência concluída: todos de {subgrupo_destino} foram enviados para {subgrupo_origem}.'}
     except Exception as e:
         try:
             con.rollback()
