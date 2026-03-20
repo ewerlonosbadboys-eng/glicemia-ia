@@ -7620,37 +7620,32 @@ def simular_rodizio_caixa_mes(
 
             alternativas_opcoes = []
             for item in scored[:20]:
-                prioridade_nunca_foi = int(item[1] or 0)
-                prioridade_ultimo_mes = int(item[2] or 0)
-                diff_hor_item = int(item[3] or 0)
-                diff_domingos_item = int(item[6] or 0)
-                cand = item[9]
-                match_item = item[10] if isinstance(item[10], dict) else {}
-                domingos_item = int(item[11] or 0)
+                cand = item[8]
+                match_item = item[9]
+                domingos_item = int(item[10] or 0)
                 last_move_item = int(last_move_map.get(str(cand.get('Chapa') or '').strip(), 0) or 0)
                 alternativas_opcoes.append({
                     'chapa': str(cand.get('Chapa') or '').strip(),
                     'nome': str(cand.get('Nome') or ''),
                     'entrada': str(cand.get('Entrada') or '').strip(),
-                    'diff_horario_ref_min': diff_hor_item,
+                    'diff_horario_ref_min': int(item[1] or 0),
                     'domingos': int(domingos_item),
-                    'diff_domingos': diff_domingos_item,
+                    'diff_domingos': int(item[4] or 0),
                     'domingos_trabalho_iguais_qtd': int(match_item.get('trab_iguais_qtd', 0) or 0),
                     'domingos_folga_iguais_qtd': int(match_item.get('folga_iguais_qtd', 0) or 0),
                     'ultimo_mes_destino_label': _rodizio_format_ym(last_move_item),
-                    'nunca_foi_destino': 1 if prioridade_nunca_foi == 0 and prioridade_ultimo_mes == 0 else 0,
                 })
 
             if locked_chapa:
                 for item in scored:
-                    cand = item[9]
+                    cand = item[8]
                     if str(cand.get('Chapa') or '').strip() == locked_chapa:
                         chosen = cand
                         escolha_fallback = (str(cand.get('Entrada') or '').strip() != horario_ref)
                         break
 
             if chosen is None and scored:
-                chosen = scored[0][9]
+                chosen = scored[0][8]
                 escolha_fallback = (str(chosen.get('Entrada') or '').strip() != horario_ref)
 
             ch = str(chosen.get('Chapa') or '').strip()
