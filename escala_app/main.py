@@ -8262,6 +8262,158 @@ def sincronizar_subgrupos_base_rodizio_caixa(setor: str, ano: int, mes: int, sub
 
 
 
+
+def transferencia_suprema_caixa_02_para_01(setor: str, ano: int, mes: int, subgrupo_origem: str = 'OPERADOR DE CAIXA 01', subgrupo_destino: str = 'OPERADOR DE CAIXA 02'):
+    """
+    Transferência manual suprema.
+    Quando acionada manualmente pelo usuário, IGNORA a regra de manter 14 no Caixa 02
+    e esvazia completamente o subgrupo destino na competência selecionada.
+    """
+    setor = str(setor or '').strip()
+    ano = int(ano)
+    mes = int(mes)
+    subgrupo_origem = str(subgrupo_origem or 'OPERADOR DE CAIXA 01').strip() or 'OPERADOR DE CAIXA 01'
+    subgrupo_destino = str(subgrupo_destino or 'OPERADOR DE CAIXA 02').strip() or 'OPERADOR DE CAIXA 02'
+
+    colaboradores, _, destino = _rodizio_caixa_estado_efetivo(setor, ano, mes, subgrupo_origem, subgrupo_destino)
+    chapas = {str(c.get('Chapa') or '').strip() for c in (destino or []) if str(c.get('Chapa') or '').strip()}
+
+    con = db_conn()
+    cur = con.cursor()
+    try:
+        consultas = [
+            (
+                "SELECT chapa FROM colaboradores WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND UPPER(TRIM(subgrupo))=UPPER(TRIM(?))",
+                (setor, subgrupo_destino),
+            ),
+            (
+                "SELECT chapa FROM subgrupo_competencia WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND UPPER(TRIM(subgrupo))=UPPER(TRIM(?))",
+                (setor, ano, mes, subgrupo_destino),
+            ),
+            (
+                "SELECT chapa FROM colaborador_competencia_snapshot WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND UPPER(TRIM(subgrupo))=UPPER(TRIM(?))",
+                (setor, ano, mes, subgrupo_destino),
+            ),
+            (
+                "SELECT chapa FROM rodizio_caixa_hist WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND UPPER(TRIM(subgrupo_destino))=UPPER(TRIM(?))",
+                (setor, ano, mes, subgrupo_destino),
+            ),
+        ]
+        for sql, params in consultas:
+            try:
+                cur.execute(sql, params)
+                chapas.update(str(r[0]).strip() for r in (cur.fetchall() or []) if str(r[0] or '').strip())
+            except Exception:
+                pass
+
+        chapas_afetadas = sorted(chapas)
+        if not chapas_afetadas:
+            con.close()
+            return {'ok': True, 'qtd': 0, 'msg': f'Nenhum colaborador estava em {subgrupo_destino} em {mes:02d}/{ano}.'}
+
+        cur.execute('BEGIN')
+        marks = ','.join(['?'] * len(chapas_afetadas))
+        agora = datetime.now().isoformat()
+
+        cur.execute(
+            f"UPDATE colaboradores SET subgrupo=? WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND TRIM(chapa) IN ({marks})",
+            [subgrupo_origem, setor, *chapas_afetadas]
+        )
+
+        cur.execute(
+            f"DELETE FROM subgrupo_competencia WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa) IN ({marks})",
+            [setor, ano, mes, *chapas_afetadas]
+        )
+        for ch in chapas_afetadas:
+            cur.execute(
+                """
+                INSERT INTO subgrupo_competencia(setor, ano, mes, chapa, subgrupo, atualizado_em)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(setor, ano, mes, chapa) DO UPDATE SET
+                    subgrupo=excluded.subgrupo,
+                    atualizado_em=excluded.atualizado_em
+                """,
+                (setor, ano, mes, ch, subgrupo_origem, agora)
+            )
+
+        for ch in chapas_afetadas:
+            cur.execute(
+                "SELECT nome, entrada, folga_sab FROM colaborador_competencia_snapshot WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=? LIMIT 1",
+                (setor, ano, mes, ch)
+            )
+            row = cur.fetchone()
+            nome_snap = entrada_snap = None
+            folga_sab_snap = 0
+            if row:
+                nome_snap = str(row[0] or '').strip()
+                entrada_snap = str(row[1] or '').strip()
+                folga_sab_snap = int(row[2] or 0)
+            if not nome_snap or not entrada_snap:
+                cur.execute(
+                    "SELECT nome, entrada, COALESCE(folga_sab,0) FROM colaboradores WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND TRIM(chapa)=? LIMIT 1",
+                    (setor, ch)
+                )
+                rowb = cur.fetchone()
+                if rowb:
+                    if not nome_snap:
+                        nome_snap = str(rowb[0] or '').strip()
+                    if not entrada_snap:
+                        entrada_snap = str(rowb[1] or '').strip()
+                    folga_sab_snap = int(rowb[2] or 0)
+            cur.execute(
+                """
+                INSERT INTO colaborador_competencia_snapshot(setor, ano, mes, chapa, nome, subgrupo, entrada, folga_sab, atualizado_em)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(setor, ano, mes, chapa) DO UPDATE SET
+                    nome=excluded.nome,
+                    subgrupo=excluded.subgrupo,
+                    entrada=excluded.entrada,
+                    folga_sab=excluded.folga_sab,
+                    atualizado_em=excluded.atualizado_em
+                """,
+                (setor, ano, mes, ch, nome_snap or '', subgrupo_origem, entrada_snap or '06:00', int(folga_sab_snap or 0), agora)
+            )
+
+        try:
+            cur.execute(
+                f"DELETE FROM retificacoes_competencia WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa) IN ({marks})",
+                [setor, ano, mes, *chapas_afetadas]
+            )
+        except Exception:
+            pass
+
+        try:
+            cur.execute(
+                "DELETE FROM rodizio_caixa_hist WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=?",
+                (setor, ano, mes)
+            )
+        except Exception:
+            pass
+
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        con.close()
+
+    try:
+        rebuild_colaborador_competencia_snapshot(setor, int(ano), int(mes))
+    except Exception:
+        pass
+
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+
+    return {
+        'ok': True,
+        'qtd': len(chapas_afetadas),
+        'msg': f'Transferência suprema concluída em {mes:02d}/{ano}. {len(chapas_afetadas)} pessoa(s) voltaram de {subgrupo_destino} para {subgrupo_origem} e o Caixa 02 ficou vazio.'
+    }
+
+
 def resetar_rodizio_caixa_mes(setor: str, ano: int, mes: int, subgrupo_origem: str = 'OPERADOR DE CAIXA 01', subgrupo_destino: str = 'OPERADOR DE CAIXA 02'):
     """
     Volta do zero do rodízio da competência atual.
@@ -14048,14 +14200,15 @@ def page_app():
                     st.rerun()
                 if bcfg2.button("🚨 Transferir TODOS do Caixa 02 para Caixa 01", key='rod_caixa_move_all_back', use_container_width=True, disabled=(_status_comp_rod == 'FECHADA')):
                     try:
-                        res_mass = resetar_rodizio_caixa_mes(setor, ano_r, mes_r, 'OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02')
+                        st.warning('Modo supremo: esta ação manual ignora a regra de manter 14 pessoas no Caixa 02 e esvazia o subgrupo destino nesta competência.')
+                        res_mass = transferencia_suprema_caixa_02_para_01(setor, ano_r, mes_r, 'OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02')
                         base_reset = f"rod_caixa_aprov::{setor}::{ano_r}::{mes_r}::{subgrupo_origem}::{subgrupo_destino}"
                         for suf in ["::aprovados", "::negados", "::aplicado", "::complementar_aprovados"]:
                             st.session_state.pop(base_reset + suf, None)
                         st.session_state[_rod_reset_defaults_key] = True
                         st.session_state[force_review_key] = True
                         set_rodizio_caixa_cfg(setor, 'OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02', 14, 20, True)
-                        st.success(res_mass.get('msg', 'Todos do Caixa 02 foram transferidos para o Caixa 01 nesta competência.'))
+                        st.success(res_mass.get('msg', 'Transferência manual concluída. O Caixa 02 foi esvaziado nesta competência.'))
                         st.rerun()
                     except Exception as e:
                         st.error(f'Falha ao transferir todos do Caixa 02 para o Caixa 01: {e}')
