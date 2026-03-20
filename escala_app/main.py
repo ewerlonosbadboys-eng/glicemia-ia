@@ -14470,9 +14470,9 @@ def page_app():
                                 st.success(res_apply.get('msg', 'Transferências aplicadas com sucesso.'))
                                 st.rerun()
                             else:
-                                st.error(res_apply.get('msg', 'Não foi possível aplicar a transferência.'))
+                                st.error(res_apply.get('msg', 'Não foi possível aplicar o rodízio.'))
                     elif st.session_state.get(aplic_key):
-                        st.success(f"Transferência já aplicada na competência {mes_r:02d}/{ano_r}. Gere a escala novamente para refletir a troca.")
+                        st.success(f"Rodízio já aplicado na competência {mes_r:02d}/{ano_r}. Gere a escala novamente para refletir a troca.")
                     elif slots:
                         st.info(f"Para aplicar de verdade no mês {mes_r:02d}/{ano_r}, todas as {qtd_obrigatoria} sugestões precisam estar aprovadas e depois você deve clicar em 'Aplicar mudança de subgrupos agora (antes da escala)'.")
 
@@ -14484,9 +14484,9 @@ def page_app():
                         'Chapa': s.get('origem_chapa', ''),
                         'Horário Caixa 01': s.get('origem_entrada', ''),
                         'Domingos origem': s.get('origem_domingos_label', ''),
-                        'Última vez no Caixa 02': s.get('origem_ultimo_mes_destino_label', ''),
+                        'Última vez que foi para o Caixa 02': s.get('origem_ultimo_mes_destino_label', ''),
                         'Selecionado agora': str(aprovados_atuais.get(s.get('slot_key')) or '').strip(),
-                        'Vaga de referência': s.get('destino_nome', ''),
+                        'Sai do Caixa 02': s.get('destino_nome', ''),
                         'Domingos destino': s.get('destino_domingos_label', ''),
                         'Domingos iguais trabalho': int(s.get('domingos_trabalho_iguais_qtd', 0) or 0),
                         'Domingos iguais folga': int(s.get('domingos_folga_iguais_qtd', 0) or 0),
@@ -14505,11 +14505,11 @@ def page_app():
                                 f"Chapa: `{s.get('origem_chapa', '-')}` | Horário Caixa 01: **{s.get('origem_entrada', '-') }** | Domingos: **{int(s.get('origem_domingos', 0) or 0)}**"
                             )
                             cinfo2.markdown(
-                                f"**Vaga de referência:** horário **{s.get('destino_entrada', '-')}** | Domingos: **{int(s.get('destino_domingos', 0) or 0)}**  \n"
-                                f"Base usada para encaixe da vaga"
+                                f"**Sai do Caixa 02:** {s.get('destino_nome', '-')}  \n"
+                                f"Horário destino: **{s.get('destino_entrada', '-')}** | Domingos: **{int(s.get('destino_domingos', 0) or 0)}**"
                             )
                             cinfo3.markdown(
-                                f"**Última vez no Caixa 02:** {s.get('origem_ultimo_mes_destino_label', '-')}  \n"
+                                f"**Última vez que entrou no Caixa 02:** {s.get('origem_ultimo_mes_destino_label', '-')}  \n"
                                 f"Dif. domingos: **{int(s.get('diff_domingos', 0) or 0)}** | Alternativas restantes: **{int(s.get('alternativas_mesmo_horario', 0) or 0)}**"
                             )
                             st.caption(s.get('observacao') or '-')
