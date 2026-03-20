@@ -14313,6 +14313,9 @@ def page_app():
                     st.session_state[aprov_key] = {}
                 if neg_key not in st.session_state:
                     st.session_state[neg_key] = []
+                snap_key = state_base + "::slots_snapshot"
+                if snap_key not in st.session_state:
+                    st.session_state[snap_key] = {}
 
                 sim = simular_rodizio_caixa_mes(
                     setor,
@@ -14427,14 +14430,20 @@ def page_app():
                     slots = sim.get('slots') or []
                     aprov_state_key = aprov_key
                     neg_state_key = neg_key
+                    slots_snapshot_state = dict(st.session_state.get(snap_key, {}))
                     aprovados_atuais = st.session_state.get(aprov_state_key, {})
+                    slots_map = {str(s.get('slot_key') or ''): dict(s) for s in slots if str(s.get('slot_key') or '').strip()}
+                    for sk, snap in slots_snapshot_state.items():
+                        if sk and sk not in slots_map:
+                            slots_map[sk] = dict(snap)
+                    slots = list(slots_map.values())
                     aprovados_validos = sum(1 for s in slots if str(aprovados_atuais.get(s.get('slot_key')) or '').strip())
                     top1, top2, top3 = st.columns(3)
                     top1.metric('Sugestões montadas', len(slots))
                     top2.metric('Aprovadas', aprovados_validos)
                     top3.metric('Pendentes', max(0, len(slots) - aprovados_validos))
                     if st.session_state.get(force_review_key):
-                        st.warning(f"Revisão manual ativa em {mes_r:02d}/{ano_r}: trocar a pessoa no seletor NÃO aplica nada sozinho. Só aplica quando você clicar em 'Aplicar mudança de subgrupos agora'.")
+                        st.warning(f"Revisão manual ativa em {mes_r:02d}/{ano_r}: trocar a pessoa no seletor NÃO aplica nada sozinho. A aprovação fica congelada no card até você negar ou resetar esta vaga.")
 
                     a1, a2 = st.columns([1, 1])
                     if a1.button('Limpar aprovações e negativas da fila', key='rod_caixa_clear_aprov', use_container_width=True):
@@ -14551,13 +14560,29 @@ def page_app():
                             if bcol1.button('✅ Aprovar e jogar para Caixa 02', key=f'rod_caixa_ok_{slot_key}', use_container_width=True):
                                 chapa_sel = str(st.session_state.get(f'rod_caixa_pick_{slot_key}', str(s.get('origem_chapa') or '')) or '').strip()
                                 tmp = dict(st.session_state.get(aprov_state_key, {}))
+                                tmp_snap = dict(st.session_state.get(snap_key, {}))
                                 chapa_ant = str(tmp.get(slot_key) or '').strip()
                                 chapa_eff = chapa_sel or str(s.get('origem_chapa') or '')
                                 if chapa_ant and chapa_ant != chapa_eff:
                                     resetar_preview_aprovacao_rodizio_caixa(setor, ano_r, mes_r, s, chapa_ant, subgrupo_origem, subgrupo_destino)
                                 aplicar_preview_aprovacao_rodizio_caixa(setor, ano_r, mes_r, s, chapa_eff, subgrupo_origem, subgrupo_destino)
                                 tmp[slot_key] = chapa_eff
+                                snap_slot = dict(s)
+                                snap_slot['aprovado_manual'] = True
+                                for alt in list(s.get('alternativas_opcoes') or []):
+                                    if str(alt.get('chapa') or '').strip() == chapa_eff:
+                                        snap_slot['origem_chapa'] = chapa_eff
+                                        snap_slot['origem_nome'] = str(alt.get('nome') or s.get('origem_nome') or '')
+                                        snap_slot['origem_entrada'] = str(alt.get('entrada') or s.get('origem_entrada') or '')
+                                        snap_slot['origem_domingos'] = int(alt.get('domingos', s.get('origem_domingos', 0)) or 0)
+                                        snap_slot['origem_ultimo_mes_destino_label'] = str(alt.get('ultimo_mes_destino_label') or s.get('origem_ultimo_mes_destino_label') or '-')
+                                        snap_slot['diff_domingos'] = int(alt.get('diff_domingos', s.get('diff_domingos', 0)) or 0)
+                                        snap_slot['domingos_trabalho_iguais_qtd'] = int(alt.get('domingos_trabalho_iguais_qtd', s.get('domingos_trabalho_iguais_qtd', 0)) or 0)
+                                        snap_slot['domingos_folga_iguais_qtd'] = int(alt.get('domingos_folga_iguais_qtd', s.get('domingos_folga_iguais_qtd', 0)) or 0)
+                                        break
+                                tmp_snap[slot_key] = snap_slot
                                 st.session_state[aprov_state_key] = tmp
+                                st.session_state[snap_key] = tmp_snap
                                 st.session_state.pop(state_base + "::aplicado", None)
                                 st.rerun()
                             if bcol2.button('❌ Negar e chamar próximo', key=f'rod_caixa_no_{slot_key}', use_container_width=True):
@@ -14567,21 +14592,27 @@ def page_app():
                                 if chapa_neg and chapa_neg not in negs:
                                     negs.append(chapa_neg)
                                 tmp = dict(st.session_state.get(aprov_state_key, {}))
+                                tmp_snap = dict(st.session_state.get(snap_key, {}))
                                 chapa_ant = str(tmp.get(slot_key) or '').strip()
                                 if chapa_ant:
                                     resetar_preview_aprovacao_rodizio_caixa(setor, ano_r, mes_r, s, chapa_ant, subgrupo_origem, subgrupo_destino)
                                 tmp.pop(slot_key, None)
+                                tmp_snap.pop(slot_key, None)
                                 st.session_state[aprov_state_key] = tmp
+                                st.session_state[snap_key] = tmp_snap
                                 st.session_state[neg_state_key] = negs
                                 st.session_state.pop(state_base + "::aplicado", None)
                                 st.rerun()
                             if bcol3.button('🔄 Resetar esta vaga', key=f'rod_caixa_reset_{slot_key}', use_container_width=True, disabled=(not aprovado)):
                                 tmp = dict(st.session_state.get(aprov_state_key, {}))
+                                tmp_snap = dict(st.session_state.get(snap_key, {}))
                                 chapa_ant = str(tmp.get(slot_key) or '').strip()
                                 if chapa_ant:
                                     resetar_preview_aprovacao_rodizio_caixa(setor, ano_r, mes_r, s, chapa_ant, subgrupo_origem, subgrupo_destino)
                                 tmp.pop(slot_key, None)
+                                tmp_snap.pop(slot_key, None)
                                 st.session_state[aprov_state_key] = tmp
+                                st.session_state[snap_key] = tmp_snap
                                 st.session_state.pop(state_base + "::aplicado", None)
                                 st.rerun()
                             if aprovado:
