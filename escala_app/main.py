@@ -6437,6 +6437,11 @@ def admin_update_funcionario(setor: str, chapa_atual: str, nome_novo: str, subgr
         create_system_user(nome_final, setor, chapa_atual, senha_padrao, is_lider=int(is_lider), is_admin=int(is_admin), is_ax_lider=int(is_ax_lider))
 
     try:
+        rebuild_colaborador_competencia_snapshot(setor, int(ano), int(mes))
+    except Exception:
+        pass
+
+    try:
         st.cache_data.clear()
     except Exception:
         pass
@@ -6498,6 +6503,11 @@ def admin_rename_setor_global(setor_atual: str, setor_novo: str) -> dict:
         con.commit()
     finally:
         con.close()
+
+    try:
+        rebuild_colaborador_competencia_snapshot(setor, int(ano), int(mes))
+    except Exception:
+        pass
 
     try:
         st.cache_data.clear()
@@ -8045,6 +8055,11 @@ def aplicar_rodizio_caixa_mes(setor: str, ano: int, mes: int, simulacao: dict):
         con.close()
 
     try:
+        rebuild_colaborador_competencia_snapshot(setor, int(ano), int(mes))
+    except Exception:
+        pass
+
+    try:
         st.cache_data.clear()
     except Exception:
         pass
@@ -8189,6 +8204,11 @@ def sincronizar_subgrupos_base_rodizio_caixa(setor: str, ano: int, mes: int, sub
         con.close()
 
     try:
+        rebuild_colaborador_competencia_snapshot(setor, int(ano), int(mes))
+    except Exception:
+        pass
+
+    try:
         st.cache_data.clear()
     except Exception:
         pass
@@ -8322,6 +8342,13 @@ def resetar_rodizio_caixa_mes(setor: str, ano: int, mes: int, subgrupo_origem: s
             (setor, ano, mes)
         )
 
+        # limpa quaisquer retificações de subgrupo/status/entrada do mês para os afetados,
+        # porque elas podem regravar Caixa 02 de volta no snapshot após o reset.
+        cur.execute(
+            f"DELETE FROM retificacoes_competencia WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa) IN ({marks})",
+            [setor, ano, mes, *chapas_afetadas]
+        )
+
         # limpa desenho/overrides do mês dos afetados
         cur.execute(
             f"DELETE FROM escala_mes WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa) IN ({marks})",
@@ -8338,6 +8365,11 @@ def resetar_rodizio_caixa_mes(setor: str, ano: int, mes: int, subgrupo_origem: s
         raise
     finally:
         con.close()
+
+    try:
+        rebuild_colaborador_competencia_snapshot(setor, int(ano), int(mes))
+    except Exception:
+        pass
 
     try:
         st.cache_data.clear()
@@ -13933,10 +13965,13 @@ def page_app():
                 c1, c2, c3, c4 = st.columns([1.4, 1.4, 1, 1])
                 _rod_reset_defaults_key = f"rod_caixa_reset_defaults::{setor}"
                 if st.session_state.get(_rod_reset_defaults_key, False):
-                    st.session_state['rod_caixa_origem'] = 'OPERADOR DE CAIXA 01'
-                    st.session_state['rod_caixa_destino'] = 'OPERADOR DE CAIXA 02'
-                    st.session_state['rod_caixa_qtd'] = 14
-                    st.session_state['rod_caixa_tol'] = 20
+                    # Nunca sobrescreve widgets já instanciados; remove as chaves e deixa a
+                    # inicialização padrão abaixo recriar os valores no próximo rerun.
+                    for _k in ['rod_caixa_origem', 'rod_caixa_destino', 'rod_caixa_qtd', 'rod_caixa_tol']:
+                        try:
+                            st.session_state.pop(_k, None)
+                        except Exception:
+                            pass
                     st.session_state[_rod_reset_defaults_key] = False
                 if 'rod_caixa_origem' not in st.session_state:
                     st.session_state['rod_caixa_origem'] = str(cfg.get('subgrupo_origem') or 'OPERADOR DE CAIXA 01')
@@ -13985,11 +14020,27 @@ def page_app():
                         except Exception as e:
                             st.error(f'Falha ao zerar rodízio da competência: {e}')
                     else:
-                        set_rodizio_caixa_cfg(setor, 'OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02', 14, 20, True)
-                        st.session_state[_rod_reset_defaults_key] = True
-                        st.session_state[force_review_key] = True
-                        st.success('Configuração resetada para o padrão.')
-                        st.rerun()
+                        try:
+                            res_reset = resetar_rodizio_caixa_mes(setor, ano_r, mes_r, 'OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02')
+                            if res_reset.get('ok'):
+                                base_reset = f"rod_caixa_aprov::{setor}::{ano_r}::{mes_r}::{subgrupo_origem}::{subgrupo_destino}"
+                                for suf in ["::aprovados", "::negados", "::aplicado", "::complementar_aprovados"]:
+                                    st.session_state.pop(base_reset + suf, None)
+                                set_rodizio_caixa_cfg(setor, 'OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02', 14, 20, True)
+                                st.session_state[_rod_reset_defaults_key] = True
+                                st.session_state[force_review_key] = True
+                                st.success(res_reset.get('msg', 'Volta do zero concluída.'))
+                                st.rerun()
+                            else:
+                                # Mesmo se não achar histórico, ainda reseta a configuração visual
+                                # para o padrão e reabre a fila.
+                                set_rodizio_caixa_cfg(setor, 'OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02', 14, 20, True)
+                                st.session_state[_rod_reset_defaults_key] = True
+                                st.session_state[force_review_key] = True
+                                st.warning(res_reset.get('msg', 'Nenhum colaborador foi resetado, mas a configuração voltou ao padrão.'))
+                                st.rerun()
+                        except Exception as e:
+                            st.error(f'Falha ao executar volta do zero: {e}')
                 if _status_comp_rod == 'FECHADA':
                     st.error(f'🔒 Competência {mes_r:02d}/{ano_r} fechada: o rodízio deste mês fica somente para consulta.')
                 state_base = f"rod_caixa_aprov::{setor}::{ano_r}::{mes_r}::{subgrupo_origem}::{subgrupo_destino}"
