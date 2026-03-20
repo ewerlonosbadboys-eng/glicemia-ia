@@ -7206,7 +7206,12 @@ def load_colaboradores_setor_competencia(setor: str, ano: int, mes: int) -> list
 
 def _rodizio_caixa_base_mes_anterior_congelado(setor: str, ano: int, mes: int) -> list[dict]:
     atuais = [_clone_colaborador_base(c) for c in (load_colaboradores_setor(setor) or [])]
-    mapa = {str(c.get('Chapa') or '').strip(): c for c in atuais if str(c.get('Chapa') or '').strip()}
+    mapa = {}
+    for c in atuais:
+        ch_raw = str(c.get('Chapa') or '').strip()
+        ch_key = _norm_chapa(ch_raw)
+        if ch_key:
+            mapa[ch_key] = c
     ano_ant, mes_ant = _competencia_anterior(int(ano), int(mes))
 
     if competencia_fechada(setor, ano_ant, mes_ant):
@@ -7250,7 +7255,12 @@ def _transferencia_colaboradores_mes_atual(setor: str, ano: int, mes: int) -> li
     Não usa rodizio_caixa_hist e não reconstrói pelo mês anterior.
     """
     atuais = [_clone_colaborador_base(c) for c in (load_colaboradores_setor(setor) or [])]
-    mapa = {str(c.get('Chapa') or '').strip(): c for c in atuais if str(c.get('Chapa') or '').strip()}
+    mapa = {}
+    for c in atuais:
+        ch_raw = str(c.get('Chapa') or '').strip()
+        ch_key = _norm_chapa(ch_raw)
+        if ch_key:
+            mapa[ch_key] = c
 
     con = db_conn()
     try:
@@ -7268,7 +7278,7 @@ def _transferencia_colaboradores_mes_atual(setor: str, ano: int, mes: int) -> li
         con.close()
 
     for row in rows:
-        ch = str((row[0] if row else '') or '').strip()
+        ch = _norm_chapa(str((row[0] if row else '') or '').strip())
         sg = str((row[1] if row else '') or '').strip()
         if not ch or ch not in mapa:
             continue
@@ -14445,7 +14455,8 @@ def page_app():
                                 continue
                             chapa_sel_tmp = str(aprov_tmp.get(slot_key_tmp) or '').strip()
                             if chapa_sel_tmp:
-                                st.session_state[aprov_key] = {}
+                                resetar_preview_aprovacao_rodizio_caixa(setor, ano_r, mes_r, s, chapa_sel_tmp, subgrupo_origem, subgrupo_destino)
+                        st.session_state[aprov_key] = {}
                         st.session_state[neg_key] = []
                         st.session_state.pop(state_base + "::aplicado", None)
                         st.rerun()
@@ -14455,9 +14466,10 @@ def page_app():
                             slot_key_tmp = str(s.get('slot_key') or '')
                             chapa_sel_tmp = str(st.session_state.get(f'rod_caixa_pick_{slot_key_tmp}', str(s.get('origem_chapa') or '')) or '').strip()
                             if slot_key_tmp and chapa_sel_tmp:
+                                aplicar_preview_aprovacao_rodizio_caixa(setor, ano_r, mes_r, s, chapa_sel_tmp, subgrupo_origem, subgrupo_destino)
                                 aprov_all[slot_key_tmp] = chapa_sel_tmp
                         st.session_state[aprov_key] = aprov_all
-                        st.session_state.pop(state_base + "::aplicado", None)
+                        st.session_state[state_base + "::aplicado"] = True
                         st.rerun()
 
                     aplic_key = state_base + "::aplicado"
@@ -14465,21 +14477,12 @@ def page_app():
                     pronto_aplicar = bool(slots) and int(aprovados_validos) >= int(qtd_obrigatoria) and int(max(0, len(slots) - aprovados_validos)) == 0
 
                     if pronto_aplicar:
-                        st.success(f"Todas as {qtd_obrigatoria} sugestões foram aprovadas. Agora falta aplicar o rodízio no mês {mes_r:02d}/{ano_r}.")
-                        if st.button('🔁 Aplicar transferências agora e jogar para Caixa 02', key='rod_caixa_apply_now', use_container_width=True, disabled=(_status_comp_rod == 'FECHADA')):
-                            sim_apply = montar_simulacao_com_aprovacoes_rodizio_caixa(sim, st.session_state.get(aprov_key, {}))
-                            res_apply = aplicar_rodizio_caixa_mes(setor, ano_r, mes_r, sim_apply)
-                            if res_apply.get('ok'):
-                                st.session_state[aplic_key] = True
-                                st.session_state[force_review_key] = False
-                                st.success(res_apply.get('msg', 'Transferências aplicadas com sucesso.'))
-                                st.rerun()
-                            else:
-                                st.error(res_apply.get('msg', 'Não foi possível aplicar o rodízio.'))
+                        st.success(f"As {qtd_obrigatoria} vagas já estão gravadas direto no mês {mes_r:02d}/{ano_r}. O painel acima já reflete o Caixa 02 sem botão final de aplicar.")
+                        st.session_state[aplic_key] = True
                     elif st.session_state.get(aplic_key):
-                        st.success(f"Rodízio já aplicado na competência {mes_r:02d}/{ano_r}. Gere a escala novamente para refletir a troca.")
+                        st.success(f"Revisão manual salva em {mes_r:02d}/{ano_r}: as trocas aprovadas já estão gravadas no mês atual.")
                     elif slots:
-                        st.info(f"Para aplicar de verdade no mês {mes_r:02d}/{ano_r}, todas as {qtd_obrigatoria} sugestões precisam estar aprovadas e depois você deve clicar em 'Aplicar mudança de subgrupos agora (antes da escala)'.")
+                        st.info(f"Ao aprovar cada vaga, a pessoa já sobe para o {subgrupo_destino}. Se não gostar, use Resetar esta vaga para desfazer só aquela vaga.")
 
                 if slots:
                     st.markdown('### Sugestões de transferência por vez para esta competência')
@@ -14491,7 +14494,7 @@ def page_app():
                         'Domingos origem': s.get('origem_domingos_label', ''),
                         'Última vez que foi para o Caixa 02': s.get('origem_ultimo_mes_destino_label', ''),
                         'Selecionado agora': str(aprovados_atuais.get(s.get('slot_key')) or '').strip(),
-                        'Sai do Caixa 02': s.get('destino_nome', ''),
+                        'Vaga de referência': s.get('destino_nome', ''),
                         'Domingos destino': s.get('destino_domingos_label', ''),
                         'Domingos iguais trabalho': int(s.get('domingos_trabalho_iguais_qtd', 0) or 0),
                         'Domingos iguais folga': int(s.get('domingos_folga_iguais_qtd', 0) or 0),
@@ -14510,7 +14513,7 @@ def page_app():
                                 f"Chapa: `{s.get('origem_chapa', '-')}` | Horário Caixa 01: **{s.get('origem_entrada', '-') }** | Domingos: **{int(s.get('origem_domingos', 0) or 0)}**"
                             )
                             cinfo2.markdown(
-                                f"**Sai do Caixa 02:** {s.get('destino_nome', '-')}  \n"
+                                f"**Vaga de referência:** {s.get('destino_nome', '-')}  \n"
                                 f"Horário destino: **{s.get('destino_entrada', '-')}** | Domingos: **{int(s.get('destino_domingos', 0) or 0)}**"
                             )
                             cinfo3.markdown(
