@@ -8223,10 +8223,7 @@ def sincronizar_subgrupos_base_rodizio_caixa(setor: str, ano: int, mes: int, sub
 def resetar_rodizio_caixa_mes(setor: str, ano: int, mes: int, subgrupo_origem: str = 'OPERADOR DE CAIXA 01', subgrupo_destino: str = 'OPERADOR DE CAIXA 02'):
     """
     Volta do zero do rodízio da competência atual.
-    Regras deste reset:
-    - TODO colaborador que estiver no subgrupo destino (na base, competência ou snapshot) volta para o subgrupo origem
-    - limpa histórico do rodízio da competência
-    - limpa escala/overrides do mês dos afetados para regeneração limpa
+    Faz reset agressivo e reconstrói o mês a partir do cadastro base.
     """
     setor = str(setor or '').strip()
     ano = int(ano)
@@ -8239,7 +8236,6 @@ def resetar_rodizio_caixa_mes(setor: str, ano: int, mes: int, subgrupo_origem: s
     try:
         cur.execute('BEGIN')
 
-        # união de todos os afetados no mês/base
         chapas = set()
         consultas = [
             (
@@ -8258,6 +8254,10 @@ def resetar_rodizio_caixa_mes(setor: str, ano: int, mes: int, subgrupo_origem: s
                 "SELECT chapa FROM rodizio_caixa_hist WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND (UPPER(TRIM(subgrupo_destino))=UPPER(TRIM(?)) OR UPPER(TRIM(subgrupo_origem))=UPPER(TRIM(?)))",
                 (setor, ano, mes, subgrupo_destino, subgrupo_destino),
             ),
+            (
+                "SELECT chapa FROM retificacoes_competencia WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND UPPER(TRIM(COALESCE(novo_subgrupo,'')))=UPPER(TRIM(?))",
+                (setor, ano, mes, subgrupo_destino),
+            ),
         ]
         for sql, params in consultas:
             try:
@@ -8266,26 +8266,66 @@ def resetar_rodizio_caixa_mes(setor: str, ano: int, mes: int, subgrupo_origem: s
             except Exception:
                 pass
 
+        # Se nada foi encontrado nas estruturas do mês, usa todos os colaboradores do setor para reconstruir o mês limpo.
+        cur.execute("SELECT chapa, nome, entrada, COALESCE(folga_sab,0) FROM colaboradores WHERE UPPER(TRIM(setor))=UPPER(TRIM(?))", (setor,))
+        base_rows = cur.fetchall() or []
+        base_map = {
+            str(r[0]).strip(): {
+                'nome': str(r[1] or '').strip(),
+                'entrada': str(r[2] or '').strip() or '06:00',
+                'folga_sab': int(r[3] or 0),
+            }
+            for r in base_rows if str(r[0] or '').strip()
+        }
+        if not chapas:
+            chapas.update(base_map.keys())
+
         chapas_afetadas = sorted(chapas)
         if not chapas_afetadas:
             con.rollback()
-            return {'ok': False, 'msg': f'Nenhum colaborador em {subgrupo_destino} foi encontrado em {mes:02d}/{ano} para zerar.'}
+            return {'ok': False, 'msg': f'Nenhum colaborador foi encontrado em {setor} para reconstruir {mes:02d}/{ano}.'}
 
         marks = ','.join(['?'] * len(chapas_afetadas))
         agora = datetime.now().isoformat()
 
-        # cadastro base
+        # 1) Garante que todo mundo marcado como Caixa 02 no cadastro base volte para Caixa 01
         cur.execute(
-            f"UPDATE colaboradores SET subgrupo=? WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND TRIM(chapa) IN ({marks})",
-            [subgrupo_origem, setor, *chapas_afetadas]
+            "UPDATE colaboradores SET subgrupo=? WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND UPPER(TRIM(subgrupo))=UPPER(TRIM(?))",
+            (subgrupo_origem, setor, subgrupo_destino)
         )
 
-        # competência do mês -> força volta para origem
+        # 2) Limpa completamente as estruturas do mês para os afetados
         cur.execute(
             f"DELETE FROM subgrupo_competencia WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa) IN ({marks})",
             [setor, ano, mes, *chapas_afetadas]
         )
+        cur.execute(
+            f"DELETE FROM colaborador_competencia_snapshot WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa) IN ({marks})",
+            [setor, ano, mes, *chapas_afetadas]
+        )
+        cur.execute(
+            f"DELETE FROM retificacoes_competencia WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa) IN ({marks})",
+            [setor, ano, mes, *chapas_afetadas]
+        )
+        cur.execute(
+            "DELETE FROM rodizio_caixa_hist WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=?",
+            (setor, ano, mes)
+        )
+        cur.execute(
+            f"DELETE FROM escala_mes WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa) IN ({marks})",
+            [setor, ano, mes, *chapas_afetadas]
+        )
+        cur.execute(
+            f"DELETE FROM overrides WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa) IN ({marks})",
+            [setor, ano, mes, *chapas_afetadas]
+        )
+
+        # 3) Recria competência e snapshot forçando Caixa 01 para os afetados
         for ch in chapas_afetadas:
+            base_info = base_map.get(ch, {})
+            nome = str(base_info.get('nome', '') or '').strip()
+            entrada = str(base_info.get('entrada', '') or '').strip() or '06:00'
+            folga_sab = int(base_info.get('folga_sab', 0) or 0)
             cur.execute(
                 """
                 INSERT INTO subgrupo_competencia(setor, ano, mes, chapa, subgrupo, atualizado_em)
@@ -8296,32 +8336,6 @@ def resetar_rodizio_caixa_mes(setor: str, ano: int, mes: int, subgrupo_origem: s
                 """,
                 (setor, ano, mes, ch, subgrupo_origem, agora)
             )
-
-        # snapshot do mês -> força volta para origem e preserva nome/entrada/folga_sab
-        for ch in chapas_afetadas:
-            cur.execute(
-                "SELECT nome, entrada, folga_sab FROM colaborador_competencia_snapshot WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=? LIMIT 1",
-                (setor, ano, mes, ch)
-            )
-            row = cur.fetchone()
-            nome_snap = entrada_snap = None
-            folga_sab_snap = 0
-            if row:
-                nome_snap = str(row[0] or '').strip()
-                entrada_snap = str(row[1] or '').strip()
-                folga_sab_snap = int(row[2] or 0)
-            if not nome_snap or not entrada_snap:
-                cur.execute(
-                    "SELECT nome, entrada, COALESCE(folga_sab,0) FROM colaboradores WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND TRIM(chapa)=? LIMIT 1",
-                    (setor, ch)
-                )
-                rowb = cur.fetchone()
-                if rowb:
-                    if not nome_snap:
-                        nome_snap = str(rowb[0] or '').strip()
-                    if not entrada_snap:
-                        entrada_snap = str(rowb[1] or '').strip()
-                    folga_sab_snap = int(rowb[2] or 0)
             cur.execute(
                 """
                 INSERT INTO colaborador_competencia_snapshot(setor, ano, mes, chapa, nome, subgrupo, entrada, folga_sab, atualizado_em)
@@ -8333,31 +8347,8 @@ def resetar_rodizio_caixa_mes(setor: str, ano: int, mes: int, subgrupo_origem: s
                     folga_sab=excluded.folga_sab,
                     atualizado_em=excluded.atualizado_em
                 """,
-                (setor, ano, mes, ch, nome_snap or '', subgrupo_origem, entrada_snap or '06:00', int(folga_sab_snap or 0), agora)
+                (setor, ano, mes, ch, nome, subgrupo_origem, entrada, folga_sab, agora)
             )
-
-        # limpa histórico do rodízio inteiro do mês
-        cur.execute(
-            "DELETE FROM rodizio_caixa_hist WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=?",
-            (setor, ano, mes)
-        )
-
-        # limpa quaisquer retificações de subgrupo/status/entrada do mês para os afetados,
-        # porque elas podem regravar Caixa 02 de volta no snapshot após o reset.
-        cur.execute(
-            f"DELETE FROM retificacoes_competencia WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa) IN ({marks})",
-            [setor, ano, mes, *chapas_afetadas]
-        )
-
-        # limpa desenho/overrides do mês dos afetados
-        cur.execute(
-            f"DELETE FROM escala_mes WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa) IN ({marks})",
-            [setor, ano, mes, *chapas_afetadas]
-        )
-        cur.execute(
-            f"DELETE FROM overrides WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa) IN ({marks}) AND campo IN ('H_Entrada','H_Saida','Status')",
-            [setor, ano, mes, *chapas_afetadas]
-        )
 
         con.commit()
     except Exception:
@@ -8378,7 +8369,7 @@ def resetar_rodizio_caixa_mes(setor: str, ano: int, mes: int, subgrupo_origem: s
 
     return {
         'ok': True,
-        'msg': f'Volta do zero concluído em {mes:02d}/{ano}. Todos que estavam em {subgrupo_destino} voltaram para {subgrupo_origem}.'
+        'msg': f'Volta do zero concluído em {mes:02d}/{ano}. Todos que estavam em {subgrupo_destino} voltaram para {subgrupo_origem} e o mês foi reconstruído.'
     }
 
 
@@ -14010,7 +14001,7 @@ def page_app():
                             if res_reset.get('ok'):
                                 # limpa aprovações/negações da rodada para permitir nova escolha
                                 base_reset = f"rod_caixa_aprov::{setor}::{ano_r}::{mes_r}::{subgrupo_origem}::{subgrupo_destino}"
-                                for suf in ["::aprovados", "::negados", "::aplicado", "::complementar_aprovados"]:
+                                for suf in ["::aprovados", "::negados", "::aplicado", "::complementar_aprovados", "::complementar_negados"]:
                                     st.session_state.pop(base_reset + suf, None)
                                 st.session_state[force_review_key] = True
                                 st.success(res_reset.get('msg', 'Rodízio zerado com sucesso. A fila foi reaberta para nova aprovação manual.'))
@@ -14024,7 +14015,7 @@ def page_app():
                             res_reset = resetar_rodizio_caixa_mes(setor, ano_r, mes_r, 'OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02')
                             if res_reset.get('ok'):
                                 base_reset = f"rod_caixa_aprov::{setor}::{ano_r}::{mes_r}::{subgrupo_origem}::{subgrupo_destino}"
-                                for suf in ["::aprovados", "::negados", "::aplicado", "::complementar_aprovados"]:
+                                for suf in ["::aprovados", "::negados", "::aplicado", "::complementar_aprovados", "::complementar_negados"]:
                                     st.session_state.pop(base_reset + suf, None)
                                 set_rodizio_caixa_cfg(setor, 'OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02', 14, 20, True)
                                 st.session_state[_rod_reset_defaults_key] = True
