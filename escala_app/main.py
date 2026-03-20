@@ -5130,6 +5130,31 @@ def _norm_setor(v: str) -> str:
 def _norm_chapa(v: str) -> str:
     return str(v or "").strip()
 
+def _norm_chapa_match(v: str) -> str:
+    s = str(v or '').strip()
+    somente_digitos = re.sub(r'\D+', '', s)
+    return somente_digitos or s.upper()
+
+def _resolver_chapa_real_setor(setor: str, chapa: str) -> str:
+    setor = _norm_setor(setor)
+    chapa = _norm_chapa(chapa)
+    if not chapa:
+        return ''
+    alvo_keys = {_norm_chapa(chapa), _norm_chapa_match(chapa)}
+    con = db_conn()
+    cur = con.cursor()
+    try:
+        cur.execute("SELECT chapa FROM colaboradores WHERE UPPER(TRIM(setor))=?", (setor,))
+        for (ch_db,) in (cur.fetchall() or []):
+            ch_db = _norm_chapa(ch_db)
+            if not ch_db:
+                continue
+            if ch_db in alvo_keys or _norm_chapa_match(ch_db) in alvo_keys:
+                return ch_db
+    finally:
+        con.close()
+    return chapa
+
 def hash_password(password: str, salt: str) -> str:
     password = (password or "").strip()
     salt = (salt or "").strip()
@@ -7243,14 +7268,17 @@ def _rodizio_caixa_base_mes_anterior_congelado(setor: str, ano: int, mes: int) -
 def _transferencia_colaboradores_mes_atual(setor: str, ano: int, mes: int) -> list[dict]:
     """
     Fonte oficial da aba Transferência.
-    Lê somente o estado atual da competência:
-    1) colaboradores base do setor
-    2) sobrescreve com subgrupo_competencia do mês, quando existir
-
-    Não usa rodizio_caixa_hist e não reconstrói pelo mês anterior.
+    Lê o estado oficial do mês atual e faz o match da chapa de forma tolerante,
+    para refletir as mudanças mesmo quando a formatação da chapa varia.
     """
     atuais = [_clone_colaborador_base(c) for c in (load_colaboradores_setor(setor) or [])]
-    mapa = {str(c.get('Chapa') or '').strip(): c for c in atuais if str(c.get('Chapa') or '').strip()}
+    mapa: dict[str, dict] = {}
+    for c in atuais:
+        ch = _norm_chapa(c.get('Chapa'))
+        if not ch:
+            continue
+        mapa[ch] = c
+        mapa[_norm_chapa_match(ch)] = c
 
     con = db_conn()
     try:
@@ -7268,14 +7296,30 @@ def _transferencia_colaboradores_mes_atual(setor: str, ano: int, mes: int) -> li
         con.close()
 
     for row in rows:
-        ch = str((row[0] if row else '') or '').strip()
+        ch = _norm_chapa((row[0] if row else '') or '')
         sg = str((row[1] if row else '') or '').strip()
-        if not ch or ch not in mapa:
+        if not ch or not sg:
             continue
-        if sg:
-            mapa[ch]['Subgrupo'] = sg
+        base = mapa.get(ch) or mapa.get(_norm_chapa_match(ch))
+        if base is None:
+            real = get_colaborador_record(setor, _resolver_chapa_real_setor(setor, ch))
+            if real:
+                base = _clone_colaborador_base(real)
+                real_ch = _norm_chapa(base.get('Chapa'))
+                mapa[real_ch] = base
+                mapa[_norm_chapa_match(real_ch)] = base
+                atuais.append(base)
+        if base is not None:
+            base['Subgrupo'] = sg
 
-    return list(mapa.values())
+    vistos = set()
+    out = []
+    for c in atuais:
+        ch = _norm_chapa(c.get('Chapa'))
+        if ch and ch not in vistos:
+            vistos.add(ch)
+            out.append(c)
+    return out
 
 
 def _rodizio_caixa_estado_efetivo(setor: str, ano: int, mes: int, subgrupo_origem: str, subgrupo_destino: str):
@@ -8625,7 +8669,7 @@ def resetar_rodizio_caixa_mes(setor: str, ano: int, mes: int, subgrupo_origem: s
 
 
 def _upsert_subgrupo_preview_competencia(setor: str, ano: int, mes: int, chapa: str, novo_subgrupo: str, nova_entrada: str | None = None):
-    chapa = str(chapa or '').strip()
+    chapa = _resolver_chapa_real_setor(setor, chapa)
     novo_subgrupo = str(novo_subgrupo or '').strip()
     nova_entrada = str(nova_entrada or '').strip()
     if not chapa or not novo_subgrupo:
@@ -8696,7 +8740,7 @@ def _upsert_subgrupo_preview_competencia(setor: str, ano: int, mes: int, chapa: 
 
 
 def _restaurar_subgrupo_preview_competencia(setor: str, ano: int, mes: int, chapa: str, subgrupo_base: str, entrada_base: str | None = None):
-    chapa = str(chapa or '').strip()
+    chapa = _resolver_chapa_real_setor(setor, chapa)
     subgrupo_base = str(subgrupo_base or '').strip()
     entrada_base = str(entrada_base or '').strip()
     if not chapa:
