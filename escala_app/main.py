@@ -8640,37 +8640,31 @@ def _upsert_subgrupo_preview_competencia(setor: str, ano: int, mes: int, chapa: 
     cur = con.cursor()
     try:
         entrada_final = nova_entrada
-        nome_final = ''
-        folga_sab_final = 0
-
-        cur.execute(
-            "SELECT nome, entrada, COALESCE(folga_sab,0) FROM colaboradores WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND TRIM(chapa)=? LIMIT 1",
-            (setor, chapa)
-        )
-        row_col = cur.fetchone()
-        if row_col:
-            nome_final = str(row_col[0] or '').strip()
-            if not entrada_final and str(row_col[1] or '').strip():
-                entrada_final = str(row_col[1] or '').strip()
-            folga_sab_final = int(row_col[2] or 0)
-
         if not entrada_final:
             cur.execute(
-                "SELECT nome, entrada, COALESCE(folga_sab,0) FROM colaborador_competencia_snapshot WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=? LIMIT 1",
+                "SELECT entrada FROM colaborador_competencia_snapshot WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=? LIMIT 1",
                 (setor, int(ano), int(mes), chapa)
             )
             row_snap = cur.fetchone()
-            if row_snap:
-                if not nome_final:
-                    nome_final = str(row_snap[0] or '').strip()
-                if str(row_snap[1] or '').strip():
-                    entrada_final = str(row_snap[1] or '').strip()
-                folga_sab_final = int(row_snap[2] or 0)
-
+            if row_snap and str(row_snap[0] or '').strip():
+                entrada_final = str(row_snap[0] or '').strip()
+        if not entrada_final:
+            cur.execute(
+                "SELECT entrada FROM colaboradores WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND TRIM(chapa)=? LIMIT 1",
+                (setor, chapa)
+            )
+            row_col = cur.fetchone()
+            if row_col and str(row_col[0] or '').strip():
+                entrada_final = str(row_col[0] or '').strip()
         entrada_final = entrada_final or '06:00'
 
+        # importante: ao aprovar manualmente, refletir igual ao Alterar Subgrupo manual
         cur.execute(
-            "UPDATE colaboradores SET subgrupo=?, entrada=? WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND TRIM(chapa)=?",
+            """
+            UPDATE colaboradores
+            SET subgrupo=?, entrada=?
+            WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND TRIM(chapa)=?
+            """,
             (novo_subgrupo, entrada_final, setor, chapa)
         )
 
@@ -8687,15 +8681,17 @@ def _upsert_subgrupo_preview_competencia(setor: str, ano: int, mes: int, chapa: 
         cur.execute(
             """
             INSERT INTO colaborador_competencia_snapshot(setor, ano, mes, chapa, nome, subgrupo, entrada, folga_sab, atualizado_em)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            SELECT ?, ?, ?, ?, COALESCE(NULLIF(nome,''), ''), ?, ?, COALESCE(folga_sab, 0), ?
+            FROM colaboradores
+            WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND TRIM(chapa)=?
             ON CONFLICT(setor, ano, mes, chapa) DO UPDATE SET
-                nome=excluded.nome,
+                nome=COALESCE(excluded.nome, colaborador_competencia_snapshot.nome),
                 subgrupo=excluded.subgrupo,
-                entrada=excluded.entrada,
-                folga_sab=excluded.folga_sab,
+                entrada=COALESCE(NULLIF(excluded.entrada,''), colaborador_competencia_snapshot.entrada),
+                folga_sab=COALESCE(excluded.folga_sab, colaborador_competencia_snapshot.folga_sab),
                 atualizado_em=excluded.atualizado_em
             """,
-            (setor, int(ano), int(mes), chapa, nome_final, novo_subgrupo, entrada_final, int(folga_sab_final or 0), ts)
+            (setor, int(ano), int(mes), chapa, novo_subgrupo, entrada_final, ts, setor, chapa)
         )
         cur.execute(
             "DELETE FROM escala_mes WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=?",
@@ -8724,24 +8720,25 @@ def _restaurar_subgrupo_preview_competencia(setor: str, ano: int, mes: int, chap
     con = db_conn()
     cur = con.cursor()
     try:
-        nome_final = ''
-        folga_sab_final = 0
-        cur.execute(
-            "SELECT nome, entrada, COALESCE(folga_sab,0) FROM colaboradores WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND TRIM(chapa)=? LIMIT 1",
-            (setor, chapa)
-        )
-        row_col = cur.fetchone()
-        if row_col:
-            nome_final = str(row_col[0] or '').strip()
-            if not entrada_base and str(row_col[1] or '').strip():
-                entrada_base = str(row_col[1] or '').strip()
-            folga_sab_final = int(row_col[2] or 0)
-        entrada_base = entrada_base or '06:00'
+        entrada_final = entrada_base
+        if not entrada_final:
+            cur.execute(
+                "SELECT entrada FROM colaboradores WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND TRIM(chapa)=? LIMIT 1",
+                (setor, chapa)
+            )
+            row_col = cur.fetchone()
+            if row_col and str(row_col[0] or '').strip():
+                entrada_final = str(row_col[0] or '').strip()
+        entrada_final = entrada_final or '06:00'
 
         if subgrupo_base:
             cur.execute(
-                "UPDATE colaboradores SET subgrupo=?, entrada=? WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND TRIM(chapa)=?",
-                (subgrupo_base, entrada_base, setor, chapa)
+                """
+                UPDATE colaboradores
+                SET subgrupo=?, entrada=?
+                WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND TRIM(chapa)=?
+                """,
+                (subgrupo_base, entrada_final, setor, chapa)
             )
             cur.execute(
                 """
@@ -8753,29 +8750,16 @@ def _restaurar_subgrupo_preview_competencia(setor: str, ano: int, mes: int, chap
                 """,
                 (setor, int(ano), int(mes), chapa, subgrupo_base, ts)
             )
-            cur.execute(
-                """
-                INSERT INTO colaborador_competencia_snapshot(setor, ano, mes, chapa, nome, subgrupo, entrada, folga_sab, atualizado_em)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(setor, ano, mes, chapa) DO UPDATE SET
-                    nome=excluded.nome,
-                    subgrupo=excluded.subgrupo,
-                    entrada=excluded.entrada,
-                    folga_sab=excluded.folga_sab,
-                    atualizado_em=excluded.atualizado_em
-                """,
-                (setor, int(ano), int(mes), chapa, nome_final, subgrupo_base, entrada_base, int(folga_sab_final or 0), ts)
-            )
         else:
             cur.execute(
                 "DELETE FROM subgrupo_competencia WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=?",
                 (setor, int(ano), int(mes), chapa)
             )
-            cur.execute(
-                "DELETE FROM colaborador_competencia_snapshot WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=?",
-                (setor, int(ano), int(mes), chapa)
-            )
 
+        cur.execute(
+            "DELETE FROM colaborador_competencia_snapshot WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=?",
+            (setor, int(ano), int(mes), chapa)
+        )
         cur.execute(
             "DELETE FROM escala_mes WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=?",
             (setor, int(ano), int(mes), chapa)
@@ -14536,7 +14520,7 @@ def page_app():
                         'Domingos origem': s.get('origem_domingos_label', ''),
                         'Última vez que foi para o Caixa 02': s.get('origem_ultimo_mes_destino_label', ''),
                         'Selecionado agora': str(aprovados_atuais.get(s.get('slot_key')) or '').strip(),
-                        'Vaga Caixa 02': s.get('destino_nome', ''),
+                        'Sai do Caixa 02': s.get('destino_nome', ''),
                         'Domingos destino': s.get('destino_domingos_label', ''),
                         'Domingos iguais trabalho': int(s.get('domingos_trabalho_iguais_qtd', 0) or 0),
                         'Domingos iguais folga': int(s.get('domingos_folga_iguais_qtd', 0) or 0),
@@ -14555,7 +14539,7 @@ def page_app():
                                 f"Chapa: `{s.get('origem_chapa', '-')}` | Horário Caixa 01: **{s.get('origem_entrada', '-') }** | Domingos: **{int(s.get('origem_domingos', 0) or 0)}**"
                             )
                             cinfo2.markdown(
-                                f"**Vaga Caixa 02:** {s.get('destino_nome', '-')}  \n"
+                                f"**Sai do Caixa 02:** {s.get('destino_nome', '-')}  \n"
                                 f"Horário destino: **{s.get('destino_entrada', '-')}** | Domingos: **{int(s.get('destino_domingos', 0) or 0)}**"
                             )
                             cinfo3.markdown(
