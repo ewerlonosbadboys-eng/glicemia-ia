@@ -14041,13 +14041,26 @@ def page_app():
                     st.session_state[force_review_key] = False
                 rodizio_ja_aplicado_mes = bool(hist_mes) and (not bool(st.session_state.get(force_review_key, False)))
 
-                bcfg1, bcfg2, _bcfg3 = st.columns([1, 1, 4])
+                bcfg1, bcfg2, bcfg3, _bcfg4 = st.columns([1, 1, 1.35, 3.65])
                 if bcfg1.button("Salvar configuração da transferência", key='rod_caixa_save_cfg', use_container_width=True, disabled=(_status_comp_rod == 'FECHADA')):
                     set_rodizio_caixa_cfg(setor, subgrupo_origem, subgrupo_destino, qtd_destino, tolerancia, True)
                     st.success("Configuração salva.")
                     st.rerun()
-                label_reset = "Remanejar tudo para Operador de Caixa 01" if rodizio_ja_aplicado_mes else "Recriar do zero"
-                if bcfg2.button(label_reset, key='rod_caixa_reset_cfg', use_container_width=True, disabled=(_status_comp_rod == 'FECHADA')):
+                if bcfg2.button("🚨 Transferir TODOS do Caixa 02 para Caixa 01", key='rod_caixa_move_all_back', use_container_width=True, disabled=(_status_comp_rod == 'FECHADA')):
+                    try:
+                        res_mass = resetar_rodizio_caixa_mes(setor, ano_r, mes_r, 'OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02')
+                        base_reset = f"rod_caixa_aprov::{setor}::{ano_r}::{mes_r}::{subgrupo_origem}::{subgrupo_destino}"
+                        for suf in ["::aprovados", "::negados", "::aplicado", "::complementar_aprovados"]:
+                            st.session_state.pop(base_reset + suf, None)
+                        st.session_state[_rod_reset_defaults_key] = True
+                        st.session_state[force_review_key] = True
+                        set_rodizio_caixa_cfg(setor, 'OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02', 14, 20, True)
+                        st.success(res_mass.get('msg', 'Todos do Caixa 02 foram transferidos para o Caixa 01 nesta competência.'))
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f'Falha ao transferir todos do Caixa 02 para o Caixa 01: {e}')
+                label_reset = "Recriar fila e sugestões do zero"
+                if bcfg3.button(label_reset, key='rod_caixa_reset_cfg', use_container_width=True, disabled=(_status_comp_rod == 'FECHADA')):
                     if rodizio_ja_aplicado_mes:
                         try:
                             res_reset = resetar_rodizio_caixa_mes(setor, ano_r, mes_r, subgrupo_origem, subgrupo_destino)
