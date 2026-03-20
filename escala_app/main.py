@@ -7581,7 +7581,7 @@ def simular_rodizio_caixa_mes(
             d = pool_destino[0]
             dest_fallback = (str(d.get('Entrada') or '').strip() != horario_ref)
             idx_slot_horario = int(cont_slot_por_horario.get(horario_ref, 0))
-            slot_key = f"{horario_ref}|{idx_slot_horario}|{str(d.get('Chapa') or '').strip()}"
+            slot_key = f"{horario_ref}|{idx_slot_horario}"
             locked_chapa = aprovados_por_slot.get(slot_key, '').strip()
 
             disponiveis_pool = _pool_horario_proximo(candidatos, horario_ref, usados_origem, negados_set, 60)
@@ -7882,7 +7882,7 @@ def simular_rodizio_caixa_mes(
                 domingos_orig = int(domingos_map.get(ch, 0) or 0)
                 diff_hor = abs(int((_hora_to_min(ent) or 0)) - int((_hora_to_min(horario_ref) or 0)))
                 row = {
-                    'slot_key': f'entrada_direta|{horario_ref}|{len(slots)}|{ch}',
+                    'slot_key': f'entrada_direta|{horario_ref}|{int(selecionados_horario.get(horario_ref, 0))}',
                     'origem_chapa': ch,
                     'origem_nome': str(cand.get('Nome') or ''),
                     'origem_subgrupo': subgrupo_origem,
@@ -7952,7 +7952,7 @@ def simular_rodizio_caixa_mes(
                 ent = str(cand.get('Entrada') or '').strip()
                 usados_origem.add(ch)
                 row = {
-                    'slot_key': f'entrada_direta_final|{horario_ref}|{len(slots)}|{ch}',
+                    'slot_key': f'entrada_direta_final|{horario_ref}|{len(pares)}',
                     'origem_chapa': ch,
                     'origem_nome': str(cand.get('Nome') or ''),
                     'origem_subgrupo': subgrupo_origem,
@@ -8185,10 +8185,10 @@ def aplicar_ajuste_complementar_rodizio_caixa_mes(setor: str, ano: int, mes: int
     try:
         cur.execute('BEGIN')
         for s in slots:
-            ch = str(s.get('origem_chapa') or '').strip()
+            ch = str(s_view.get('origem_chapa') or '').strip()
             if not ch:
                 continue
-            ent_ant = str(s.get('origem_entrada') or '').strip()
+            ent_ant = str(s_view.get('origem_entrada') or '').strip()
             ent_nova = str(s.get('origem_nova_entrada') or s.get('horario_ref') or ent_ant).strip() or ent_ant or '06:00'
             cur.execute(
                 "UPDATE colaboradores SET subgrupo=?, entrada=? WHERE setor=? AND chapa=?",
@@ -8209,7 +8209,7 @@ def aplicar_ajuste_complementar_rodizio_caixa_mes(setor: str, ano: int, mes: int
                 INSERT OR REPLACE INTO rodizio_caixa_hist(setor, ano, mes, ciclo_ref, chapa, nome, movimento, subgrupo_origem, subgrupo_destino, entrada_antiga, entrada_nova, compat_status, observacao, criado_em)
                 VALUES (?, ?, ?, ?, ?, ?, 'ENTRA_DESTINO_COMPLEMENTAR', ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (setor, int(ano), int(mes), ciclo, ch, str(s.get('origem_nome') or ''), subgrupo_origem, subgrupo_destino, ent_ant, ent_nova, str(s.get('compatibilidade') or 'QUASE IGUAL'), str(s.get('observacao') or ''), ts)
+                (setor, int(ano), int(mes), ciclo, ch, str(s_view.get('origem_nome') or ''), subgrupo_origem, subgrupo_destino, ent_ant, ent_nova, str(s.get('compatibilidade') or 'QUASE IGUAL'), str(s_view.get('observacao') or ''), ts)
             )
         con.commit()
     except Exception:
@@ -14256,7 +14256,7 @@ def page_app():
                         st.warning('Modo supremo: esta ação manual ignora a regra de manter 14 pessoas no Caixa 02 e esvazia o subgrupo destino nesta competência.')
                         res_mass = transferencia_suprema_caixa_02_para_01(setor, ano_r, mes_r, 'OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02')
                         base_reset = f"rod_caixa_aprov::{setor}::{ano_r}::{mes_r}::{subgrupo_origem}::{subgrupo_destino}"
-                        for suf in ["::aprovados", "::negados", "::aplicado", "::complementar_aprovados"]:
+                        for suf in ["::aprovados", "::negados", "::aplicado", "::complementar_aprovados", "::frozen"]:
                             st.session_state.pop(base_reset + suf, None)
                         st.session_state[_rod_reset_defaults_key] = True
                         st.session_state[force_review_key] = True
@@ -14273,7 +14273,7 @@ def page_app():
                             if res_reset.get('ok'):
                                 # limpa aprovações/negações da rodada para permitir nova escolha
                                 base_reset = f"rod_caixa_aprov::{setor}::{ano_r}::{mes_r}::{subgrupo_origem}::{subgrupo_destino}"
-                                for suf in ["::aprovados", "::negados", "::aplicado", "::complementar_aprovados"]:
+                                for suf in ["::aprovados", "::negados", "::aplicado", "::complementar_aprovados", "::frozen"]:
                                     st.session_state.pop(base_reset + suf, None)
                                 st.session_state[force_review_key] = True
                                 st.success(res_reset.get('msg', 'Rodízio zerado com sucesso. A fila foi reaberta para nova aprovação manual.'))
@@ -14287,7 +14287,7 @@ def page_app():
                             res_reset = resetar_rodizio_caixa_mes(setor, ano_r, mes_r, 'OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02')
                             if res_reset.get('ok'):
                                 base_reset = f"rod_caixa_aprov::{setor}::{ano_r}::{mes_r}::{subgrupo_origem}::{subgrupo_destino}"
-                                for suf in ["::aprovados", "::negados", "::aplicado", "::complementar_aprovados"]:
+                                for suf in ["::aprovados", "::negados", "::aplicado", "::complementar_aprovados", "::frozen"]:
                                     st.session_state.pop(base_reset + suf, None)
                                 set_rodizio_caixa_cfg(setor, 'OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02', 14, 20, True)
                                 st.session_state[_rod_reset_defaults_key] = True
@@ -14313,9 +14313,9 @@ def page_app():
                     st.session_state[aprov_key] = {}
                 if neg_key not in st.session_state:
                     st.session_state[neg_key] = []
-                snap_key = state_base + "::slots_snapshot"
-                if snap_key not in st.session_state:
-                    st.session_state[snap_key] = {}
+                frozen_key = state_base + "::frozen"
+                if frozen_key not in st.session_state:
+                    st.session_state[frozen_key] = {}
 
                 sim = simular_rodizio_caixa_mes(
                     setor,
@@ -14430,20 +14430,14 @@ def page_app():
                     slots = sim.get('slots') or []
                     aprov_state_key = aprov_key
                     neg_state_key = neg_key
-                    slots_snapshot_state = dict(st.session_state.get(snap_key, {}))
                     aprovados_atuais = st.session_state.get(aprov_state_key, {})
-                    slots_map = {str(s.get('slot_key') or ''): dict(s) for s in slots if str(s.get('slot_key') or '').strip()}
-                    for sk, snap in slots_snapshot_state.items():
-                        if sk and sk not in slots_map:
-                            slots_map[sk] = dict(snap)
-                    slots = list(slots_map.values())
                     aprovados_validos = sum(1 for s in slots if str(aprovados_atuais.get(s.get('slot_key')) or '').strip())
                     top1, top2, top3 = st.columns(3)
                     top1.metric('Sugestões montadas', len(slots))
                     top2.metric('Aprovadas', aprovados_validos)
                     top3.metric('Pendentes', max(0, len(slots) - aprovados_validos))
                     if st.session_state.get(force_review_key):
-                        st.warning(f"Revisão manual ativa em {mes_r:02d}/{ano_r}: trocar a pessoa no seletor NÃO aplica nada sozinho. A aprovação fica congelada no card até você negar ou resetar esta vaga.")
+                        st.warning(f"Revisão manual ativa em {mes_r:02d}/{ano_r}: trocar a pessoa no seletor NÃO aplica nada sozinho. Só aplica quando você clicar em 'Aplicar mudança de subgrupos agora'.")
 
                     a1, a2 = st.columns([1, 1])
                     if a1.button('Limpar aprovações e negativas da fila', key='rod_caixa_clear_aprov', use_container_width=True):
@@ -14462,7 +14456,7 @@ def page_app():
                         aprov_all = {}
                         for s in slots:
                             slot_key_tmp = str(s.get('slot_key') or '')
-                            chapa_sel_tmp = str(st.session_state.get(f'rod_caixa_pick_{slot_key_tmp}', str(s.get('origem_chapa') or '')) or '').strip()
+                            chapa_sel_tmp = str(st.session_state.get(f'rod_caixa_pick_{slot_key_tmp}', str(s_view.get('origem_chapa') or '')) or '').strip()
                             if slot_key_tmp and chapa_sel_tmp:
                                 aprov_all[slot_key_tmp] = chapa_sel_tmp
                         st.session_state[aprov_key] = aprov_all
@@ -14494,41 +14488,43 @@ def page_app():
                     st.markdown('### Sugestões de transferência por vez para esta competência')
                     resumo_aprov = pd.DataFrame([{
                         'Status': 'APROVADO' if str(aprovados_atuais.get(s.get('slot_key')) or '').strip() else 'PENDENTE',
-                        'Nome sugerido': s.get('origem_nome', ''),
-                        'Chapa': s.get('origem_chapa', ''),
-                        'Horário Caixa 01': s.get('origem_entrada', ''),
+                        'Nome sugerido': s_view.get('origem_nome', ''),
+                        'Chapa': s_view.get('origem_chapa', ''),
+                        'Horário Caixa 01': s_view.get('origem_entrada', ''),
                         'Domingos origem': s.get('origem_domingos_label', ''),
-                        'Última vez que foi para o Caixa 02': s.get('origem_ultimo_mes_destino_label', ''),
+                        'Última vez que foi para o Caixa 02': s_view.get('origem_ultimo_mes_destino_label', ''),
                         'Selecionado agora': str(aprovados_atuais.get(s.get('slot_key')) or '').strip(),
-                        'Sai do Caixa 02': s.get('destino_nome', ''),
+                        'Sai do Caixa 02': s_view.get('destino_nome', ''),
                         'Domingos destino': s.get('destino_domingos_label', ''),
                         'Domingos iguais trabalho': int(s.get('domingos_trabalho_iguais_qtd', 0) or 0),
                         'Domingos iguais folga': int(s.get('domingos_folga_iguais_qtd', 0) or 0),
-                        'Dif. domingos': int(s.get('diff_domingos', 0) or 0),
-                        'Alternativas no mesmo horário': int(s.get('alternativas_mesmo_horario', 0) or 0),
+                        'Dif. domingos': int(s_view.get('diff_domingos', 0) or 0),
+                        'Alternativas no mesmo horário': int(s_view.get('alternativas_mesmo_horario', 0) or 0),
                     } for s in slots])
                     st.dataframe(resumo_aprov, use_container_width=True, height=340)
 
+                    frozen_slots = dict(st.session_state.get(frozen_key, {}) or {})
                     for i, s in enumerate(slots, start=1):
                         slot_key = str(s.get('slot_key') or '')
-                        aprovado = bool(str(aprovados_atuais.get(slot_key) or '').strip())
+                        s_view = dict(frozen_slots.get(slot_key) or s)
+                        aprovado = bool(str(aprovados_atuais.get(slot_key) or '').strip()) or bool(frozen_slots.get(slot_key))
                         with st.container(border=True):
                             cinfo1, cinfo2, cinfo3 = st.columns([3.2, 2.1, 2.2])
                             cinfo1.markdown(
-                                f"**{i}. {s.get('origem_nome', '-') }**  \n"
-                                f"Chapa: `{s.get('origem_chapa', '-')}` | Horário Caixa 01: **{s.get('origem_entrada', '-') }** | Domingos: **{int(s.get('origem_domingos', 0) or 0)}**"
+                                f"**{i}. {s_view.get('origem_nome', '-') }**  \n"
+                                f"Chapa: `{s_view.get('origem_chapa', '-')}` | Horário Caixa 01: **{s_view.get('origem_entrada', '-') }** | Domingos: **{int(s_view.get('origem_domingos', 0) or 0)}**"
                             )
                             cinfo2.markdown(
-                                f"**Sai do Caixa 02:** {s.get('destino_nome', '-')}  \n"
-                                f"Horário destino: **{s.get('destino_entrada', '-')}** | Domingos: **{int(s.get('destino_domingos', 0) or 0)}**"
+                                f"**Sai do Caixa 02:** {s_view.get('destino_nome', '-')}  \n"
+                                f"Horário destino: **{s_view.get('destino_entrada', '-')}** | Domingos: **{int(s_view.get('destino_domingos', 0) or 0)}**"
                             )
                             cinfo3.markdown(
-                                f"**Última vez que entrou no Caixa 02:** {s.get('origem_ultimo_mes_destino_label', '-')}  \n"
-                                f"Dif. domingos: **{int(s.get('diff_domingos', 0) or 0)}** | Alternativas restantes: **{int(s.get('alternativas_mesmo_horario', 0) or 0)}**"
+                                f"**Última vez que entrou no Caixa 02:** {s_view.get('origem_ultimo_mes_destino_label', '-')}  \n"
+                                f"Dif. domingos: **{int(s_view.get('diff_domingos', 0) or 0)}** | Alternativas restantes: **{int(s_view.get('alternativas_mesmo_horario', 0) or 0)}**"
                             )
-                            st.caption(s.get('observacao') or '-')
+                            st.caption(s_view.get('observacao') or '-')
 
-                            alternativas_slot = list(s.get('alternativas_opcoes') or [])
+                            alternativas_slot = list((s_view.get('alternativas_opcoes') or s.get('alternativas_opcoes') or []))
                             mapa_alt = {}
                             opcoes_alt = []
                             for alt in alternativas_slot:
@@ -14544,7 +14540,7 @@ def page_app():
                                 opcoes_alt.append(ch_alt)
 
                             chapa_aprovada_slot = str(aprovados_atuais.get(slot_key) or '').strip()
-                            chapa_padrao_slot = chapa_aprovada_slot if chapa_aprovada_slot in opcoes_alt else str(s.get('origem_chapa') or '').strip()
+                            chapa_padrao_slot = chapa_aprovada_slot if chapa_aprovada_slot in opcoes_alt else str(s_view.get('origem_chapa') or '').strip()
                             idx_padrao_slot = opcoes_alt.index(chapa_padrao_slot) if chapa_padrao_slot in opcoes_alt else 0
 
                             if opcoes_alt:
@@ -14558,66 +14554,47 @@ def page_app():
 
                             bcol1, bcol2, bcol3, bcol4 = st.columns([1, 1, 1, 3])
                             if bcol1.button('✅ Aprovar e jogar para Caixa 02', key=f'rod_caixa_ok_{slot_key}', use_container_width=True):
-                                chapa_sel = str(st.session_state.get(f'rod_caixa_pick_{slot_key}', str(s.get('origem_chapa') or '')) or '').strip()
+                                chapa_sel = str(st.session_state.get(f'rod_caixa_pick_{slot_key}', str(s_view.get('origem_chapa') or '')) or '').strip()
                                 tmp = dict(st.session_state.get(aprov_state_key, {}))
-                                tmp_snap = dict(st.session_state.get(snap_key, {}))
                                 chapa_ant = str(tmp.get(slot_key) or '').strip()
-                                chapa_eff = chapa_sel or str(s.get('origem_chapa') or '')
+                                chapa_eff = chapa_sel or str(s_view.get('origem_chapa') or '')
                                 if chapa_ant and chapa_ant != chapa_eff:
                                     resetar_preview_aprovacao_rodizio_caixa(setor, ano_r, mes_r, s, chapa_ant, subgrupo_origem, subgrupo_destino)
                                 aplicar_preview_aprovacao_rodizio_caixa(setor, ano_r, mes_r, s, chapa_eff, subgrupo_origem, subgrupo_destino)
                                 tmp[slot_key] = chapa_eff
-                                snap_slot = dict(s)
-                                snap_slot['aprovado_manual'] = True
-                                for alt in list(s.get('alternativas_opcoes') or []):
-                                    if str(alt.get('chapa') or '').strip() == chapa_eff:
-                                        snap_slot['origem_chapa'] = chapa_eff
-                                        snap_slot['origem_nome'] = str(alt.get('nome') or s.get('origem_nome') or '')
-                                        snap_slot['origem_entrada'] = str(alt.get('entrada') or s.get('origem_entrada') or '')
-                                        snap_slot['origem_domingos'] = int(alt.get('domingos', s.get('origem_domingos', 0)) or 0)
-                                        snap_slot['origem_ultimo_mes_destino_label'] = str(alt.get('ultimo_mes_destino_label') or s.get('origem_ultimo_mes_destino_label') or '-')
-                                        snap_slot['diff_domingos'] = int(alt.get('diff_domingos', s.get('diff_domingos', 0)) or 0)
-                                        snap_slot['domingos_trabalho_iguais_qtd'] = int(alt.get('domingos_trabalho_iguais_qtd', s.get('domingos_trabalho_iguais_qtd', 0)) or 0)
-                                        snap_slot['domingos_folga_iguais_qtd'] = int(alt.get('domingos_folga_iguais_qtd', s.get('domingos_folga_iguais_qtd', 0)) or 0)
-                                        break
-                                tmp_snap[slot_key] = snap_slot
                                 st.session_state[aprov_state_key] = tmp
-                                st.session_state[snap_key] = tmp_snap
                                 st.session_state.pop(state_base + "::aplicado", None)
                                 st.rerun()
                             if bcol2.button('❌ Negar e chamar próximo', key=f'rod_caixa_no_{slot_key}', use_container_width=True):
                                 negs = list(st.session_state.get(neg_key, []))
-                                chapa_escolhida_agora = str(st.session_state.get(f'rod_caixa_pick_{slot_key}', str(s.get('origem_chapa') or '')) or '').strip()
-                                chapa_neg = chapa_escolhida_agora or str(s.get('origem_chapa') or '').strip()
+                                chapa_escolhida_agora = str(st.session_state.get(f'rod_caixa_pick_{slot_key}', str(s_view.get('origem_chapa') or '')) or '').strip()
+                                chapa_neg = chapa_escolhida_agora or str(s_view.get('origem_chapa') or '').strip()
                                 if chapa_neg and chapa_neg not in negs:
                                     negs.append(chapa_neg)
                                 tmp = dict(st.session_state.get(aprov_state_key, {}))
-                                tmp_snap = dict(st.session_state.get(snap_key, {}))
                                 chapa_ant = str(tmp.get(slot_key) or '').strip()
                                 if chapa_ant:
                                     resetar_preview_aprovacao_rodizio_caixa(setor, ano_r, mes_r, s, chapa_ant, subgrupo_origem, subgrupo_destino)
                                 tmp.pop(slot_key, None)
-                                tmp_snap.pop(slot_key, None)
                                 st.session_state[aprov_state_key] = tmp
-                                st.session_state[snap_key] = tmp_snap
                                 st.session_state[neg_state_key] = negs
                                 st.session_state.pop(state_base + "::aplicado", None)
                                 st.rerun()
                             if bcol3.button('🔄 Resetar esta vaga', key=f'rod_caixa_reset_{slot_key}', use_container_width=True, disabled=(not aprovado)):
                                 tmp = dict(st.session_state.get(aprov_state_key, {}))
-                                tmp_snap = dict(st.session_state.get(snap_key, {}))
-                                chapa_ant = str(tmp.get(slot_key) or '').strip()
+                                frozen_slots = dict(st.session_state.get(frozen_key, {}) or {})
+                                chapa_ant = str(tmp.get(slot_key) or str(s_view.get('origem_chapa') or '')).strip()
                                 if chapa_ant:
-                                    resetar_preview_aprovacao_rodizio_caixa(setor, ano_r, mes_r, s, chapa_ant, subgrupo_origem, subgrupo_destino)
+                                    resetar_preview_aprovacao_rodizio_caixa(setor, ano_r, mes_r, s_view, chapa_ant, subgrupo_origem, subgrupo_destino)
                                 tmp.pop(slot_key, None)
-                                tmp_snap.pop(slot_key, None)
+                                frozen_slots.pop(slot_key, None)
+                                st.session_state[frozen_key] = frozen_slots
                                 st.session_state[aprov_state_key] = tmp
-                                st.session_state[snap_key] = tmp_snap
                                 st.session_state.pop(state_base + "::aplicado", None)
                                 st.rerun()
                             if aprovado:
                                 chapa_sel_txt = str(aprovados_atuais.get(slot_key) or '').strip()
-                                nome_sel_txt = mapa_alt.get(chapa_sel_txt, chapa_sel_txt)
+                                nome_sel_txt = mapa_alt.get(chapa_sel_txt, str((st.session_state.get(frozen_key, {}) or {}).get(slot_key, {}).get('origem_nome') or chapa_sel_txt))
                                 bcol4.success(f'Aprovado manualmente. Seleção atual: {nome_sel_txt}')
                             else:
                                 bcol4.warning('Pendente. Ao negar, o sistema chama a próxima pessoa da fila desse horário.')
