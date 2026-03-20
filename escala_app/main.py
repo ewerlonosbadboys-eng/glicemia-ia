@@ -7620,37 +7620,32 @@ def simular_rodizio_caixa_mes(
 
             alternativas_opcoes = []
             for item in scored[:20]:
-                prioridade_nunca_foi = int(item[1] or 0)
-                prioridade_ultimo_mes = int(item[2] or 0)
-                diff_hor_item = int(item[3] or 0)
-                diff_domingos_item = int(item[6] or 0)
-                cand = item[9]
-                match_item = item[10] if isinstance(item[10], dict) else {}
-                domingos_item = int(item[11] or 0)
+                cand = item[8]
+                match_item = item[9]
+                domingos_item = int(item[10] or 0)
                 last_move_item = int(last_move_map.get(str(cand.get('Chapa') or '').strip(), 0) or 0)
                 alternativas_opcoes.append({
                     'chapa': str(cand.get('Chapa') or '').strip(),
                     'nome': str(cand.get('Nome') or ''),
                     'entrada': str(cand.get('Entrada') or '').strip(),
-                    'diff_horario_ref_min': diff_hor_item,
+                    'diff_horario_ref_min': int(item[1] or 0),
                     'domingos': int(domingos_item),
-                    'diff_domingos': diff_domingos_item,
+                    'diff_domingos': int(item[4] or 0),
                     'domingos_trabalho_iguais_qtd': int(match_item.get('trab_iguais_qtd', 0) or 0),
                     'domingos_folga_iguais_qtd': int(match_item.get('folga_iguais_qtd', 0) or 0),
                     'ultimo_mes_destino_label': _rodizio_format_ym(last_move_item),
-                    'nunca_foi_destino': 1 if prioridade_nunca_foi == 0 and prioridade_ultimo_mes == 0 else 0,
                 })
 
             if locked_chapa:
                 for item in scored:
-                    cand = item[9]
+                    cand = item[8]
                     if str(cand.get('Chapa') or '').strip() == locked_chapa:
                         chosen = cand
                         escolha_fallback = (str(cand.get('Entrada') or '').strip() != horario_ref)
                         break
 
             if chosen is None and scored:
-                chosen = scored[0][9]
+                chosen = scored[0][8]
                 escolha_fallback = (str(chosen.get('Entrada') or '').strip() != horario_ref)
 
             ch = str(chosen.get('Chapa') or '').strip()
@@ -14433,9 +14428,6 @@ def page_app():
                     top1.metric('Sugestões montadas', len(slots))
                     top2.metric('Aprovadas', aprovados_validos)
                     top3.metric('Pendentes', max(0, len(slots) - aprovados_validos))
-                    if st.session_state.get(force_review_key):
-                        st.warning(f"Revisão manual ativa em {mes_r:02d}/{ano_r}: trocar a pessoa no seletor NÃO aplica nada sozinho. Só aplica quando você clicar em 'Aplicar mudança de subgrupos agora'.")
-
                     a1, a2 = st.columns([1, 1])
                     if a1.button('Limpar aprovações e negativas da fila', key='rod_caixa_clear_aprov', use_container_width=True):
                         aprov_tmp = dict(st.session_state.get(aprov_key, {}))
@@ -14445,41 +14437,30 @@ def page_app():
                                 continue
                             chapa_sel_tmp = str(aprov_tmp.get(slot_key_tmp) or '').strip()
                             if chapa_sel_tmp:
-                                st.session_state[aprov_key] = {}
+                                resetar_preview_aprovacao_rodizio_caixa(setor, ano_r, mes_r, s, chapa_sel_tmp, subgrupo_origem, subgrupo_destino)
+                        st.session_state[aprov_key] = {}
                         st.session_state[neg_key] = []
                         st.session_state.pop(state_base + "::aplicado", None)
                         st.rerun()
-                    if a2.button('Aprovar as 14 sugestões atuais', key='rod_caixa_aprov_all', use_container_width=True):
+                    if a2.button('Aprovar as 14 sugestões atuais direto', key='rod_caixa_aprov_all', use_container_width=True, disabled=(_status_comp_rod == 'FECHADA')):
                         aprov_all = {}
                         for s in slots:
                             slot_key_tmp = str(s.get('slot_key') or '')
                             chapa_sel_tmp = str(st.session_state.get(f'rod_caixa_pick_{slot_key_tmp}', str(s.get('origem_chapa') or '')) or '').strip()
-                            if slot_key_tmp and chapa_sel_tmp:
-                                aprov_all[slot_key_tmp] = chapa_sel_tmp
+                            if not (slot_key_tmp and chapa_sel_tmp):
+                                continue
+                            aplicar_preview_aprovacao_rodizio_caixa(setor, ano_r, mes_r, s, chapa_sel_tmp, subgrupo_origem, subgrupo_destino)
+                            aprov_all[slot_key_tmp] = chapa_sel_tmp
                         st.session_state[aprov_key] = aprov_all
                         st.session_state.pop(state_base + "::aplicado", None)
+                        st.success(f"As {len(aprov_all)} transferência(s) selecionadas foram gravadas direto na competência {mes_r:02d}/{ano_r}.")
                         st.rerun()
 
-                    aplic_key = state_base + "::aplicado"
                     qtd_obrigatoria = int(sim.get('qtd_destino_obrigatoria', 14) or 14)
-                    pronto_aplicar = bool(slots) and int(aprovados_validos) >= int(qtd_obrigatoria) and int(max(0, len(slots) - aprovados_validos)) == 0
-
-                    if pronto_aplicar:
-                        st.success(f"Todas as {qtd_obrigatoria} sugestões foram aprovadas. Agora falta aplicar o rodízio no mês {mes_r:02d}/{ano_r}.")
-                        if st.button('🔁 Aplicar transferências agora e jogar para Caixa 02', key='rod_caixa_apply_now', use_container_width=True, disabled=(_status_comp_rod == 'FECHADA')):
-                            sim_apply = montar_simulacao_com_aprovacoes_rodizio_caixa(sim, st.session_state.get(aprov_key, {}))
-                            res_apply = aplicar_rodizio_caixa_mes(setor, ano_r, mes_r, sim_apply)
-                            if res_apply.get('ok'):
-                                st.session_state[aplic_key] = True
-                                st.session_state[force_review_key] = False
-                                st.success(res_apply.get('msg', 'Transferências aplicadas com sucesso.'))
-                                st.rerun()
-                            else:
-                                st.error(res_apply.get('msg', 'Não foi possível aplicar o rodízio.'))
-                    elif st.session_state.get(aplic_key):
-                        st.success(f"Rodízio já aplicado na competência {mes_r:02d}/{ano_r}. Gere a escala novamente para refletir a troca.")
+                    if int(aprovados_validos) >= int(qtd_obrigatoria):
+                        st.success(f"As {qtd_obrigatoria} vagas já estão gravadas direto no mês {mes_r:02d}/{ano_r}. O painel acima já reflete o Caixa 02 sem botão final de aplicar.")
                     elif slots:
-                        st.info(f"Para aplicar de verdade no mês {mes_r:02d}/{ano_r}, todas as {qtd_obrigatoria} sugestões precisam estar aprovadas e depois você deve clicar em 'Aplicar mudança de subgrupos agora (antes da escala)'.")
+                        st.info(f"Aprovação individual agora grava direto no mês {mes_r:02d}/{ano_r}. Não existe mais etapa final de aplicar.")
 
                 if slots:
                     st.markdown('### Sugestões de transferência por vez para esta competência')
@@ -14491,7 +14472,7 @@ def page_app():
                         'Domingos origem': s.get('origem_domingos_label', ''),
                         'Última vez que foi para o Caixa 02': s.get('origem_ultimo_mes_destino_label', ''),
                         'Selecionado agora': str(aprovados_atuais.get(s.get('slot_key')) or '').strip(),
-                        'Sai do Caixa 02': s.get('destino_nome', ''),
+                        'Vaga de referência': s.get('destino_entrada', ''),
                         'Domingos destino': s.get('destino_domingos_label', ''),
                         'Domingos iguais trabalho': int(s.get('domingos_trabalho_iguais_qtd', 0) or 0),
                         'Domingos iguais folga': int(s.get('domingos_folga_iguais_qtd', 0) or 0),
@@ -14587,9 +14568,9 @@ def page_app():
                             if aprovado:
                                 chapa_sel_txt = str(aprovados_atuais.get(slot_key) or '').strip()
                                 nome_sel_txt = mapa_alt.get(chapa_sel_txt, chapa_sel_txt)
-                                bcol4.success(f'Aprovado manualmente. Seleção atual: {nome_sel_txt}')
+                                bcol4.success(f'Transferência gravada no mês. Seleção atual: {nome_sel_txt}')
                             else:
-                                bcol4.warning('Pendente. Ao negar, o sistema chama a próxima pessoa da fila desse horário.')
+                                bcol4.warning('Pendente. Ao negar, a pessoa volta para Caixa 01 e o sistema chama a próxima da fila desse horário.')
                 else:
                     st.warning("Nenhuma troca encontrada para aplicar neste mês.")
 
