@@ -7057,19 +7057,6 @@ def _rodizio_format_ym(ym: int) -> str:
     return f'{mes:02d}/{ano}'
 
 
-def _rodizio_prioridade_historico_destino(last_move_ym: int) -> tuple[int, int]:
-    """
-    Prioridade da fila para transferência:
-    - quem nunca foi para o Caixa 02 vem primeiro
-    - quem já foi fica depois
-    - entre quem já foi, quem foi há mais tempo vem antes
-    """
-    ym = int(last_move_ym or 0)
-    if ym <= 0:
-        return (0, 0)
-    return (1, ym)
-
-
 def _rodizio_rank_origem(setor: str, candidatos_origem: list[dict], subgrupo_destino: str):
     last_move = _rodizio_last_move_map(setor, subgrupo_destino)
     out = []
@@ -7240,46 +7227,8 @@ def _rodizio_caixa_base_mes_anterior_congelado(setor: str, ano: int, mes: int) -
     return list(mapa.values())
 
 
-def _transferencia_colaboradores_mes_atual(setor: str, ano: int, mes: int) -> list[dict]:
-    """
-    Fonte oficial da aba Transferência.
-    Lê somente o estado atual da competência:
-    1) colaboradores base do setor
-    2) sobrescreve com subgrupo_competencia do mês, quando existir
-
-    Não usa rodizio_caixa_hist e não reconstrói pelo mês anterior.
-    """
-    atuais = [_clone_colaborador_base(c) for c in (load_colaboradores_setor(setor) or [])]
-    mapa = {str(c.get('Chapa') or '').strip(): c for c in atuais if str(c.get('Chapa') or '').strip()}
-
-    con = db_conn()
-    try:
-        cur = con.cursor()
-        cur.execute(
-            """
-            SELECT chapa, subgrupo
-            FROM subgrupo_competencia
-            WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=?
-            """,
-            (str(setor or '').strip(), int(ano), int(mes))
-        )
-        rows = cur.fetchall() or []
-    finally:
-        con.close()
-
-    for row in rows:
-        ch = str((row[0] if row else '') or '').strip()
-        sg = str((row[1] if row else '') or '').strip()
-        if not ch or ch not in mapa:
-            continue
-        if sg:
-            mapa[ch]['Subgrupo'] = sg
-
-    return list(mapa.values())
-
-
 def _rodizio_caixa_estado_efetivo(setor: str, ano: int, mes: int, subgrupo_origem: str, subgrupo_destino: str):
-    colaboradores = _transferencia_colaboradores_mes_atual(setor, int(ano), int(mes))
+    colaboradores = _rodizio_caixa_base_mes_anterior_congelado(setor, int(ano), int(mes))
     origem = [c for c in colaboradores if str(c.get('Subgrupo') or '').strip().upper() == str(subgrupo_origem).strip().upper()]
     destino = [c for c in colaboradores if str(c.get('Subgrupo') or '').strip().upper() == str(subgrupo_destino).strip().upper()]
     return colaboradores, origem, destino
@@ -7380,8 +7329,8 @@ def simular_ajuste_complementar_rodizio_caixa_mes(
                 if best is not None:
                     match_score = int((-best[0]) * 100 + (-best[1]) * 10)
                     diff_dom = int(best[2])
-            ranked.append((0 if ent == horario_ref else 1, *_rodizio_prioridade_historico_destino(int(last_move_map.get(ch, 0) or 0)), diff, -match_score, diff_dom, str(cand.get('Nome') or '').upper(), cand))
-        ranked.sort(key=lambda x: (x[0], x[1], x[2], x[3], x[4], x[5], x[6]))
+            ranked.append((0 if ent == horario_ref else 1, diff, -match_score, diff_dom, int(last_move_map.get(ch, 0) or 0), str(cand.get('Nome') or '').upper(), cand))
+        ranked.sort(key=lambda x: (x[0], x[1], x[2], x[3], x[4], x[5]))
         return [x[-1] for x in ranked]
 
     faltam_rest = int(faltam_total)
@@ -7605,18 +7554,18 @@ def simular_rodizio_caixa_mes(
                 last_move = int(last_move_map.get(ch, 0) or 0)
                 scored.append((
                     0 if ent == horario_ref else 1,
-                    *_rodizio_prioridade_historico_destino(last_move),
                     diff_hor,
                     -int(match_info.get('trab_iguais_qtd', 0) or 0),
                     -int(match_info.get('folga_iguais_qtd', 0) or 0),
                     sunday_diff,
+                    last_move,
                     pos,
                     str(cand.get('Nome') or '').upper(),
                     cand,
                     match_info,
                     domingos_orig,
                 ))
-            scored.sort(key=lambda x: (x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8]))
+            scored.sort(key=lambda x: (x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7]))
 
             alternativas_opcoes = []
             for item in scored[:20]:
@@ -7856,8 +7805,8 @@ def simular_rodizio_caixa_mes(
                     continue
                 domingos_orig = int(domingos_map.get(ch, 0) or 0)
                 last_move = int(last_move_map.get(ch, 0) or 0)
-                ranked.append((0 if ent == horario_ref else 1, *_rodizio_prioridade_historico_destino(last_move), diff_hor, domingos_orig, str(cand.get('Nome') or '').upper(), cand))
-            ranked.sort(key=lambda x: (x[0], x[1], x[2], x[3], x[4], x[5]))
+                ranked.append((0 if ent == horario_ref else 1, diff_hor, domingos_orig, last_move, str(cand.get('Nome') or '').upper(), cand))
+            ranked.sort(key=lambda x: (x[0], x[1], x[2], x[3], x[4]))
             return [x[-1] for x in ranked]
 
         for cota_info in _rodizio_caixa_cotas_custom(setor, subgrupo_destino):
@@ -7937,10 +7886,9 @@ def simular_rodizio_caixa_mes(
                         melhor_h = h
                 if melhor_h is None:
                     continue
-                _prio_hist = _rodizio_prioridade_historico_destino(int(last_move_map.get(ch, 0) or 0))
-                candidatos_rest.append((int(melhor_diff), _prio_hist[0], _prio_hist[1], str(cand.get('Nome') or '').upper(), cand, melhor_h))
-            candidatos_rest.sort(key=lambda x: (x[0], x[1], x[2], x[3]))
-            for diff_hor, _flag_hist, _last, _nm, cand, horario_ref in candidatos_rest:
+                candidatos_rest.append((int(melhor_diff), int(last_move_map.get(ch, 0) or 0), str(cand.get('Nome') or '').upper(), cand, melhor_h))
+            candidatos_rest.sort(key=lambda x: (x[0], x[1], x[2]))
+            for diff_hor, _last, _nm, cand, horario_ref in candidatos_rest:
                 if len(pares) >= int(qtd_obrigatoria):
                     break
                 ch = str(cand.get('Chapa') or '').strip()
@@ -8314,154 +8262,6 @@ def sincronizar_subgrupos_base_rodizio_caixa(setor: str, ano: int, mes: int, sub
 
 
 
-
-def transferencia_suprema_caixa_02_para_01(setor: str, ano: int, mes: int, subgrupo_origem: str = 'OPERADOR DE CAIXA 01', subgrupo_destino: str = 'OPERADOR DE CAIXA 02'):
-    """
-    Transferência manual suprema.
-    Quando acionada manualmente pelo usuário, IGNORA a regra de manter 14 no Caixa 02
-    e esvazia completamente o subgrupo destino na competência selecionada.
-    """
-    setor = str(setor or '').strip()
-    ano = int(ano)
-    mes = int(mes)
-    subgrupo_origem = str(subgrupo_origem or 'OPERADOR DE CAIXA 01').strip() or 'OPERADOR DE CAIXA 01'
-    subgrupo_destino = str(subgrupo_destino or 'OPERADOR DE CAIXA 02').strip() or 'OPERADOR DE CAIXA 02'
-
-    colaboradores, _, destino = _rodizio_caixa_estado_efetivo(setor, ano, mes, subgrupo_origem, subgrupo_destino)
-    chapas = {str(c.get('Chapa') or '').strip() for c in (destino or []) if str(c.get('Chapa') or '').strip()}
-
-    con = db_conn()
-    cur = con.cursor()
-    try:
-        consultas = [
-            (
-                "SELECT chapa FROM colaboradores WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND UPPER(TRIM(subgrupo))=UPPER(TRIM(?))",
-                (setor, subgrupo_destino),
-            ),
-            (
-                "SELECT chapa FROM subgrupo_competencia WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND UPPER(TRIM(subgrupo))=UPPER(TRIM(?))",
-                (setor, ano, mes, subgrupo_destino),
-            ),
-            (
-                "SELECT chapa FROM colaborador_competencia_snapshot WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND UPPER(TRIM(subgrupo))=UPPER(TRIM(?))",
-                (setor, ano, mes, subgrupo_destino),
-            ),
-        ]
-        for sql, params in consultas:
-            try:
-                cur.execute(sql, params)
-                chapas.update(str(r[0]).strip() for r in (cur.fetchall() or []) if str(r[0] or '').strip())
-            except Exception:
-                pass
-
-        chapas_afetadas = sorted(chapas)
-        if not chapas_afetadas:
-            con.close()
-            return {'ok': True, 'qtd': 0, 'msg': f'Nenhum colaborador estava em {subgrupo_destino} em {mes:02d}/{ano}.'}
-
-        cur.execute('BEGIN')
-        marks = ','.join(['?'] * len(chapas_afetadas))
-        agora = datetime.now().isoformat()
-
-        cur.execute(
-            f"UPDATE colaboradores SET subgrupo=? WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND TRIM(chapa) IN ({marks})",
-            [subgrupo_origem, setor, *chapas_afetadas]
-        )
-
-        cur.execute(
-            f"DELETE FROM subgrupo_competencia WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa) IN ({marks})",
-            [setor, ano, mes, *chapas_afetadas]
-        )
-        for ch in chapas_afetadas:
-            cur.execute(
-                """
-                INSERT INTO subgrupo_competencia(setor, ano, mes, chapa, subgrupo, atualizado_em)
-                VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(setor, ano, mes, chapa) DO UPDATE SET
-                    subgrupo=excluded.subgrupo,
-                    atualizado_em=excluded.atualizado_em
-                """,
-                (setor, ano, mes, ch, subgrupo_origem, agora)
-            )
-
-        for ch in chapas_afetadas:
-            cur.execute(
-                "SELECT nome, entrada, folga_sab FROM colaborador_competencia_snapshot WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=? LIMIT 1",
-                (setor, ano, mes, ch)
-            )
-            row = cur.fetchone()
-            nome_snap = entrada_snap = None
-            folga_sab_snap = 0
-            if row:
-                nome_snap = str(row[0] or '').strip()
-                entrada_snap = str(row[1] or '').strip()
-                folga_sab_snap = int(row[2] or 0)
-            if not nome_snap or not entrada_snap:
-                cur.execute(
-                    "SELECT nome, entrada, COALESCE(folga_sab,0) FROM colaboradores WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND TRIM(chapa)=? LIMIT 1",
-                    (setor, ch)
-                )
-                rowb = cur.fetchone()
-                if rowb:
-                    if not nome_snap:
-                        nome_snap = str(rowb[0] or '').strip()
-                    if not entrada_snap:
-                        entrada_snap = str(rowb[1] or '').strip()
-                    folga_sab_snap = int(rowb[2] or 0)
-            cur.execute(
-                """
-                INSERT INTO colaborador_competencia_snapshot(setor, ano, mes, chapa, nome, subgrupo, entrada, folga_sab, atualizado_em)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(setor, ano, mes, chapa) DO UPDATE SET
-                    nome=excluded.nome,
-                    subgrupo=excluded.subgrupo,
-                    entrada=excluded.entrada,
-                    folga_sab=excluded.folga_sab,
-                    atualizado_em=excluded.atualizado_em
-                """,
-                (setor, ano, mes, ch, nome_snap or '', subgrupo_origem, entrada_snap or '06:00', int(folga_sab_snap or 0), agora)
-            )
-
-        try:
-            cur.execute(
-                f"DELETE FROM retificacoes_competencia WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa) IN ({marks})",
-                [setor, ano, mes, *chapas_afetadas]
-            )
-        except Exception:
-            pass
-
-        try:
-            cur.execute(
-                "DELETE FROM rodizio_caixa_hist WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=?",
-                (setor, ano, mes)
-            )
-        except Exception:
-            pass
-
-        con.commit()
-    except Exception:
-        con.rollback()
-        raise
-    finally:
-        con.close()
-
-    try:
-        rebuild_colaborador_competencia_snapshot(setor, int(ano), int(mes))
-    except Exception:
-        pass
-
-    try:
-        st.cache_data.clear()
-    except Exception:
-        pass
-
-    return {
-        'ok': True,
-        'qtd': len(chapas_afetadas),
-        'msg': f'Transferência suprema concluída em {mes:02d}/{ano}. {len(chapas_afetadas)} pessoa(s) voltaram de {subgrupo_destino} para {subgrupo_origem} e o Caixa 02 ficou vazio.'
-    }
-
-
 def resetar_rodizio_caixa_mes(setor: str, ano: int, mes: int, subgrupo_origem: str = 'OPERADOR DE CAIXA 01', subgrupo_destino: str = 'OPERADOR DE CAIXA 02'):
     """
     Volta do zero do rodízio da competência atual.
@@ -8634,23 +8434,34 @@ def _upsert_subgrupo_preview_competencia(setor: str, ano: int, mes: int, chapa: 
     con = db_conn()
     cur = con.cursor()
     try:
+        nome_final = ''
         entrada_final = nova_entrada
+        folga_sab_final = 0
+
+        cur.execute(
+            "SELECT nome, entrada, COALESCE(folga_sab, 0) FROM colaboradores WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND TRIM(chapa)=? LIMIT 1",
+            (setor, chapa)
+        )
+        row_col = cur.fetchone()
+        if row_col:
+            nome_final = str(row_col[0] or '').strip()
+            if not entrada_final and str(row_col[1] or '').strip():
+                entrada_final = str(row_col[1] or '').strip()
+            folga_sab_final = int(row_col[2] or 0)
+
         if not entrada_final:
             cur.execute(
-                "SELECT entrada FROM colaborador_competencia_snapshot WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=? LIMIT 1",
+                "SELECT nome, entrada, COALESCE(folga_sab, 0) FROM colaborador_competencia_snapshot WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=? LIMIT 1",
                 (setor, int(ano), int(mes), chapa)
             )
             row_snap = cur.fetchone()
-            if row_snap and str(row_snap[0] or '').strip():
-                entrada_final = str(row_snap[0] or '').strip()
-        if not entrada_final:
-            cur.execute(
-                "SELECT entrada FROM colaboradores WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND TRIM(chapa)=? LIMIT 1",
-                (setor, chapa)
-            )
-            row_col = cur.fetchone()
-            if row_col and str(row_col[0] or '').strip():
-                entrada_final = str(row_col[0] or '').strip()
+            if row_snap:
+                if not nome_final:
+                    nome_final = str(row_snap[0] or '').strip()
+                if str(row_snap[1] or '').strip():
+                    entrada_final = str(row_snap[1] or '').strip()
+                folga_sab_final = int(row_snap[2] or folga_sab_final or 0)
+
         entrada_final = entrada_final or '06:00'
 
         cur.execute(
@@ -8663,20 +8474,25 @@ def _upsert_subgrupo_preview_competencia(setor: str, ano: int, mes: int, chapa: 
             """,
             (setor, int(ano), int(mes), chapa, novo_subgrupo, ts)
         )
+
+        # Atualiza a base também para a tela refletir imediatamente no mesmo mês.
+        cur.execute(
+            "UPDATE colaboradores SET subgrupo=?, entrada=? WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND TRIM(chapa)=?",
+            (novo_subgrupo, entrada_final, setor, chapa)
+        )
+
         cur.execute(
             """
             INSERT INTO colaborador_competencia_snapshot(setor, ano, mes, chapa, nome, subgrupo, entrada, folga_sab, atualizado_em)
-            SELECT ?, ?, ?, ?, COALESCE(NULLIF(nome,''), ''), ?, ?, COALESCE(folga_sab, 0), ?
-            FROM colaboradores
-            WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND TRIM(chapa)=?
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(setor, ano, mes, chapa) DO UPDATE SET
-                nome=COALESCE(excluded.nome, colaborador_competencia_snapshot.nome),
+                nome=excluded.nome,
                 subgrupo=excluded.subgrupo,
-                entrada=COALESCE(NULLIF(excluded.entrada,''), colaborador_competencia_snapshot.entrada),
-                folga_sab=COALESCE(excluded.folga_sab, colaborador_competencia_snapshot.folga_sab),
+                entrada=excluded.entrada,
+                folga_sab=excluded.folga_sab,
                 atualizado_em=excluded.atualizado_em
             """,
-            (setor, int(ano), int(mes), chapa, novo_subgrupo, entrada_final, ts, setor, chapa)
+            (setor, int(ano), int(mes), chapa, nome_final, novo_subgrupo, entrada_final, folga_sab_final, ts)
         )
         cur.execute(
             "DELETE FROM escala_mes WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=?",
@@ -8705,6 +8521,19 @@ def _restaurar_subgrupo_preview_competencia(setor: str, ano: int, mes: int, chap
     con = db_conn()
     cur = con.cursor()
     try:
+        nome_final = ''
+        folga_sab_final = 0
+        cur.execute(
+            "SELECT nome, entrada, COALESCE(folga_sab, 0) FROM colaboradores WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND TRIM(chapa)=? LIMIT 1",
+            (setor, chapa)
+        )
+        row_col = cur.fetchone()
+        if row_col:
+            nome_final = str(row_col[0] or '').strip()
+            if not entrada_base and str(row_col[1] or '').strip():
+                entrada_base = str(row_col[1] or '').strip()
+            folga_sab_final = int(row_col[2] or 0)
+
         if subgrupo_base:
             cur.execute(
                 """
@@ -8716,11 +8545,17 @@ def _restaurar_subgrupo_preview_competencia(setor: str, ano: int, mes: int, chap
                 """,
                 (setor, int(ano), int(mes), chapa, subgrupo_base, ts)
             )
+            entrada_final = entrada_base or '06:00'
+            cur.execute(
+                "UPDATE colaboradores SET subgrupo=?, entrada=? WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND TRIM(chapa)=?",
+                (subgrupo_base, entrada_final, setor, chapa)
+            )
         else:
             cur.execute(
                 "DELETE FROM subgrupo_competencia WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=?",
                 (setor, int(ano), int(mes), chapa)
             )
+            entrada_final = entrada_base or '06:00'
 
         cur.execute(
             "DELETE FROM colaborador_competencia_snapshot WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=?",
@@ -8738,6 +8573,20 @@ def _restaurar_subgrupo_preview_competencia(setor: str, ano: int, mes: int, chap
             """,
             (setor, int(ano), int(mes), chapa)
         )
+        if subgrupo_base:
+            cur.execute(
+                """
+                INSERT INTO colaborador_competencia_snapshot(setor, ano, mes, chapa, nome, subgrupo, entrada, folga_sab, atualizado_em)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(setor, ano, mes, chapa) DO UPDATE SET
+                    nome=excluded.nome,
+                    subgrupo=excluded.subgrupo,
+                    entrada=excluded.entrada,
+                    folga_sab=excluded.folga_sab,
+                    atualizado_em=excluded.atualizado_em
+                """,
+                (setor, int(ano), int(mes), chapa, nome_final, subgrupo_base, entrada_final, folga_sab_final, ts)
+            )
         con.commit()
     finally:
         con.close()
@@ -14248,15 +14097,14 @@ def page_app():
                     st.rerun()
                 if bcfg2.button("🚨 Transferir TODOS do Caixa 02 para Caixa 01", key='rod_caixa_move_all_back', use_container_width=True, disabled=(_status_comp_rod == 'FECHADA')):
                     try:
-                        st.warning('Modo supremo: esta ação manual ignora a regra de manter 14 pessoas no Caixa 02 e esvazia o subgrupo destino nesta competência.')
-                        res_mass = transferencia_suprema_caixa_02_para_01(setor, ano_r, mes_r, 'OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02')
+                        res_mass = resetar_rodizio_caixa_mes(setor, ano_r, mes_r, 'OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02')
                         base_reset = f"rod_caixa_aprov::{setor}::{ano_r}::{mes_r}::{subgrupo_origem}::{subgrupo_destino}"
                         for suf in ["::aprovados", "::negados", "::aplicado", "::complementar_aprovados"]:
                             st.session_state.pop(base_reset + suf, None)
                         st.session_state[_rod_reset_defaults_key] = True
                         st.session_state[force_review_key] = True
                         set_rodizio_caixa_cfg(setor, 'OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02', 14, 20, True)
-                        st.success(res_mass.get('msg', 'Transferência manual concluída. O Caixa 02 foi esvaziado nesta competência.'))
+                        st.success(res_mass.get('msg', 'Todos do Caixa 02 foram transferidos para o Caixa 01 nesta competência.'))
                         st.rerun()
                     except Exception as e:
                         st.error(f'Falha ao transferir todos do Caixa 02 para o Caixa 01: {e}')
@@ -14322,7 +14170,7 @@ def page_app():
                 )
                 st.caption(f"Competência ativa: {mes_r:02d}/{ano_r}. Regra fixa do rodízio: 14 trocas por mês, respeitando as cotas por horário do Caixa 01.")
                 st.info(f"{subgrupo_destino}: {sim.get('qtd_destino_atual', 0)} pessoa(s) hoje. Rodízio planejado: {sim.get('qtd_troca', 0)} troca(s). Quantidade obrigatória: {sim.get('qtd_destino_obrigatoria', 14)}.")
-                st.caption("Na sugestão do mês, o sistema prioriza: 1) quem nunca foi para o Caixa 02, 2) horário fixo da cota, 3) domingo mais parecido, 4) entre quem já foi, quem está há mais tempo sem ir.")
+                st.caption("Na sugestão do mês, o sistema prioriza: 1) horário fixo da cota, 2) domingo mais parecido, 3) quem está há mais tempo sem ir para o Caixa 02.")
 
                 painel_conf = montar_painel_conferencia_rodizio_caixa_mes(setor, ano_r, mes_r, subgrupo_origem, subgrupo_destino)
                 st.markdown("### Verificar transferência do mês por subgrupo")
