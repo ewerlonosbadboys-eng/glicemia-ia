@@ -14002,37 +14002,7 @@ def page_app():
                     set_rodizio_caixa_cfg(setor, subgrupo_origem, subgrupo_destino, qtd_destino, tolerancia, True)
                     st.success("Configuração salva.")
                     st.rerun()
-                label_reset = "Zerar o que foi aplicado neste mês" if rodizio_ja_aplicado_mes else "Voltar do zero")
-
-    if st.button("🔥 RESET TOTAL (AGRESSIVO)"):
-        conn = get_conn()
-        cur = conn.cursor()
-
-        cur.execute("""
-            UPDATE colaboradores
-            SET subgrupo = 'OPERADOR DE CAIXA 01'
-        """)
-
-        for t in [
-            "subgrupo_competencia",
-            "colaborador_competencia_snapshot",
-            "retificacoes_competencia",
-            "rodizio_caixa_hist",
-            "escala_mes",
-            "overrides"
-        ]:
-            try:
-                cur.execute(f"DELETE FROM {t} WHERE setor=? AND ano=? AND mes=?", (setor, ano, mes))
-            except:
-                pass
-
-        conn.commit()
-
-        st.cache_data.clear()
-        st.cache_resource.clear()
-
-        st.success("RESET TOTAL EXECUTADO")
-        st.rerun()
+                label_reset = "Zerar o que foi aplicado neste mês" if rodizio_ja_aplicado_mes else "Voltar do zero"
                 if bcfg2.button(label_reset, key='rod_caixa_reset_cfg', use_container_width=True, disabled=(_status_comp_rod == 'FECHADA')):
                     if rodizio_ja_aplicado_mes:
                         try:
@@ -14095,6 +14065,37 @@ def page_app():
                 st.caption(f"Competência ativa: {mes_r:02d}/{ano_r}. Regra fixa do rodízio: 14 trocas por mês, respeitando as cotas por horário do Caixa 01.")
                 st.info(f"{subgrupo_destino}: {sim.get('qtd_destino_atual', 0)} pessoa(s) hoje. Rodízio planejado: {sim.get('qtd_troca', 0)} troca(s). Quantidade obrigatória: {sim.get('qtd_destino_obrigatoria', 14)}.")
                 st.caption("Na sugestão do mês, o sistema prioriza: 1) horário fixo da cota, 2) domingo mais parecido, 3) quem está há mais tempo sem ir para o Caixa 02.")
+
+                painel_conf = montar_painel_conferencia_rodizio_caixa_mes(setor, ano_r, mes_r, subgrupo_origem, subgrupo_destino)
+                st.markdown("### Conferência do mês por subgrupo")
+                k1, k2, k3 = st.columns(3)
+                k1.metric(subgrupo_origem, int(painel_conf.get('qtd_origem', 0) or 0))
+                k2.metric(subgrupo_destino, int(painel_conf.get('qtd_destino', 0) or 0))
+                k3.metric('Meta fixa Caixa 02', int(painel_conf.get('qtd_alvo_destino', 14) or 14))
+                cc1, cc2 = st.columns(2)
+                with cc1:
+                    st.markdown(f"#### {subgrupo_origem}")
+                    df_origem_conf = painel_conf.get('df_origem')
+                    if isinstance(df_origem_conf, pd.DataFrame) and not df_origem_conf.empty:
+                        st.dataframe(df_origem_conf, use_container_width=True, height=330)
+                    else:
+                        st.info(f"Nenhuma pessoa em {subgrupo_origem} nesta competência.")
+                with cc2:
+                    st.markdown(f"#### {subgrupo_destino}")
+                    df_destino_conf = painel_conf.get('df_destino')
+                    if isinstance(df_destino_conf, pd.DataFrame) and not df_destino_conf.empty:
+                        st.dataframe(df_destino_conf, use_container_width=True, height=330)
+                    else:
+                        st.info(f"Nenhuma pessoa em {subgrupo_destino} nesta competência.")
+
+                exc_dest = int(painel_conf.get('excesso_destino', 0) or 0)
+                falt_dest = int(painel_conf.get('faltam_destino', 0) or 0)
+                if exc_dest > 0:
+                    st.warning(f"O {subgrupo_destino} está com {exc_dest} pessoa(s) acima da meta fixa de 14.")
+                elif falt_dest > 0:
+                    st.warning(f"O {subgrupo_destino} está com {falt_dest} pessoa(s) abaixo da meta fixa de 14.")
+                else:
+                    st.success(f"Conferência OK: o {subgrupo_destino} está exatamente com 14 pessoas.")
 
                 if rodizio_ja_aplicado_mes:
                     pares_aplicados = build_rodizio_caixa_aplicado_pairs(hist_mes)
@@ -14298,7 +14299,8 @@ def page_app():
                                 st.rerun()
                             if bcol2.button('❌ Negar e chamar próximo da fila', key=f'rod_caixa_no_{slot_key}', use_container_width=True):
                                 negs = list(st.session_state.get(neg_key, []))
-                                chapa_neg = str(s.get('origem_chapa') or '').strip()
+                                chapa_escolhida_agora = str(st.session_state.get(f'rod_caixa_pick_{slot_key}', str(s.get('origem_chapa') or '')) or '').strip()
+                                chapa_neg = chapa_escolhida_agora or str(s.get('origem_chapa') or '').strip()
                                 if chapa_neg and chapa_neg not in negs:
                                     negs.append(chapa_neg)
                                 tmp = dict(st.session_state.get(aprov_state_key, {}))
@@ -16780,3 +16782,41 @@ else:
         page_login()
     else:
         page_app()
+
+
+# =========================
+# RESET TOTAL AGRESSIVO
+# =========================
+def reset_agressivo_total(setor, ano, mes, conn):
+    cur = conn.cursor()
+
+    try:
+        cur.execute("UPDATE colaboradores SET subgrupo='OPERADOR DE CAIXA 01' WHERE subgrupo='OPERADOR DE CAIXA 02'")
+    except:
+        pass
+
+    for t in ["subgrupo_competencia","colaborador_competencia_snapshot","retificacoes_competencia","rodizio_caixa_hist","escala_mes","overrides"]:
+        try:
+            cur.execute(f"DELETE FROM {t} WHERE setor=? AND ano=? AND mes=?", (setor, ano, mes))
+        except:
+            pass
+
+    conn.commit()
+
+
+# BOTÃO RESET TOTAL
+try:
+    if st.button("RESET TOTAL (AGRESSIVO)"):
+        conn = get_conn()
+        reset_agressivo_total(setor, int(ano), int(mes), conn)
+
+        try:
+            st.cache_data.clear()
+            st.cache_resource.clear()
+        except:
+            pass
+
+        st.success("RESET TOTAL executado")
+        st.rerun()
+except:
+    pass
