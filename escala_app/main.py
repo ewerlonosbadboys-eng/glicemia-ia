@@ -14002,7 +14002,37 @@ def page_app():
                     set_rodizio_caixa_cfg(setor, subgrupo_origem, subgrupo_destino, qtd_destino, tolerancia, True)
                     st.success("Configuração salva.")
                     st.rerun()
-                label_reset = "Zerar o que foi aplicado neste mês" if rodizio_ja_aplicado_mes else "Voltar do zero"
+                label_reset = "Zerar o que foi aplicado neste mês" if rodizio_ja_aplicado_mes else "Voltar do zero")
+
+    if st.button("🔥 RESET TOTAL (AGRESSIVO)"):
+        conn = get_conn()
+        cur = conn.cursor()
+
+        cur.execute("""
+            UPDATE colaboradores
+            SET subgrupo = 'OPERADOR DE CAIXA 01'
+        """)
+
+        for t in [
+            "subgrupo_competencia",
+            "colaborador_competencia_snapshot",
+            "retificacoes_competencia",
+            "rodizio_caixa_hist",
+            "escala_mes",
+            "overrides"
+        ]:
+            try:
+                cur.execute(f"DELETE FROM {t} WHERE setor=? AND ano=? AND mes=?", (setor, ano, mes))
+            except:
+                pass
+
+        conn.commit()
+
+        st.cache_data.clear()
+        st.cache_resource.clear()
+
+        st.success("RESET TOTAL EXECUTADO")
+        st.rerun()
                 if bcfg2.button(label_reset, key='rod_caixa_reset_cfg', use_container_width=True, disabled=(_status_comp_rod == 'FECHADA')):
                     if rodizio_ja_aplicado_mes:
                         try:
@@ -16750,41 +16780,3 @@ else:
         page_login()
     else:
         page_app()
-
-
-# =========================
-# RESET TOTAL AGRESSIVO
-# =========================
-def reset_agressivo_total(setor, ano, mes, conn):
-    cur = conn.cursor()
-
-    try:
-        cur.execute("UPDATE colaboradores SET subgrupo='OPERADOR DE CAIXA 01' WHERE subgrupo='OPERADOR DE CAIXA 02'")
-    except:
-        pass
-
-    for t in ["subgrupo_competencia","colaborador_competencia_snapshot","retificacoes_competencia","rodizio_caixa_hist","escala_mes","overrides"]:
-        try:
-            cur.execute(f"DELETE FROM {t} WHERE setor=? AND ano=? AND mes=?", (setor, ano, mes))
-        except:
-            pass
-
-    conn.commit()
-
-
-# BOTÃO RESET TOTAL
-try:
-    if st.button("RESET TOTAL (AGRESSIVO)"):
-        conn = get_conn()
-        reset_agressivo_total(setor, int(ano), int(mes), conn)
-
-        try:
-            st.cache_data.clear()
-            st.cache_resource.clear()
-        except:
-            pass
-
-        st.success("RESET TOTAL executado")
-        st.rerun()
-except:
-    pass
