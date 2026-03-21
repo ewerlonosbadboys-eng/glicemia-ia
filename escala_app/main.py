@@ -1182,6 +1182,19 @@ def salvar_retificacao_competencia(setor: str, ano: int, mes: int, chapa: str, d
             novo_subgrupo, motivo, usuario, agora_iso
         ))
 
+        # subgrupo vale o mês inteiro: ao salvar um novo subgrupo, limpa rastros
+        # antigos do mesmo mês em outros dias para a mesma chapa.
+        # Sem isso, uma retificação velha pode voltar a puxar o colaborador para
+        # Caixa 01 quando o histórico do mês é recomposto.
+        if novo_subgrupo:
+            cur.execute("""
+                UPDATE retificacoes_competencia
+                SET novo_subgrupo=''
+                WHERE UPPER(TRIM(setor))=UPPER(TRIM(?))
+                  AND ano=? AND mes=? AND TRIM(chapa)=? AND dia<>?
+                  AND COALESCE(NULLIF(TRIM(novo_subgrupo), ''), '')<>''
+            """, (setor, ano, mes, chapa, dia))
+
         mudou_subgrupo = bool(novo_subgrupo) and str(novo_subgrupo).strip() != str(subgrupo_base or '').strip()
 
         # Só atualiza estruturas pesadas quando houve mudança real de subgrupo.
@@ -8678,6 +8691,19 @@ def _upsert_subgrupo_preview_competencia(setor: str, ano: int, mes: int, chapa: 
             """,
             (setor, int(ano), int(mes), chapa, novo_subgrupo, ts)
         )
+
+        # subgrupo mensal precisa ter uma única verdade por competência.
+        # Limpamos rastros conflitantes do histórico e das retificações do mês
+        # para evitar que a pessoa volte sozinha para Caixa 01 em telas futuras.
+        cur.execute(
+            "DELETE FROM rodizio_caixa_hist WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=?",
+            (setor, int(ano), int(mes), chapa)
+        )
+        cur.execute(
+            "UPDATE retificacoes_competencia SET novo_subgrupo='' WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=?",
+            (setor, int(ano), int(mes), chapa)
+        )
+
         cur.execute(
             """
             INSERT INTO colaborador_competencia_snapshot(setor, ano, mes, chapa, nome, subgrupo, entrada, folga_sab, atualizado_em)
