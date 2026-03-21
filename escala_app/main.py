@@ -14658,9 +14658,23 @@ def page_app():
                                 f"**{i}. {s.get('origem_nome', '-') }**  \n"
                                 f"Chapa: `{s.get('origem_chapa', '-')}` | Horário Caixa 01: **{s.get('origem_entrada', '-') }** | Domingos: **{int(s.get('origem_domingos', 0) or 0)}**"
                             )
+                            subgrupo_card = str(st.session_state.get(f'rod_caixa_subgrupo_manual_{slot_key}') or subgrupo_atual_slot or s.get('manual_subgrupo') or s.get('origem_subgrupo') or subgrupo_origem).strip()
+                            colabs_comp_card = load_colaboradores_setor_competencia(setor, int(ano_r), int(mes_r)) or []
+                            domingos_map_card = _rodizio_domingos_trabalhados_map(setor, int(ano_r), int(mes_r)) or {}
+                            qtd_pessoas_domingo_subgrupo = 0
+                            total_domingos_subgrupo = 0
+                            for _c_card in colabs_comp_card:
+                                _sub_card = str(_c_card.get('Subgrupo') or '').strip()
+                                if _sub_card.upper() != subgrupo_card.upper():
+                                    continue
+                                _ch_card = str(_c_card.get('Chapa') or '').strip()
+                                _dom_card = int(domingos_map_card.get(_ch_card, 0) or 0)
+                                if _dom_card > 0:
+                                    qtd_pessoas_domingo_subgrupo += 1
+                                total_domingos_subgrupo += _dom_card
                             cinfo2.markdown(
-                                f"**Sai do Caixa 02:** {s.get('destino_nome', '-')}  \n"
-                                f"Horário destino: **{s.get('destino_entrada', '-')}** | Domingos: **{int(s.get('destino_domingos', 0) or 0)}**"
+                                f"**Subgrupo analisado:** {subgrupo_card or '-'}  \n"
+                                f"Pessoas do subgrupo que trabalham domingo: **{int(qtd_pessoas_domingo_subgrupo)}** | Total de domingos trabalhados no mês vigente: **{int(total_domingos_subgrupo)}**"
                             )
                             cinfo3.markdown(
                                 f"**Última vez que entrou no Caixa 02:** {s.get('origem_ultimo_mes_destino_label', '-')}  \n"
