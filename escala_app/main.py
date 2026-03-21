@@ -14694,193 +14694,220 @@ def page_app():
                         resumo_caixa02_df = resumo_caixa02_df.sort_values(by=['Entrada', 'Nome'], kind='stable').reset_index(drop=True)
                     st.dataframe(resumo_caixa02_df, use_container_width=True, height=340)
 
-                    for i, s in enumerate(slots, start=1):
-                        slot_key = str(s.get('slot_key') or '')
-                        aprovado = bool(str(aprovados_atuais.get(slot_key) or '').strip())
-                        with st.container(border=True):
-                            cinfo1, cinfo2, cinfo3 = st.columns([3.2, 2.1, 2.2])
-                            cinfo1.markdown(
-                                f"**{i}. {s.get('origem_nome', '-') }**  \n"
-                                f"Chapa: `{s.get('origem_chapa', '-')}` | Horário Caixa 01: **{s.get('origem_entrada', '-') }** | Domingos: **{int(s.get('origem_domingos', 0) or 0)}**"
-                            )
-                            sg_slot_key = f'rod_caixa_subgrupo_manual_{slot_key}'
-                            subgrupo_atual_slot = str(
-                                st.session_state.get(sg_slot_key)
-                                or s.get('manual_subgrupo')
-                                or s.get('origem_subgrupo')
-                                or subgrupo_origem
-                                or ''
-                            ).strip()
-                            subgrupo_card = subgrupo_atual_slot
-                            colabs_comp_card = load_colaboradores_setor_competencia(setor, int(ano_r), int(mes_r)) or []
-                            domingos_map_card = _rodizio_domingos_trabalhados_map(setor, int(ano_r), int(mes_r)) or {}
-                            qtd_pessoas_domingo_subgrupo = 0
-                            total_domingos_subgrupo = 0
-                            for _c_card in colabs_comp_card:
-                                _sub_card = str(_c_card.get('Subgrupo') or '').strip()
-                                if _sub_card.upper() != subgrupo_card.upper():
-                                    continue
-                                _ch_card = str(_c_card.get('Chapa') or '').strip()
-                                _dom_card = int(domingos_map_card.get(_ch_card, 0) or 0)
-                                if _dom_card > 0:
-                                    qtd_pessoas_domingo_subgrupo += 1
-                                total_domingos_subgrupo += _dom_card
-                            cinfo2.markdown(
-                                f"**Subgrupo analisado:** {subgrupo_card or '-'}  \n"
-                                f"Pessoas do subgrupo que trabalham domingo: **{int(qtd_pessoas_domingo_subgrupo)}** | Total de domingos trabalhados no mês vigente: **{int(total_domingos_subgrupo)}**"
-                            )
-                            cinfo3.markdown(
-                                f"**Última vez que entrou no Caixa 02:** {s.get('origem_ultimo_mes_destino_label', '-')}  \n"
-                                f"Dif. domingos: **{int(s.get('diff_domingos', 0) or 0)}** | Alternativas restantes: **{int(s.get('alternativas_mesmo_horario', 0) or 0)}**"
-                            )
-                            st.caption(s.get('observacao') or '-')
+                    def _render_transfer_slot_card(i, s):
+                                            slot_key = str(s.get('slot_key') or '')
+                                            aprovado = bool(str(aprovados_atuais.get(slot_key) or '').strip())
+                                            with st.container(border=True):
+                                                cinfo1, cinfo2, cinfo3 = st.columns([3.2, 2.1, 2.2])
+                                                cinfo1.markdown(
+                                                    f"**{i}. {s.get('origem_nome', '-') }**  \n"
+                                                    f"Chapa: `{s.get('origem_chapa', '-')}` | Horário Caixa 01: **{s.get('origem_entrada', '-') }** | Domingos: **{int(s.get('origem_domingos', 0) or 0)}**"
+                                                )
+                                                sg_slot_key = f'rod_caixa_subgrupo_manual_{slot_key}'
+                                                subgrupo_atual_slot = str(
+                                                    st.session_state.get(sg_slot_key)
+                                                    or s.get('manual_subgrupo')
+                                                    or s.get('origem_subgrupo')
+                                                    or subgrupo_origem
+                                                    or ''
+                                                ).strip()
+                                                subgrupo_card = subgrupo_atual_slot
+                                                colabs_comp_card = load_colaboradores_setor_competencia(setor, int(ano_r), int(mes_r)) or []
+                                                domingos_map_card = _rodizio_domingos_trabalhados_map(setor, int(ano_r), int(mes_r)) or {}
+                                                qtd_pessoas_domingo_subgrupo = 0
+                                                total_domingos_subgrupo = 0
+                                                for _c_card in colabs_comp_card:
+                                                    _sub_card = str(_c_card.get('Subgrupo') or '').strip()
+                                                    if _sub_card.upper() != subgrupo_card.upper():
+                                                        continue
+                                                    _ch_card = str(_c_card.get('Chapa') or '').strip()
+                                                    _dom_card = int(domingos_map_card.get(_ch_card, 0) or 0)
+                                                    if _dom_card > 0:
+                                                        qtd_pessoas_domingo_subgrupo += 1
+                                                    total_domingos_subgrupo += _dom_card
+                                                cinfo2.markdown(
+                                                    f"**Subgrupo analisado:** {subgrupo_card or '-'}  \n"
+                                                    f"Pessoas do subgrupo que trabalham domingo: **{int(qtd_pessoas_domingo_subgrupo)}** | Total de domingos trabalhados no mês vigente: **{int(total_domingos_subgrupo)}**"
+                                                )
+                                                cinfo3.markdown(
+                                                    f"**Última vez que entrou no Caixa 02:** {s.get('origem_ultimo_mes_destino_label', '-')}  \n"
+                                                    f"Dif. domingos: **{int(s.get('diff_domingos', 0) or 0)}** | Alternativas restantes: **{int(s.get('alternativas_mesmo_horario', 0) or 0)}**"
+                                                )
+                                                st.caption(s.get('observacao') or '-')
 
-                            alternativas_slot = list(s.get('alternativas_opcoes') or [])
-                            mapa_alt = {}
-                            opcoes_alt = []
-                            for alt in alternativas_slot:
-                                ch_alt = str(alt.get('chapa') or '').strip()
-                                if not ch_alt or ch_alt in mapa_alt:
-                                    continue
-                                label_alt = (
-                                    f"{str(alt.get('nome') or '-') } | chapa {ch_alt} | horário {str(alt.get('entrada') or '-')} | "
-                                    f"dif. regra {int(alt.get('diff_horario_ref_min', 0) or 0)} min | domingos {int(alt.get('domingos', 0) or 0)} | "
-                                    f"último Caixa 02 {str(alt.get('ultimo_mes_destino_label') or '-')}"
-                                )
-                                mapa_alt[ch_alt] = label_alt
-                                opcoes_alt.append(ch_alt)
+                                                alternativas_slot = list(s.get('alternativas_opcoes') or [])
+                                                mapa_alt = {}
+                                                opcoes_alt = []
+                                                for alt in alternativas_slot:
+                                                    ch_alt = str(alt.get('chapa') or '').strip()
+                                                    if not ch_alt or ch_alt in mapa_alt:
+                                                        continue
+                                                    label_alt = (
+                                                        f"{str(alt.get('nome') or '-') } | chapa {ch_alt} | horário {str(alt.get('entrada') or '-')} | "
+                                                        f"dif. regra {int(alt.get('diff_horario_ref_min', 0) or 0)} min | domingos {int(alt.get('domingos', 0) or 0)} | "
+                                                        f"último Caixa 02 {str(alt.get('ultimo_mes_destino_label') or '-')}"
+                                                    )
+                                                    mapa_alt[ch_alt] = label_alt
+                                                    opcoes_alt.append(ch_alt)
 
-                            chapa_aprovada_slot = str(aprovados_atuais.get(slot_key) or '').strip()
-                            chapa_padrao_slot = chapa_aprovada_slot if chapa_aprovada_slot in opcoes_alt else str(s.get('origem_chapa') or '').strip()
-                            idx_padrao_slot = opcoes_alt.index(chapa_padrao_slot) if chapa_padrao_slot in opcoes_alt else 0
+                                                chapa_aprovada_slot = str(aprovados_atuais.get(slot_key) or '').strip()
+                                                chapa_padrao_slot = chapa_aprovada_slot if chapa_aprovada_slot in opcoes_alt else str(s.get('origem_chapa') or '').strip()
+                                                idx_padrao_slot = opcoes_alt.index(chapa_padrao_slot) if chapa_padrao_slot in opcoes_alt else 0
 
-                            frozen_item_slot = dict(st.session_state.get(freeze_slots_key, {}).get(slot_key, {}) or {})
-                            chapa_congelada_slot = str(frozen_item_slot.get('selected_chapa') or s.get('selected_chapa') or '').strip()
-                            if chapa_congelada_slot and chapa_congelada_slot not in mapa_alt:
-                                colab_congelado_slot = get_colaborador_record(setor, chapa_congelada_slot) or {}
-                                nome_congelado_slot = str(colab_congelado_slot.get('Nome') or chapa_congelada_slot).strip()
-                                entrada_congelado_slot = str(colab_congelado_slot.get('Entrada') or s.get('origem_entrada') or '-').strip()
-                                subgrupo_congelado_slot = str(
-                                    get_subgrupo_competencia_ou_base(
-                                        setor,
-                                        chapa_congelada_slot,
-                                        int(ano_r),
-                                        int(mes_r),
-                                        str(colab_congelado_slot.get('Subgrupo') or s.get('origem_subgrupo') or subgrupo_origem).strip()
-                                    )
-                                ).strip()
-                                mapa_alt[chapa_congelada_slot] = f"{nome_congelado_slot} | chapa {chapa_congelada_slot} | horário {entrada_congelado_slot} | subgrupo atual {subgrupo_congelado_slot} | congelado manualmente"
-                                opcoes_alt.append(chapa_congelada_slot)
+                                                frozen_item_slot = dict(st.session_state.get(freeze_slots_key, {}).get(slot_key, {}) or {})
+                                                chapa_congelada_slot = str(frozen_item_slot.get('selected_chapa') or s.get('selected_chapa') or '').strip()
+                                                if chapa_congelada_slot and chapa_congelada_slot not in mapa_alt:
+                                                    colab_congelado_slot = get_colaborador_record(setor, chapa_congelada_slot) or {}
+                                                    nome_congelado_slot = str(colab_congelado_slot.get('Nome') or chapa_congelada_slot).strip()
+                                                    entrada_congelado_slot = str(colab_congelado_slot.get('Entrada') or s.get('origem_entrada') or '-').strip()
+                                                    subgrupo_congelado_slot = str(
+                                                        get_subgrupo_competencia_ou_base(
+                                                            setor,
+                                                            chapa_congelada_slot,
+                                                            int(ano_r),
+                                                            int(mes_r),
+                                                            str(colab_congelado_slot.get('Subgrupo') or s.get('origem_subgrupo') or subgrupo_origem).strip()
+                                                        )
+                                                    ).strip()
+                                                    mapa_alt[chapa_congelada_slot] = f"{nome_congelado_slot} | chapa {chapa_congelada_slot} | horário {entrada_congelado_slot} | subgrupo atual {subgrupo_congelado_slot} | congelado manualmente"
+                                                    opcoes_alt.append(chapa_congelada_slot)
 
-                            if opcoes_alt:
-                                idx_padrao_slot = opcoes_alt.index(chapa_padrao_slot) if chapa_padrao_slot in opcoes_alt else 0
-                                st.selectbox(
-                                    'Escolha quem está mais próximo para entrar no Operador de Caixa 02:',
-                                    options=opcoes_alt,
-                                    index=idx_padrao_slot,
-                                    key=f'rod_caixa_pick_{slot_key}',
-                                    format_func=lambda ch: mapa_alt.get(ch, ch),
-                                )
+                                                if opcoes_alt:
+                                                    idx_padrao_slot = opcoes_alt.index(chapa_padrao_slot) if chapa_padrao_slot in opcoes_alt else 0
+                                                    st.selectbox(
+                                                        'Escolha quem está mais próximo para entrar no Operador de Caixa 02:',
+                                                        options=opcoes_alt,
+                                                        index=idx_padrao_slot,
+                                                        key=f'rod_caixa_pick_{slot_key}',
+                                                        format_func=lambda ch: mapa_alt.get(ch, ch),
+                                                    )
 
-                            chapa_perfil_slot = str(st.session_state.get(f'rod_caixa_pick_{slot_key}', chapa_padrao_slot) or chapa_padrao_slot or '').strip()
-                            colab_perfil_slot = get_colaborador_record(setor, chapa_perfil_slot) or {}
-                            nome_perfil_slot = str(colab_perfil_slot.get('Nome') or s.get('origem_nome') or '').strip()
-                            entrada_perfil_slot = str(colab_perfil_slot.get('Entrada') or s.get('origem_entrada') or BALANCO_DIA_ENTRADA).strip()
-                            folga_sab_perfil_slot = bool(colab_perfil_slot.get('Folga_Sab'))
-                            subgrupo_atual_slot = get_subgrupo_competencia_ou_base(
-                                setor,
-                                chapa_perfil_slot,
-                                int(ano_r),
-                                int(mes_r),
-                                str(colab_perfil_slot.get('Subgrupo') or s.get('origem_subgrupo') or subgrupo_origem).strip()
-                            ) if chapa_perfil_slot else str(s.get('origem_subgrupo') or subgrupo_origem).strip()
-                            if st.session_state.get(f'{sg_slot_key}__last_chapa') != chapa_perfil_slot:
-                                st.session_state[sg_slot_key] = subgrupo_atual_slot
-                                st.session_state[f'{sg_slot_key}__last_chapa'] = chapa_perfil_slot
+                                                chapa_perfil_slot = str(st.session_state.get(f'rod_caixa_pick_{slot_key}', chapa_padrao_slot) or chapa_padrao_slot or '').strip()
+                                                colab_perfil_slot = get_colaborador_record(setor, chapa_perfil_slot) or {}
+                                                nome_perfil_slot = str(colab_perfil_slot.get('Nome') or s.get('origem_nome') or '').strip()
+                                                entrada_perfil_slot = str(colab_perfil_slot.get('Entrada') or s.get('origem_entrada') or BALANCO_DIA_ENTRADA).strip()
+                                                folga_sab_perfil_slot = bool(colab_perfil_slot.get('Folga_Sab'))
+                                                subgrupo_atual_slot = get_subgrupo_competencia_ou_base(
+                                                    setor,
+                                                    chapa_perfil_slot,
+                                                    int(ano_r),
+                                                    int(mes_r),
+                                                    str(colab_perfil_slot.get('Subgrupo') or s.get('origem_subgrupo') or subgrupo_origem).strip()
+                                                ) if chapa_perfil_slot else str(s.get('origem_subgrupo') or subgrupo_origem).strip()
+                                                if st.session_state.get(f'{sg_slot_key}__last_chapa') != chapa_perfil_slot:
+                                                    st.session_state[sg_slot_key] = subgrupo_atual_slot
+                                                    st.session_state[f'{sg_slot_key}__last_chapa'] = chapa_perfil_slot
 
-                            subgrupo_opts_slot = [sg for sg in ([""] + list_subgrupos(setor)) if sg]
-                            if subgrupo_atual_slot and subgrupo_atual_slot not in subgrupo_opts_slot:
-                                subgrupo_opts_slot.append(subgrupo_atual_slot)
+                                                subgrupo_opts_slot = [sg for sg in ([""] + list_subgrupos(setor)) if sg]
+                                                if subgrupo_atual_slot and subgrupo_atual_slot not in subgrupo_opts_slot:
+                                                    subgrupo_opts_slot.append(subgrupo_atual_slot)
 
-                            pcol1, pcol2, pcol3 = st.columns([2.2, 2.2, 1.2])
-                            pcol1.text_input('Pessoa desta vaga:', value=f"{nome_perfil_slot} — {chapa_perfil_slot}", disabled=True, key=f'rod_caixa_nome_view_{slot_key}')
-                            pcol2.selectbox('Subgrupo desta pessoa:', options=subgrupo_opts_slot, key=sg_slot_key)
-                            salvar_manual_slot = pcol3.button('💾 Salvar perfil', key=f'rod_caixa_salvar_perfil_{slot_key}', use_container_width=True, disabled=(not chapa_perfil_slot))
+                                                pcol1, pcol2, pcol3 = st.columns([2.2, 2.2, 1.2])
+                                                pcol1.text_input('Pessoa desta vaga:', value=f"{nome_perfil_slot} — {chapa_perfil_slot}", disabled=True, key=f'rod_caixa_nome_view_{slot_key}')
+                                                pcol2.selectbox('Subgrupo desta pessoa:', options=subgrupo_opts_slot, key=sg_slot_key)
+                                                salvar_manual_slot = pcol3.button('💾 Salvar perfil', key=f'rod_caixa_salvar_perfil_{slot_key}', use_container_width=True, disabled=(not chapa_perfil_slot))
 
-                            if salvar_manual_slot:
-                                novo_subgrupo_manual = str(st.session_state.get(sg_slot_key) or '').strip()
-                                if not chapa_perfil_slot:
-                                    st.error('Nenhuma pessoa selecionada para atualizar.')
-                                elif not novo_subgrupo_manual:
-                                    st.error('Selecione o subgrupo antes de salvar.')
-                                else:
-                                    try:
-                                        update_colaborador_perfil(
-                                            setor=setor,
-                                            chapa_antiga=chapa_perfil_slot,
-                                            chapa_nova=chapa_perfil_slot,
-                                            nome_novo=nome_perfil_slot or chapa_perfil_slot,
-                                            subgrupo=novo_subgrupo_manual,
-                                            entrada=entrada_perfil_slot or BALANCO_DIA_ENTRADA,
-                                            folga_sab=folga_sab_perfil_slot,
-                                            ano=int(ano_r),
-                                            mes=int(mes_r),
-                                        )
-                                        frozen_slots = dict(st.session_state.get(freeze_slots_key, {}))
-                                        s_frozen = dict(s)
-                                        s_frozen['manual_freeze'] = True
-                                        s_frozen['manual_subgrupo'] = novo_subgrupo_manual
-                                        s_frozen['selected_chapa'] = chapa_perfil_slot
-                                        frozen_slots[slot_key] = {
-                                            'slot': s_frozen,
-                                            'selected_chapa': chapa_perfil_slot,
-                                            'manual_subgrupo': novo_subgrupo_manual,
-                                            'manual_freeze': True,
-                                        }
-                                        st.session_state[freeze_slots_key] = frozen_slots
-                                        tmp_aprov_manual = dict(st.session_state.get(aprov_state_key, {}))
-                                        tmp_aprov_manual.pop(slot_key, None)
-                                        st.session_state[aprov_state_key] = tmp_aprov_manual
-                                        st.success(f'Perfil de {nome_perfil_slot or chapa_perfil_slot} atualizado para {novo_subgrupo_manual}. A sugestão ficou congelada nesta vaga para você poder revisar depois, sem contar como aprovada.')
-                                        st.rerun()
-                                    except Exception as e:
-                                        st.error(f'Não foi possível salvar o perfil: {e}')
+                                                if salvar_manual_slot:
+                                                    novo_subgrupo_manual = str(st.session_state.get(sg_slot_key) or '').strip()
+                                                    if not chapa_perfil_slot:
+                                                        st.error('Nenhuma pessoa selecionada para atualizar.')
+                                                    elif not novo_subgrupo_manual:
+                                                        st.error('Selecione o subgrupo antes de salvar.')
+                                                    else:
+                                                        try:
+                                                            update_colaborador_perfil(
+                                                                setor=setor,
+                                                                chapa_antiga=chapa_perfil_slot,
+                                                                chapa_nova=chapa_perfil_slot,
+                                                                nome_novo=nome_perfil_slot or chapa_perfil_slot,
+                                                                subgrupo=novo_subgrupo_manual,
+                                                                entrada=entrada_perfil_slot or BALANCO_DIA_ENTRADA,
+                                                                folga_sab=folga_sab_perfil_slot,
+                                                                ano=int(ano_r),
+                                                                mes=int(mes_r),
+                                                            )
+                                                            frozen_slots = dict(st.session_state.get(freeze_slots_key, {}))
+                                                            s_frozen = dict(s)
+                                                            s_frozen['manual_freeze'] = True
+                                                            s_frozen['manual_subgrupo'] = novo_subgrupo_manual
+                                                            s_frozen['selected_chapa'] = chapa_perfil_slot
+                                                            frozen_slots[slot_key] = {
+                                                                'slot': s_frozen,
+                                                                'selected_chapa': chapa_perfil_slot,
+                                                                'manual_subgrupo': novo_subgrupo_manual,
+                                                                'manual_freeze': True,
+                                                            }
+                                                            st.session_state[freeze_slots_key] = frozen_slots
+                                                            tmp_aprov_manual = dict(st.session_state.get(aprov_state_key, {}))
+                                                            tmp_aprov_manual.pop(slot_key, None)
+                                                            st.session_state[aprov_state_key] = tmp_aprov_manual
+                                                            st.success(f'Perfil de {nome_perfil_slot or chapa_perfil_slot} atualizado para {novo_subgrupo_manual}. A sugestão ficou congelada nesta vaga para você poder revisar depois, sem contar como aprovada.')
+                                                            st.rerun()
+                                                        except Exception as e:
+                                                            st.error(f'Não foi possível salvar o perfil: {e}')
 
-                            frozen_item_slot = dict(st.session_state.get(freeze_slots_key, {}).get(slot_key, {}) or {})
-                            if bool(frozen_item_slot.get('manual_freeze') or s.get('manual_freeze')):
-                                subgrupo_congelado_txt = str(frozen_item_slot.get('manual_subgrupo') or s.get('manual_subgrupo') or st.session_state.get(sg_slot_key) or '').strip()
-                                st.info(f"Vaga congelada manualmente nesta revisão. A sugestão continua visível mesmo após mudar o subgrupo. Subgrupo salvo: {subgrupo_congelado_txt or '-'}")
+                                                frozen_item_slot = dict(st.session_state.get(freeze_slots_key, {}).get(slot_key, {}) or {})
+                                                if bool(frozen_item_slot.get('manual_freeze') or s.get('manual_freeze')):
+                                                    subgrupo_congelado_txt = str(frozen_item_slot.get('manual_subgrupo') or s.get('manual_subgrupo') or st.session_state.get(sg_slot_key) or '').strip()
+                                                    st.info(f"Vaga congelada manualmente nesta revisão. A sugestão continua visível mesmo após mudar o subgrupo. Subgrupo salvo: {subgrupo_congelado_txt or '-'}")
 
-                            bcol1, bcol2 = st.columns([1, 4])
-                            if bcol1.button('❌ Negar e chamar próximo', key=f'rod_caixa_no_{slot_key}', use_container_width=True):
-                                negs = list(st.session_state.get(neg_key, []))
-                                chapa_escolhida_agora = str(st.session_state.get(f'rod_caixa_pick_{slot_key}', str(s.get('origem_chapa') or '')) or '').strip()
-                                chapa_neg = chapa_escolhida_agora or str(s.get('origem_chapa') or '').strip()
-                                if chapa_neg and chapa_neg not in negs:
-                                    negs.append(chapa_neg)
-                                tmp = dict(st.session_state.get(aprov_state_key, {}))
-                                chapa_ant = str(tmp.get(slot_key) or '').strip()
-                                if chapa_ant:
-                                    resetar_preview_aprovacao_rodizio_caixa(setor, ano_r, mes_r, s, chapa_ant, subgrupo_origem, subgrupo_destino)
-                                tmp.pop(slot_key, None)
-                                st.session_state[aprov_state_key] = tmp
-                                st.session_state[neg_state_key] = negs
-                                frozen_slots = dict(st.session_state.get(freeze_slots_key, {}))
-                                frozen_slots.pop(slot_key, None)
-                                st.session_state[freeze_slots_key] = frozen_slots
-                                st.session_state.pop(state_base + "::aplicado", None)
-                                st.rerun()
-                            frozen_ativo_slot = bool(frozen_item_slot.get('manual_freeze') or s.get('manual_freeze'))
-                            if aprovado:
-                                chapa_sel_txt = str(aprovados_atuais.get(slot_key) or '').strip()
-                                nome_sel_txt = mapa_alt.get(chapa_sel_txt, chapa_sel_txt)
-                                bcol2.success(f'Aprovado manualmente. Seleção atual: {nome_sel_txt}')
-                            elif frozen_ativo_slot:
-                                chapa_sel_txt = str(frozen_item_slot.get('selected_chapa') or chapa_perfil_slot or '').strip()
-                                nome_sel_txt = mapa_alt.get(chapa_sel_txt, chapa_sel_txt)
-                                bcol2.info(f'Perfil salvo manualmente. Seleção atual congelada: {nome_sel_txt}')
-                            else:
-                                bcol2.warning('Pendente. Ao negar, o sistema chama a próxima pessoa da fila desse horário.')
+                                                bcol1, bcol2 = st.columns([1, 4])
+                                                if bcol1.button('❌ Negar e chamar próximo', key=f'rod_caixa_no_{slot_key}', use_container_width=True):
+                                                    negs = list(st.session_state.get(neg_key, []))
+                                                    chapa_escolhida_agora = str(st.session_state.get(f'rod_caixa_pick_{slot_key}', str(s.get('origem_chapa') or '')) or '').strip()
+                                                    chapa_neg = chapa_escolhida_agora or str(s.get('origem_chapa') or '').strip()
+                                                    if chapa_neg and chapa_neg not in negs:
+                                                        negs.append(chapa_neg)
+                                                    tmp = dict(st.session_state.get(aprov_state_key, {}))
+                                                    chapa_ant = str(tmp.get(slot_key) or '').strip()
+                                                    if chapa_ant:
+                                                        resetar_preview_aprovacao_rodizio_caixa(setor, ano_r, mes_r, s, chapa_ant, subgrupo_origem, subgrupo_destino)
+                                                    tmp.pop(slot_key, None)
+                                                    st.session_state[aprov_state_key] = tmp
+                                                    st.session_state[neg_state_key] = negs
+                                                    frozen_slots = dict(st.session_state.get(freeze_slots_key, {}))
+                                                    frozen_slots.pop(slot_key, None)
+                                                    st.session_state[freeze_slots_key] = frozen_slots
+                                                    st.session_state.pop(state_base + "::aplicado", None)
+                                                    st.rerun()
+                                                frozen_ativo_slot = bool(frozen_item_slot.get('manual_freeze') or s.get('manual_freeze'))
+                                                if aprovado:
+                                                    chapa_sel_txt = str(aprovados_atuais.get(slot_key) or '').strip()
+                                                    nome_sel_txt = mapa_alt.get(chapa_sel_txt, chapa_sel_txt)
+                                                    bcol2.success(f'Aprovado manualmente. Seleção atual: {nome_sel_txt}')
+                                                elif frozen_ativo_slot:
+                                                    chapa_sel_txt = str(frozen_item_slot.get('selected_chapa') or chapa_perfil_slot or '').strip()
+                                                    nome_sel_txt = mapa_alt.get(chapa_sel_txt, chapa_sel_txt)
+                                                    bcol2.info(f'Perfil salvo manualmente. Seleção atual congelada: {nome_sel_txt}')
+                                                else:
+                                                    bcol2.warning('Pendente. Ao negar, o sistema chama a próxima pessoa da fila desse horário.')
+                    slots_pendentes = []
+                    slots_aprovados_ui = []
+                    for _s_tmp in slots:
+                        _slot_key_tmp = str(_s_tmp.get('slot_key') or '')
+                        _frozen_tmp = dict(st.session_state.get(freeze_slots_key, {}).get(_slot_key_tmp, {}) or {})
+                        _frozen_ativo_tmp = bool(_frozen_tmp.get('manual_freeze') or _s_tmp.get('manual_freeze'))
+                        _aprovado_tmp = bool(str(aprovados_atuais.get(_slot_key_tmp) or '').strip())
+                        if _frozen_ativo_tmp or _aprovado_tmp:
+                            slots_aprovados_ui.append(_s_tmp)
+                        else:
+                            slots_pendentes.append(_s_tmp)
+
+                    tab_sugestoes_transfer, tab_aprovados_transfer = st.tabs(['Sugestões', 'Aprovados'])
+
+                    with tab_sugestoes_transfer:
+                        if slots_pendentes:
+                            for i, s in enumerate(slots_pendentes, start=1):
+                                _render_transfer_slot_card(i, s)
+                        else:
+                            st.info('Nenhuma sugestão pendente nesta competência.')
+
+                    with tab_aprovados_transfer:
+                        if slots_aprovados_ui:
+                            for i, s in enumerate(slots_aprovados_ui, start=1):
+                                _render_transfer_slot_card(i, s)
+                        else:
+                            st.info('Nenhuma vaga aprovada ou congelada manualmente nesta competência.')
                 else:
                     st.warning("Nenhuma troca encontrada para aplicar neste mês.")
 
