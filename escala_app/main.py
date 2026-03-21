@@ -14915,7 +14915,7 @@ def page_app():
                             slots_pendentes.append(_s_tmp)
 
                     negados_logs_ui = list(st.session_state.get(neg_log_key, []))
-                    tab_sugestoes_transfer, tab_aprovados_transfer, tab_negados_transfer = st.tabs(['Sugestões', 'Aprovados', 'Negados'])
+                    tab_sugestoes_transfer, tab_aprovados_transfer, tab_negados_transfer, tab_analise_transfer = st.tabs(['Sugestões', 'Aprovados', 'Negados', 'Análises'])
 
                     with tab_sugestoes_transfer:
                         if slots_pendentes:
@@ -14947,76 +14947,83 @@ def page_app():
                                     st.write(f"Última vez que entrou no Caixa 02: {ultima_vez_neg}")
                         else:
                             st.info('Nenhuma pessoa negada nesta competência.')
-                else:
-                    st.warning("Nenhuma troca encontrada para aplicar neste mês.")
 
-                pares = sim.get('pares') or []
-                if pares:
-                    df_pares = pd.DataFrame([{
-                        'Entra no ' + subgrupo_destino: p['origem_nome'],
-                        'Chapa entra': p['origem_chapa'],
-                        'Horário atual entra': p['origem_entrada'],
-                        'Domingos entra': p.get('origem_domingos_label', ''),
-                        'Última vez no Caixa 02': p.get('origem_ultimo_mes_destino_label', ''),
-                        'Sai do ' + subgrupo_destino: p['destino_nome'],
-                        'Chapa sai': p['destino_chapa'],
-                        'Horário atual sai': p['destino_entrada'],
-                        'Domingos sai': p.get('destino_domingos_label', ''),
-                        'Domingos iguais trabalho': int(p.get('domingos_trabalho_iguais_qtd', 0) or 0),
-                        'Domingos iguais folga': int(p.get('domingos_folga_iguais_qtd', 0) or 0),
-                        'Dif. domingos': int(p.get('diff_domingos', 0) or 0),
-                        'Compatibilidade': p['compatibilidade'],
-                        'Observação': p['observacao'] or '-',
-                    } for p in pares])
-                    st.markdown("### Simulação consolidada do mês")
-                    st.dataframe(df_pares, use_container_width=True, height=380)
+                    with tab_analise_transfer:
+                        pares = sim.get('pares') or []
+                        if pares:
+                            df_pares = pd.DataFrame([{
+                                'Entra no ' + subgrupo_destino: p['origem_nome'],
+                                'Chapa entra': p['origem_chapa'],
+                                'Horário atual entra': p['origem_entrada'],
+                                'Domingos entra': p.get('origem_domingos_label', ''),
+                                'Última vez no Caixa 02': p.get('origem_ultimo_mes_destino_label', ''),
+                                'Sai do ' + subgrupo_destino: p['destino_nome'],
+                                'Chapa sai': p['destino_chapa'],
+                                'Horário atual sai': p['destino_entrada'],
+                                'Domingos sai': p.get('destino_domingos_label', ''),
+                                'Domingos iguais trabalho': int(p.get('domingos_trabalho_iguais_qtd', 0) or 0),
+                                'Domingos iguais folga': int(p.get('domingos_folga_iguais_qtd', 0) or 0),
+                                'Dif. domingos': int(p.get('diff_domingos', 0) or 0),
+                                'Compatibilidade': p['compatibilidade'],
+                                'Observação': p['observacao'] or '-',
+                            } for p in pares])
+                            st.markdown("### Simulação consolidada do mês")
+                            st.dataframe(df_pares, use_container_width=True, height=380)
+                        else:
+                            st.info('Sem simulação consolidada para esta competência.')
 
-                cotas_horario = sim.get('cotas_horario') or []
-                st.markdown("### Regra fixa por horário")
-                with st.expander("➕ Adicionar exceção manual por horário", expanded=False):
-                    cex1, cex2, cex3 = st.columns([1, 1, 2])
-                    horarios_base = [str(h) for h, _q in _rodizio_caixa_cotas_ordenadas()]
-                    horario_extra = cex1.selectbox('Horário da exceção', options=horarios_base, key=f'rod_extra_horario::{setor}::{ano_r}::{mes_r}')
-                    qtd_extra = cex2.number_input('Qtd extra manual', min_value=1, max_value=20, value=1, step=1, key=f'rod_extra_qtd::{setor}::{ano_r}::{mes_r}')
-                    cex3.caption('A regra automática continua em 14 pessoas. O extra manual serve só para você autorizar pessoas acima da regra automática.')
-                    a1, a2 = st.columns([1,2])
-                    if a1.button('Salvar exceção manual', key=f'rod_extra_save::{setor}::{ano_r}::{mes_r}', use_container_width=True):
-                        try:
-                            set_rodizio_caixa_regra_extra(setor, horario_extra, int(qtd_extra), subgrupo_destino)
-                            st.success(f'Exceção manual salva para {horario_extra}: +{int(qtd_extra)} pessoa(s).')
-                            st.rerun()
-                        except Exception as e:
-                            st.error(str(e))
-                    extras_ativas = list_rodizio_caixa_regras_extras(setor, subgrupo_destino)
-                    if extras_ativas:
-                        st.markdown('#### Extras manuais ativos')
-                        for extra in extras_ativas:
-                            ex1, ex2, ex3 = st.columns([1,1,1])
-                            ex1.write(f"Horário: {extra.get('Horário')}")
-                            ex2.write(f"Qtd extra: {extra.get('Qtd extra')}")
-                            if ex3.button('Remover', key=f"rod_extra_del::{setor}::{subgrupo_destino}::{extra.get('Horário')}", use_container_width=True):
+                        cotas_horario = sim.get('cotas_horario') or []
+                        st.markdown("### Regra fixa por horário")
+                        with st.expander("➕ Adicionar exceção manual por horário", expanded=False):
+                            cex1, cex2, cex3 = st.columns([1, 1, 2])
+                            horarios_base = [str(h) for h, _q in _rodizio_caixa_cotas_ordenadas()]
+                            horario_extra = cex1.selectbox('Horário da exceção', options=horarios_base, key=f'rod_extra_horario::{setor}::{ano_r}::{mes_r}')
+                            qtd_extra = cex2.number_input('Qtd extra manual', min_value=1, max_value=20, value=1, step=1, key=f'rod_extra_qtd::{setor}::{ano_r}::{mes_r}')
+                            cex3.caption('A regra automática continua em 14 pessoas. O extra manual serve só para você autorizar pessoas acima da regra automática.')
+                            a1, a2 = st.columns([1,2])
+                            if a1.button('Salvar exceção manual', key=f'rod_extra_save::{setor}::{ano_r}::{mes_r}', use_container_width=True):
                                 try:
-                                    set_rodizio_caixa_regra_extra(setor, str(extra.get('Horário') or ''), 0, subgrupo_destino)
-                                    st.success(f"Exceção removida do horário {extra.get('Horário')}.")
+                                    set_rodizio_caixa_regra_extra(setor, horario_extra, int(qtd_extra), subgrupo_destino)
+                                    st.success(f'Exceção manual salva para {horario_extra}: +{int(qtd_extra)} pessoa(s).')
                                     st.rerun()
                                 except Exception as e:
                                     st.error(str(e))
+                            extras_ativas = list_rodizio_caixa_regras_extras(setor, subgrupo_destino)
+                            if extras_ativas:
+                                st.markdown('#### Extras manuais ativos')
+                                for extra in extras_ativas:
+                                    ex1, ex2, ex3 = st.columns([1,1,1])
+                                    ex1.write(f"Horário: {extra.get('Horário')}")
+                                    ex2.write(f"Qtd extra: {extra.get('Qtd extra')}")
+                                    if ex3.button('Remover', key=f"rod_extra_del::{setor}::{subgrupo_destino}::{extra.get('Horário')}", use_container_width=True):
+                                        try:
+                                            set_rodizio_caixa_regra_extra(setor, str(extra.get('Horário') or ''), 0, subgrupo_destino)
+                                            st.success(f"Exceção removida do horário {extra.get('Horário')}.")
+                                            st.rerun()
+                                        except Exception as e:
+                                            st.error(str(e))
 
-                if cotas_horario:
-                    st.dataframe(pd.DataFrame(cotas_horario), use_container_width=True, height=240)
-                    if any(int(r.get('Extra manual', 0) or 0) > 0 for r in cotas_horario):
-                        st.info('A coluna Extra manual mostra pessoas acima da regra automática. O automático segue 14; acima disso só entra por exceção manual.')
+                        if cotas_horario:
+                            st.dataframe(pd.DataFrame(cotas_horario), use_container_width=True, height=240)
+                            if any(int(r.get('Extra manual', 0) or 0) > 0 for r in cotas_horario):
+                                st.info('A coluna Extra manual mostra pessoas acima da regra automática. O automático segue 14; acima disso só entra por exceção manual.')
+                        else:
+                            st.info('Sem regra fixa por horário disponível para esta competência.')
 
-                alertas = sim.get('alertas') or []
-                if alertas:
-                    st.markdown("### Alertas para liderança")
-                    for a in alertas:
-                        st.warning(a)
+                        alertas = sim.get('alertas') or []
+                        if alertas:
+                            st.markdown("### Alertas para liderança")
+                            for a in alertas:
+                                st.warning(a)
 
-                proximos = sim.get('proximos') or []
-                if proximos:
-                    st.markdown("### Próximos da fila para o próximo mês")
-                    st.dataframe(pd.DataFrame(proximos[:50]), use_container_width=True, height=260)
+                        proximos = sim.get('proximos') or []
+                        if proximos:
+                            st.markdown("### Próximos da fila para o próximo mês")
+                            st.dataframe(pd.DataFrame(proximos[:50]), use_container_width=True, height=260)
+                        else:
+                            st.info('Sem fila projetada para o próximo mês nesta competência.')
+                else:
+                    st.warning("Nenhuma troca encontrada para aplicar neste mês.")
 
                 qtd_meta_aprov = len(slots) if rodizio_ja_aplicado_mes else int(sim.get('qtd_destino_obrigatoria', 14))
                 todos_aprovados = bool(slots) and aprovados_validos == len(slots) and len(slots) >= int(qtd_meta_aprov)
