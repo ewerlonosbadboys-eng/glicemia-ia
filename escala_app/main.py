@@ -7221,58 +7221,6 @@ def _rodizio_domingos_label(info: dict | None) -> str:
     return ' | '.join(partes)
 
 
-
-@st.cache_data(show_spinner=False, ttl=120)
-def _rodizio_resumo_subgrupo_mes(setor: str, ano: int, mes: int, subgrupo: str) -> dict:
-    setor = _norm_setor(setor)
-    subgrupo = str(subgrupo or '').strip()
-    if not setor or not subgrupo:
-        return {
-            'subgrupo': subgrupo,
-            'pessoas_subgrupo': 0,
-            'pessoas_com_domingo': 0,
-            'total_domingos_trabalhados': 0,
-        }
-
-    domingos_map = _rodizio_domingos_trabalhados_map(setor, int(ano), int(mes))
-    con = db_conn()
-    cur = con.cursor()
-    try:
-        cur.execute(
-            """
-            SELECT chapa, nome, subgrupo
-            FROM colaboradores
-            WHERE UPPER(TRIM(setor)) = UPPER(TRIM(?))
-            """,
-            (setor,),
-        )
-        rows = cur.fetchall() or []
-    finally:
-        con.close()
-
-    pessoas_subgrupo = 0
-    pessoas_com_domingo = 0
-    total_domingos_trabalhados = 0
-
-    for chapa, _nome, base_subgrupo in rows:
-        ch = _norm_chapa(chapa)
-        sg_final = get_subgrupo_competencia_ou_base(setor, ch, int(ano), int(mes), str(base_subgrupo or '').strip())
-        if str(sg_final or '').strip().upper() != subgrupo.upper():
-            continue
-        pessoas_subgrupo += 1
-        domingos_pessoa = int(domingos_map.get(ch, 0) or 0)
-        total_domingos_trabalhados += domingos_pessoa
-        if domingos_pessoa > 0:
-            pessoas_com_domingo += 1
-
-    return {
-        'subgrupo': subgrupo,
-        'pessoas_subgrupo': int(pessoas_subgrupo),
-        'pessoas_com_domingo': int(pessoas_com_domingo),
-        'total_domingos_trabalhados': int(total_domingos_trabalhados),
-    }
-
-
 def _rodizio_match_domingos(orig_info: dict | None, dest_info: dict | None) -> dict:
     orig_info = orig_info or {}
     dest_info = dest_info or {}
@@ -14671,16 +14619,9 @@ def page_app():
                                 f"**{i}. {s.get('origem_nome', '-') }**  \n"
                                 f"Chapa: `{s.get('origem_chapa', '-')}` | Horário Caixa 01: **{s.get('origem_entrada', '-') }** | Domingos: **{int(s.get('origem_domingos', 0) or 0)}**"
                             )
-                            resumo_subgrupo_card = _rodizio_resumo_subgrupo_mes(
-                                setor,
-                                int(ano_r),
-                                int(mes_r),
-                                str(subgrupo_atual_slot or s.get('origem_subgrupo') or subgrupo_origem).strip(),
-                            )
                             cinfo2.markdown(
-                                f"**Subgrupo atual:** {str(subgrupo_atual_slot or s.get('origem_subgrupo') or subgrupo_origem).strip() or '-'}  \n"
-                                f"Pessoas no subgrupo com domingo no mês: **{int(resumo_subgrupo_card.get('pessoas_com_domingo', 0) or 0)}** / **{int(resumo_subgrupo_card.get('pessoas_subgrupo', 0) or 0)}** | "
-                                f"Total de domingos trabalhados no subgrupo: **{int(resumo_subgrupo_card.get('total_domingos_trabalhados', 0) or 0)}**"
+                                f"**Sai do Caixa 02:** {s.get('destino_nome', '-')}  \n"
+                                f"Horário destino: **{s.get('destino_entrada', '-')}** | Domingos: **{int(s.get('destino_domingos', 0) or 0)}**"
                             )
                             cinfo3.markdown(
                                 f"**Última vez que entrou no Caixa 02:** {s.get('origem_ultimo_mes_destino_label', '-')}  \n"
