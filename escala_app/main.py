@@ -14657,6 +14657,56 @@ def page_app():
                                     format_func=lambda ch: mapa_alt.get(ch, ch),
                                 )
 
+                            chapa_perfil_slot = str(st.session_state.get(f'rod_caixa_pick_{slot_key}', chapa_padrao_slot) or chapa_padrao_slot or '').strip()
+                            colab_perfil_slot = get_colaborador_record(setor, chapa_perfil_slot) or {}
+                            nome_perfil_slot = str(colab_perfil_slot.get('Nome') or s.get('origem_nome') or '').strip()
+                            entrada_perfil_slot = str(colab_perfil_slot.get('Entrada') or s.get('origem_entrada') or BALANCO_DIA_ENTRADA).strip()
+                            folga_sab_perfil_slot = bool(colab_perfil_slot.get('Folga_Sab'))
+                            subgrupo_atual_slot = get_subgrupo_competencia_ou_base(
+                                setor,
+                                chapa_perfil_slot,
+                                int(ano_r),
+                                int(mes_r),
+                                str(colab_perfil_slot.get('Subgrupo') or s.get('origem_subgrupo') or subgrupo_origem).strip()
+                            ) if chapa_perfil_slot else str(s.get('origem_subgrupo') or subgrupo_origem).strip()
+                            sg_slot_key = f'rod_caixa_subgrupo_manual_{slot_key}'
+                            if st.session_state.get(f'{sg_slot_key}__last_chapa') != chapa_perfil_slot:
+                                st.session_state[sg_slot_key] = subgrupo_atual_slot
+                                st.session_state[f'{sg_slot_key}__last_chapa'] = chapa_perfil_slot
+
+                            subgrupo_opts_slot = [sg for sg in ([""] + list_subgrupos(setor)) if sg]
+                            if subgrupo_atual_slot and subgrupo_atual_slot not in subgrupo_opts_slot:
+                                subgrupo_opts_slot.append(subgrupo_atual_slot)
+
+                            pcol1, pcol2, pcol3 = st.columns([2.2, 2.2, 1.2])
+                            pcol1.text_input('Pessoa desta vaga:', value=f"{nome_perfil_slot} — {chapa_perfil_slot}", disabled=True, key=f'rod_caixa_nome_view_{slot_key}')
+                            pcol2.selectbox('Subgrupo desta pessoa:', options=subgrupo_opts_slot, key=sg_slot_key)
+                            salvar_manual_slot = pcol3.button('💾 Salvar perfil', key=f'rod_caixa_salvar_perfil_{slot_key}', use_container_width=True, disabled=(not chapa_perfil_slot))
+
+                            if salvar_manual_slot:
+                                novo_subgrupo_manual = str(st.session_state.get(sg_slot_key) or '').strip()
+                                if not chapa_perfil_slot:
+                                    st.error('Nenhuma pessoa selecionada para atualizar.')
+                                elif not novo_subgrupo_manual:
+                                    st.error('Selecione o subgrupo antes de salvar.')
+                                else:
+                                    try:
+                                        update_colaborador_perfil(
+                                            setor=setor,
+                                            chapa_antiga=chapa_perfil_slot,
+                                            chapa_nova=chapa_perfil_slot,
+                                            nome_novo=nome_perfil_slot or chapa_perfil_slot,
+                                            subgrupo=novo_subgrupo_manual,
+                                            entrada=entrada_perfil_slot or BALANCO_DIA_ENTRADA,
+                                            folga_sab=folga_sab_perfil_slot,
+                                            ano=int(ano_r),
+                                            mes=int(mes_r),
+                                        )
+                                        st.success(f'Perfil de {nome_perfil_slot or chapa_perfil_slot} atualizado para {novo_subgrupo_manual}.')
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f'Não foi possível salvar o perfil: {e}')
+
                             bcol1, bcol2, bcol3, bcol4 = st.columns([1, 1, 1, 3])
                             if bcol1.button('✅ Aprovar e jogar para Caixa 02', key=f'rod_caixa_ok_{slot_key}', use_container_width=True):
                                 chapa_sel = str(st.session_state.get(f'rod_caixa_pick_{slot_key}', str(s.get('origem_chapa') or '')) or '').strip()
