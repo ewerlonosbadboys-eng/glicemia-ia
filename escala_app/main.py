@@ -14658,7 +14658,15 @@ def page_app():
                                 f"**{i}. {s.get('origem_nome', '-') }**  \n"
                                 f"Chapa: `{s.get('origem_chapa', '-')}` | Horário Caixa 01: **{s.get('origem_entrada', '-') }** | Domingos: **{int(s.get('origem_domingos', 0) or 0)}**"
                             )
-                            subgrupo_card = str(st.session_state.get(f'rod_caixa_subgrupo_manual_{slot_key}') or subgrupo_atual_slot or s.get('manual_subgrupo') or s.get('origem_subgrupo') or subgrupo_origem).strip()
+                            sg_slot_key = f'rod_caixa_subgrupo_manual_{slot_key}'
+                            subgrupo_atual_slot = str(
+                                st.session_state.get(sg_slot_key)
+                                or s.get('manual_subgrupo')
+                                or s.get('origem_subgrupo')
+                                or subgrupo_origem
+                                or ''
+                            ).strip()
+                            subgrupo_card = subgrupo_atual_slot
                             colabs_comp_card = load_colaboradores_setor_competencia(setor, int(ano_r), int(mes_r)) or []
                             domingos_map_card = _rodizio_domingos_trabalhados_map(setor, int(ano_r), int(mes_r)) or {}
                             qtd_pessoas_domingo_subgrupo = 0
@@ -14741,7 +14749,6 @@ def page_app():
                                 int(mes_r),
                                 str(colab_perfil_slot.get('Subgrupo') or s.get('origem_subgrupo') or subgrupo_origem).strip()
                             ) if chapa_perfil_slot else str(s.get('origem_subgrupo') or subgrupo_origem).strip()
-                            sg_slot_key = f'rod_caixa_subgrupo_manual_{slot_key}'
                             if st.session_state.get(f'{sg_slot_key}__last_chapa') != chapa_perfil_slot:
                                 st.session_state[sg_slot_key] = subgrupo_atual_slot
                                 st.session_state[f'{sg_slot_key}__last_chapa'] = chapa_perfil_slot
