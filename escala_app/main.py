@@ -14634,6 +14634,7 @@ def page_app():
                     st.markdown('### Pessoas que estão no Operador de Caixa 02 nesta competência')
                     colabs_caixa02_resumo = load_colaboradores_setor_competencia(setor, int(ano_r), int(mes_r)) or []
                     domingos_map_resumo = _rodizio_domingos_trabalhados_map(setor, int(ano_r), int(mes_r)) or {}
+                    domingos_detalhe_resumo = _rodizio_domingos_detalhe_map(setor, int(ano_r), int(mes_r)) or {}
                     last_move_map_resumo = _rodizio_last_move_map(setor, subgrupo_destino) or {}
                     resumo_caixa02 = []
                     for c_res in colabs_caixa02_resumo:
@@ -14641,6 +14642,8 @@ def page_app():
                         if sub_res.upper() != str(subgrupo_destino or '').strip().upper():
                             continue
                         ch_res = str(c_res.get('Chapa') or '').strip()
+                        dom_info_res = domingos_detalhe_resumo.get(ch_res, {'trab': tuple(), 'folga': tuple()}) or {'trab': tuple(), 'folga': tuple()}
+                        domingos_trabalho_res = ', '.join(list(dom_info_res.get('trab') or [])) or '-'
                         resumo_caixa02.append({
                             'Nome': str(c_res.get('Nome') or '').strip(),
                             'Chapa': ch_res,
@@ -14648,6 +14651,7 @@ def page_app():
                             'Entrada': str(c_res.get('Entrada') or '').strip(),
                             'Trabalha domingo no mês': 'SIM' if int(domingos_map_resumo.get(ch_res, 0) or 0) > 0 else 'NÃO',
                             'Qtd. domingos no mês': int(domingos_map_resumo.get(ch_res, 0) or 0),
+                            'Dias de domingo trabalhados': domingos_trabalho_res,
                             'Última vez que entrou no Caixa 02': _rodizio_format_ym(int(last_move_map_resumo.get(ch_res, 0) or 0)),
                         })
                     resumo_caixa02_df = pd.DataFrame(resumo_caixa02)
