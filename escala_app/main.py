@@ -14631,23 +14631,29 @@ def page_app():
                     slots = slots_render
 
                 if slots:
-                    st.markdown('### Sugestões de transferência por vez para esta competência')
-                    resumo_aprov = pd.DataFrame([{
-                        'Status': 'APROVADO' if str(aprovados_atuais.get(s.get('slot_key')) or '').strip() else 'PENDENTE',
-                        'Nome sugerido': s.get('origem_nome', ''),
-                        'Chapa': s.get('origem_chapa', ''),
-                        'Horário Caixa 01': s.get('origem_entrada', ''),
-                        'Domingos origem': s.get('origem_domingos_label', ''),
-                        'Última vez que foi para o Caixa 02': s.get('origem_ultimo_mes_destino_label', ''),
-                        'Selecionado agora': str(aprovados_atuais.get(s.get('slot_key')) or '').strip(),
-                        'Sai do Caixa 02': s.get('destino_nome', ''),
-                        'Domingos destino': s.get('destino_domingos_label', ''),
-                        'Domingos iguais trabalho': int(s.get('domingos_trabalho_iguais_qtd', 0) or 0),
-                        'Domingos iguais folga': int(s.get('domingos_folga_iguais_qtd', 0) or 0),
-                        'Dif. domingos': int(s.get('diff_domingos', 0) or 0),
-                        'Alternativas no mesmo horário': int(s.get('alternativas_mesmo_horario', 0) or 0),
-                    } for s in slots])
-                    st.dataframe(resumo_aprov, use_container_width=True, height=340)
+                    st.markdown('### Pessoas que estão no Operador de Caixa 02 nesta competência')
+                    colabs_caixa02_resumo = load_colaboradores_setor_competencia(setor, int(ano_r), int(mes_r)) or []
+                    domingos_map_resumo = _rodizio_domingos_trabalhados_map(setor, int(ano_r), int(mes_r)) or {}
+                    last_move_map_resumo = _rodizio_last_move_map(setor, subgrupo_destino) or {}
+                    resumo_caixa02 = []
+                    for c_res in colabs_caixa02_resumo:
+                        sub_res = str(c_res.get('Subgrupo') or '').strip()
+                        if sub_res.upper() != str(subgrupo_destino or '').strip().upper():
+                            continue
+                        ch_res = str(c_res.get('Chapa') or '').strip()
+                        resumo_caixa02.append({
+                            'Nome': str(c_res.get('Nome') or '').strip(),
+                            'Chapa': ch_res,
+                            'Subgrupo': sub_res,
+                            'Entrada': str(c_res.get('Entrada') or '').strip(),
+                            'Trabalha domingo no mês': 'SIM' if int(domingos_map_resumo.get(ch_res, 0) or 0) > 0 else 'NÃO',
+                            'Qtd. domingos no mês': int(domingos_map_resumo.get(ch_res, 0) or 0),
+                            'Última vez que entrou no Caixa 02': _rodizio_format_ym(int(last_move_map_resumo.get(ch_res, 0) or 0)),
+                        })
+                    resumo_caixa02_df = pd.DataFrame(resumo_caixa02)
+                    if not resumo_caixa02_df.empty:
+                        resumo_caixa02_df = resumo_caixa02_df.sort_values(by=['Entrada', 'Nome'], kind='stable').reset_index(drop=True)
+                    st.dataframe(resumo_caixa02_df, use_container_width=True, height=340)
 
                     for i, s in enumerate(slots, start=1):
                         slot_key = str(s.get('slot_key') or '')
