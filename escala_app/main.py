@@ -14453,12 +14453,15 @@ def page_app():
                 aprov_key = state_base + "::aprovados"
                 neg_key = state_base + "::negados"
                 freeze_slots_key = state_base + "::slots_congelados"
+                neg_log_key = state_base + "::negados_log"
                 if freeze_slots_key not in st.session_state:
                     st.session_state[freeze_slots_key] = {}
                 if aprov_key not in st.session_state:
                     st.session_state[aprov_key] = {}
                 if neg_key not in st.session_state:
                     st.session_state[neg_key] = []
+                if neg_log_key not in st.session_state:
+                    st.session_state[neg_log_key] = []
 
                 sim = simular_rodizio_caixa_mes(
                     setor,
@@ -14854,10 +14857,27 @@ def page_app():
                                                 bcol1, bcol2 = st.columns([1, 4])
                                                 if bcol1.button('❌ Negar e chamar próximo', key=f'rod_caixa_no_{slot_key}', use_container_width=True):
                                                     negs = list(st.session_state.get(neg_key, []))
+                                                    neg_logs = list(st.session_state.get(neg_log_key, []))
                                                     chapa_escolhida_agora = str(st.session_state.get(f'rod_caixa_pick_{slot_key}', str(s.get('origem_chapa') or '')) or '').strip()
                                                     chapa_neg = chapa_escolhida_agora or str(s.get('origem_chapa') or '').strip()
+                                                    colab_neg = get_colaborador_record(setor, chapa_neg) if chapa_neg else {}
+                                                    nome_neg = str((colab_neg or {}).get('Nome') or s.get('origem_nome') or '').strip()
+                                                    entrada_neg = str((colab_neg or {}).get('Entrada') or s.get('origem_entrada') or BALANCO_DIA_ENTRADA).strip()
+                                                    subgrupo_neg = str(st.session_state.get(sg_slot_key) or (colab_neg or {}).get('Subgrupo') or s.get('manual_subgrupo') or s.get('origem_subgrupo') or subgrupo_origem).strip()
+                                                    domingos_neg = int(s.get('origem_domingos_qtd', 0) or 0)
+                                                    ultima_vez_neg = str(s.get('origem_ultimo_mes_destino_label') or '').strip()
                                                     if chapa_neg and chapa_neg not in negs:
                                                         negs.append(chapa_neg)
+                                                    if chapa_neg:
+                                                        neg_logs.insert(0, {
+                                                            'slot_key': slot_key,
+                                                            'nome': nome_neg,
+                                                            'chapa': chapa_neg,
+                                                            'entrada': entrada_neg,
+                                                            'subgrupo': subgrupo_neg,
+                                                            'domingos': domingos_neg,
+                                                            'ultima_vez_caixa02': ultima_vez_neg,
+                                                        })
                                                     tmp = dict(st.session_state.get(aprov_state_key, {}))
                                                     chapa_ant = str(tmp.get(slot_key) or '').strip()
                                                     if chapa_ant:
@@ -14865,6 +14885,7 @@ def page_app():
                                                     tmp.pop(slot_key, None)
                                                     st.session_state[aprov_state_key] = tmp
                                                     st.session_state[neg_state_key] = negs
+                                                    st.session_state[neg_log_key] = neg_logs[:200]
                                                     frozen_slots = dict(st.session_state.get(freeze_slots_key, {}))
                                                     frozen_slots.pop(slot_key, None)
                                                     st.session_state[freeze_slots_key] = frozen_slots
@@ -14893,7 +14914,8 @@ def page_app():
                         else:
                             slots_pendentes.append(_s_tmp)
 
-                    tab_sugestoes_transfer, tab_aprovados_transfer = st.tabs(['Sugestões', 'Aprovados'])
+                    negados_logs_ui = list(st.session_state.get(neg_log_key, []))
+                    tab_sugestoes_transfer, tab_aprovados_transfer, tab_negados_transfer = st.tabs(['Sugestões', 'Aprovados', 'Negados'])
 
                     with tab_sugestoes_transfer:
                         if slots_pendentes:
@@ -14908,6 +14930,23 @@ def page_app():
                                 _render_transfer_slot_card(i, s)
                         else:
                             st.info('Nenhuma vaga aprovada ou congelada manualmente nesta competência.')
+
+                    with tab_negados_transfer:
+                        if negados_logs_ui:
+                            st.caption('Aqui ficam as pessoas negadas nesta revisão, separadas das sugestões e dos aprovados.')
+                            for i, item_neg in enumerate(negados_logs_ui, start=1):
+                                nome_neg = str(item_neg.get('nome') or '-').strip()
+                                chapa_neg = str(item_neg.get('chapa') or '-').strip()
+                                entrada_neg = str(item_neg.get('entrada') or '-').strip()
+                                subgrupo_neg = str(item_neg.get('subgrupo') or '-').strip()
+                                domingos_neg = int(item_neg.get('domingos', 0) or 0)
+                                ultima_vez_neg = str(item_neg.get('ultima_vez_caixa02') or 'Nunca fez rodízio para o destino').strip()
+                                with st.container(border=True):
+                                    st.markdown(f"**{i}. {nome_neg}**")
+                                    st.write(f"Chapa: {chapa_neg} | Horário: {entrada_neg} | Subgrupo: {subgrupo_neg} | Domingos: {domingos_neg}")
+                                    st.write(f"Última vez que entrou no Caixa 02: {ultima_vez_neg}")
+                        else:
+                            st.info('Nenhuma pessoa negada nesta competência.')
                 else:
                     st.warning("Nenhuma troca encontrada para aplicar neste mês.")
 
