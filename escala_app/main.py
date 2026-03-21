@@ -15032,10 +15032,24 @@ def page_app():
                     else:
                         info_col.success('As 14 aprovações já estão prontas. Use o botão principal acima para aplicar.')
 
-                hist = list_rodizio_caixa_hist(setor, limit=120)
+                hist = get_rodizio_caixa_hist_mes(setor, int(ano_r), int(mes_r), subgrupo_origem, subgrupo_destino)
                 if hist:
+                    hist_view = [{
+                        'Ciclo': str(r.get('ciclo_ref') or ''),
+                        'Chapa': str(r.get('chapa') or ''),
+                        'Nome': str(r.get('nome') or ''),
+                        'Movimento': str(r.get('movimento') or ''),
+                        'Origem': str(r.get('subgrupo_origem') or ''),
+                        'Destino': str(r.get('subgrupo_destino') or ''),
+                        'Entrada antiga': str(r.get('entrada_antiga') or ''),
+                        'Entrada nova': str(r.get('entrada_nova') or ''),
+                        'Compatibilidade': str(r.get('compat_status') or ''),
+                        'Observação': str(r.get('observacao') or ''),
+                        'Criado em': str(r.get('criado_em') or ''),
+                    } for r in hist]
                     st.markdown("### Relatório de trocas já aplicadas")
-                    st.dataframe(pd.DataFrame(hist), use_container_width=True, height=320)
+                    st.caption(f"Exibindo somente a competência vigente: {int(mes_r):02d}/{int(ano_r)}")
+                    st.dataframe(pd.DataFrame(hist_view), use_container_width=True, height=320)
 
     elif sec_main == "📂 Menu Escala":
         ui_section("Escala", "Clique em uma opção para abrir as telas da área de escala.")
