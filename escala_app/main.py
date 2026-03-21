@@ -14632,7 +14632,9 @@ def page_app():
 
                 if slots:
                     st.markdown('### Pessoas que estão no Operador de Caixa 02 nesta competência')
-                    colabs_caixa02_resumo = load_colaboradores_setor_competencia(setor, int(ano_r), int(mes_r)) or []
+                    # Fonte oficial da aba Transferência: usa somente o estado efetivo da competência atual
+                    # para não manter pessoa no Caixa 02 por fallback de cadastro base/snapshot antigo.
+                    colabs_caixa02_resumo = _transferencia_colaboradores_mes_atual(setor, int(ano_r), int(mes_r)) or []
                     domingos_map_resumo = _rodizio_domingos_trabalhados_map(setor, int(ano_r), int(mes_r)) or {}
                     domingos_detalhe_resumo = _rodizio_domingos_detalhe_map(setor, int(ano_r), int(mes_r)) or {}
                     last_move_map_resumo = _rodizio_last_move_map(setor, subgrupo_destino) or {}
