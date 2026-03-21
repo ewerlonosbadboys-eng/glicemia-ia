@@ -14667,11 +14667,44 @@ def page_app():
                     slots = slots_render
 
                 if slots:
+                    # Pré-cálculos locais para deixar a aba Transferência mais rápida sem mudar as regras.
+                    transfer_colabs_comp = load_colaboradores_setor_competencia(setor, int(ano_r), int(mes_r)) or []
+                    transfer_domingos_map = _rodizio_domingos_trabalhados_map(setor, int(ano_r), int(mes_r)) or {}
+                    transfer_subgrupo_domingo_stats = {}
+                    transfer_colab_cache = {}
+                    for _c_fast in transfer_colabs_comp:
+                        _ch_fast = str(_c_fast.get('Chapa') or '').strip()
+                        _sg_fast = str(_c_fast.get('Subgrupo') or '').strip()
+                        if _ch_fast:
+                            transfer_colab_cache[_ch_fast] = _c_fast
+                        if not _sg_fast:
+                            continue
+                        _dom_fast = int(transfer_domingos_map.get(_ch_fast, 0) or 0)
+                        _stat_fast = transfer_subgrupo_domingo_stats.setdefault(_sg_fast.upper(), {'qtd_pessoas_domingo': 0, 'total_domingos': 0})
+                        if _dom_fast > 0:
+                            _stat_fast['qtd_pessoas_domingo'] += 1
+                        _stat_fast['total_domingos'] += _dom_fast
+                    transfer_subgrupo_cache = {}
+                    def _transfer_get_colab_cached(chapa_local):
+                        chapa_local = str(chapa_local or '').strip()
+                        if not chapa_local:
+                            return {}
+                        if chapa_local not in transfer_colab_cache:
+                            transfer_colab_cache[chapa_local] = get_colaborador_record(setor, chapa_local) or {}
+                        return transfer_colab_cache.get(chapa_local) or {}
+                    def _transfer_get_subgrupo_cached(chapa_local):
+                        chapa_local = str(chapa_local or '').strip()
+                        if not chapa_local:
+                            return ''
+                        if chapa_local not in transfer_subgrupo_cache:
+                            transfer_subgrupo_cache[chapa_local] = str(get_subgrupo_competencia_ou_base(setor, chapa_local, int(ano_r), int(mes_r)) or '').strip()
+                        return transfer_subgrupo_cache.get(chapa_local) or ''
+
                     st.markdown('### Pessoas que estão no Operador de Caixa 02 nesta competência')
                     # Fonte oficial da aba Transferência: usa somente o estado efetivo da competência atual
                     # para não manter pessoa no Caixa 02 por fallback de cadastro base/snapshot antigo.
                     colabs_caixa02_resumo = _transferencia_colaboradores_mes_atual(setor, int(ano_r), int(mes_r)) or []
-                    domingos_map_resumo = _rodizio_domingos_trabalhados_map(setor, int(ano_r), int(mes_r)) or {}
+                    domingos_map_resumo = transfer_domingos_map
                     domingos_detalhe_resumo = _rodizio_domingos_detalhe_map(setor, int(ano_r), int(mes_r)) or {}
                     last_move_map_resumo = _rodizio_last_move_map(setor, subgrupo_destino) or {}
                     resumo_caixa02 = []
@@ -14715,19 +14748,9 @@ def page_app():
                                                     or ''
                                                 ).strip()
                                                 subgrupo_card = subgrupo_atual_slot
-                                                colabs_comp_card = load_colaboradores_setor_competencia(setor, int(ano_r), int(mes_r)) or []
-                                                domingos_map_card = _rodizio_domingos_trabalhados_map(setor, int(ano_r), int(mes_r)) or {}
-                                                qtd_pessoas_domingo_subgrupo = 0
-                                                total_domingos_subgrupo = 0
-                                                for _c_card in colabs_comp_card:
-                                                    _sub_card = str(_c_card.get('Subgrupo') or '').strip()
-                                                    if _sub_card.upper() != subgrupo_card.upper():
-                                                        continue
-                                                    _ch_card = str(_c_card.get('Chapa') or '').strip()
-                                                    _dom_card = int(domingos_map_card.get(_ch_card, 0) or 0)
-                                                    if _dom_card > 0:
-                                                        qtd_pessoas_domingo_subgrupo += 1
-                                                    total_domingos_subgrupo += _dom_card
+                                                _stats_card = transfer_subgrupo_domingo_stats.get(subgrupo_card.upper(), {}) if subgrupo_card else {}
+                                                qtd_pessoas_domingo_subgrupo = int(_stats_card.get('qtd_pessoas_domingo', 0) or 0)
+                                                total_domingos_subgrupo = int(_stats_card.get('total_domingos', 0) or 0)
                                                 cinfo2.markdown(
                                                     f"**Subgrupo analisado:** {subgrupo_card or '-'}  \n"
                                                     f"Pessoas do subgrupo que trabalham domingo: **{int(qtd_pessoas_domingo_subgrupo)}** | Total de domingos trabalhados no mês vigente: **{int(total_domingos_subgrupo)}**"
@@ -14760,7 +14783,7 @@ def page_app():
                                                 frozen_item_slot = dict(st.session_state.get(freeze_slots_key, {}).get(slot_key, {}) or {})
                                                 chapa_congelada_slot = str(frozen_item_slot.get('selected_chapa') or s.get('selected_chapa') or '').strip()
                                                 if chapa_congelada_slot and chapa_congelada_slot not in mapa_alt:
-                                                    colab_congelado_slot = get_colaborador_record(setor, chapa_congelada_slot) or {}
+                                                    colab_congelado_slot = _transfer_get_colab_cached(chapa_congelada_slot) or {}
                                                     nome_congelado_slot = str(colab_congelado_slot.get('Nome') or chapa_congelada_slot).strip()
                                                     entrada_congelado_slot = str(colab_congelado_slot.get('Entrada') or s.get('origem_entrada') or '-').strip()
                                                     subgrupo_congelado_slot = str(
@@ -14860,7 +14883,7 @@ def page_app():
                                                     neg_logs = list(st.session_state.get(neg_log_key, []))
                                                     chapa_escolhida_agora = str(st.session_state.get(f'rod_caixa_pick_{slot_key}', str(s.get('origem_chapa') or '')) or '').strip()
                                                     chapa_neg = chapa_escolhida_agora or str(s.get('origem_chapa') or '').strip()
-                                                    colab_neg = get_colaborador_record(setor, chapa_neg) if chapa_neg else {}
+                                                    colab_neg = _transfer_get_colab_cached(chapa_neg) if chapa_neg else {}
                                                     nome_neg = str((colab_neg or {}).get('Nome') or s.get('origem_nome') or '').strip()
                                                     entrada_neg = str((colab_neg or {}).get('Entrada') or s.get('origem_entrada') or BALANCO_DIA_ENTRADA).strip()
                                                     subgrupo_neg = str(st.session_state.get(sg_slot_key) or (colab_neg or {}).get('Subgrupo') or s.get('manual_subgrupo') or s.get('origem_subgrupo') or subgrupo_origem).strip()
