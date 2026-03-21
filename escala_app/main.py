@@ -1182,19 +1182,6 @@ def salvar_retificacao_competencia(setor: str, ano: int, mes: int, chapa: str, d
             novo_subgrupo, motivo, usuario, agora_iso
         ))
 
-        # subgrupo vale o mês inteiro: ao salvar um novo subgrupo, limpa rastros
-        # antigos do mesmo mês em outros dias para a mesma chapa.
-        # Sem isso, uma retificação velha pode voltar a puxar o colaborador para
-        # Caixa 01 quando o histórico do mês é recomposto.
-        if novo_subgrupo:
-            cur.execute("""
-                UPDATE retificacoes_competencia
-                SET novo_subgrupo=''
-                WHERE UPPER(TRIM(setor))=UPPER(TRIM(?))
-                  AND ano=? AND mes=? AND TRIM(chapa)=? AND dia<>?
-                  AND COALESCE(NULLIF(TRIM(novo_subgrupo), ''), '')<>''
-            """, (setor, ano, mes, chapa, dia))
-
         mudou_subgrupo = bool(novo_subgrupo) and str(novo_subgrupo).strip() != str(subgrupo_base or '').strip()
 
         # Só atualiza estruturas pesadas quando houve mudança real de subgrupo.
@@ -6123,7 +6110,7 @@ def _aplicar_pendencia_ax_generica(payload: dict):
     elif modulo == 'excluir_colaborador':
         delete_colaborador_total(payload['setor'], payload['chapa'])
     elif modulo == 'editar_perfil':
-        update_colaborador_perfil(payload['setor'], payload['ch_sel'], payload['chapa_edit'], payload['nome_edit'], payload.get('sg',''), payload.get('ent_sel','06:00'), bool(payload.get('sab', False)))
+        update_colaborador_perfil(payload['setor'], payload['ch_sel'], payload['chapa_edit'], payload['nome_edit'], payload.get('sg',''), payload.get('ent_sel','06:00'), bool(payload.get('sab', False)), payload.get('ano'), payload.get('mes'))
     elif modulo == 'alterar_senha':
         setor = payload['setor']; ch = payload['chapa']; senha_final = payload['senha_final']; forcar = bool(payload.get('forcar_troca', False))
         user_pwd = get_usuario_sistema_por_setor_chapa(setor, ch)
@@ -6666,7 +6653,7 @@ def delete_colaborador_total(setor: str, chapa: str):
     except Exception:
         pass
 
-def update_colaborador_perfil(setor: str, chapa_antiga: str, chapa_nova: str, nome_novo: str, subgrupo: str, entrada: str, folga_sab: bool):
+def update_colaborador_perfil(setor: str, chapa_antiga: str, chapa_nova: str, nome_novo: str, subgrupo: str, entrada: str, folga_sab: bool, ano: int | None = None, mes: int | None = None):
     setor = _norm_setor(setor)
     chapa_antiga = _norm_chapa(chapa_antiga)
     chapa_nova = _norm_chapa(chapa_nova)
@@ -6678,6 +6665,9 @@ def update_colaborador_perfil(setor: str, chapa_antiga: str, chapa_nova: str, no
         raise ValueError("Chapa antiga/nova inválida.")
     if not nome_novo:
         raise ValueError("Nome do colaborador é obrigatório.")
+
+    ano_ref = int(ano) if ano is not None else None
+    mes_ref = int(mes) if mes is not None else None
 
     con = db_conn()
     cur = con.cursor()
@@ -6705,21 +6695,99 @@ def update_colaborador_perfil(setor: str, chapa_antiga: str, chapa_nova: str, no
         "overrides",
         "escala_mes",
         "estado_mes_anterior",
+        "subgrupo_competencia",
+        "colaborador_competencia_snapshot",
+        "retificacoes_competencia",
+        "rodizio_caixa_hist",
     ]
     for tb in tabelas:
         try:
-            cur.execute(f"UPDATE {tb} SET chapa=? WHERE setor=? AND chapa=?", (chapa_nova, setor, chapa_antiga))
+            cur.execute(f"UPDATE {tb} SET chapa=? WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND TRIM(chapa)=?", (chapa_nova, setor, chapa_antiga))
         except Exception:
-            pass
+            try:
+                cur.execute(f"UPDATE {tb} SET chapa=? WHERE setor=? AND chapa=?", (chapa_nova, setor, chapa_antiga))
+            except Exception:
+                pass
 
     # Atualiza nome também no usuário do sistema, se existir login
     try:
         cur.execute(
-            "UPDATE usuarios_sistema SET nome=? WHERE setor=? AND chapa=?",
+            "UPDATE usuarios_sistema SET nome=? WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND TRIM(chapa)=?",
             (nome_novo, setor, chapa_nova),
         )
     except Exception:
-        pass
+        try:
+            cur.execute(
+                "UPDATE usuarios_sistema SET nome=? WHERE setor=? AND chapa=?",
+                (nome_novo, setor, chapa_nova),
+            )
+        except Exception:
+            pass
+
+    # Quando a edição veio da tela da competência, a alteração manual deve virar
+    # a fonte oficial do mês e vencer qualquer rastro antigo de rodízio/retificação.
+    if ano_ref is not None and mes_ref is not None:
+        agora_iso = datetime.now().isoformat()
+
+        # Limpa apenas o subgrupo retificado do mês para não puxar o cadastro de volta.
+        try:
+            cur.execute(
+                """
+                UPDATE retificacoes_competencia
+                SET novo_subgrupo='',
+                    nome=?,
+                    criado_em=?
+                WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=?
+                """,
+                (nome_novo, agora_iso, setor, ano_ref, mes_ref, chapa_nova),
+            )
+        except Exception:
+            pass
+
+        # Remove histórico conflitante de rodízio da pessoa no mês, pois a edição manual
+        # passa a ser a verdade final para aquele colaborador naquela competência.
+        try:
+            cur.execute(
+                """
+                DELETE FROM rodizio_caixa_hist
+                WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=?
+                """,
+                (setor, ano_ref, mes_ref, chapa_nova),
+            )
+        except Exception:
+            pass
+
+        try:
+            cur.execute(
+                """
+                INSERT INTO subgrupo_competencia(setor, ano, mes, chapa, subgrupo, atualizado_em)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(setor, ano, mes, chapa) DO UPDATE SET
+                    subgrupo=excluded.subgrupo,
+                    atualizado_em=excluded.atualizado_em
+                """,
+                (setor, ano_ref, mes_ref, chapa_nova, subgrupo, agora_iso),
+            )
+        except Exception:
+            pass
+
+        try:
+            cur.execute(
+                """
+                INSERT INTO colaborador_competencia_snapshot(
+                    setor, ano, mes, chapa, nome, subgrupo, entrada, folga_sab, atualizado_em
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(setor, ano, mes, chapa) DO UPDATE SET
+                    nome=excluded.nome,
+                    subgrupo=excluded.subgrupo,
+                    entrada=excluded.entrada,
+                    folga_sab=excluded.folga_sab,
+                    atualizado_em=excluded.atualizado_em
+                """,
+                (setor, ano_ref, mes_ref, chapa_nova, nome_novo, subgrupo, entrada, 1 if folga_sab else 0, agora_iso),
+            )
+        except Exception:
+            pass
 
     con.commit()
     con.close()
@@ -8691,19 +8759,6 @@ def _upsert_subgrupo_preview_competencia(setor: str, ano: int, mes: int, chapa: 
             """,
             (setor, int(ano), int(mes), chapa, novo_subgrupo, ts)
         )
-
-        # subgrupo mensal precisa ter uma única verdade por competência.
-        # Limpamos rastros conflitantes do histórico e das retificações do mês
-        # para evitar que a pessoa volte sozinha para Caixa 01 em telas futuras.
-        cur.execute(
-            "DELETE FROM rodizio_caixa_hist WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=?",
-            (setor, int(ano), int(mes), chapa)
-        )
-        cur.execute(
-            "UPDATE retificacoes_competencia SET novo_subgrupo='' WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND TRIM(chapa)=?",
-            (setor, int(ano), int(mes), chapa)
-        )
-
         cur.execute(
             """
             INSERT INTO colaborador_competencia_snapshot(setor, ano, mes, chapa, nome, subgrupo, entrada, folga_sab, atualizado_em)
@@ -13953,10 +14008,10 @@ def page_app():
                     else:
                         try:
                             if bool(auth.get('is_ax_lider', False)) and not bool(auth.get('is_admin', False)):
-                                rid = registrar_pendencia_ax_generica(setor, 'editar_perfil', 'salvar', {'_modulo':'editar_perfil','_acao':'salvar','setor':setor,'ch_sel':ch_sel,'chapa_edit':chapa_edit,'nome_edit':nome_edit,'sg':sg,'ent_sel':ent_sel,'sab':bool(sab)}, str(auth.get('nome') or '').strip(), str(auth.get('chapa') or '').strip(), 'Edição de perfil enviada pelo AX do Líder')
+                                rid = registrar_pendencia_ax_generica(setor, 'editar_perfil', 'salvar', {'_modulo':'editar_perfil','_acao':'salvar','setor':setor,'ch_sel':ch_sel,'chapa_edit':chapa_edit,'nome_edit':nome_edit,'sg':sg,'ent_sel':ent_sel,'sab':bool(sab),'ano':int(ano_vis),'mes':int(mes_vis)}, str(auth.get('nome') or '').strip(), str(auth.get('chapa') or '').strip(), 'Edição de perfil enviada pelo AX do Líder')
                                 st.warning(f'Solicitação enviada para aprovação do líder. Protocolo #{rid}.')
                                 st.rerun()
-                            update_colaborador_perfil(setor, ch_sel, chapa_edit, nome_edit, sg, ent_sel, sab)
+                            update_colaborador_perfil(setor, ch_sel, chapa_edit, nome_edit, sg, ent_sel, sab, ano_vis, mes_vis)
                             st.success("Salvo!")
                             st.rerun()
                         except Exception as e:
