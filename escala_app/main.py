@@ -14818,30 +14818,8 @@ def page_app():
                                 subgrupo_congelado_txt = str(frozen_item_slot.get('manual_subgrupo') or s.get('manual_subgrupo') or st.session_state.get(sg_slot_key) or '').strip()
                                 st.info(f"Vaga congelada manualmente nesta revisão. A sugestão continua visível mesmo após mudar o subgrupo. Subgrupo salvo: {subgrupo_congelado_txt or '-'}")
 
-                            bcol1, bcol2, bcol3, bcol4 = st.columns([1, 1, 1, 3])
-                            if bcol1.button('✅ Aprovar e jogar para Caixa 02', key=f'rod_caixa_ok_{slot_key}', use_container_width=True):
-                                chapa_sel = str(st.session_state.get(f'rod_caixa_pick_{slot_key}', str(s.get('origem_chapa') or '')) or '').strip()
-                                tmp = dict(st.session_state.get(aprov_state_key, {}))
-                                chapa_ant = str(tmp.get(slot_key) or '').strip()
-                                chapa_eff = chapa_sel or str(s.get('origem_chapa') or '')
-                                if chapa_ant and chapa_ant != chapa_eff:
-                                    resetar_preview_aprovacao_rodizio_caixa(setor, ano_r, mes_r, s, chapa_ant, subgrupo_origem, subgrupo_destino)
-                                aplicar_preview_aprovacao_rodizio_caixa(setor, ano_r, mes_r, s, chapa_eff, subgrupo_origem, subgrupo_destino)
-                                tmp[slot_key] = chapa_eff
-                                st.session_state[aprov_state_key] = tmp
-                                frozen_slots = dict(st.session_state.get(freeze_slots_key, {}))
-                                s_frozen = dict(s)
-                                s_frozen['selected_chapa'] = chapa_eff
-                                frozen_slots[slot_key] = {
-                                    'slot': s_frozen,
-                                    'selected_chapa': chapa_eff,
-                                    'manual_subgrupo': str(st.session_state.get(sg_slot_key) or '').strip(),
-                                    'manual_freeze': bool(dict(st.session_state.get(freeze_slots_key, {}).get(slot_key, {}) or {}).get('manual_freeze')),
-                                }
-                                st.session_state[freeze_slots_key] = frozen_slots
-                                st.session_state.pop(state_base + "::aplicado", None)
-                                st.rerun()
-                            if bcol2.button('❌ Negar e chamar próximo', key=f'rod_caixa_no_{slot_key}', use_container_width=True):
+                            bcol1, bcol2 = st.columns([1, 4])
+                            if bcol1.button('❌ Negar e chamar próximo', key=f'rod_caixa_no_{slot_key}', use_container_width=True):
                                 negs = list(st.session_state.get(neg_key, []))
                                 chapa_escolhida_agora = str(st.session_state.get(f'rod_caixa_pick_{slot_key}', str(s.get('origem_chapa') or '')) or '').strip()
                                 chapa_neg = chapa_escolhida_agora or str(s.get('origem_chapa') or '').strip()
@@ -14860,28 +14838,16 @@ def page_app():
                                 st.session_state.pop(state_base + "::aplicado", None)
                                 st.rerun()
                             frozen_ativo_slot = bool(frozen_item_slot.get('manual_freeze') or s.get('manual_freeze'))
-                            if bcol3.button('🔄 Resetar esta vaga', key=f'rod_caixa_reset_{slot_key}', use_container_width=True, disabled=(not aprovado and not frozen_ativo_slot)):
-                                tmp = dict(st.session_state.get(aprov_state_key, {}))
-                                chapa_ant = str(tmp.get(slot_key) or '').strip()
-                                if chapa_ant:
-                                    resetar_preview_aprovacao_rodizio_caixa(setor, ano_r, mes_r, s, chapa_ant, subgrupo_origem, subgrupo_destino)
-                                tmp.pop(slot_key, None)
-                                st.session_state[aprov_state_key] = tmp
-                                frozen_slots = dict(st.session_state.get(freeze_slots_key, {}))
-                                frozen_slots.pop(slot_key, None)
-                                st.session_state[freeze_slots_key] = frozen_slots
-                                st.session_state.pop(state_base + "::aplicado", None)
-                                st.rerun()
                             if aprovado:
                                 chapa_sel_txt = str(aprovados_atuais.get(slot_key) or '').strip()
                                 nome_sel_txt = mapa_alt.get(chapa_sel_txt, chapa_sel_txt)
-                                bcol4.success(f'Aprovado manualmente. Seleção atual: {nome_sel_txt}')
+                                bcol2.success(f'Aprovado manualmente. Seleção atual: {nome_sel_txt}')
                             elif frozen_ativo_slot:
                                 chapa_sel_txt = str(frozen_item_slot.get('selected_chapa') or chapa_perfil_slot or '').strip()
                                 nome_sel_txt = mapa_alt.get(chapa_sel_txt, chapa_sel_txt)
-                                bcol4.info(f'Perfil salvo manualmente. Seleção atual congelada: {nome_sel_txt}')
+                                bcol2.info(f'Perfil salvo manualmente. Seleção atual congelada: {nome_sel_txt}')
                             else:
-                                bcol4.warning('Pendente. Ao negar, o sistema chama a próxima pessoa da fila desse horário.')
+                                bcol2.warning('Pendente. Ao negar, o sistema chama a próxima pessoa da fila desse horário.')
                 else:
                     st.warning("Nenhuma troca encontrada para aplicar neste mês.")
 
