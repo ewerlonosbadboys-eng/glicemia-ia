@@ -14319,32 +14319,25 @@ def page_app():
                 st.info("A subaba Transferência está disponível somente para setores FRENTECAIXA.")
             else:
                 st.markdown("### 🔁 Subaba Transferência")
-                st.caption("Regra fixa: 14 operadores no Caixa 02, com prioridade para horários 06:50×4, 07:30×1, 08:00×1, 09:00×1, 10:00×1, 11:00×1, 12:00×1 e 12:40×4. O sistema tenta domingos iguais primeiro; quando não houver, ele avisa e segue para o mais próximo.")
                 cfg = get_rodizio_caixa_cfg(setor)
-                c1, c2, c3, c4 = st.columns([1.4, 1.4, 1, 1])
                 _rod_reset_defaults_key = f"rod_caixa_reset_defaults::{setor}"
                 if st.session_state.get(_rod_reset_defaults_key, False):
-                    # Nunca sobrescreve widgets já instanciados; remove as chaves e deixa a
-                    # inicialização padrão abaixo recriar os valores no próximo rerun.
                     for _k in ['rod_caixa_origem', 'rod_caixa_destino', 'rod_caixa_qtd', 'rod_caixa_tol']:
                         try:
                             st.session_state.pop(_k, None)
                         except Exception:
                             pass
                     st.session_state[_rod_reset_defaults_key] = False
-                if 'rod_caixa_origem' not in st.session_state:
-                    st.session_state['rod_caixa_origem'] = str(cfg.get('subgrupo_origem') or 'OPERADOR DE CAIXA 01')
-                if 'rod_caixa_destino' not in st.session_state:
-                    st.session_state['rod_caixa_destino'] = str(cfg.get('subgrupo_destino') or 'OPERADOR DE CAIXA 02')
-                if 'rod_caixa_qtd' not in st.session_state:
-                    st.session_state['rod_caixa_qtd'] = int(cfg.get('qtd_destino', 14))
-                if 'rod_caixa_tol' not in st.session_state:
-                    st.session_state['rod_caixa_tol'] = int(cfg.get('tolerancia_min', 20))
 
-                subgrupo_origem = c1.text_input("Subgrupo origem", key='rod_caixa_origem')
-                subgrupo_destino = c2.text_input("Subgrupo destino", key='rod_caixa_destino')
-                qtd_destino = int(c3.number_input("Qtd fixa no destino", min_value=1, max_value=100, step=1, key='rod_caixa_qtd'))
-                tolerancia = int(c4.number_input("Tolerância (min)", min_value=0, max_value=120, step=5, key='rod_caixa_tol'))
+                subgrupo_origem = str(st.session_state.get('rod_caixa_origem') or cfg.get('subgrupo_origem') or 'OPERADOR DE CAIXA 01')
+                subgrupo_destino = str(st.session_state.get('rod_caixa_destino') or cfg.get('subgrupo_destino') or 'OPERADOR DE CAIXA 02')
+                qtd_destino = int(st.session_state.get('rod_caixa_qtd') or cfg.get('qtd_destino', 14) or 14)
+                tolerancia = int(st.session_state.get('rod_caixa_tol') or cfg.get('tolerancia_min', 20) or 20)
+
+                st.session_state['rod_caixa_origem'] = subgrupo_origem
+                st.session_state['rod_caixa_destino'] = subgrupo_destino
+                st.session_state['rod_caixa_qtd'] = qtd_destino
+                st.session_state['rod_caixa_tol'] = tolerancia
 
                 ano_r = int(st.session_state.get('cfg_ano', datetime.now().year))
                 mes_r = int(st.session_state.get('cfg_mes', datetime.now().month))
@@ -14356,11 +14349,7 @@ def page_app():
                     st.session_state[force_review_key] = False
                 rodizio_ja_aplicado_mes = bool(hist_mes) and (not bool(st.session_state.get(force_review_key, False)))
 
-                bcfg1, bcfg2, bcfg3, _bcfg4 = st.columns([1, 1, 1.35, 3.65])
-                if bcfg1.button("Salvar configuração da transferência", key='rod_caixa_save_cfg', use_container_width=True, disabled=(_status_comp_rod == 'FECHADA')):
-                    set_rodizio_caixa_cfg(setor, subgrupo_origem, subgrupo_destino, qtd_destino, tolerancia, True)
-                    st.success("Configuração salva.")
-                    st.rerun()
+                _bcfg_hidden, bcfg2, bcfg3, _bcfg4 = st.columns([1, 1, 1.35, 3.65])
                 if bcfg2.button("🚨 Transferir TODOS do Caixa 02 para Caixa 01", key='rod_caixa_move_all_back', use_container_width=True, disabled=(_status_comp_rod == 'FECHADA')):
                     try:
                         st.warning('Modo supremo: esta ação manual ignora a regra de manter 14 pessoas no Caixa 02 e esvazia o subgrupo destino nesta competência.')
