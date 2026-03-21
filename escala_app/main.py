@@ -7110,18 +7110,62 @@ def build_rodizio_caixa_aplicado_pairs(hist_rows: list[dict]):
 
 
 def _rodizio_last_move_map(setor: str, subgrupo_destino: str) -> dict[str, int]:
+    """
+    Último mês em que a pessoa esteve no subgrupo destino.
+
+    Fonte consolidada:
+    1) histórico oficial de rodízio (rodizio_caixa_hist)
+    2) subgrupo_competencia do mês
+    3) snapshot congelado da competência
+
+    Isso evita falso "nunca passou pelo Caixa 02" quando a pessoa foi movida
+    manualmente no mês anterior (ou no mês atual) sem gerar linha no
+    rodizio_caixa_hist.
+    """
+    setor = _norm_setor(setor)
+    subgrupo_destino = str(subgrupo_destino or '').strip()
+    out: dict[str, int] = {}
+
+    def _merge_rows(rows):
+        for ch, ym in rows or []:
+            ch = _norm_chapa(ch)
+            ym = int(ym or 0)
+            if not ch or ym <= 0:
+                continue
+            atual = int(out.get(ch, 0) or 0)
+            if ym > atual:
+                out[ch] = ym
+
     con = db_conn()
     cur = con.cursor()
-    out: dict[str, int] = {}
     try:
         cur.execute("""
-            SELECT chapa, MAX(ano * 100 + mes)
+            SELECT TRIM(chapa) AS chapa, MAX(ano * 100 + mes) AS ym
             FROM rodizio_caixa_hist
-            WHERE setor=? AND movimento='ENTRA_DESTINO' AND subgrupo_destino=?
-            GROUP BY chapa
+            WHERE UPPER(TRIM(setor))=UPPER(TRIM(?))
+              AND UPPER(TRIM(movimento))='ENTRA_DESTINO'
+              AND UPPER(TRIM(subgrupo_destino))=UPPER(TRIM(?))
+            GROUP BY TRIM(chapa)
         """, (setor, subgrupo_destino))
-        for ch, ym in cur.fetchall():
-            out[str(ch or '').strip()] = int(ym or 0)
+        _merge_rows(cur.fetchall())
+
+        cur.execute("""
+            SELECT TRIM(chapa) AS chapa, MAX(ano * 100 + mes) AS ym
+            FROM subgrupo_competencia
+            WHERE UPPER(TRIM(setor))=UPPER(TRIM(?))
+              AND UPPER(TRIM(subgrupo))=UPPER(TRIM(?))
+            GROUP BY TRIM(chapa)
+        """, (setor, subgrupo_destino))
+        _merge_rows(cur.fetchall())
+
+        cur.execute("""
+            SELECT TRIM(chapa) AS chapa, MAX(ano * 100 + mes) AS ym
+            FROM colaborador_competencia_snapshot
+            WHERE UPPER(TRIM(setor))=UPPER(TRIM(?))
+              AND UPPER(TRIM(subgrupo))=UPPER(TRIM(?))
+            GROUP BY TRIM(chapa)
+        """, (setor, subgrupo_destino))
+        _merge_rows(cur.fetchall())
     finally:
         con.close()
     return out
