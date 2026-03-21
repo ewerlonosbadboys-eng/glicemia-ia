@@ -14619,9 +14619,10 @@ def page_app():
                                 f"**{i}. {s.get('origem_nome', '-') }**  \n"
                                 f"Chapa: `{s.get('origem_chapa', '-')}` | Horário Caixa 01: **{s.get('origem_entrada', '-') }** | Domingos: **{int(s.get('origem_domingos', 0) or 0)}**"
                             )
+                            subgrupo_origem_slot = str(s.get('origem_subgrupo') or 'OPERADOR DE CAIXA 01').strip()
                             cinfo2.markdown(
-                                f"**Sai do Caixa 02:** {s.get('destino_nome', '-')}  \n"
-                                f"Horário destino: **{s.get('destino_entrada', '-')}** | Domingos: **{int(s.get('destino_domingos', 0) or 0)}**"
+                                f"**Subgrupo atual:** {subgrupo_origem_slot}  \n"
+                                f"Pessoa desta vaga: **{s.get('origem_nome', '-')}**"
                             )
                             cinfo3.markdown(
                                 f"**Última vez que entrou no Caixa 02:** {s.get('origem_ultimo_mes_destino_label', '-')}  \n"
@@ -14662,13 +14663,20 @@ def page_app():
                             nome_perfil_slot = str(colab_perfil_slot.get('Nome') or s.get('origem_nome') or '').strip()
                             entrada_perfil_slot = str(colab_perfil_slot.get('Entrada') or s.get('origem_entrada') or BALANCO_DIA_ENTRADA).strip()
                             folga_sab_perfil_slot = bool(colab_perfil_slot.get('Folga_Sab'))
-                            subgrupo_atual_slot = get_subgrupo_competencia_ou_base(
-                                setor,
-                                chapa_perfil_slot,
-                                int(ano_r),
-                                int(mes_r),
-                                str(colab_perfil_slot.get('Subgrupo') or s.get('origem_subgrupo') or subgrupo_origem).strip()
-                            ) if chapa_perfil_slot else str(s.get('origem_subgrupo') or subgrupo_origem).strip()
+                            subgrupo_origem_slot = str(s.get('origem_subgrupo') or 'OPERADOR DE CAIXA 01').strip()
+                            subgrupo_base_slot = str(colab_perfil_slot.get('Subgrupo') or subgrupo_origem_slot).strip()
+                            subgrupo_atual_slot = subgrupo_base_slot
+                            if chapa_perfil_slot:
+                                try:
+                                    subgrupo_atual_slot = str(get_subgrupo_competencia_ou_base(
+                                        setor,
+                                        chapa_perfil_slot,
+                                        int(ano_r),
+                                        int(mes_r),
+                                        subgrupo_base_slot,
+                                    ) or subgrupo_base_slot).strip()
+                                except Exception:
+                                    subgrupo_atual_slot = subgrupo_base_slot
                             sg_slot_key = f'rod_caixa_subgrupo_manual_{slot_key}'
                             if st.session_state.get(f'{sg_slot_key}__last_chapa') != chapa_perfil_slot:
                                 st.session_state[sg_slot_key] = subgrupo_atual_slot
