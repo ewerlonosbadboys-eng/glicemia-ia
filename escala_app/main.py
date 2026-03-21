@@ -14419,6 +14419,9 @@ def page_app():
                 state_base = f"rod_caixa_aprov::{setor}::{ano_r}::{mes_r}::{subgrupo_origem}::{subgrupo_destino}"
                 aprov_key = state_base + "::aprovados"
                 neg_key = state_base + "::negados"
+                freeze_slots_key = state_base + "::slots_congelados"
+                if freeze_slots_key not in st.session_state:
+                    st.session_state[freeze_slots_key] = {}
                 if aprov_key not in st.session_state:
                     st.session_state[aprov_key] = {}
                 if neg_key not in st.session_state:
@@ -14557,6 +14560,7 @@ def page_app():
                             if chapa_sel_tmp:
                                 st.session_state[aprov_key] = {}
                         st.session_state[neg_key] = []
+                        st.session_state[freeze_slots_key] = {}
                         st.session_state.pop(state_base + "::aplicado", None)
                         st.rerun()
                     if a2.button('Aprovar as 14 sugestões atuais', key='rod_caixa_aprov_all', use_container_width=True):
@@ -14591,6 +14595,41 @@ def page_app():
                     elif slots:
                         st.info(f"Para aplicar de verdade no mês {mes_r:02d}/{ano_r}, todas as {qtd_obrigatoria} sugestões precisam estar aprovadas e depois você deve clicar em 'Aplicar mudança de subgrupos agora (antes da escala)'.")
 
+                frozen_slots_map = dict(st.session_state.get(freeze_slots_key, {}))
+                if slots:
+                    slots_render = []
+                    seen_slots_render = set()
+                    for s_tmp in list(slots):
+                        slot_key_tmp = str(s_tmp.get('slot_key') or '').strip()
+                        if slot_key_tmp:
+                            seen_slots_render.add(slot_key_tmp)
+                            frozen_item_tmp = dict(frozen_slots_map.get(slot_key_tmp, {}) or {})
+                            if frozen_item_tmp:
+                                s_merge = dict(frozen_item_tmp.get('slot') or {})
+                                s_merge.update(s_tmp)
+                                if frozen_item_tmp.get('manual_freeze'):
+                                    s_merge['manual_freeze'] = True
+                                if frozen_item_tmp.get('manual_subgrupo'):
+                                    s_merge['manual_subgrupo'] = frozen_item_tmp.get('manual_subgrupo')
+                                if frozen_item_tmp.get('selected_chapa'):
+                                    s_merge['selected_chapa'] = frozen_item_tmp.get('selected_chapa')
+                                slots_render.append(s_merge)
+                            else:
+                                slots_render.append(s_tmp)
+                    for slot_key_tmp, frozen_item_tmp in frozen_slots_map.items():
+                        slot_key_tmp = str(slot_key_tmp or '').strip()
+                        if not slot_key_tmp or slot_key_tmp in seen_slots_render:
+                            continue
+                        s_freeze = dict((frozen_item_tmp or {}).get('slot') or {})
+                        if s_freeze:
+                            s_freeze['manual_freeze'] = bool((frozen_item_tmp or {}).get('manual_freeze'))
+                            if (frozen_item_tmp or {}).get('manual_subgrupo'):
+                                s_freeze['manual_subgrupo'] = (frozen_item_tmp or {}).get('manual_subgrupo')
+                            if (frozen_item_tmp or {}).get('selected_chapa'):
+                                s_freeze['selected_chapa'] = (frozen_item_tmp or {}).get('selected_chapa')
+                            slots_render.append(s_freeze)
+                    slots = slots_render
+
                 if slots:
                     st.markdown('### Sugestões de transferência por vez para esta competência')
                     resumo_aprov = pd.DataFrame([{
@@ -14619,10 +14658,9 @@ def page_app():
                                 f"**{i}. {s.get('origem_nome', '-') }**  \n"
                                 f"Chapa: `{s.get('origem_chapa', '-')}` | Horário Caixa 01: **{s.get('origem_entrada', '-') }** | Domingos: **{int(s.get('origem_domingos', 0) or 0)}**"
                             )
-                            subgrupo_origem_slot = str(s.get('origem_subgrupo') or 'OPERADOR DE CAIXA 01').strip()
                             cinfo2.markdown(
-                                f"**Subgrupo atual:** {subgrupo_origem_slot}  \n"
-                                f"Pessoa desta vaga: **{s.get('origem_nome', '-')}**"
+                                f"**Sai do Caixa 02:** {s.get('destino_nome', '-')}  \n"
+                                f"Horário destino: **{s.get('destino_entrada', '-')}** | Domingos: **{int(s.get('destino_domingos', 0) or 0)}**"
                             )
                             cinfo3.markdown(
                                 f"**Última vez que entrou no Caixa 02:** {s.get('origem_ultimo_mes_destino_label', '-')}  \n"
@@ -14649,7 +14687,26 @@ def page_app():
                             chapa_padrao_slot = chapa_aprovada_slot if chapa_aprovada_slot in opcoes_alt else str(s.get('origem_chapa') or '').strip()
                             idx_padrao_slot = opcoes_alt.index(chapa_padrao_slot) if chapa_padrao_slot in opcoes_alt else 0
 
+                            frozen_item_slot = dict(st.session_state.get(freeze_slots_key, {}).get(slot_key, {}) or {})
+                            chapa_congelada_slot = str(frozen_item_slot.get('selected_chapa') or s.get('selected_chapa') or '').strip()
+                            if chapa_congelada_slot and chapa_congelada_slot not in mapa_alt:
+                                colab_congelado_slot = get_colaborador_record(setor, chapa_congelada_slot) or {}
+                                nome_congelado_slot = str(colab_congelado_slot.get('Nome') or chapa_congelada_slot).strip()
+                                entrada_congelado_slot = str(colab_congelado_slot.get('Entrada') or s.get('origem_entrada') or '-').strip()
+                                subgrupo_congelado_slot = str(
+                                    get_subgrupo_competencia_ou_base(
+                                        setor,
+                                        chapa_congelada_slot,
+                                        int(ano_r),
+                                        int(mes_r),
+                                        str(colab_congelado_slot.get('Subgrupo') or s.get('origem_subgrupo') or subgrupo_origem).strip()
+                                    )
+                                ).strip()
+                                mapa_alt[chapa_congelada_slot] = f"{nome_congelado_slot} | chapa {chapa_congelada_slot} | horário {entrada_congelado_slot} | subgrupo atual {subgrupo_congelado_slot} | congelado manualmente"
+                                opcoes_alt.append(chapa_congelada_slot)
+
                             if opcoes_alt:
+                                idx_padrao_slot = opcoes_alt.index(chapa_padrao_slot) if chapa_padrao_slot in opcoes_alt else 0
                                 st.selectbox(
                                     'Escolha quem está mais próximo para entrar no Operador de Caixa 02:',
                                     options=opcoes_alt,
@@ -14663,20 +14720,13 @@ def page_app():
                             nome_perfil_slot = str(colab_perfil_slot.get('Nome') or s.get('origem_nome') or '').strip()
                             entrada_perfil_slot = str(colab_perfil_slot.get('Entrada') or s.get('origem_entrada') or BALANCO_DIA_ENTRADA).strip()
                             folga_sab_perfil_slot = bool(colab_perfil_slot.get('Folga_Sab'))
-                            subgrupo_origem_slot = str(s.get('origem_subgrupo') or 'OPERADOR DE CAIXA 01').strip()
-                            subgrupo_base_slot = str(colab_perfil_slot.get('Subgrupo') or subgrupo_origem_slot).strip()
-                            subgrupo_atual_slot = subgrupo_base_slot
-                            if chapa_perfil_slot:
-                                try:
-                                    subgrupo_atual_slot = str(get_subgrupo_competencia_ou_base(
-                                        setor,
-                                        chapa_perfil_slot,
-                                        int(ano_r),
-                                        int(mes_r),
-                                        subgrupo_base_slot,
-                                    ) or subgrupo_base_slot).strip()
-                                except Exception:
-                                    subgrupo_atual_slot = subgrupo_base_slot
+                            subgrupo_atual_slot = get_subgrupo_competencia_ou_base(
+                                setor,
+                                chapa_perfil_slot,
+                                int(ano_r),
+                                int(mes_r),
+                                str(colab_perfil_slot.get('Subgrupo') or s.get('origem_subgrupo') or subgrupo_origem).strip()
+                            ) if chapa_perfil_slot else str(s.get('origem_subgrupo') or subgrupo_origem).strip()
                             sg_slot_key = f'rod_caixa_subgrupo_manual_{slot_key}'
                             if st.session_state.get(f'{sg_slot_key}__last_chapa') != chapa_perfil_slot:
                                 st.session_state[sg_slot_key] = subgrupo_atual_slot
@@ -14710,10 +14760,31 @@ def page_app():
                                             ano=int(ano_r),
                                             mes=int(mes_r),
                                         )
-                                        st.success(f'Perfil de {nome_perfil_slot or chapa_perfil_slot} atualizado para {novo_subgrupo_manual}.')
+                                        frozen_slots = dict(st.session_state.get(freeze_slots_key, {}))
+                                        s_frozen = dict(s)
+                                        s_frozen['manual_freeze'] = True
+                                        s_frozen['manual_subgrupo'] = novo_subgrupo_manual
+                                        s_frozen['selected_chapa'] = chapa_perfil_slot
+                                        frozen_slots[slot_key] = {
+                                            'slot': s_frozen,
+                                            'selected_chapa': chapa_perfil_slot,
+                                            'manual_subgrupo': novo_subgrupo_manual,
+                                            'manual_freeze': True,
+                                        }
+                                        st.session_state[freeze_slots_key] = frozen_slots
+                                        tmp_aprov_manual = dict(st.session_state.get(aprov_state_key, {}))
+                                        if chapa_perfil_slot:
+                                            tmp_aprov_manual[slot_key] = chapa_perfil_slot
+                                            st.session_state[aprov_state_key] = tmp_aprov_manual
+                                        st.success(f'Perfil de {nome_perfil_slot or chapa_perfil_slot} atualizado para {novo_subgrupo_manual}. A sugestão ficou congelada nesta vaga para você poder revisar depois.')
                                         st.rerun()
                                     except Exception as e:
                                         st.error(f'Não foi possível salvar o perfil: {e}')
+
+                            frozen_item_slot = dict(st.session_state.get(freeze_slots_key, {}).get(slot_key, {}) or {})
+                            if bool(frozen_item_slot.get('manual_freeze') or s.get('manual_freeze')):
+                                subgrupo_congelado_txt = str(frozen_item_slot.get('manual_subgrupo') or s.get('manual_subgrupo') or st.session_state.get(sg_slot_key) or '').strip()
+                                st.info(f"Vaga congelada manualmente nesta revisão. A sugestão continua visível mesmo após mudar o subgrupo. Subgrupo salvo: {subgrupo_congelado_txt or '-'}")
 
                             bcol1, bcol2, bcol3, bcol4 = st.columns([1, 1, 1, 3])
                             if bcol1.button('✅ Aprovar e jogar para Caixa 02', key=f'rod_caixa_ok_{slot_key}', use_container_width=True):
@@ -14726,6 +14797,16 @@ def page_app():
                                 aplicar_preview_aprovacao_rodizio_caixa(setor, ano_r, mes_r, s, chapa_eff, subgrupo_origem, subgrupo_destino)
                                 tmp[slot_key] = chapa_eff
                                 st.session_state[aprov_state_key] = tmp
+                                frozen_slots = dict(st.session_state.get(freeze_slots_key, {}))
+                                s_frozen = dict(s)
+                                s_frozen['selected_chapa'] = chapa_eff
+                                frozen_slots[slot_key] = {
+                                    'slot': s_frozen,
+                                    'selected_chapa': chapa_eff,
+                                    'manual_subgrupo': str(st.session_state.get(sg_slot_key) or '').strip(),
+                                    'manual_freeze': bool(dict(st.session_state.get(freeze_slots_key, {}).get(slot_key, {}) or {}).get('manual_freeze')),
+                                }
+                                st.session_state[freeze_slots_key] = frozen_slots
                                 st.session_state.pop(state_base + "::aplicado", None)
                                 st.rerun()
                             if bcol2.button('❌ Negar e chamar próximo', key=f'rod_caixa_no_{slot_key}', use_container_width=True):
@@ -14741,6 +14822,9 @@ def page_app():
                                 tmp.pop(slot_key, None)
                                 st.session_state[aprov_state_key] = tmp
                                 st.session_state[neg_state_key] = negs
+                                frozen_slots = dict(st.session_state.get(freeze_slots_key, {}))
+                                frozen_slots.pop(slot_key, None)
+                                st.session_state[freeze_slots_key] = frozen_slots
                                 st.session_state.pop(state_base + "::aplicado", None)
                                 st.rerun()
                             if bcol3.button('🔄 Resetar esta vaga', key=f'rod_caixa_reset_{slot_key}', use_container_width=True, disabled=(not aprovado)):
@@ -14750,6 +14834,9 @@ def page_app():
                                     resetar_preview_aprovacao_rodizio_caixa(setor, ano_r, mes_r, s, chapa_ant, subgrupo_origem, subgrupo_destino)
                                 tmp.pop(slot_key, None)
                                 st.session_state[aprov_state_key] = tmp
+                                frozen_slots = dict(st.session_state.get(freeze_slots_key, {}))
+                                frozen_slots.pop(slot_key, None)
+                                st.session_state[freeze_slots_key] = frozen_slots
                                 st.session_state.pop(state_base + "::aplicado", None)
                                 st.rerun()
                             if aprovado:
