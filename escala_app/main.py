@@ -15020,27 +15020,17 @@ def page_app():
 
                 qtd_meta_aprov = len(slots) if rodizio_ja_aplicado_mes else int(sim.get('qtd_destino_obrigatoria', 14))
                 todos_aprovados = bool(slots) and aprovados_validos == len(slots) and len(slots) >= int(qtd_meta_aprov)
-                b1, b2 = st.columns([1, 2])
+                info_col = st.container()
                 if not todos_aprovados:
                     if rodizio_ja_aplicado_mes:
-                        b2.info('Para aplicar o ajuste complementar, aprove manualmente todas as sugestões complementares atuais.')
+                        info_col.info('Para aplicar o ajuste complementar, aprove manualmente todas as sugestões complementares atuais.')
                     else:
-                        b2.info('Para aplicar o rodízio, aprove manualmente todas as 14 sugestões atuais.')
+                        info_col.info('Para aplicar o rodízio, aprove manualmente todas as 14 sugestões atuais.')
                 else:
                     if rodizio_ja_aplicado_mes:
-                        b2.success('As sugestões complementares já estão prontas. Use o botão de ajuste complementar acima para aplicar.')
+                        info_col.success('As sugestões complementares já estão prontas. Use o botão de ajuste complementar acima para aplicar.')
                     else:
-                        b2.success('As 14 aprovações já estão prontas. Use o botão principal acima para aplicar. Se a base não refletir, use a sincronização manual abaixo.')
-                if b1.button("🛠️ Sincronizar subgrupos base manualmente", key='rod_caixa_sync_manual', use_container_width=True):
-                    try:
-                        res = sincronizar_subgrupos_base_rodizio_caixa(setor, ano_r, mes_r, subgrupo_origem, subgrupo_destino)
-                        if res.get('ok'):
-                            st.success(res.get('msg', 'Subgrupos sincronizados com sucesso.'))
-                            st.rerun()
-                        else:
-                            st.warning(res.get('msg', 'Nenhum dado para sincronizar.'))
-                    except Exception as e:
-                        st.error(str(e))
+                        info_col.success('As 14 aprovações já estão prontas. Use o botão principal acima para aplicar.')
 
                 hist = list_rodizio_caixa_hist(setor, limit=120)
                 if hist:
