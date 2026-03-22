@@ -6240,144 +6240,6 @@ def admin_list_users():
     return df
 
 
-def ensure_gestao_setores_permissoes_table():
-    con = db_conn()
-    cur = con.cursor()
-    try:
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS gestao_setores_permissoes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                gestor_setor TEXT NOT NULL,
-                gestor_chapa TEXT NOT NULL,
-                setor_permitido TEXT NOT NULL,
-                criado_em TEXT NOT NULL,
-                UNIQUE(gestor_setor, gestor_chapa, setor_permitido)
-            )
-        """)
-        con.commit()
-    finally:
-        con.close()
-
-
-def admin_list_usuarios_gestao():
-    ensure_gestao_setores_permissoes_table()
-    con = db_conn()
-    try:
-        try:
-            df = pd.read_sql_query("""
-                SELECT nome, setor, chapa, COALESCE(is_admin,0) AS is_admin, COALESCE(is_lider,0) AS is_lider, COALESCE(is_ax_lider,0) AS is_ax_lider
-                FROM usuarios_sistema
-                WHERE UPPER(TRIM(setor)) IN ('GESTAO', 'GERENCIA', 'GERENTE')
-                   OR COALESCE(is_admin,0) = 1
-                   OR COALESCE(is_lider,0) = 1
-                   OR COALESCE(is_ax_lider,0) = 1
-                ORDER BY
-                    CASE
-                        WHEN COALESCE(is_admin,0) = 1 THEN 0
-                        WHEN UPPER(TRIM(setor)) IN ('GESTAO', 'GERENCIA', 'GERENTE') THEN 1
-                        WHEN COALESCE(is_lider,0) = 1 THEN 2
-                        ELSE 3
-                    END,
-                    nome ASC, chapa ASC
-            """, con)
-        except Exception:
-            df = pd.read_sql_query("""
-                SELECT nome, setor, chapa, COALESCE(is_admin,0) AS is_admin, COALESCE(is_lider,0) AS is_lider, 0 AS is_ax_lider
-                FROM usuarios_sistema
-                WHERE UPPER(TRIM(setor)) IN ('GESTAO', 'GERENCIA', 'GERENTE')
-                   OR COALESCE(is_admin,0) = 1
-                   OR COALESCE(is_lider,0) = 1
-                ORDER BY
-                    CASE
-                        WHEN COALESCE(is_admin,0) = 1 THEN 0
-                        WHEN UPPER(TRIM(setor)) IN ('GESTAO', 'GERENCIA', 'GERENTE') THEN 1
-                        WHEN COALESCE(is_lider,0) = 1 THEN 2
-                        ELSE 3
-                    END,
-                    nome ASC, chapa ASC
-            """, con)
-    finally:
-        con.close()
-
-    if df.empty:
-        return []
-
-    out = []
-    for _, r in df.iterrows():
-        nome = str(r.get('nome') or '').strip() or str(r.get('chapa') or '').strip()
-        setor = _norm_setor(r.get('setor') or '')
-        chapa = _norm_chapa(r.get('chapa') or '')
-        flags = []
-        if int(r.get('is_admin', 0) or 0) == 1:
-            flags.append('ADMIN')
-        if setor in ('GESTAO', 'GERENCIA', 'GERENTE'):
-            flags.append('GESTAO')
-        if int(r.get('is_lider', 0) or 0) == 1:
-            flags.append('LIDER')
-        if int(r.get('is_ax_lider', 0) or 0) == 1:
-            flags.append('AX')
-        suf = f" [{' / '.join(flags)}]" if flags else ''
-        out.append({'label': f"{nome} ({chapa}) • {setor}{suf}", 'nome': nome, 'setor': setor, 'chapa': chapa})
-    return out
-
-
-def get_setores_permitidos_gestao(gestor_setor: str, gestor_chapa: str) -> list:
-    ensure_gestao_setores_permissoes_table()
-    gestor_setor = _norm_setor(gestor_setor)
-    gestor_chapa = _norm_chapa(gestor_chapa)
-    if not gestor_setor or not gestor_chapa:
-        return []
-    con = db_conn()
-    cur = con.cursor()
-    try:
-        cur.execute("""
-            SELECT setor_permitido
-            FROM gestao_setores_permissoes
-            WHERE UPPER(TRIM(gestor_setor))=? AND TRIM(gestor_chapa)=?
-            ORDER BY setor_permitido ASC
-        """, (gestor_setor, gestor_chapa))
-        rows = cur.fetchall() or []
-        return [str(r[0] or '').strip() for r in rows if str(r[0] or '').strip()]
-    finally:
-        con.close()
-
-
-def salvar_setores_permitidos_gestao(gestor_setor: str, gestor_chapa: str, setores_permitidos):
-    ensure_gestao_setores_permissoes_table()
-    gestor_setor = _norm_setor(gestor_setor)
-    gestor_chapa = _norm_chapa(gestor_chapa)
-    setores_limpos = sorted({_norm_setor(x) for x in list(setores_permitidos or []) if _norm_setor(x) and _norm_setor(x) not in ('ADMIN',)})
-    if not gestor_setor or not gestor_chapa:
-        raise ValueError('Gestor inválido para salvar permissões.')
-    con = db_conn()
-    cur = con.cursor()
-    try:
-        cur.execute("DELETE FROM gestao_setores_permissoes WHERE UPPER(TRIM(gestor_setor))=? AND TRIM(gestor_chapa)=?", (gestor_setor, gestor_chapa))
-        agora = datetime.now().isoformat()
-        for setor_perm in setores_limpos:
-            cur.execute("""
-                INSERT OR IGNORE INTO gestao_setores_permissoes(gestor_setor, gestor_chapa, setor_permitido, criado_em)
-                VALUES (?, ?, ?, ?)
-            """, (gestor_setor, gestor_chapa, setor_perm, agora))
-        con.commit()
-    finally:
-        con.close()
-    return {'gestor_setor': gestor_setor, 'gestor_chapa': gestor_chapa, 'setores': setores_limpos, 'total': len(setores_limpos)}
-
-
-def admin_df_permissoes_gestao() -> pd.DataFrame:
-    ensure_gestao_setores_permissoes_table()
-    con = db_conn()
-    try:
-        return pd.read_sql_query("""
-            SELECT gestor_setor, gestor_chapa, setor_permitido, criado_em
-            FROM gestao_setores_permissoes
-            ORDER BY gestor_setor ASC, gestor_chapa ASC, setor_permitido ASC
-        """, con)
-    finally:
-        con.close()
-
-
 @st.cache_data(show_spinner=False, ttl=300)
 def admin_get_funcionarios_leve_all() -> pd.DataFrame:
     con = db_conn()
@@ -6628,24 +6490,23 @@ def admin_rename_setor_global(setor_atual: str, setor_novo: str) -> dict:
             if 'setor' not in cols:
                 continue
 
-            try:
-                cur.execute(
-                    f"UPDATE {tabela} SET setor=? WHERE UPPER(TRIM(setor))=UPPER(TRIM(?))",
-                    (setor_novo_norm, setor_atual_norm),
-                )
-                if int(cur.rowcount or 0) > 0:
-                    atualizados.append((tabela, int(cur.rowcount or 0)))
-            except Exception:
-                raise
+            cur.execute(
+                f"UPDATE {tabela} SET setor=? WHERE UPPER(TRIM(setor))=UPPER(TRIM(?))",
+                (setor_novo_norm, setor_atual_norm),
+            )
+            if int(cur.rowcount or 0) > 0:
+                atualizados.append((tabela, int(cur.rowcount or 0)))
+
+        try:
+            cur.execute("UPDATE setores SET nome=? WHERE UPPER(TRIM(nome))=UPPER(TRIM(?))", (setor_novo_norm, setor_atual_norm))
+            if int(cur.rowcount or 0) > 0:
+                atualizados.append(('setores', int(cur.rowcount or 0)))
+        except Exception:
+            pass
 
         con.commit()
     finally:
         con.close()
-
-    try:
-        rebuild_colaborador_competencia_snapshot(setor, int(ano), int(mes))
-    except Exception:
-        pass
 
     try:
         st.cache_data.clear()
@@ -6658,6 +6519,66 @@ def admin_rename_setor_global(setor_atual: str, setor_novo: str) -> dict:
         'tabelas_atualizadas': atualizados,
         'total_tabelas': len(atualizados),
         'total_registros': sum(q for _, q in atualizados),
+    }
+
+
+def admin_delete_setor_global(setor_nome: str) -> dict:
+    """Exclui um setor do cadastro e remove todos os registros vinculados a ele nas tabelas do sistema."""
+    setor_norm = _norm_setor(setor_nome)
+    protegidos = {'ADMIN', 'GERAL', 'GESTAO'}
+
+    if not setor_norm:
+        raise ValueError('Informe o setor que será excluído.')
+    if setor_norm in protegidos:
+        raise ValueError(f'O setor {setor_norm} é protegido e não pode ser excluído.')
+
+    con = db_conn()
+    cur = con.cursor()
+    removidos = []
+    try:
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+        tabelas = [str(r[0]) for r in cur.fetchall() if str(r[0]).strip()]
+
+        for tabela in tabelas:
+            try:
+                cur.execute(f"PRAGMA table_info({tabela})")
+                cols = [str(r[1]) for r in cur.fetchall()]
+            except Exception:
+                continue
+
+            if tabela == 'setores':
+                try:
+                    cur.execute("DELETE FROM setores WHERE UPPER(TRIM(nome))=UPPER(TRIM(?))", (setor_norm,))
+                    if int(cur.rowcount or 0) > 0:
+                        removidos.append(('setores', int(cur.rowcount or 0)))
+                except Exception:
+                    pass
+                continue
+
+            if 'setor' in cols:
+                cur.execute(f"DELETE FROM {tabela} WHERE UPPER(TRIM(setor))=UPPER(TRIM(?))", (setor_norm,))
+                if int(cur.rowcount or 0) > 0:
+                    removidos.append((tabela, int(cur.rowcount or 0)))
+
+            if 'setor_alvo' in cols:
+                cur.execute(f"DELETE FROM {tabela} WHERE UPPER(TRIM(setor_alvo))=UPPER(TRIM(?))", (setor_norm,))
+                if int(cur.rowcount or 0) > 0:
+                    removidos.append((f'{tabela}.setor_alvo', int(cur.rowcount or 0)))
+
+        con.commit()
+    finally:
+        con.close()
+
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+
+    return {
+        'setor_excluido': setor_norm,
+        'tabelas_afetadas': removidos,
+        'total_tabelas': len(removidos),
+        'total_registros': sum(q for _, q in removidos),
     }
 
 def colaborador_exists(setor: str, chapa: str) -> bool:
@@ -12865,7 +12786,7 @@ def _regenerar_mes_inteiro(setor: str, ano: int, mes: int, seed: int = 0, respei
 
 
 
-def page_gestao_dashboard(ano: int, mes: int, auth: dict | None = None):
+def page_gestao_dashboard(ano: int, mes: int):
     st.title("📊 Gestão — Visão Geral (todos os setores)")
     st.caption("Indicadores de trabalho, folgas, férias e afastamentos. Use os filtros para cruzar setor e período.")
     ui_section("Filtros executivos", "Cruze setores e competência para enxergar volume de trabalho, folgas, férias e afastamentos sem mexer nos dados-base.")
@@ -12880,27 +12801,8 @@ def page_gestao_dashboard(ano: int, mes: int, auth: dict | None = None):
     if not setores_all:
         setores_all = ["GERAL"]
 
-    auth = auth or dict(st.session_state.get('auth') or {})
-    setores_permitidos = []
-    try:
-        if auth and not bool(auth.get('is_admin', False)):
-            setores_permitidos = get_setores_permitidos_gestao(auth.get('setor', ''), auth.get('chapa', ''))
-    except Exception:
-        setores_permitidos = []
-
-    if setores_permitidos:
-        permitidos_norm = {_norm_setor(x) for x in setores_permitidos}
-        setores_base = [s for s in setores_all if _norm_setor(s) in permitidos_norm]
-        if not setores_base:
-            setores_base = list(setores_permitidos)
-        st.info("Visualização limitada aos setores liberados no Admin para este usuário de gestão.")
-    else:
-        setores_base = list(setores_all)
-        if auth and str(auth.get('setor','')).strip().upper() in ('GESTAO', 'GERENCIA', 'GERENTE') and not bool(auth.get('is_admin', False)):
-            st.caption("Este usuário de gestão ainda não possui setores específicos vinculados no Admin. Por enquanto, a visão continua geral.")
-
     c1, c2, c3 = st.columns([2,1,1])
-    setores_sel = c1.multiselect("Setores", setores_base, default=setores_base, key="gest_setores")
+    setores_sel = c1.multiselect("Setores", setores_all, default=setores_all, key="gest_setores")
     ano = int(c2.number_input("Ano", value=int(ano), step=1, key="gest_ano"))
     mes = int(c3.selectbox("Mês", list(range(1,13)), index=int(mes)-1, key="gest_mes"))
 
@@ -13875,7 +13777,7 @@ def page_app():
     # PERFIL GESTÃO (GERENTE) — UI dedicada
     # =========================
     if str(setor).strip().upper() in ("GESTAO", "GERENCIA", "GERENTE"):
-        page_gestao_dashboard(int(st.session_state["cfg_ano"]), int(st.session_state["cfg_mes"]), auth=auth)
+        page_gestao_dashboard(int(st.session_state["cfg_ano"]), int(st.session_state["cfg_mes"]))
         return
 
     _lideranca_ok = bool(auth.get('is_lider', False)) or bool(auth.get('is_ax_lider', False)) or colaborador_eh_lideranca(setor, auth.get('chapa',''))
@@ -17216,81 +17118,56 @@ def page_app():
                         st.error(f"Falha ao salvar usuário: {e}")
 
             st.markdown("---")
-            st.subheader("🏷️ Renomear setor")
-            st.caption("Use esta subárea para trocar o nome de um setor em todo o sistema sem precisar editar tabela por tabela.")
-            try:
-                setores_ren = listar_setores_db()
-            except Exception:
-                setores_ren = []
-            rr1, rr2 = st.columns([1.2, 1.4])
-            with rr1:
-                setor_ren_atual = st.selectbox("Setor atual", setores_ren, key="adm_ren_setor_atual") if setores_ren else st.text_input("Setor atual", value="FLV", key="adm_ren_setor_atual_txt")
-            with rr2:
-                setor_ren_novo = st.text_input("Novo nome do setor", value=str(setor_ren_atual or ''), key="adm_ren_setor_novo")
-            st.caption("Isso atualiza o nome do setor nas tabelas que possuem a coluna setor, incluindo colaboradores, usuários, escala, retificações, assinaturas e competências.")
-            if st.button("Renomear setor", key="adm_ren_setor_btn"):
+            st.subheader("🏷️ Administração de setores")
+            st.caption("Use as sub abas abaixo para renomear ou excluir um setor do sistema.")
+            tab_setor_ren, tab_setor_exc = st.tabs(["✏️ Renomear setor", "🗑️ Excluir setor"])
+
+            with tab_setor_ren:
+                st.caption("Use esta subárea para trocar o nome de um setor em todo o sistema sem precisar editar tabela por tabela.")
                 try:
-                    res = admin_rename_setor_global(str(setor_ren_atual), str(setor_ren_novo))
-                    st.success(f"Setor renomeado de {res['setor_antigo']} para {res['setor_novo']}. Tabelas afetadas: {res['total_tabelas']} | Registros atualizados: {res['total_registros']}")
-                    if res['tabelas_atualizadas']:
-                        st.dataframe(pd.DataFrame(res['tabelas_atualizadas'], columns=['Tabela', 'Registros atualizados']), use_container_width=True, hide_index=True)
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Falha ao renomear setor: {e}")
-
-            st.markdown("---")
-            st.subheader("👁️ Permissões da Gestão por setor")
-            st.caption("Aqui o ADMIN escolhe quais setores cada usuário da Gestão poderá visualizar no painel executivo.")
-            try:
-                gestores_opts = admin_list_usuarios_gestao()
-            except Exception:
-                gestores_opts = []
-            try:
-                setores_perm_all = [s for s in listar_setores_db() if str(s or '').strip().upper() not in ('ADMIN',)]
-            except Exception:
-                setores_perm_all = []
-
-            if not gestores_opts:
-                st.info("Nenhum usuário de gestão/liderança encontrado para vincular setores.")
-            else:
-                gestor_map = {g['label']: g for g in gestores_opts}
-                gestor_label_sel = st.selectbox("Usuário da gestão", list(gestor_map.keys()), key="adm_gestao_perm_user")
-                gestor_sel = gestor_map.get(gestor_label_sel) or {}
-                gestor_setor_sel = str(gestor_sel.get('setor') or '').strip()
-                gestor_chapa_sel = str(gestor_sel.get('chapa') or '').strip()
-                setores_atuais_gestor = get_setores_permitidos_gestao(gestor_setor_sel, gestor_chapa_sel)
-                st.caption(f"Gestor selecionado: setor {gestor_setor_sel} • chapa {gestor_chapa_sel}")
-
-                setores_escolhidos = st.multiselect(
-                    "Setores que este usuário poderá ver",
-                    setores_perm_all,
-                    default=[s for s in setores_atuais_gestor if s in setores_perm_all],
-                    key=f"adm_gestao_perm_setores::{gestor_setor_sel}::{gestor_chapa_sel}"
-                )
-                gp1, gp2 = st.columns([1, 1])
-                if gp1.button("Salvar permissões da gestão", key="adm_gestao_perm_salvar"):
-                    try:
-                        res_perm = salvar_setores_permitidos_gestao(gestor_setor_sel, gestor_chapa_sel, setores_escolhidos)
-                        st.success(f"Permissões salvas. Total de setores liberados: {res_perm['total']}")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Falha ao salvar permissões: {e}")
-                if gp2.button("Limpar permissões deste usuário", key="adm_gestao_perm_limpar"):
-                    try:
-                        salvar_setores_permitidos_gestao(gestor_setor_sel, gestor_chapa_sel, [])
-                        st.success("Permissões removidas. Este usuário voltou para visão geral até receber novos setores.")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Falha ao limpar permissões: {e}")
-
-                try:
-                    df_perm_gest = admin_df_permissoes_gestao()
+                    setores_ren = listar_setores_db()
                 except Exception:
-                    df_perm_gest = pd.DataFrame()
-                if not df_perm_gest.empty:
-                    st.dataframe(df_perm_gest, use_container_width=True, hide_index=True)
-                else:
-                    st.caption("Nenhuma permissão específica cadastrada ainda.")
+                    setores_ren = []
+                rr1, rr2 = st.columns([1.2, 1.4])
+                with rr1:
+                    setor_ren_atual = st.selectbox("Setor atual", setores_ren, key="adm_ren_setor_atual") if setores_ren else st.text_input("Setor atual", value="FLV", key="adm_ren_setor_atual_txt")
+                with rr2:
+                    setor_ren_novo = st.text_input("Novo nome do setor", value=str(setor_ren_atual or ''), key="adm_ren_setor_novo")
+                st.caption("Isso atualiza o nome do setor nas tabelas que possuem a coluna setor, incluindo colaboradores, usuários, escala, retificações, assinaturas e competências.")
+                if st.button("Renomear setor", key="adm_ren_setor_btn"):
+                    try:
+                        res = admin_rename_setor_global(str(setor_ren_atual), str(setor_ren_novo))
+                        st.success(f"Setor renomeado de {res['setor_antigo']} para {res['setor_novo']}. Tabelas afetadas: {res['total_tabelas']} | Registros atualizados: {res['total_registros']}")
+                        if res['tabelas_atualizadas']:
+                            st.dataframe(pd.DataFrame(res['tabelas_atualizadas'], columns=['Tabela', 'Registros atualizados']), use_container_width=True, hide_index=True)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Falha ao renomear setor: {e}")
+
+            with tab_setor_exc:
+                st.caption("Exclusão global do setor: remove o setor do cadastro e apaga os registros vinculados nas tabelas que usam setor/setor_alvo.")
+                st.warning("Atenção: esta ação é irreversível para o setor selecionado. Faça backup antes de excluir.")
+                try:
+                    setores_exc = [s for s in listar_setores_db() if _norm_setor(s) not in {'ADMIN', 'GERAL', 'GESTAO'}]
+                except Exception:
+                    setores_exc = []
+                setor_exc = st.selectbox("Setor para excluir", setores_exc, key="adm_exc_setor") if setores_exc else st.text_input("Setor para excluir", value="", key="adm_exc_setor_txt")
+                confirm_exc = st.text_input("Digite EXCLUIR para confirmar", key="adm_exc_confirm")
+                if st.button("Excluir setor agora", key="adm_exc_setor_btn"):
+                    try:
+                        setor_exc_final = str(setor_exc or '').strip()
+                        if not setor_exc_final:
+                            st.error("Selecione o setor que deseja excluir.")
+                        elif str(confirm_exc or '').strip().upper() != 'EXCLUIR':
+                            st.error("Para excluir, digite EXCLUIR no campo de confirmação.")
+                        else:
+                            res = admin_delete_setor_global(setor_exc_final)
+                            st.success(f"Setor {res['setor_excluido']} excluído com sucesso. Tabelas afetadas: {res['total_tabelas']} | Registros removidos: {res['total_registros']}")
+                            if res['tabelas_afetadas']:
+                                st.dataframe(pd.DataFrame(res['tabelas_afetadas'], columns=['Tabela', 'Registros removidos']), use_container_width=True, hide_index=True)
+                            st.rerun()
+                    except Exception as e:
+                        st.error(f"Falha ao excluir setor: {e}")
 
             st.markdown("---")
             st.subheader("🧊 Competência do setor (fechar / reabrir)")
