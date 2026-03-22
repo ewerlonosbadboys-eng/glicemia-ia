@@ -12786,10 +12786,170 @@ def _regenerar_mes_inteiro(setor: str, ano: int, mes: int, seed: int = 0, respei
 
 
 
+def ensure_gestao_setores_permitidos_table() -> None:
+    con = db_conn()
+    cur = con.cursor()
+    try:
+        _safe_exec(cur, """
+        CREATE TABLE IF NOT EXISTS gestao_setores_permitidos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            gestor_setor TEXT NOT NULL,
+            gestor_chapa TEXT NOT NULL,
+            setor_permitido TEXT NOT NULL,
+            criado_em TEXT NOT NULL,
+            UNIQUE(gestor_setor, gestor_chapa, setor_permitido)
+        )
+        """)
+        con.commit()
+    finally:
+        con.close()
+
+
+def listar_usuarios_gestao_para_permissao() -> list[dict]:
+    ensure_gestao_setores_permitidos_table()
+    con = db_conn()
+    try:
+        try:
+            df = pd.read_sql_query(
+                """
+                SELECT nome, setor, chapa
+                FROM usuarios_sistema
+                WHERE UPPER(TRIM(setor)) IN ('GESTAO', 'GERENCIA', 'GERENTE')
+                ORDER BY nome ASC, chapa ASC
+                """,
+                con,
+            )
+        except Exception:
+            df = pd.DataFrame(columns=['nome', 'setor', 'chapa'])
+    finally:
+        con.close()
+
+    out = []
+    for _, r in df.iterrows():
+        setor = _norm_setor(r.get('setor'))
+        chapa = _norm_chapa(r.get('chapa'))
+        nome = str(r.get('nome') or '').strip() or chapa
+        if setor and chapa:
+            out.append({'nome': nome, 'setor': setor, 'chapa': chapa})
+    return out
+
+
+def get_setores_permitidos_gestao(gestor_setor: str, gestor_chapa: str) -> list[str]:
+    ensure_gestao_setores_permitidos_table()
+    gestor_setor = _norm_setor(gestor_setor)
+    gestor_chapa = _norm_chapa(gestor_chapa)
+    if not gestor_setor or not gestor_chapa:
+        return []
+
+    con = db_conn()
+    try:
+        df = pd.read_sql_query(
+            """
+            SELECT setor_permitido
+            FROM gestao_setores_permitidos
+            WHERE UPPER(TRIM(gestor_setor))=? AND TRIM(gestor_chapa)=?
+            ORDER BY setor_permitido ASC
+            """,
+            con,
+            params=(gestor_setor, gestor_chapa),
+        )
+    except Exception:
+        df = pd.DataFrame(columns=['setor_permitido'])
+    finally:
+        con.close()
+
+    return [
+        _norm_setor(x)
+        for x in df.get('setor_permitido', pd.Series(dtype=str)).tolist()
+        if str(x or '').strip()
+    ]
+
+
+def salvar_setores_permitidos_gestao(gestor_setor: str, gestor_chapa: str, setores: list[str]) -> int:
+    ensure_gestao_setores_permitidos_table()
+    gestor_setor = _norm_setor(gestor_setor)
+    gestor_chapa = _norm_chapa(gestor_chapa)
+    setores_norm = sorted({
+        _norm_setor(s)
+        for s in (setores or [])
+        if _norm_setor(s) and _norm_setor(s) not in {'ADMIN', 'GESTAO', 'GERENCIA', 'GERENTE'}
+    })
+
+    con = db_conn()
+    cur = con.cursor()
+    try:
+        cur.execute(
+            "DELETE FROM gestao_setores_permitidos WHERE UPPER(TRIM(gestor_setor))=? AND TRIM(gestor_chapa)=?",
+            (gestor_setor, gestor_chapa),
+        )
+        agora = datetime.now().isoformat()
+        for setor_perm in setores_norm:
+            cur.execute(
+                """
+                INSERT OR IGNORE INTO gestao_setores_permitidos(gestor_setor, gestor_chapa, setor_permitido, criado_em)
+                VALUES (?, ?, ?, ?)
+                """,
+                (gestor_setor, gestor_chapa, setor_perm, agora),
+            )
+        con.commit()
+    finally:
+        con.close()
+    return len(setores_norm)
+
+
+def limpar_setores_permitidos_gestao(gestor_setor: str, gestor_chapa: str) -> int:
+    ensure_gestao_setores_permitidos_table()
+    gestor_setor = _norm_setor(gestor_setor)
+    gestor_chapa = _norm_chapa(gestor_chapa)
+    con = db_conn()
+    cur = con.cursor()
+    try:
+        cur.execute(
+            "DELETE FROM gestao_setores_permitidos WHERE UPPER(TRIM(gestor_setor))=? AND TRIM(gestor_chapa)=?",
+            (gestor_setor, gestor_chapa),
+        )
+        removidos = int(cur.rowcount or 0)
+        con.commit()
+    finally:
+        con.close()
+    return removidos
+
+
+def listar_permissoes_gestao_df() -> pd.DataFrame:
+    ensure_gestao_setores_permitidos_table()
+    con = db_conn()
+    try:
+        try:
+            df = pd.read_sql_query(
+                """
+                SELECT p.gestor_setor, p.gestor_chapa, u.nome AS gestor_nome, p.setor_permitido, p.criado_em
+                FROM gestao_setores_permitidos p
+                LEFT JOIN usuarios_sistema u
+                  ON UPPER(TRIM(u.setor)) = UPPER(TRIM(p.gestor_setor))
+                 AND TRIM(u.chapa) = TRIM(p.gestor_chapa)
+                ORDER BY gestor_nome ASC, p.gestor_chapa ASC, p.setor_permitido ASC
+                """,
+                con,
+            )
+        except Exception:
+            df = pd.DataFrame(columns=['gestor_setor', 'gestor_chapa', 'gestor_nome', 'setor_permitido', 'criado_em'])
+    finally:
+        con.close()
+    return df
+
+
 def page_gestao_dashboard(ano: int, mes: int):
     st.title("📊 Gestão — Visão Geral (todos os setores)")
     st.caption("Indicadores de trabalho, folgas, férias e afastamentos. Use os filtros para cruzar setor e período.")
     ui_section("Filtros executivos", "Cruze setores e competência para enxergar volume de trabalho, folgas, férias e afastamentos sem mexer nos dados-base.")
+
+    auth = st.session_state.get("auth") or {}
+    setores_permitidos = []
+    try:
+        if str(auth.get('setor') or '').strip().upper() in ('GESTAO', 'GERENCIA', 'GERENTE') and not bool(auth.get('is_admin', False)):
+            setores_permitidos = get_setores_permitidos_gestao(str(auth.get('setor') or ''), str(auth.get('chapa') or ''))
+    except Exception:
+        setores_permitidos = []
 
     con = db_conn()
     try:
@@ -12797,9 +12957,16 @@ def page_gestao_dashboard(ano: int, mes: int):
     except Exception:
         setores_all = []
     # remove setores técnicos
-    setores_all = [s for s in setores_all if s and s.upper() not in ("ADMIN",)]
+    setores_all = [s for s in setores_all if s and s.upper() not in ("ADMIN", "GESTAO", "GERENCIA", "GERENTE")]
+    if setores_permitidos:
+        permitidos_norm = {_norm_setor(s) for s in setores_permitidos if str(s or '').strip()}
+        setores_all = [s for s in setores_all if _norm_setor(s) in permitidos_norm]
     if not setores_all:
-        setores_all = ["GERAL"]
+        st.warning("Nenhum setor liberado para esta gestão.")
+        return
+
+    if setores_permitidos:
+        st.info("Esta gestão está limitada aos setores liberados no Admin.")
 
     c1, c2, c3 = st.columns([2,1,1])
     setores_sel = c1.multiselect("Setores", setores_all, default=setores_all, key="gest_setores")
@@ -17119,8 +17286,77 @@ def page_app():
 
             st.markdown("---")
             st.subheader("🏷️ Administração de setores")
-            st.caption("Use as sub abas abaixo para renomear ou excluir um setor do sistema.")
-            tab_setor_ren, tab_setor_exc = st.tabs(["✏️ Renomear setor", "🗑️ Excluir setor"])
+            st.caption("Use as sub abas abaixo para controlar permissões da Gestão, renomear ou excluir um setor do sistema.")
+            tab_setor_perm, tab_setor_ren, tab_setor_exc = st.tabs(["👁️ Permissões da Gestão", "✏️ Renomear setor", "🗑️ Excluir setor"])
+
+            with tab_setor_perm:
+                st.caption("Aqui o ADMIN escolhe quais setores cada usuário da Gestão pode visualizar no painel Gestão.")
+                usuarios_gestao = listar_usuarios_gestao_para_permissao()
+                if not usuarios_gestao:
+                    st.info("Nenhum usuário de Gestão encontrado. Cadastre um usuário no setor GESTAO para liberar setores específicos.")
+                else:
+                    mapa_gest = {}
+                    opcoes_gest = []
+                    for u in usuarios_gestao:
+                        label_u = f"{str(u.get('nome') or '').strip()} — {str(u.get('chapa') or '').strip()} ({str(u.get('setor') or '').strip()})"
+                        opcoes_gest.append(label_u)
+                        mapa_gest[label_u] = u
+
+                    gestor_sel_label = st.selectbox("Usuário da Gestão", opcoes_gest, key="adm_gest_perm_user")
+                    gestor_sel = mapa_gest.get(gestor_sel_label) or {}
+
+                    try:
+                        setores_disp = [s for s in listar_setores_db() if _norm_setor(s) not in {'ADMIN', 'GESTAO', 'GERENCIA', 'GERENTE'}]
+                    except Exception:
+                        setores_disp = []
+
+                    setores_salvos = get_setores_permitidos_gestao(str(gestor_sel.get('setor') or ''), str(gestor_sel.get('chapa') or ''))
+                    setores_default = [s for s in setores_disp if _norm_setor(s) in {_norm_setor(x) for x in setores_salvos}]
+                    setores_marcados = st.multiselect(
+                        "Setores que este usuário pode ver",
+                        setores_disp,
+                        default=setores_default,
+                        key=f"adm_gest_perm_setores::{str(gestor_sel.get('setor') or '')}::{str(gestor_sel.get('chapa') or '')}",
+                    )
+
+                    pg1, pg2 = st.columns([1, 1])
+                    if pg1.button("Salvar permissões", key="adm_gest_perm_salvar"):
+                        try:
+                            total_perm = salvar_setores_permitidos_gestao(
+                                str(gestor_sel.get('setor') or ''),
+                                str(gestor_sel.get('chapa') or ''),
+                                list(setores_marcados or []),
+                            )
+                            st.success(f"Permissões salvas com sucesso. Total de setores liberados: {total_perm}.")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Falha ao salvar permissões da gestão: {e}")
+                    if pg2.button("Limpar permissões deste usuário", key="adm_gest_perm_limpar"):
+                        try:
+                            removidos = limpar_setores_permitidos_gestao(str(gestor_sel.get('setor') or ''), str(gestor_sel.get('chapa') or ''))
+                            st.success(f"Permissões removidas com sucesso. Registros apagados: {removidos}.")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Falha ao limpar permissões da gestão: {e}")
+
+                    df_perm = listar_permissoes_gestao_df()
+                    st.markdown("##### Permissões já cadastradas")
+                    if df_perm is not None and not df_perm.empty:
+                        df_view_perm = df_perm.rename(columns={
+                            'gestor_nome': 'Nome',
+                            'gestor_setor': 'Setor do usuário',
+                            'gestor_chapa': 'Chapa',
+                            'setor_permitido': 'Setor liberado',
+                            'criado_em': 'Criado em',
+                        }).copy()
+                        if 'Criado em' in df_view_perm.columns:
+                            try:
+                                df_view_perm['Criado em'] = pd.to_datetime(df_view_perm['Criado em'], errors='coerce').dt.strftime('%d/%m/%Y %H:%M')
+                            except Exception:
+                                pass
+                        st.dataframe(df_view_perm, use_container_width=True, hide_index=True)
+                    else:
+                        st.info("Ainda não existem permissões específicas salvas para usuários da Gestão.")
 
             with tab_setor_ren:
                 st.caption("Use esta subárea para trocar o nome de um setor em todo o sistema sem precisar editar tabela por tabela.")
