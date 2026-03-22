@@ -2754,7 +2754,7 @@ def ui_back_header(title: str, main_key: str, sub_label: str):
     st.markdown(f"## {title}")
 
 
-def get_app_like_nav_config(is_admin_area: bool, setor: str = ""):
+def get_app_like_nav_config(is_admin_area: bool, setor: str = "", modo_gestao_somente: bool = False):
     setor_norm = str(setor or "").strip().upper()
     colabs = [
         ("👥 Colaboradores", {"sec_main": "👥 Colaboradores", "sec_col": "👥 Colaboradores"}),
@@ -2767,6 +2767,22 @@ def get_app_like_nav_config(is_admin_area: bool, setor: str = ""):
     ]
     if setor_norm.replace(" ", "").startswith("FRENTECAIXA"):
         colabs.append(("🔁 Transferência", {"sec_main": "👥 Colaboradores", "sec_col": "🔁 Transferência"}))
+
+    if modo_gestao_somente and not is_admin_area:
+        return {
+            "gestao": {
+                "label": "⚙️ Gestão",
+                "default_sub": "📂 Menu Gestão",
+                "submenus": [
+                    ("📂 Menu Gestão", {"sec_main": "📂 Menu Gestão"}),
+                ],
+            },
+            "admin": {
+                "label": "🔒 Admin",
+                "default_sub": "Painel admin",
+                "submenus": [("Painel admin", {"sec_main": "🔒 Admin"})],
+            },
+        }
 
     return {
         "dashboard": {
@@ -2820,9 +2836,9 @@ def get_app_like_nav_config(is_admin_area: bool, setor: str = ""):
         },
     }
 
-def render_app_like_sidebar_nav(is_admin_area: bool, setor: str = ""):
-    cfg = get_app_like_nav_config(is_admin_area, setor)
-    main_keys = ["admin"] if is_admin_area else ["dashboard", "colaboradores", "escala", "gestao"]
+def render_app_like_sidebar_nav(is_admin_area: bool, setor: str = "", modo_gestao_somente: bool = False):
+    cfg = get_app_like_nav_config(is_admin_area, setor, modo_gestao_somente)
+    main_keys = ["admin"] if is_admin_area else (["gestao"] if modo_gestao_somente else ["dashboard", "colaboradores", "escala", "gestao"])
     default_main = main_keys[0]
     if st.session_state.get("app_like_main") not in main_keys:
         st.session_state["app_like_main"] = default_main
@@ -2846,9 +2862,9 @@ def render_app_like_sidebar_nav(is_admin_area: bool, setor: str = ""):
         st.session_state["app_like_sub"] = current_sub
 
 
-def render_app_like_top_nav(is_admin_area: bool, setor: str = ""):
-    cfg = get_app_like_nav_config(is_admin_area, setor)
-    main_keys = ["admin"] if is_admin_area else ["dashboard", "colaboradores", "escala", "gestao"]
+def render_app_like_top_nav(is_admin_area: bool, setor: str = "", modo_gestao_somente: bool = False):
+    cfg = get_app_like_nav_config(is_admin_area, setor, modo_gestao_somente)
+    main_keys = ["admin"] if is_admin_area else (["gestao"] if modo_gestao_somente else ["dashboard", "colaboradores", "escala", "gestao"])
     default_main = main_keys[0]
     if st.session_state.get("app_like_main") not in main_keys:
         st.session_state["app_like_main"] = default_main
@@ -2882,9 +2898,9 @@ def render_app_like_top_nav(is_admin_area: bool, setor: str = ""):
     st.markdown('</div>', unsafe_allow_html=True)
 
 
-def resolve_app_like_route(is_admin_area: bool, setor: str = ""):
-    cfg = get_app_like_nav_config(is_admin_area, setor)
-    main_keys = ["admin"] if is_admin_area else ["dashboard", "colaboradores", "escala", "gestao"]
+def resolve_app_like_route(is_admin_area: bool, setor: str = "", modo_gestao_somente: bool = False):
+    cfg = get_app_like_nav_config(is_admin_area, setor, modo_gestao_somente)
+    main_keys = ["admin"] if is_admin_area else (["gestao"] if modo_gestao_somente else ["dashboard", "colaboradores", "escala", "gestao"])
     current_main = st.session_state.get("app_like_main")
     if current_main not in main_keys:
         current_main = main_keys[0]
@@ -14265,7 +14281,8 @@ def page_app():
 
         if _perfil_gestao_nav:
             st.toggle("Menu compacto", key="ultra_sidebar_compact", help="Diminui a largura da sidebar para leitura mais focada.")
-            render_app_like_sidebar_nav(_is_admin_area_nav, auth_setor)
+            _modo_gestao_somente_nav = bool(_setores_permitidos_gestao) and not bool(auth.get('is_admin', False))
+            render_app_like_sidebar_nav(_is_admin_area_nav, auth_setor, _modo_gestao_somente_nav)
             st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
 
         if st.button("🚪 Sair", use_container_width=True, key="logout_btn"):
@@ -14381,8 +14398,9 @@ def page_app():
     # APP / NAVEGAÇÃO PRINCIPAL
     # =========================
     is_admin_area = bool(auth.get("is_admin", False)) and auth_setor == "ADMIN"
-    render_app_like_top_nav(is_admin_area, auth_setor)
-    app_route = resolve_app_like_route(is_admin_area, auth_setor)
+    _modo_gestao_somente = bool(_setores_permitidos_gestao) and not bool(auth.get('is_admin', False))
+    render_app_like_top_nav(is_admin_area, auth_setor, _modo_gestao_somente)
+    app_route = resolve_app_like_route(is_admin_area, auth_setor, _modo_gestao_somente)
     sec_main = app_route.get("sec_main", "dashboard")
     sec_col = app_route.get("sec_col", "👥 Colaboradores")
     sec_aj = app_route.get("sec_aj", "🧩 Folgas manuais em grade")
@@ -15691,47 +15709,56 @@ def page_app():
         st.info("Clique em uma das opções acima para abrir o conteúdo de Escala.")
 
     elif sec_main == "📂 Menu Gestão":
-        ui_section("Gestão", "Clique em uma opção para abrir as telas da área de gestão.")
-
-        _mostrar_dashboard_gerente = False
-        try:
-            _mostrar_dashboard_gerente = bool(_setores_permitidos_gestao) and not bool(auth.get('is_admin', False))
-        except Exception:
-            _mostrar_dashboard_gerente = False
-
-        if _mostrar_dashboard_gerente:
+        _modo_gestao_somente_menu = bool(_setores_permitidos_gestao) and not bool(auth.get('is_admin', False))
+        if _modo_gestao_somente_menu:
+            ui_section("Gestão", "Modo gestão ativo: este usuário vê somente o painel consolidado dos setores liberados.")
+            st.success(f"👁️ Modo Gestão ativo para o setor base {auth_setor}. Edição, cadastro, geração de escala e ajustes ficam ocultos neste perfil.")
             st.markdown("### 📊 Painel do gerente")
-            st.caption("Abaixo aparecem os dados consolidados dos setores liberados para este gerente, sem precisar trocar de usuário ou ir para outro painel.")
+            st.caption("Abaixo aparecem os dados consolidados dos setores liberados para este gerente, sem precisar trocar de usuário ou navegar por outras áreas.")
             page_gestao_dashboard(int(st.session_state["cfg_ano"]), int(st.session_state["cfg_mes"]))
-            st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
-            st.caption("Ações operacionais da Gestão continuam disponíveis logo abaixo.")
+            st.info("Este perfil está em visualização gerencial. Somente indicadores, gráficos e consultas ficam disponíveis.")
+        else:
+            ui_section("Gestão", "Clique em uma opção para abrir as telas da área de gestão.")
 
-        botoes_gestao = [
-            ("🧩 Folgas manuais em grade", "🧩 Folgas manuais em grade", "ges_menu_folgas"),
-            ("📊 Contagens por dia", "📊 Contagens por dia", "ges_menu_contagens"),
-            ("🔁 Troca de horários", "🔁 Troca de horários", "ges_menu_troca"),
-            ("✅ Preferência por subgrupo", "✅ Preferência por subgrupo", "ges_menu_preferencia"),
-            ("📌 Subgrupos (editável)", "📌 Subgrupos (editável)", "ges_menu_subgrupos"),
-            ("✏️ Retificar folga, horário e subgrupo", "✏️ Retificar folga, horário e subgrupo", "ges_menu_retificar"),
-            ("🗺️ Mapa anual de férias", "🗺️ Mapa anual de férias", "ges_menu_mapa_ferias"),
-            ("➕ Lançar Férias", "➕ Lançar Férias", "ges_menu_lancar_ferias"),
-            ("📊 Controle (histórico)", "📊 Controle (histórico)", "ges_menu_controle_ferias"),
-            ("📋 Férias cadastradas", "📋 Férias cadastradas", "ges_menu_ferias_cadastradas"),
-            ("❌ Remover férias", "❌ Remover férias", "ges_menu_remover_ferias"),
-            ("✍️ Assinaturas", "✍️ Assinaturas", "ges_menu_assinaturas"),
-            ("📨 Minhas solicitações", "📨 Minhas solicitações", "ges_menu_solicitacoes"),
-        ]
-        idx_btn_ges = 0
-        while idx_btn_ges < len(botoes_gestao):
-            linha = st.columns(min(4, len(botoes_gestao) - idx_btn_ges))
-            for col_btn in linha:
-                label_btn, destino_btn, key_btn = botoes_gestao[idx_btn_ges]
-                with col_btn:
-                    if st.button(label_btn, key=key_btn, use_container_width=True):
-                        st.session_state["app_like_sub"] = destino_btn
-                        st.rerun()
-                idx_btn_ges += 1
-        st.info("Clique em uma das opções acima para abrir o conteúdo de Gestão.")
+            _mostrar_dashboard_gerente = False
+            try:
+                _mostrar_dashboard_gerente = bool(_setores_permitidos_gestao) and not bool(auth.get('is_admin', False))
+            except Exception:
+                _mostrar_dashboard_gerente = False
+
+            if _mostrar_dashboard_gerente:
+                st.markdown("### 📊 Painel do gerente")
+                st.caption("Abaixo aparecem os dados consolidados dos setores liberados para este gerente, sem precisar trocar de usuário ou ir para outro painel.")
+                page_gestao_dashboard(int(st.session_state["cfg_ano"]), int(st.session_state["cfg_mes"]))
+                st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
+                st.caption("Ações operacionais da Gestão continuam disponíveis logo abaixo.")
+
+            botoes_gestao = [
+                ("🧩 Folgas manuais em grade", "🧩 Folgas manuais em grade", "ges_menu_folgas"),
+                ("📊 Contagens por dia", "📊 Contagens por dia", "ges_menu_contagens"),
+                ("🔁 Troca de horários", "🔁 Troca de horários", "ges_menu_troca"),
+                ("✅ Preferência por subgrupo", "✅ Preferência por subgrupo", "ges_menu_preferencia"),
+                ("📌 Subgrupos (editável)", "📌 Subgrupos (editável)", "ges_menu_subgrupos"),
+                ("✏️ Retificar folga, horário e subgrupo", "✏️ Retificar folga, horário e subgrupo", "ges_menu_retificar"),
+                ("🗺️ Mapa anual de férias", "🗺️ Mapa anual de férias", "ges_menu_mapa_ferias"),
+                ("➕ Lançar Férias", "➕ Lançar Férias", "ges_menu_lancar_ferias"),
+                ("📊 Controle (histórico)", "📊 Controle (histórico)", "ges_menu_controle_ferias"),
+                ("📋 Férias cadastradas", "📋 Férias cadastradas", "ges_menu_ferias_cadastradas"),
+                ("❌ Remover férias", "❌ Remover férias", "ges_menu_remover_ferias"),
+                ("✍️ Assinaturas", "✍️ Assinaturas", "ges_menu_assinaturas"),
+                ("📨 Minhas solicitações", "📨 Minhas solicitações", "ges_menu_solicitacoes"),
+            ]
+            idx_btn_ges = 0
+            while idx_btn_ges < len(botoes_gestao):
+                linha = st.columns(min(4, len(botoes_gestao) - idx_btn_ges))
+                for col_btn in linha:
+                    label_btn, destino_btn, key_btn = botoes_gestao[idx_btn_ges]
+                    with col_btn:
+                        if st.button(label_btn, key=key_btn, use_container_width=True):
+                            st.session_state["app_like_sub"] = destino_btn
+                            st.rerun()
+                    idx_btn_ges += 1
+            st.info("Clique em uma das opções acima para abrir o conteúdo de Gestão.")
 
     elif sec_main == "🚀 Gerar Escala":
         st.subheader("🚀 Gerar escala")
