@@ -13895,10 +13895,23 @@ def page_app():
     aplicar_reforco_visual_etapa5()
     aplicar_ultra_visual_empresa_total(bool(st.session_state.get("ultra_sidebar_compact", False)))
     auth = st.session_state.get("auth") or {}
-    setor = auth.get("setor", "GERAL")
-    _lideranca_ok_nav = bool(auth.get('is_lider', False)) or bool(auth.get('is_ax_lider', False)) or colaborador_eh_lideranca(setor, auth.get('chapa',''))
+    auth_setor = _norm_setor(auth.get("setor", "GERAL")) or "GERAL"
+    setor = auth_setor
+    auth_chapa = _norm_chapa(auth.get('chapa', ''))
+    _lideranca_ok_nav = bool(auth.get('is_lider', False)) or bool(auth.get('is_ax_lider', False)) or colaborador_eh_lideranca(auth_setor, auth_chapa)
     _perfil_gestao_nav = bool(auth.get('is_admin', False)) or _lideranca_ok_nav
-    _is_admin_area_nav = bool(auth.get("is_admin", False)) and setor == "ADMIN"
+    _is_admin_area_nav = bool(auth.get("is_admin", False)) and auth_setor == "ADMIN"
+
+    _setores_permitidos_gestao = []
+    if _lideranca_ok_nav and not bool(auth.get('is_admin', False)):
+        try:
+            _setores_permitidos_gestao = [
+                _norm_setor(s)
+                for s in get_setores_permitidos_gestao(auth_setor, auth_chapa)
+                if _norm_setor(s)
+            ]
+        except Exception:
+            _setores_permitidos_gestao = []
 
     if st.session_state.get("auth_force_change", False):
         st.markdown("## 🔐 Troca obrigatória de senha")
@@ -13914,8 +13927,8 @@ def page_app():
                 st.error("A confirmação da senha não confere.")
                 st.stop()
             try:
-                update_password(setor, auth.get("chapa", ""), nova1)
-                set_force_change_password(setor, auth.get("chapa", ""), False)
+                update_password(auth_setor, auth_chapa, nova1)
+                set_force_change_password(auth_setor, auth_chapa, False)
                 st.session_state["auth_force_change"] = False
                 if st.session_state.get("auth"):
                     st.session_state["auth"]["forcar_troca_senha"] = False
@@ -13946,9 +13959,9 @@ def page_app():
 
         _ano_sb = int(st.session_state.get('cfg_ano') or datetime.now().year)
         _mes_sb = int(st.session_state.get('cfg_mes') or datetime.now().month)
-        _colab_sb = get_colaborador_competencia_snapshot(setor, auth.get('chapa',''), _ano_sb, _mes_sb) or get_colaborador_record(setor, auth.get('chapa',''))
-        _subgrupo_auth = get_subgrupo_competencia_ou_base(setor, auth.get('chapa',''), _ano_sb, _mes_sb, (_colab_sb or {}).get('Subgrupo', 'SEM SUBGRUPO'))
-        _lideranca_ok = bool(auth.get('is_lider', False)) or bool(auth.get('is_ax_lider', False)) or colaborador_eh_lideranca(setor, auth.get('chapa',''))
+        _colab_sb = get_colaborador_competencia_snapshot(auth_setor, auth_chapa, _ano_sb, _mes_sb) or get_colaborador_record(auth_setor, auth_chapa)
+        _subgrupo_auth = get_subgrupo_competencia_ou_base(auth_setor, auth_chapa, _ano_sb, _mes_sb, (_colab_sb or {}).get('Subgrupo', 'SEM SUBGRUPO'))
+        _lideranca_ok = bool(auth.get('is_lider', False)) or bool(auth.get('is_ax_lider', False)) or colaborador_eh_lideranca(auth_setor, auth_chapa)
         _perfil_gestao = bool(auth.get('is_admin', False)) or _lideranca_ok
         perfil_label = 'ADMIN' if auth.get('is_admin', False) else ('AX LÍDER' if auth.get('is_ax_lider', False) else ('LÍDER' if _lideranca_ok else 'COLABORADOR'))
 
@@ -13966,7 +13979,7 @@ def page_app():
 
         if _perfil_gestao_nav:
             st.toggle("Menu compacto", key="ultra_sidebar_compact", help="Diminui a largura da sidebar para leitura mais focada.")
-            render_app_like_sidebar_nav(_is_admin_area_nav, setor)
+            render_app_like_sidebar_nav(_is_admin_area_nav, auth_setor)
             st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
 
         if st.button("🚪 Sair", use_container_width=True, key="logout_btn"):
@@ -13976,11 +13989,11 @@ def page_app():
     # =========================
     # PERFIL GESTÃO (GERENTE) — UI dedicada
     # =========================
-    if str(setor).strip().upper() in ("GESTAO", "GERENCIA", "GERENTE"):
+    if str(auth_setor).strip().upper() in ("GESTAO", "GERENCIA", "GERENTE"):
         page_gestao_dashboard(int(st.session_state["cfg_ano"]), int(st.session_state["cfg_mes"]))
         return
 
-    _lideranca_ok = bool(auth.get('is_lider', False)) or bool(auth.get('is_ax_lider', False)) or colaborador_eh_lideranca(setor, auth.get('chapa',''))
+    _lideranca_ok = bool(auth.get('is_lider', False)) or bool(auth.get('is_ax_lider', False)) or colaborador_eh_lideranca(auth_setor, auth_chapa)
     _perfil_gestao = bool(auth.get('is_admin', False)) or _lideranca_ok
 
     if not _perfil_gestao:
@@ -13990,12 +14003,14 @@ def page_app():
     ui_hero(
         f"Olá, {auth.get('nome','Usuário')}",
         (
-            f"Perfil: {perfil_label} • Setor: {setor} • Chapa: {auth.get('chapa','-')} • "
+            f"Perfil: {perfil_label} • Setor base: {auth_setor} • Chapa: {auth.get('chapa','-')} • "
             f"Subgrupo: {_subgrupo_auth} • Competência {int(st.session_state['cfg_mes']):02d}/{int(st.session_state['cfg_ano'])}"
         ),
         "ESCALA 5X2 AUTOMATIZADA",
     )
     ui_section("Navegação principal", "As abas e fluxos abaixo continuam seguindo as mesmas permissões, aprovações e regras já definidas no sistema.")
+    if setor != auth_setor:
+        st.caption(f"Visualizando agora o setor liberado: {setor}")
 
     nav_sp1, nav_sp2, nav_mes_col, nav_ano_col = st.columns([4.2, 0.2, 1.0, 1.0])
     with nav_mes_col:
@@ -14014,6 +14029,28 @@ def page_app():
         )
     st.session_state["cfg_mes"] = int(mes_cfg_topo)
     st.session_state["cfg_ano"] = int(ano_cfg_topo)
+
+    setores_visao_gestao = []
+    if bool(auth.get('is_admin', False)):
+        setor = auth_setor
+    else:
+        setores_visao_gestao = list(dict.fromkeys([s for s in (_setores_permitidos_gestao or []) if s]))
+        if setores_visao_gestao:
+            chave_setor_ctx = f"gestao_setor_contexto::{auth_setor}::{auth_chapa or 'semchapa'}"
+            if st.session_state.get(chave_setor_ctx) not in setores_visao_gestao:
+                st.session_state[chave_setor_ctx] = setores_visao_gestao[0]
+            gx1, gx2 = st.columns([2.2, 3.8])
+            with gx1:
+                setor = st.selectbox(
+                    "Setor em gestão",
+                    setores_visao_gestao,
+                    key=chave_setor_ctx,
+                    help="Escolha qual setor liberado você quer analisar nesta tela.",
+                )
+            with gx2:
+                st.info(f"Setor base: {auth_setor} • setores liberados: {len(setores_visao_gestao)}")
+        else:
+            setor = auth_setor
 
     # =========================
     # KPIs
@@ -14054,9 +14091,9 @@ def page_app():
     # =========================
     # APP / NAVEGAÇÃO PRINCIPAL
     # =========================
-    is_admin_area = bool(auth.get("is_admin", False)) and setor == "ADMIN"
-    render_app_like_top_nav(is_admin_area, setor)
-    app_route = resolve_app_like_route(is_admin_area, setor)
+    is_admin_area = bool(auth.get("is_admin", False)) and auth_setor == "ADMIN"
+    render_app_like_top_nav(is_admin_area, auth_setor)
+    app_route = resolve_app_like_route(is_admin_area, auth_setor)
     sec_main = app_route.get("sec_main", "dashboard")
     sec_col = app_route.get("sec_col", "👥 Colaboradores")
     sec_aj = app_route.get("sec_aj", "🧩 Folgas manuais em grade")
