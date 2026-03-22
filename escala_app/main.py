@@ -9066,6 +9066,292 @@ def get_kpis_cached(setor: str, ano: int, mes: int):
         "trabalhos_mes": int(trabalhos_mes),
     }
 
+
+@st.cache_data(show_spinner=False, ttl=120)
+def get_kpis_multi_setor_cached(setores: tuple, ano: int, mes: int):
+    setores = tuple(sorted({_norm_setor(s) for s in (setores or ()) if _norm_setor(s)}))
+    if not setores:
+        return {"total_colab": 0, "folgas_mes": 0, "ferias_mes": 0, "trabalhos_mes": 0}
+
+    total_colab = folgas_mes = ferias_mes = trabalhos_mes = 0
+    for setor_item in setores:
+        try:
+            k = get_kpis_cached(setor_item, int(ano), int(mes)) or {}
+        except Exception:
+            k = {}
+        total_colab += int(k.get("total_colab", 0) or 0)
+        folgas_mes += int(k.get("folgas_mes", 0) or 0)
+        ferias_mes += int(k.get("ferias_mes", 0) or 0)
+        trabalhos_mes += int(k.get("trabalhos_mes", 0) or 0)
+
+    return {
+        "total_colab": int(total_colab),
+        "folgas_mes": int(folgas_mes),
+        "ferias_mes": int(ferias_mes),
+        "trabalhos_mes": int(trabalhos_mes),
+    }
+
+
+@st.cache_data(show_spinner=False, ttl=120)
+def load_gestao_dashboard_multi_setor(setores: tuple, ano: int, mes: int):
+    setores = tuple(sorted({_norm_setor(s) for s in (setores or ()) if _norm_setor(s)}))
+    if not setores:
+        return {
+            'setores': [],
+            'resumo': {},
+            'df_status_ref': pd.DataFrame(),
+            'df_setores': pd.DataFrame(),
+            'df_diario': pd.DataFrame(),
+            'df_ferias': pd.DataFrame(),
+        }
+
+    ano = int(ano)
+    mes = int(mes)
+    placeholders = ','.join(['?'] * len(setores))
+    con = db_conn()
+    try:
+        try:
+            df_colab = pd.read_sql_query(
+                f"SELECT setor, chapa, nome, subgrupo FROM colaboradores WHERE setor IN ({placeholders})",
+                con,
+                params=list(setores),
+            )
+        except Exception:
+            df_colab = pd.DataFrame(columns=['setor', 'chapa', 'nome', 'subgrupo'])
+
+        try:
+            df_escala = pd.read_sql_query(
+                f"SELECT setor, chapa, dia, status FROM escala_mes WHERE ano=? AND mes=? AND setor IN ({placeholders})",
+                con,
+                params=[ano, mes, *list(setores)],
+            )
+        except Exception:
+            df_escala = pd.DataFrame(columns=['setor', 'chapa', 'dia', 'status'])
+
+        try:
+            dt_ini = date(ano, mes, 1)
+            dt_fim = date(ano, mes, calendar.monthrange(ano, mes)[1])
+            df_ferias = pd.read_sql_query(
+                f"""
+                SELECT f.setor, f.chapa, f.inicio, f.fim, COALESCE(c.nome, '') AS nome
+                FROM ferias f
+                LEFT JOIN colaboradores c ON c.setor = f.setor AND CAST(c.chapa AS TEXT)=CAST(f.chapa AS TEXT)
+                WHERE f.setor IN ({placeholders})
+                  AND date(f.inicio) <= date(?)
+                  AND date(f.fim) >= date(?)
+                ORDER BY date(f.inicio) ASC, f.setor ASC
+                """,
+                con,
+                params=[*list(setores), dt_fim.strftime('%Y-%m-%d'), dt_ini.strftime('%Y-%m-%d')],
+            )
+        except Exception:
+            df_ferias = pd.DataFrame(columns=['setor', 'chapa', 'inicio', 'fim', 'nome'])
+    finally:
+        con.close()
+
+    if 'setor' not in df_colab.columns:
+        df_colab['setor'] = ''
+    if 'chapa' not in df_colab.columns:
+        df_colab['chapa'] = ''
+    df_colab['setor'] = df_colab['setor'].astype(str).map(_norm_setor)
+    df_colab['chapa'] = df_colab['chapa'].astype(str).map(_norm_chapa)
+    total_colaboradores = int(len(df_colab.index))
+
+    if 'setor' not in df_escala.columns:
+        df_escala['setor'] = ''
+    if 'chapa' not in df_escala.columns:
+        df_escala['chapa'] = ''
+    if 'dia' not in df_escala.columns:
+        df_escala['dia'] = 0
+    if 'status' not in df_escala.columns:
+        df_escala['status'] = ''
+    df_escala['setor'] = df_escala['setor'].astype(str).map(_norm_setor)
+    df_escala['chapa'] = df_escala['chapa'].astype(str).map(_norm_chapa)
+    df_escala['dia'] = pd.to_numeric(df_escala['dia'], errors='coerce').fillna(0).astype(int)
+    df_escala['status'] = df_escala['status'].astype(str).str.strip()
+
+    hoje = datetime.now()
+    ultimo_dia = calendar.monthrange(ano, mes)[1]
+    dia_ref = min(int(hoje.day), int(ultimo_dia)) if int(hoje.year) == ano and int(hoje.month) == mes else 1
+    df_ref = df_escala[df_escala['dia'] == int(dia_ref)].copy() if not df_escala.empty else pd.DataFrame(columns=df_escala.columns)
+
+    status_ref_labels = {
+        'Trabalhando hoje': int(df_ref['status'].isin(['Trabalho', 'Balanço']).sum()) if not df_ref.empty else 0,
+        'De folga hoje': int((df_ref['status'] == 'Folga').sum()) if not df_ref.empty else 0,
+        'De férias hoje': int((df_ref['status'] == 'Férias').sum()) if not df_ref.empty else 0,
+        'Afastados hoje': int((df_ref['status'] == 'Afastamento').sum()) if not df_ref.empty else 0,
+    }
+    df_status_ref = pd.DataFrame({'Indicador': list(status_ref_labels.keys()), 'Quantidade': list(status_ref_labels.values())}).set_index('Indicador')
+
+    if df_escala.empty:
+        df_setores = pd.DataFrame(columns=['Setor', 'Colaboradores', 'Trabalho', 'Folga', 'Férias', 'Afastamento'])
+        df_diario = pd.DataFrame(columns=['Dia', 'Trabalho', 'Folga', 'Férias', 'Afastamento'])
+    else:
+        df_setores = (
+            df_escala.assign(
+                Trabalho=df_escala['status'].isin(['Trabalho', 'Balanço']).astype(int),
+                Folga=(df_escala['status'] == 'Folga').astype(int),
+                Férias=(df_escala['status'] == 'Férias').astype(int),
+                Afastamento=(df_escala['status'] == 'Afastamento').astype(int),
+            )
+            .groupby('setor', as_index=False)[['Trabalho', 'Folga', 'Férias', 'Afastamento']]
+            .sum()
+            .rename(columns={'setor': 'Setor'})
+        )
+        if not df_colab.empty:
+            df_colab_count = df_colab.groupby('setor', as_index=False)['chapa'].nunique().rename(columns={'setor': 'Setor', 'chapa': 'Colaboradores'})
+            df_setores = df_setores.merge(df_colab_count, on='Setor', how='left')
+        else:
+            df_setores['Colaboradores'] = 0
+        df_setores['Colaboradores'] = pd.to_numeric(df_setores['Colaboradores'], errors='coerce').fillna(0).astype(int)
+        df_setores = df_setores[['Setor', 'Colaboradores', 'Trabalho', 'Folga', 'Férias', 'Afastamento']].sort_values('Setor')
+
+        df_diario = (
+            df_escala.assign(
+                Trabalho=df_escala['status'].isin(['Trabalho', 'Balanço']).astype(int),
+                Folga=(df_escala['status'] == 'Folga').astype(int),
+                Férias=(df_escala['status'] == 'Férias').astype(int),
+                Afastamento=(df_escala['status'] == 'Afastamento').astype(int),
+            )
+            .groupby('dia', as_index=False)[['Trabalho', 'Folga', 'Férias', 'Afastamento']]
+            .sum()
+            .rename(columns={'dia': 'Dia'})
+            .sort_values('Dia')
+        )
+
+    ferias_programadas = int(len(df_ferias.index)) if not df_ferias.empty else 0
+
+    resumo = {
+        'total_colaboradores': int(total_colaboradores),
+        'trabalhando_hoje': int(status_ref_labels['Trabalhando hoje']),
+        'folga_hoje': int(status_ref_labels['De folga hoje']),
+        'ferias_hoje': int(status_ref_labels['De férias hoje']),
+        'afastados_hoje': int(status_ref_labels['Afastados hoje']),
+        'ferias_programadas': int(ferias_programadas),
+        'dia_referencia': int(dia_ref),
+        'qtd_setores': int(len(setores)),
+    }
+
+    return {
+        'setores': list(setores),
+        'resumo': resumo,
+        'df_status_ref': df_status_ref,
+        'df_setores': df_setores,
+        'df_diario': df_diario,
+        'df_ferias': df_ferias,
+    }
+
+
+def render_gestao_dashboard_executivo(auth_setor: str, auth_chapa: str, ano: int, mes: int, setores_visiveis: list[str]):
+    setores_visiveis = [ _norm_setor(s) for s in (setores_visiveis or []) if _norm_setor(s) ]
+    if not setores_visiveis:
+        return
+
+    pacote = load_gestao_dashboard_multi_setor(tuple(setores_visiveis), int(ano), int(mes)) or {}
+    resumo = pacote.get('resumo') or {}
+    df_status_ref = pacote.get('df_status_ref')
+    df_setores = pacote.get('df_setores')
+    df_diario = pacote.get('df_diario')
+    df_ferias = pacote.get('df_ferias')
+    dia_ref = int(resumo.get('dia_referencia', 1) or 1)
+
+    ui_section(
+        'Dashboard executivo da gestão',
+        'Visão consolidada de todos os setores liberados para o gestor, com foco em trabalho, folgas, férias e cobertura.'
+    )
+    st.caption(
+        f"Setor base do gestor: {str(auth_setor or '').strip().upper()} • "
+        f"Setores liberados: {int(resumo.get('qtd_setores', 0) or 0)} • "
+        f"Dia de referência: {dia_ref:02d}/{int(mes):02d}/{int(ano)}"
+    )
+
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    cards = [
+        ('Colaboradores ativos', int(resumo.get('total_colaboradores', 0) or 0)),
+        ('Trabalhando hoje', int(resumo.get('trabalhando_hoje', 0) or 0)),
+        ('Folgas hoje', int(resumo.get('folga_hoje', 0) or 0)),
+        ('Férias hoje', int(resumo.get('ferias_hoje', 0) or 0)),
+        ('Afastados hoje', int(resumo.get('afastados_hoje', 0) or 0)),
+        ('Férias programadas', int(resumo.get('ferias_programadas', 0) or 0)),
+    ]
+    for col, (titulo, valor) in zip([c1, c2, c3, c4, c5, c6], cards):
+        col.markdown(
+            f"<div class='kpi-card'><div class='kpi-title'>{titulo}</div><p class='kpi-value'>{int(valor)}</p></div>",
+            unsafe_allow_html=True,
+        )
+
+    g1, g2 = st.columns([1.1, 1.4])
+    with g1:
+        st.markdown('#### Status do dia')
+        if isinstance(df_status_ref, pd.DataFrame) and not df_status_ref.empty:
+            st.bar_chart(df_status_ref)
+        else:
+            st.info('Sem dados de status para o dia de referência.')
+    with g2:
+        st.markdown('#### Visão por setor liberado')
+        if isinstance(df_setores, pd.DataFrame) and not df_setores.empty:
+            st.bar_chart(df_setores.set_index('Setor')[['Colaboradores', 'Trabalho', 'Folga', 'Férias', 'Afastamento']])
+        else:
+            st.info('Sem dados consolidados por setor nesta competência.')
+
+    st.markdown('#### Cobertura diária do mês')
+    if isinstance(df_diario, pd.DataFrame) and not df_diario.empty:
+        st.line_chart(df_diario.set_index('Dia')[['Trabalho', 'Folga', 'Férias', 'Afastamento']])
+    else:
+        st.info('Sem dados suficientes para montar a cobertura diária do mês.')
+
+    r1, r2 = st.columns([1.2, 1])
+    with r1:
+        st.markdown('#### Resumo operacional por setor')
+        if isinstance(df_setores, pd.DataFrame) and not df_setores.empty:
+            st.dataframe(df_setores, use_container_width=True, hide_index=True)
+        else:
+            st.info('Nenhum resumo operacional disponível para os setores liberados.')
+    with r2:
+        st.markdown('#### Alertas rápidos')
+        alertas = []
+        if isinstance(df_setores, pd.DataFrame) and not df_setores.empty:
+            for _, row in df_setores.iterrows():
+                nome_setor = str(row.get('Setor') or '').strip()
+                colaboradores = int(row.get('Colaboradores', 0) or 0)
+                trabalho = int(row.get('Trabalho', 0) or 0)
+                ferias = int(row.get('Férias', 0) or 0)
+                afast = int(row.get('Afastamento', 0) or 0)
+                if colaboradores > 0 and (ferias + afast) >= max(1, int(round(colaboradores * 0.2))):
+                    alertas.append(f"⚠️ {nome_setor}: férias + afastamentos em volume relevante ({ferias + afast}).")
+                if trabalho == 0:
+                    alertas.append(f"⚠️ {nome_setor}: sem registros de trabalho na competência selecionada.")
+        if isinstance(df_ferias, pd.DataFrame) and not df_ferias.empty:
+            proximas = df_ferias.head(5)
+            for _, row in proximas.iterrows():
+                nome = str(row.get('nome') or row.get('chapa') or '').strip()
+                setor_txt = str(row.get('setor') or '').strip()
+                inicio = str(row.get('inicio') or '').strip()
+                fim = str(row.get('fim') or '').strip()
+                alertas.append(f"🗓️ {nome} • {setor_txt} • férias de {inicio} até {fim}.")
+        if not alertas:
+            st.success('Sem alertas críticos nesta visão executiva.')
+        else:
+            for item in alertas[:10]:
+                st.markdown(f"- {item}")
+
+    st.markdown('#### Férias programadas na competência')
+    if isinstance(df_ferias, pd.DataFrame) and not df_ferias.empty:
+        df_ferias_show = df_ferias.copy()
+        for col in ['setor', 'nome', 'chapa', 'inicio', 'fim']:
+            if col not in df_ferias_show.columns:
+                df_ferias_show[col] = ''
+        df_ferias_show = df_ferias_show.rename(columns={
+            'setor': 'Setor',
+            'nome': 'Nome',
+            'chapa': 'Chapa',
+            'inicio': 'Início',
+            'fim': 'Fim',
+        })[['Setor', 'Nome', 'Chapa', 'Início', 'Fim']]
+        st.dataframe(df_ferias_show, use_container_width=True, hide_index=True)
+    else:
+        st.info('Nenhuma férias programada encontrada para os setores liberados nesta competência.')
+
 @st.cache_data(show_spinner=False, ttl=300)
 def list_subgrupos(setor: str):
     con = db_conn()
@@ -14058,7 +14344,10 @@ def page_app():
     ano_k = int(st.session_state["cfg_ano"])
     mes_k = int(st.session_state["cfg_mes"])
 
-    _kpi = get_kpis_cached(setor, ano_k, mes_k)
+    if setores_visao_gestao and not bool(auth.get('is_admin', False)):
+        _kpi = get_kpis_multi_setor_cached(tuple(setores_visao_gestao), ano_k, mes_k)
+    else:
+        _kpi = get_kpis_cached(setor, ano_k, mes_k)
     total_colab = int(_kpi.get("total_colab", 0))
     folgas_mes = int(_kpi.get("folgas_mes", 0))
     ferias_mes = int(_kpi.get("ferias_mes", 0))
@@ -14104,27 +14393,30 @@ def page_app():
         ui_section("Dashboard", "Área inicial do app.")
         st.markdown("<div class='ax-loading'></div>", unsafe_allow_html=True)
         st.markdown("#### 📈 Painel rápido")
-        g1, g2 = st.columns([1.2, 1])
-        with g1:
-            df_kpi_ultra = pd.DataFrame({
-                "Indicador": ["Colaboradores", "Folgas", "Férias", "Trabalho"],
-                "Quantidade": [total_colab, folgas_mes, ferias_mes, trabalhos_mes],
-            }).set_index("Indicador")
-            st.bar_chart(df_kpi_ultra)
-        with g2:
-            try:
-                colaboradores_base = load_colaboradores_setor(setor) or []
-                resumo_sub = {}
-                for c in colaboradores_base:
-                    sg = str(c.get("Subgrupo") or "SEM SUBGRUPO").strip() or "SEM SUBGRUPO"
-                    resumo_sub[sg] = resumo_sub.get(sg, 0) + 1
-                if resumo_sub:
-                    df_sub = pd.DataFrame({"Subgrupo": list(resumo_sub.keys()), "Total": list(resumo_sub.values())}).set_index("Subgrupo")
-                    st.line_chart(df_sub)
-                else:
-                    st.caption("Sem dados suficientes para gráfico por subgrupo.")
-            except Exception:
-                st.caption("Não foi possível montar o gráfico por subgrupo nesta competência.")
+        if setores_visao_gestao and not bool(auth.get('is_admin', False)):
+            render_gestao_dashboard_executivo(auth_setor, auth_chapa, int(ano_k), int(mes_k), list(setores_visao_gestao))
+        else:
+            g1, g2 = st.columns([1.2, 1])
+            with g1:
+                df_kpi_ultra = pd.DataFrame({
+                    "Indicador": ["Colaboradores", "Folgas", "Férias", "Trabalho"],
+                    "Quantidade": [total_colab, folgas_mes, ferias_mes, trabalhos_mes],
+                }).set_index("Indicador")
+                st.bar_chart(df_kpi_ultra)
+            with g2:
+                try:
+                    colaboradores_base = load_colaboradores_setor(setor) or []
+                    resumo_sub = {}
+                    for c in colaboradores_base:
+                        sg = str(c.get("Subgrupo") or "SEM SUBGRUPO").strip() or "SEM SUBGRUPO"
+                        resumo_sub[sg] = resumo_sub.get(sg, 0) + 1
+                    if resumo_sub:
+                        df_sub = pd.DataFrame({"Subgrupo": list(resumo_sub.keys()), "Total": list(resumo_sub.values())}).set_index("Subgrupo")
+                        st.line_chart(df_sub)
+                    else:
+                        st.caption("Sem dados suficientes para gráfico por subgrupo.")
+                except Exception:
+                    st.caption("Não foi possível montar o gráfico por subgrupo nesta competência.")
         return
 
     # ------------------------------------------------------
