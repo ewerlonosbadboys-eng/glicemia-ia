@@ -15692,6 +15692,20 @@ def page_app():
 
     elif sec_main == "📂 Menu Gestão":
         ui_section("Gestão", "Clique em uma opção para abrir as telas da área de gestão.")
+
+        _mostrar_dashboard_gerente = False
+        try:
+            _mostrar_dashboard_gerente = bool(_setores_permitidos_gestao) and not bool(auth.get('is_admin', False))
+        except Exception:
+            _mostrar_dashboard_gerente = False
+
+        if _mostrar_dashboard_gerente:
+            st.markdown("### 📊 Painel do gerente")
+            st.caption("Abaixo aparecem os dados consolidados dos setores liberados para este gerente, sem precisar trocar de usuário ou ir para outro painel.")
+            page_gestao_dashboard(int(st.session_state["cfg_ano"]), int(st.session_state["cfg_mes"]))
+            st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
+            st.caption("Ações operacionais da Gestão continuam disponíveis logo abaixo.")
+
         botoes_gestao = [
             ("🧩 Folgas manuais em grade", "🧩 Folgas manuais em grade", "ges_menu_folgas"),
             ("📊 Contagens por dia", "📊 Contagens por dia", "ges_menu_contagens"),
