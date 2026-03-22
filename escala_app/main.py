@@ -17335,10 +17335,32 @@ def page_app():
                         st.warning("Selecione um setor gestor para continuar.")
                     else:
                         try:
-                            setores_disp = [s for s in listar_setores_db() if _norm_setor(s) not in {'ADMIN', 'GESTAO', 'GERENCIA', 'GERENTE'}]
+                            setores_fonte = listar_setores_com_competencia()
                         except Exception:
-                            setores_disp = []
+                            try:
+                                setores_fonte = listar_setores_db()
+                            except Exception:
+                                setores_fonte = []
 
+                        setores_disp = []
+                        vistos_set = set()
+                        setor_base_norm = _norm_setor(filtro_setor_gestor)
+                        for s in setores_fonte:
+                            s_txt = str(s or '').strip().upper()
+                            s_norm = _norm_setor(s_txt)
+                            if not s_txt or s_norm in vistos_set:
+                                continue
+                            # Mantém todos os setores operacionais visíveis na lista, inclusive Frente de Caixa
+                            # e outros que existam apenas nas tabelas da operação. Só bloqueia setores técnicos.
+                            if s_norm in {'ADMIN'}:
+                                continue
+                            vistos_set.add(s_norm)
+                            setores_disp.append(s_txt)
+
+                        if setor_base_norm and setor_base_norm not in {_norm_setor(x) for x in setores_disp}:
+                            setores_disp.append(str(filtro_setor_gestor or '').strip().upper())
+
+                        setores_disp = sorted(setores_disp, key=lambda x: _norm_setor(x))
                         setores_salvos = get_setores_permitidos_gestao(str(filtro_setor_gestor or ''), '')
                         setores_default = [s for s in setores_disp if _norm_setor(s) in {_norm_setor(x) for x in setores_salvos}]
 
