@@ -13348,14 +13348,34 @@ def page_gestao_dashboard(ano: int, mes: int):
 
     con = db_conn()
     try:
+        # A lista do dashboard precisa seguir exatamente a permissão salva.
+        # Não pode depender apenas da tabela `setores`, porque isso reduz a visão
+        # quando algum setor liberado não está cadastrado ali com o mesmo nome.
+        setores_all = []
         try:
-            setores_all = pd.read_sql_query("SELECT nome FROM setores ORDER BY nome ASC", con)["nome"].tolist()
+            setores_cadastrados = pd.read_sql_query("SELECT nome FROM setores ORDER BY nome ASC", con)["nome"].tolist()
         except Exception:
-            setores_all = []
-        setores_all = [s for s in setores_all if s and _norm_setor(s) not in {"ADMIN", "GESTAO", "GERENCIA", "GERENTE"}]
-        if setores_permitidos:
-            permitidos_norm = {_norm_setor(s) for s in setores_permitidos if str(s or '').strip()}
-            setores_all = [s for s in setores_all if _norm_setor(s) in permitidos_norm]
+            setores_cadastrados = []
+
+        setores_cadastrados = [
+            _norm_setor(s)
+            for s in setores_cadastrados
+            if str(s or '').strip() and _norm_setor(s) not in {"ADMIN", "GESTAO", "GERENCIA", "GERENTE"}
+        ]
+
+        permitidos_norm = [
+            _norm_setor(s)
+            for s in (setores_permitidos or [])
+            if str(s or '').strip() and _norm_setor(s) not in {"ADMIN", "GESTAO", "GERENCIA", "GERENTE"}
+        ]
+
+        if permitidos_norm:
+            # Usa a permissão como fonte de verdade e mantém todos os setores liberados.
+            setores_all = list(dict.fromkeys(permitidos_norm))
+        else:
+            # Fallback para perfis sem permissão explícita.
+            setores_all = list(dict.fromkeys(setores_cadastrados))
+
         if not setores_all:
             st.warning("Nenhum setor liberado para esta gestão.")
             return
