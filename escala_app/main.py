@@ -6490,24 +6490,23 @@ def admin_rename_setor_global(setor_atual: str, setor_novo: str) -> dict:
             if 'setor' not in cols:
                 continue
 
-            try:
-                cur.execute(
-                    f"UPDATE {tabela} SET setor=? WHERE UPPER(TRIM(setor))=UPPER(TRIM(?))",
-                    (setor_novo_norm, setor_atual_norm),
-                )
-                if int(cur.rowcount or 0) > 0:
-                    atualizados.append((tabela, int(cur.rowcount or 0)))
-            except Exception:
-                raise
+            cur.execute(
+                f"UPDATE {tabela} SET setor=? WHERE UPPER(TRIM(setor))=UPPER(TRIM(?))",
+                (setor_novo_norm, setor_atual_norm),
+            )
+            if int(cur.rowcount or 0) > 0:
+                atualizados.append((tabela, int(cur.rowcount or 0)))
+
+        try:
+            cur.execute("UPDATE setores SET nome=? WHERE UPPER(TRIM(nome))=UPPER(TRIM(?))", (setor_novo_norm, setor_atual_norm))
+            if int(cur.rowcount or 0) > 0:
+                atualizados.append(('setores', int(cur.rowcount or 0)))
+        except Exception:
+            pass
 
         con.commit()
     finally:
         con.close()
-
-    try:
-        rebuild_colaborador_competencia_snapshot(setor, int(ano), int(mes))
-    except Exception:
-        pass
 
     try:
         st.cache_data.clear()
@@ -6520,6 +6519,66 @@ def admin_rename_setor_global(setor_atual: str, setor_novo: str) -> dict:
         'tabelas_atualizadas': atualizados,
         'total_tabelas': len(atualizados),
         'total_registros': sum(q for _, q in atualizados),
+    }
+
+
+def admin_delete_setor_global(setor_nome: str) -> dict:
+    """Exclui um setor do cadastro e remove todos os registros vinculados a ele nas tabelas do sistema."""
+    setor_norm = _norm_setor(setor_nome)
+    protegidos = {'ADMIN', 'GERAL', 'GESTAO'}
+
+    if not setor_norm:
+        raise ValueError('Informe o setor que será excluído.')
+    if setor_norm in protegidos:
+        raise ValueError(f'O setor {setor_norm} é protegido e não pode ser excluído.')
+
+    con = db_conn()
+    cur = con.cursor()
+    removidos = []
+    try:
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+        tabelas = [str(r[0]) for r in cur.fetchall() if str(r[0]).strip()]
+
+        for tabela in tabelas:
+            try:
+                cur.execute(f"PRAGMA table_info({tabela})")
+                cols = [str(r[1]) for r in cur.fetchall()]
+            except Exception:
+                continue
+
+            if tabela == 'setores':
+                try:
+                    cur.execute("DELETE FROM setores WHERE UPPER(TRIM(nome))=UPPER(TRIM(?))", (setor_norm,))
+                    if int(cur.rowcount or 0) > 0:
+                        removidos.append(('setores', int(cur.rowcount or 0)))
+                except Exception:
+                    pass
+                continue
+
+            if 'setor' in cols:
+                cur.execute(f"DELETE FROM {tabela} WHERE UPPER(TRIM(setor))=UPPER(TRIM(?))", (setor_norm,))
+                if int(cur.rowcount or 0) > 0:
+                    removidos.append((tabela, int(cur.rowcount or 0)))
+
+            if 'setor_alvo' in cols:
+                cur.execute(f"DELETE FROM {tabela} WHERE UPPER(TRIM(setor_alvo))=UPPER(TRIM(?))", (setor_norm,))
+                if int(cur.rowcount or 0) > 0:
+                    removidos.append((f'{tabela}.setor_alvo', int(cur.rowcount or 0)))
+
+        con.commit()
+    finally:
+        con.close()
+
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+
+    return {
+        'setor_excluido': setor_norm,
+        'tabelas_afetadas': removidos,
+        'total_tabelas': len(removidos),
+        'total_registros': sum(q for _, q in removidos),
     }
 
 def colaborador_exists(setor: str, chapa: str) -> bool:
@@ -17059,27 +17118,56 @@ def page_app():
                         st.error(f"Falha ao salvar usuário: {e}")
 
             st.markdown("---")
-            st.subheader("🏷️ Renomear setor")
-            st.caption("Use esta subárea para trocar o nome de um setor em todo o sistema sem precisar editar tabela por tabela.")
-            try:
-                setores_ren = listar_setores_db()
-            except Exception:
-                setores_ren = []
-            rr1, rr2 = st.columns([1.2, 1.4])
-            with rr1:
-                setor_ren_atual = st.selectbox("Setor atual", setores_ren, key="adm_ren_setor_atual") if setores_ren else st.text_input("Setor atual", value="FLV", key="adm_ren_setor_atual_txt")
-            with rr2:
-                setor_ren_novo = st.text_input("Novo nome do setor", value=str(setor_ren_atual or ''), key="adm_ren_setor_novo")
-            st.caption("Isso atualiza o nome do setor nas tabelas que possuem a coluna setor, incluindo colaboradores, usuários, escala, retificações, assinaturas e competências.")
-            if st.button("Renomear setor", key="adm_ren_setor_btn"):
+            st.subheader("🏷️ Administração de setores")
+            st.caption("Use as sub abas abaixo para renomear ou excluir um setor do sistema.")
+            tab_setor_ren, tab_setor_exc = st.tabs(["✏️ Renomear setor", "🗑️ Excluir setor"])
+
+            with tab_setor_ren:
+                st.caption("Use esta subárea para trocar o nome de um setor em todo o sistema sem precisar editar tabela por tabela.")
                 try:
-                    res = admin_rename_setor_global(str(setor_ren_atual), str(setor_ren_novo))
-                    st.success(f"Setor renomeado de {res['setor_antigo']} para {res['setor_novo']}. Tabelas afetadas: {res['total_tabelas']} | Registros atualizados: {res['total_registros']}")
-                    if res['tabelas_atualizadas']:
-                        st.dataframe(pd.DataFrame(res['tabelas_atualizadas'], columns=['Tabela', 'Registros atualizados']), use_container_width=True, hide_index=True)
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Falha ao renomear setor: {e}")
+                    setores_ren = listar_setores_db()
+                except Exception:
+                    setores_ren = []
+                rr1, rr2 = st.columns([1.2, 1.4])
+                with rr1:
+                    setor_ren_atual = st.selectbox("Setor atual", setores_ren, key="adm_ren_setor_atual") if setores_ren else st.text_input("Setor atual", value="FLV", key="adm_ren_setor_atual_txt")
+                with rr2:
+                    setor_ren_novo = st.text_input("Novo nome do setor", value=str(setor_ren_atual or ''), key="adm_ren_setor_novo")
+                st.caption("Isso atualiza o nome do setor nas tabelas que possuem a coluna setor, incluindo colaboradores, usuários, escala, retificações, assinaturas e competências.")
+                if st.button("Renomear setor", key="adm_ren_setor_btn"):
+                    try:
+                        res = admin_rename_setor_global(str(setor_ren_atual), str(setor_ren_novo))
+                        st.success(f"Setor renomeado de {res['setor_antigo']} para {res['setor_novo']}. Tabelas afetadas: {res['total_tabelas']} | Registros atualizados: {res['total_registros']}")
+                        if res['tabelas_atualizadas']:
+                            st.dataframe(pd.DataFrame(res['tabelas_atualizadas'], columns=['Tabela', 'Registros atualizados']), use_container_width=True, hide_index=True)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Falha ao renomear setor: {e}")
+
+            with tab_setor_exc:
+                st.caption("Exclusão global do setor: remove o setor do cadastro e apaga os registros vinculados nas tabelas que usam setor/setor_alvo.")
+                st.warning("Atenção: esta ação é irreversível para o setor selecionado. Faça backup antes de excluir.")
+                try:
+                    setores_exc = [s for s in listar_setores_db() if _norm_setor(s) not in {'ADMIN', 'GERAL', 'GESTAO'}]
+                except Exception:
+                    setores_exc = []
+                setor_exc = st.selectbox("Setor para excluir", setores_exc, key="adm_exc_setor") if setores_exc else st.text_input("Setor para excluir", value="", key="adm_exc_setor_txt")
+                confirm_exc = st.text_input("Digite EXCLUIR para confirmar", key="adm_exc_confirm")
+                if st.button("Excluir setor agora", key="adm_exc_setor_btn"):
+                    try:
+                        setor_exc_final = str(setor_exc or '').strip()
+                        if not setor_exc_final:
+                            st.error("Selecione o setor que deseja excluir.")
+                        elif str(confirm_exc or '').strip().upper() != 'EXCLUIR':
+                            st.error("Para excluir, digite EXCLUIR no campo de confirmação.")
+                        else:
+                            res = admin_delete_setor_global(setor_exc_final)
+                            st.success(f"Setor {res['setor_excluido']} excluído com sucesso. Tabelas afetadas: {res['total_tabelas']} | Registros removidos: {res['total_registros']}")
+                            if res['tabelas_afetadas']:
+                                st.dataframe(pd.DataFrame(res['tabelas_afetadas'], columns=['Tabela', 'Registros removidos']), use_container_width=True, hide_index=True)
+                            st.rerun()
+                    except Exception as e:
+                        st.error(f"Falha ao excluir setor: {e}")
 
             st.markdown("---")
             st.subheader("🧊 Competência do setor (fechar / reabrir)")
