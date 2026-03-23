@@ -2804,6 +2804,12 @@ def get_app_like_nav_config(is_admin_area: bool, setor: str = "", modo_gestao_so
             "default_sub": "👥 Colaboradores",
             "submenus": colabs,
         },
+        "ferias": {
+            "label": "🏖️ Férias",
+            "default_sub": "🗺️ Mapa anual de férias",
+            "submenus": [
+            ],
+        },
         "escala": {
             "label": "📅 Escala",
             "default_sub": "📂 Menu Escala",
@@ -2834,11 +2840,6 @@ def get_app_like_nav_config(is_admin_area: bool, setor: str = "", modo_gestao_so
                 ("✅ Preferência por subgrupo", {"sec_main": "⚙️ Ajustes", "sec_aj": "✅ Preferência por subgrupo"}),
                 ("📌 Subgrupos (editável)", {"sec_main": "⚙️ Ajustes", "sec_aj": "📌 Subgrupos (editável)"}),
                 ("✏️ Retificar folga, horário e subgrupo", {"sec_main": "⚙️ Ajustes", "sec_aj": "✏️ Retificar folga, horário e subgrupo"}),
-                ("🗺️ Mapa anual de férias", {"sec_main": "🏖️ Férias", "sec_fer": "🗺️ Mapa anual de férias"}),
-                ("➕ Lançar Férias", {"sec_main": "🏖️ Férias", "sec_fer": "➕ Lançar Férias"}),
-                ("📊 Controle (histórico)", {"sec_main": "🏖️ Férias", "sec_fer": "📊 Controle (histórico)"}),
-                ("📋 Férias cadastradas", {"sec_main": "🏖️ Férias", "sec_fer": "📋 Férias cadastradas"}),
-                ("❌ Remover férias", {"sec_main": "🏖️ Férias", "sec_fer": "❌ Remover férias"}),
                 ("✍️ Assinaturas", {"sec_main": "✍️ Assinaturas"}),
                 ("📨 Minhas solicitações", {"sec_main": "📨 Minhas solicitações"}),
             ],
@@ -2852,7 +2853,7 @@ def get_app_like_nav_config(is_admin_area: bool, setor: str = "", modo_gestao_so
 
 def render_app_like_sidebar_nav(is_admin_area: bool, setor: str = "", modo_gestao_somente: bool = False):
     cfg = get_app_like_nav_config(is_admin_area, setor, modo_gestao_somente)
-    main_keys = ["admin"] if is_admin_area else (["gestao", "caixa"] if modo_gestao_somente else ["dashboard", "colaboradores", "escala", "caixa", "gestao"])
+    main_keys = ["admin"] if is_admin_area else (["gestao", "caixa"] if modo_gestao_somente else ["dashboard", "colaboradores", "ferias", "escala", "caixa", "gestao"])
     default_main = main_keys[0]
     if st.session_state.get("app_like_main") not in main_keys:
         st.session_state["app_like_main"] = default_main
@@ -2878,7 +2879,7 @@ def render_app_like_sidebar_nav(is_admin_area: bool, setor: str = "", modo_gesta
 
 def render_app_like_top_nav(is_admin_area: bool, setor: str = "", modo_gestao_somente: bool = False):
     cfg = get_app_like_nav_config(is_admin_area, setor, modo_gestao_somente)
-    main_keys = ["admin"] if is_admin_area else (["gestao", "caixa"] if modo_gestao_somente else ["dashboard", "colaboradores", "escala", "caixa", "gestao"])
+    main_keys = ["admin"] if is_admin_area else (["gestao", "caixa"] if modo_gestao_somente else ["dashboard", "colaboradores", "ferias", "escala", "caixa", "gestao"])
     default_main = main_keys[0]
     if st.session_state.get("app_like_main") not in main_keys:
         st.session_state["app_like_main"] = default_main
@@ -2914,7 +2915,7 @@ def render_app_like_top_nav(is_admin_area: bool, setor: str = "", modo_gestao_so
 
 def resolve_app_like_route(is_admin_area: bool, setor: str = "", modo_gestao_somente: bool = False):
     cfg = get_app_like_nav_config(is_admin_area, setor, modo_gestao_somente)
-    main_keys = ["admin"] if is_admin_area else (["gestao", "caixa"] if modo_gestao_somente else ["dashboard", "colaboradores", "escala", "caixa", "gestao"])
+    main_keys = ["admin"] if is_admin_area else (["gestao", "caixa"] if modo_gestao_somente else ["dashboard", "colaboradores", "ferias", "escala", "caixa", "gestao"])
     current_main = st.session_state.get("app_like_main")
     if current_main not in main_keys:
         current_main = main_keys[0]
@@ -16664,11 +16665,6 @@ def page_app():
                 ("✅ Preferência por subgrupo", "✅ Preferência por subgrupo", "ges_menu_preferencia"),
                 ("📌 Subgrupos (editável)", "📌 Subgrupos (editável)", "ges_menu_subgrupos"),
                 ("✏️ Retificar folga, horário e subgrupo", "✏️ Retificar folga, horário e subgrupo", "ges_menu_retificar"),
-                ("🗺️ Mapa anual de férias", "🗺️ Mapa anual de férias", "ges_menu_mapa_ferias"),
-                ("➕ Lançar Férias", "➕ Lançar Férias", "ges_menu_lancar_ferias"),
-                ("📊 Controle (histórico)", "📊 Controle (histórico)", "ges_menu_controle_ferias"),
-                ("📋 Férias cadastradas", "📋 Férias cadastradas", "ges_menu_ferias_cadastradas"),
-                ("❌ Remover férias", "❌ Remover férias", "ges_menu_remover_ferias"),
                 ("✍️ Assinaturas", "✍️ Assinaturas", "ges_menu_assinaturas"),
                 ("📨 Minhas solicitações", "📨 Minhas solicitações", "ges_menu_solicitacoes"),
             ]
