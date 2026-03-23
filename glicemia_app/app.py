@@ -251,6 +251,59 @@ def norm_senha(x: str) -> str:
 def agora_br() -> datetime:
     return datetime.now(fuso_br)
 
+
+def normalizar_momento_gl(x: str) -> str:
+    s = str(x or '').strip()
+    if not s:
+        return ''
+    s_cmp = s.lower()
+    mapa = {
+        'antes cafe': 'Antes Café',
+        'antes café': 'Antes Café',
+        'apos cafe': 'Após Café',
+        'após cafe': 'Após Café',
+        'apos café': 'Após Café',
+        'após café': 'Após Café',
+        'antes almoco': 'Antes Almoço',
+        'antes almoço': 'Antes Almoço',
+        'apos almoco': 'Após Almoço',
+        'após almoco': 'Após Almoço',
+        'apos almoço': 'Após Almoço',
+        'após almoço': 'Após Almoço',
+        'antes janta': 'Antes Janta',
+        'apos janta': 'Após Janta',
+        'após janta': 'Após Janta',
+        'madrugada': 'Madrugada',
+        'outro': 'Outro',
+        'medida extra madrugada': 'Medida extra madrugada',
+    }
+    return mapa.get(s_cmp, s)
+
+
+def parse_data_flex_serie(serie: pd.Series) -> pd.Series:
+    s = serie.astype(str).str.strip()
+    dt = pd.to_datetime(s, format='%d/%m/%Y', errors='coerce')
+    mask = dt.isna()
+    if mask.any():
+        dt.loc[mask] = pd.to_datetime(s.loc[mask], format='%Y/%m/%d', errors='coerce')
+    mask = dt.isna()
+    if mask.any():
+        dt.loc[mask] = pd.to_datetime(s.loc[mask], format='%Y-%m-%d', errors='coerce')
+    mask = dt.isna()
+    if mask.any():
+        dt.loc[mask] = pd.to_datetime(s.loc[mask], dayfirst=True, errors='coerce')
+    return dt
+
+
+def formatar_data_br_padrao_serie(serie: pd.Series) -> pd.Series:
+    s = serie.astype(str).str.strip()
+    dt = parse_data_flex_serie(s)
+    out = s.copy()
+    mask = dt.notna()
+    if mask.any():
+        out.loc[mask] = dt.loc[mask].dt.strftime('%d/%m/%Y')
+    return out
+
 # ================= BACKUP / RESTORE =================
 BACKUP_STATE_FILE = BACKUP_DIR / "last_auto_backup.txt"
 
@@ -433,7 +486,9 @@ def apagar_backups_antigos(dias_manter=7) -> int:
                 pass
     return apagados
 
-backup_automatico_diario_3h()
+if not st.session_state.get("_startup_backup_done", False):
+    backup_automatico_diario_3h()
+    st.session_state["_startup_backup_done"] = True
 
 # ================= DESIGN PREMIUM =================
 def aplicar_layout_premium():
@@ -849,32 +904,12 @@ def migrar_csvs_para_sqlite():
                     except Exception:
                         pass
 
-migrar_csvs_para_sqlite()
+if not st.session_state.get("_startup_migracao_done", False):
+    migrar_csvs_para_sqlite()
+    st.session_state["_startup_migracao_done"] = True
 
-def carregar_dados_seguro(arq: str) -> pd.DataFrame:
-    table = _table_for_file(arq)
-    if table:
-        return _read_table_df(table, "Usuario=?", (st.session_state.user_email,))
-    if not os.path.exists(arq):
-        return pd.DataFrame()
-    df = pd.read_csv(arq)
-    if "Usuario" not in df.columns:
-        df["Usuario"] = ""
-    return df[df["Usuario"] == st.session_state.user_email].copy()
-
-# ================= IDs + CRUD GLICEMIA =================
-def _ensure_id_column(df: pd.DataFrame, col_name="ID", prefix="GL") -> pd.DataFrame:
-    if df is None or df.empty:
-        return df
-    if col_name not in df.columns:
-        df[col_name] = [f"{prefix}-{uuid.uuid4().hex[:12]}" for _ in range(len(df))]
-    else:
-        mask = df[col_name].isna() | (df[col_name].astype(str).str.strip() == "")
-        if mask.any():
-            df.loc[mask, col_name] = [f"{prefix}-{uuid.uuid4().hex[:12]}" for _ in range(int(mask.sum()))]
-    return df
-
-def carregar_glicemia_com_id() -> pd.DataFrame:
+@st.cache_data(show_spinner=False, ttl=60)
+def _cached_glicemia_usuario(user_email: str) -> pd.DataFrame:
     df_all = _read_table_df("glicemia")
     if df_all.empty:
         return pd.DataFrame(columns=["ID", "Usuario", "Data", "Hora", "Valor", "Momento", "Dose", "Dose_Rapida", "Dose_Longa"])
@@ -914,8 +949,46 @@ def carregar_glicemia_com_id() -> pd.DataFrame:
             out = (out + " | " if out else "") + f"Longa: {dl}"
         return out
 
+    df_all["Data"] = formatar_data_br_padrao_serie(df_all.get("Data", pd.Series(dtype=str)))
+    if "Hora" in df_all.columns:
+        df_all["Hora"] = df_all["Hora"].astype(str).str.strip()
+    if "Momento" in df_all.columns:
+        df_all["Momento"] = df_all["Momento"].astype(str).apply(normalizar_momento_gl)
     df_all["Dose"] = df_all.apply(_mk_dose_display, axis=1)
-    return df_all[df_all["Usuario"] == st.session_state.user_email].copy()
+    return df_all[df_all["Usuario"] == user_email].copy()
+
+
+def _limpar_cache_glicemia():
+    try:
+        _cached_glicemia_usuario.clear()
+    except Exception:
+        pass
+
+def carregar_dados_seguro(arq: str) -> pd.DataFrame:
+    table = _table_for_file(arq)
+    if table:
+        return _read_table_df(table, "Usuario=?", (st.session_state.user_email,))
+    if not os.path.exists(arq):
+        return pd.DataFrame()
+    df = pd.read_csv(arq)
+    if "Usuario" not in df.columns:
+        df["Usuario"] = ""
+    return df[df["Usuario"] == st.session_state.user_email].copy()
+
+# ================= IDs + CRUD GLICEMIA =================
+def _ensure_id_column(df: pd.DataFrame, col_name="ID", prefix="GL") -> pd.DataFrame:
+    if df is None or df.empty:
+        return df
+    if col_name not in df.columns:
+        df[col_name] = [f"{prefix}-{uuid.uuid4().hex[:12]}" for _ in range(len(df))]
+    else:
+        mask = df[col_name].isna() | (df[col_name].astype(str).str.strip() == "")
+        if mask.any():
+            df.loc[mask, col_name] = [f"{prefix}-{uuid.uuid4().hex[:12]}" for _ in range(int(mask.sum()))]
+    return df
+
+def carregar_glicemia_com_id() -> pd.DataFrame:
+    return _cached_glicemia_usuario(st.session_state.user_email)
 
 
 def carregar_historico_ultima_medida() -> pd.DataFrame:
@@ -1119,12 +1192,13 @@ def salvar_registro_glicemia(valor: int, momento: str, dose: str, dt: datetime, 
         "Data": dt.strftime("%d/%m/%Y"),
         "Hora": dt.strftime("%H:%M"),
         "Valor": int(valor),
-        "Momento": (momento or "").strip(),
+        "Momento": normalizar_momento_gl((momento or "").strip()),
         "Dose": dose_display,
         "Dose_Rapida": dr,
         "Dose_Longa": dl,
     }])
     _append_df_table("glicemia", novo)
+    _limpar_cache_glicemia()
 
 
 def aplicar_edicoes_e_exclusoes_glicemia(df_editado: pd.DataFrame):
@@ -1138,7 +1212,7 @@ def aplicar_edicoes_e_exclusoes_glicemia(df_editado: pd.DataFrame):
     df_editado["ID"] = df_editado["ID"].astype(str)
     df_editado["Data"] = df_editado["Data"].astype(str).str.strip()
     df_editado["Hora"] = df_editado["Hora"].astype(str).str.strip()
-    df_editado["Momento"] = df_editado["Momento"].astype(str).str.strip()
+    df_editado["Momento"] = df_editado["Momento"].astype(str).str.strip().apply(normalizar_momento_gl)
     if "Dose_Rapida" not in df_editado.columns:
         df_editado["Dose_Rapida"] = ""
     if "Dose_Longa" not in df_editado.columns:
@@ -1172,6 +1246,7 @@ def aplicar_edicoes_e_exclusoes_glicemia(df_editado: pd.DataFrame):
             'dose_longa': r.get('Dose_Longa', ''),
             'dose': r.get('Dose', ''),
         }, {'usuario': st.session_state.user_email, 'id': str(r['ID'])})
+    _limpar_cache_glicemia()
 
 # ================= RECEITA (RÁPIDA/LONGA) =================
 def _schema_receita_nova(rec: pd.Series, periodo: str) -> bool:
@@ -1965,8 +2040,10 @@ if st.session_state.user_email == "admin":
                     st.rerun()
 
 else:
-    render_dashboard_premium_real()
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Glicemia", "🩺 Última medição", "🍽️ Nutrição", "⚙️ Receita", "📩 Sugerir Melhoria"])
+    tab0, tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Visão Geral", "📊 Glicemia", "🩺 Última medição", "🍽️ Nutrição", "⚙️ Receita", "📩 Sugerir Melhoria"])
+
+    with tab0:
+        render_dashboard_premium_real()
 
     # ====== GLICEMIA ======
     with tab1:
@@ -2196,82 +2273,125 @@ else:
         st.markdown("### ➕ Adicionar medida manual")
 
         with st.expander("Adicionar medida manualmente", expanded=False):
-            colm1, colm2, colm3 = st.columns(3)
+            with st.form("form_glicemia_manual", clear_on_submit=False):
+                colm1, colm2, colm3 = st.columns(3)
 
-            with colm1:
-                data_manual = st.date_input(
-                    "Data",
-                    value=agora_br().date(),
-                    key="g_data_manual"
+                with colm1:
+                    data_manual = st.date_input(
+                        "Data",
+                        value=agora_br().date(),
+                        key="g_data_manual"
+                    )
+
+                with colm2:
+                    hora_manual = st.text_input(
+                        "Hora (HH:MM)",
+                        value=agora_br().strftime("%H:%M"),
+                        key="g_hora_manual"
+                    )
+
+                with colm3:
+                    valor_manual = st.number_input(
+                        "Valor Glicemia",
+                        min_value=0,
+                        max_value=600,
+                        value=100,
+                        step=1,
+                        key="g_valor_manual"
+                    )
+
+                colm4, colm5, colm6 = st.columns(3)
+
+                with colm4:
+                    momento_manual = st.selectbox(
+                        "Momento",
+                        options=MOMENTOS_ORDEM + ["Outro"],
+                        key="g_momento_manual"
+                    )
+
+                with colm5:
+                    dose_rapida_manual = st.text_input(
+                        "Dose Rápida",
+                        value="0 UI",
+                        key="g_dose_rapida_manual"
+                    )
+
+                with colm6:
+                    dose_longa_manual = st.text_input(
+                        "Dose Longa",
+                        value="0 UI",
+                        key="g_dose_longa_manual"
+                    )
+
+                salvar_manual = st.form_submit_button(
+                    "💾 Salvar medida manual",
+                    use_container_width=True,
                 )
 
-            with colm2:
-                hora_manual = st.text_input(
-                    "Hora (HH:MM)",
-                    value=agora_br().strftime("%H:%M"),
-                    key="g_hora_manual"
-                )
+            if salvar_manual:
+                hora_manual_txt = str(hora_manual or "").strip()
+                if not re.match(r"^([01]\d|2[0-3]):[0-5]\d$", hora_manual_txt):
+                    st.error("Hora inválida. Use o formato HH:MM.")
+                else:
+                    novo = pd.DataFrame([[
+                        st.session_state.user_email,
+                        data_manual.strftime("%d/%m/%Y"),
+                        hora_manual_txt,
+                        int(valor_manual),
+                        normalizar_momento_gl(momento_manual),
+                        dose_rapida_manual.strip(),
+                        dose_longa_manual.strip(),
+                        f"GL-{uuid.uuid4().hex[:10]}"
+                    ]], columns=[
+                        "Usuario", "Data", "Hora", "Valor", "Momento",
+                        "Dose_Rapida", "Dose_Longa", "ID"
+                    ])
 
-            with colm3:
-                valor_manual = st.number_input(
-                    "Valor Glicemia",
-                    min_value=0,
-                    max_value=600,
-                    value=100,
-                    step=1,
-                    key="g_valor_manual"
-                )
+                    novo["Dose"] = novo.apply(lambda r: f"{r['Dose_Rapida']} | Longa: {r['Dose_Longa']}" if str(r['Dose_Longa']).strip() else str(r['Dose_Rapida']), axis=1)
 
-            colm4, colm5, colm6 = st.columns(3)
+                    _append_df_table("glicemia", novo[["ID", "Usuario", "Data", "Hora", "Valor", "Momento", "Dose", "Dose_Rapida", "Dose_Longa"]])
+                    _limpar_cache_glicemia()
 
-            with colm4:
-                momento_manual = st.selectbox(
-                    "Momento",
-                    options=MOMENTOS_ORDEM + ["Outro"],
-                    key="g_momento_manual"
-                )
-
-            with colm5:
-                dose_rapida_manual = st.text_input(
-                    "Dose Rápida",
-                    value="0 UI",
-                    key="g_dose_rapida_manual"
-                )
-
-            with colm6:
-                dose_longa_manual = st.text_input(
-                    "Dose Longa",
-                    value="0 UI",
-                    key="g_dose_longa_manual"
-                )
-
-            if st.button("💾 Salvar medida manual", use_container_width=True, key="btn_salvar_manual"):
-                novo = pd.DataFrame([[
-                    st.session_state.user_email,
-                    data_manual.strftime("%d/%m/%Y"),
-                    hora_manual.strip(),
-                    int(valor_manual),
-                    momento_manual,
-                    dose_rapida_manual.strip(),
-                    dose_longa_manual.strip(),
-                    f"GL-{uuid.uuid4().hex[:10]}"
-                ]], columns=[
-                    "Usuario", "Data", "Hora", "Valor", "Momento",
-                    "Dose_Rapida", "Dose_Longa", "ID"
-                ])
-
-                novo["Dose"] = novo.apply(lambda r: f"{r['Dose_Rapida']} | Longa: {r['Dose_Longa']}" if str(r['Dose_Longa']).strip() else str(r['Dose_Rapida']), axis=1)
-
-                _append_df_table("glicemia", novo[["ID", "Usuario", "Data", "Hora", "Valor", "Momento", "Dose", "Dose_Rapida", "Dose_Longa"]])
-
-                st.success("Medida manual salva com sucesso!")
-                st.rerun()
+                    st.success("Medida manual salva com sucesso!")
+                    st.rerun()
 
         # ✅ HISTÓRICO EDITÁVEL (editar/excluir)
         st.markdown("### 🧾 Histórico (editar / excluir)")
 
+        colf1, colf2 = st.columns(2)
+        with colf1:
+            data_inicio = st.date_input(
+                "Data inicial",
+                value=(agora_br() - timedelta(days=30)).date(),
+                format="DD/MM/YYYY",
+                key="hist_data_inicio"
+            )
+        with colf2:
+            data_fim = st.date_input(
+                "Data final",
+                value=agora_br().date(),
+                format="DD/MM/YYYY",
+                key="hist_data_fim"
+            )
+
         if not dfg.empty:
             df_hist = dfg.copy()
+
+            try:
+                df_hist["Data"] = formatar_data_br_padrao_serie(df_hist["Data"])
+                df_hist["Momento"] = df_hist["Momento"].astype(str).apply(normalizar_momento_gl)
+                df_hist["Hora"] = df_hist["Hora"].astype(str).str.strip()
+                df_hist["_data_filtro"] = parse_data_flex_serie(df_hist["Data"])
+                data_inicio_ts = pd.Timestamp(data_inicio) if data_inicio else None
+                data_fim_ts = pd.Timestamp(data_fim) if data_fim else None
+                if data_inicio_ts is not None:
+                    df_hist = df_hist[df_hist["_data_filtro"].isna() | (df_hist["_data_filtro"] >= data_inicio_ts)]
+                if data_fim_ts is not None:
+                    df_hist = df_hist[df_hist["_data_filtro"].isna() | (df_hist["_data_filtro"] <= data_fim_ts)]
+                df_hist["_hora_ord"] = pd.to_datetime(df_hist["Hora"], format="%H:%M", errors="coerce")
+                df_hist = df_hist.sort_values(["_data_filtro", "_hora_ord"], ascending=[False, False], na_position="last")
+            except Exception:
+                pass
 
             if "Excluir" not in df_hist.columns:
                 df_hist["Excluir"] = False
@@ -2281,63 +2401,8 @@ else:
                 if c not in df_hist.columns:
                     df_hist[c] = ""
 
-            df_hist = df_hist[cols_order].tail(80).reset_index(drop=True)
-
-            # 🔎 filtro por data do histórico (somente visual, sem mexer no salvamento)
-            try:
-                df_hist["_data_filtro"] = pd.to_datetime(
-                    df_hist["Data"].astype(str).str.strip(),
-                    format="%d/%m/%Y",
-                    errors="coerce"
-                )
-            except Exception:
-                df_hist["_data_filtro"] = pd.NaT
-
-            datas_validas = df_hist["_data_filtro"].dropna()
-            if not datas_validas.empty:
-                data_min_hist = datas_validas.min().date()
-                data_max_hist = datas_validas.max().date()
-            else:
-                hoje_hist = agora_br().date()
-                data_min_hist = hoje_hist
-                data_max_hist = hoje_hist
-
-            colf1, colf2 = st.columns(2)
-            with colf1:
-                data_inicio_hist = st.date_input(
-                    "Data inicial",
-                    value=data_min_hist,
-                    min_value=data_min_hist,
-                    max_value=data_max_hist,
-                    format="DD/MM/YYYY",
-                    key="glicemia_hist_data_inicio"
-                )
-            with colf2:
-                data_fim_hist = st.date_input(
-                    "Data final",
-                    value=data_max_hist,
-                    min_value=data_min_hist,
-                    max_value=data_max_hist,
-                    format="DD/MM/YYYY",
-                    key="glicemia_hist_data_fim"
-                )
-
-            if data_inicio_hist and data_fim_hist and data_inicio_hist > data_fim_hist:
-                st.warning("A data inicial não pode ser maior que a data final.")
-                df_hist_filtrado = df_hist.iloc[0:0].copy()
-            else:
-                df_hist_filtrado = df_hist.copy()
-                if "_data_filtro" in df_hist_filtrado.columns:
-                    if data_inicio_hist:
-                        df_hist_filtrado = df_hist_filtrado[
-                            df_hist_filtrado["_data_filtro"] >= pd.to_datetime(data_inicio_hist)
-                        ]
-                    if data_fim_hist:
-                        df_hist_filtrado = df_hist_filtrado[
-                            df_hist_filtrado["_data_filtro"] <= pd.to_datetime(data_fim_hist)
-                        ]
-
-            df_hist = df_hist_filtrado.drop(columns=["_data_filtro"], errors="ignore").reset_index(drop=True)
+            # mantém os registros mais recentes visíveis no topo
+            df_hist = df_hist[cols_order].head(80).reset_index(drop=True)
 
             # Normaliza tipos para o st.data_editor não quebrar
             df_hist["Excluir"] = df_hist["Excluir"].fillna(False).astype(bool)
@@ -2777,6 +2842,9 @@ def gerar_pdf_bytes(df_g: pd.DataFrame, df_n: pd.DataFrame) -> bytes:
         story.append(Paragraph("Sem dados para tabela.", styles["Normal"]))
         story.append(Spacer(1, 10))
     else:
+        df_g = df_g.copy()
+        df_g["Data"] = formatar_data_br_padrao_serie(df_g["Data"])
+        df_g["Momento"] = df_g["Momento"].astype(str).apply(normalizar_momento_gl)
         # Pivot igual ao Excel
         pivot = df_g.pivot_table(index="Data", columns="Momento", values="Valor", aggfunc="last")
         pivot = pivot.reindex(columns=ordenar_colunas_momentos(list(pivot.columns)))
@@ -2891,6 +2959,9 @@ def gerar_pdf_bytes(df_g: pd.DataFrame, df_n: pd.DataFrame) -> bytes:
             if df_src is None or df_src.empty:
                 return None
 
+            df_src = df_src.copy()
+            df_src["Data"] = formatar_data_br_padrao_serie(df_src["Data"])
+            df_src["Momento"] = df_src["Momento"].astype(str).apply(normalizar_momento_gl)
             pivot = df_src.pivot_table(index="Data", columns="Momento", values=col_val, aggfunc="last")
             pivot = pivot.reindex(columns=ordenar_colunas_momentos(list(pivot.columns)))
             pivot = pivot.sort_index()
@@ -3156,6 +3227,9 @@ if st.sidebar.button("📥 Gerar Excel Completo"):
                 cell.alignment = Alignment(horizontal="center")
 
             # 2) Aba Glicemia (Resumo pivot por Data x Momento)
+            df_e_g = df_e_g.copy()
+            df_e_g["Data"] = formatar_data_br_padrao_serie(df_e_g["Data"])
+            df_e_g["Momento"] = df_e_g["Momento"].astype(str).apply(normalizar_momento_gl)
             pivot = df_e_g.pivot_table(index="Data", columns="Momento", values="Valor", aggfunc="last")
             pivot = pivot.reindex(columns=ordenar_colunas_momentos(list(pivot.columns)))
             pivot.to_excel(writer, sheet_name="Glicemia_Resumo")
