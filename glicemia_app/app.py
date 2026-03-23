@@ -1982,8 +1982,10 @@ if st.session_state.user_email == "admin":
                     st.rerun()
 
 else:
-    render_dashboard_premium_real()
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Glicemia", "🩺 Última medição", "🍽️ Nutrição", "⚙️ Receita", "📩 Sugerir Melhoria"])
+    tab0, tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Visão Geral", "📊 Glicemia", "🩺 Última medição", "🍽️ Nutrição", "⚙️ Receita", "📩 Sugerir Melhoria"])
+
+    with tab0:
+        render_dashboard_premium_real()
 
     # ====== GLICEMIA ======
     with tab1:
@@ -2298,8 +2300,38 @@ else:
         # ✅ HISTÓRICO EDITÁVEL (editar/excluir)
         st.markdown("### 🧾 Histórico (editar / excluir)")
 
+        colf1, colf2 = st.columns(2)
+        with colf1:
+            data_inicio = st.date_input(
+                "Data inicial",
+                value=(agora_br() - timedelta(days=30)).date(),
+                format="DD/MM/YYYY",
+                key="hist_data_inicio"
+            )
+        with colf2:
+            data_fim = st.date_input(
+                "Data final",
+                value=agora_br().date(),
+                format="DD/MM/YYYY",
+                key="hist_data_fim"
+            )
+
         if not dfg.empty:
             df_hist = dfg.copy()
+
+            try:
+                df_hist["_data_filtro"] = pd.to_datetime(
+                    df_hist["Data"].astype(str).str.strip(),
+                    format="%d/%m/%Y",
+                    errors="coerce"
+                )
+                if data_inicio:
+                    df_hist = df_hist[df_hist["_data_filtro"] >= pd.to_datetime(data_inicio)]
+                if data_fim:
+                    df_hist = df_hist[df_hist["_data_filtro"] <= pd.to_datetime(data_fim)]
+                df_hist = df_hist.sort_values(["_data_filtro", "Hora"], ascending=[False, False], na_position="last")
+            except Exception:
+                pass
 
             if "Excluir" not in df_hist.columns:
                 df_hist["Excluir"] = False
