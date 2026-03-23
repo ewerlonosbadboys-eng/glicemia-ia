@@ -2341,7 +2341,8 @@ else:
                 if c not in df_hist.columns:
                     df_hist[c] = ""
 
-            df_hist = df_hist[cols_order].tail(80).reset_index(drop=True)
+            # mantém os registros mais recentes visíveis no topo
+            df_hist = df_hist[cols_order].head(80).reset_index(drop=True)
 
             # Normaliza tipos para o st.data_editor não quebrar
             df_hist["Excluir"] = df_hist["Excluir"].fillna(False).astype(bool)
