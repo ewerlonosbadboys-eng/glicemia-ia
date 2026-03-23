@@ -13389,14 +13389,13 @@ def page_gestao_dashboard(ano: int, mes: int):
         st.markdown("<div class='gestao-pro-wrap'>", unsafe_allow_html=True)
         st.markdown(
             f"""
-            <div class='gestao-hero'>
-                <div style='font-size:.78rem;color:#9eb5ff;font-weight:700;letter-spacing:.08em;text-transform:uppercase;'>Modo Gestão Executivo</div>
-                <div style='font-size:2.05rem;font-weight:800;color:#f6f8ff;line-height:1.08;margin-top:8px;'>Painel corporativo da gestão</div>
-                <div style='font-size:.98rem;color:#aebddd;max-width:860px;margin-top:10px;'>Visão consolidada para diretoria e gerência com foco em cobertura, folgas, férias, afastamentos e leitura rápida dos setores liberados.</div>
-                <div style='display:flex;flex-wrap:wrap;gap:10px;margin-top:16px;'>
-                    <div style='padding:8px 12px;border-radius:999px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);color:#dfe7ff;font-size:.82rem;'>Setor base: <strong>{html.escape(auth_setor or "-" )}</strong></div>
-                    <div style='padding:8px 12px;border-radius:999px;background:rgba(86,140,255,.12);border:1px solid rgba(86,140,255,.22);color:#dfe7ff;font-size:.82rem;'>Setores liberados: <strong>{len(setores_all)}</strong></div>
-                    <div style='padding:8px 12px;border-radius:999px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);color:#dfe7ff;font-size:.82rem;'>Competência: <strong>{mes:02d}/{ano}</strong></div>
+            <div class='gestao-hero' style='padding:18px 18px 16px 18px;'>
+                <div style='font-size:.72rem;color:#9eb5ff;font-weight:700;letter-spacing:.08em;text-transform:uppercase;'>Modo gestão executivo</div>
+                <div style='font-size:1.55rem;font-weight:800;color:#f6f8ff;line-height:1.08;margin-top:6px;'>Painel corporativo da gestão</div>
+                <div style='display:flex;flex-wrap:wrap;gap:8px;margin-top:12px;'>
+                    <div style='padding:7px 11px;border-radius:999px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);color:#dfe7ff;font-size:.80rem;'>Base <strong>{html.escape(auth_setor or "-")}</strong></div>
+                    <div style='padding:7px 11px;border-radius:999px;background:rgba(86,140,255,.12);border:1px solid rgba(86,140,255,.22);color:#dfe7ff;font-size:.80rem;'>{len(setores_all)} setor(es) liberado(s)</div>
+                    <div style='padding:7px 11px;border-radius:999px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);color:#dfe7ff;font-size:.80rem;'>{mes:02d}/{ano}</div>
                 </div>
             </div>
             """,
@@ -13405,7 +13404,6 @@ def page_gestao_dashboard(ano: int, mes: int):
 
         filtro_box = st.container()
         with filtro_box:
-            ui_section("Filtros executivos", "Selecione período e setores para montar uma leitura de diretoria sem entrar nas telas operacionais.")
             c1, c2, c3, c4 = st.columns([2.2, 1, 1, 1])
             setores_sel = c1.multiselect("Setores estratégicos", setores_all, default=setores_all, key="gest_setores")
             ano = int(c2.number_input("Ano", value=int(ano), step=1, key="gest_ano"))
@@ -14520,17 +14518,30 @@ def page_app():
         page_portal_colaborador(auth, int(st.session_state["cfg_ano"]), int(st.session_state["cfg_mes"]))
         return
 
-    ui_hero(
-        f"Olá, {auth.get('nome','Usuário')}",
-        (
-            f"Perfil: {perfil_label} • Setor base: {auth_setor} • Chapa: {auth.get('chapa','-')} • "
-            f"Subgrupo: {_subgrupo_auth} • Competência {int(st.session_state['cfg_mes']):02d}/{int(st.session_state['cfg_ano'])}"
-        ),
-        "ESCALA 5X2 AUTOMATIZADA",
-    )
-    ui_section("Navegação principal", "As abas e fluxos abaixo continuam seguindo as mesmas permissões, aprovações e regras já definidas no sistema.")
-    if setor != auth_setor:
-        st.caption(f"Visualizando agora o setor liberado: {setor}")
+    _modo_gestao_layout_limpo = bool(_setores_permitidos_gestao) and not bool(auth.get('is_admin', False))
+    if _modo_gestao_layout_limpo:
+        st.markdown(
+            f"""
+            <div style='margin:4px 0 14px 0;padding:18px 20px;border-radius:18px;border:1px solid rgba(102,143,255,.18);background:linear-gradient(135deg, rgba(8,20,52,.92), rgba(7,27,78,.78));'>
+                <div style='font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;color:#8fb0ff;font-weight:700;'>Modo gestão</div>
+                <div style='font-size:1.55rem;font-weight:800;color:#f6f8ff;margin-top:6px;'>Painel executivo</div>
+                <div style='font-size:.88rem;color:#b8c6ea;margin-top:6px;'>Leitura consolidada para acompanhamento gerencial dos setores liberados.</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    else:
+        ui_hero(
+            f"Olá, {auth.get('nome','Usuário')}",
+            (
+                f"Perfil: {perfil_label} • Setor base: {auth_setor} • Chapa: {auth.get('chapa','-')} • "
+                f"Subgrupo: {_subgrupo_auth} • Competência {int(st.session_state['cfg_mes']):02d}/{int(st.session_state['cfg_ano'])}"
+            ),
+            "ESCALA 5X2 AUTOMATIZADA",
+        )
+        ui_section("Navegação principal", "As abas e fluxos abaixo continuam seguindo as mesmas permissões, aprovações e regras já definidas no sistema.")
+        if setor != auth_setor:
+            st.caption(f"Visualizando agora o setor liberado: {setor}")
 
     nav_sp1, nav_sp2, nav_mes_col, nav_ano_col = st.columns([4.2, 0.2, 1.0, 1.0])
     with nav_mes_col:
@@ -14568,7 +14579,10 @@ def page_app():
                     help="Escolha qual setor liberado você quer analisar nesta tela.",
                 )
             with gx2:
-                st.info(f"Setor base: {auth_setor} • setores liberados: {len(setores_visao_gestao)}")
+                st.markdown(
+                    f"<div style='margin-top:26px;padding:10px 14px;border-radius:14px;border:1px solid rgba(96,138,255,.14);background:rgba(255,255,255,.03);color:#cfd9f8;font-size:.86rem;'>Setor base <strong>{auth_setor}</strong> • {len(setores_visao_gestao)} setor(es) liberado(s)</div>",
+                    unsafe_allow_html=True,
+                )
         else:
             setor = auth_setor
 
@@ -14609,15 +14623,19 @@ def page_app():
         unsafe_allow_html=True
     )
 
-    st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
+    if not _modo_gestao_layout_limpo:
+        st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
 
     # =========================
     # APP / NAVEGAÇÃO PRINCIPAL
     # =========================
     is_admin_area = bool(auth.get("is_admin", False)) and auth_setor == "ADMIN"
     _modo_gestao_somente = bool(_setores_permitidos_gestao) and not bool(auth.get('is_admin', False))
-    render_app_like_top_nav(is_admin_area, auth_setor, _modo_gestao_somente)
+    if not _modo_gestao_somente:
+        render_app_like_top_nav(is_admin_area, auth_setor, _modo_gestao_somente)
     app_route = resolve_app_like_route(is_admin_area, auth_setor, _modo_gestao_somente)
+    if _modo_gestao_somente:
+        app_route["sec_main"] = "📂 Menu Gestão"
     sec_main = app_route.get("sec_main", "dashboard")
     sec_col = app_route.get("sec_col", "👥 Colaboradores")
     sec_aj = app_route.get("sec_aj", "🧩 Folgas manuais em grade")
@@ -15928,12 +15946,7 @@ def page_app():
     elif sec_main == "📂 Menu Gestão":
         _modo_gestao_somente_menu = bool(_setores_permitidos_gestao) and not bool(auth.get('is_admin', False))
         if _modo_gestao_somente_menu:
-            ui_section("Gestão", "Modo gestão ativo: este usuário vê somente o painel consolidado dos setores liberados.")
-            st.success(f"👁️ Modo Gestão ativo para o setor base {auth_setor}. Edição, cadastro, geração de escala e ajustes ficam ocultos neste perfil.")
-            st.markdown("### 📊 Painel do gerente")
-            st.caption("Abaixo aparecem os dados consolidados dos setores liberados para este gerente, sem precisar trocar de usuário ou navegar por outras áreas.")
             page_gestao_dashboard(int(st.session_state["cfg_ano"]), int(st.session_state["cfg_mes"]))
-            st.info("Este perfil está em visualização gerencial. Somente indicadores, gráficos e consultas ficam disponíveis.")
         else:
             ui_section("Gestão", "Clique em uma opção para abrir as telas da área de gestão.")
 
