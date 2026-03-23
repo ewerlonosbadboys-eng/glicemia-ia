@@ -16671,9 +16671,21 @@ def page_app():
         dia_padrao_cx = datetime.now().day if (ano_cx == datetime.now().year and mes_cx == datetime.now().month) else 1
         dia_padrao_cx = min(max(1, int(dia_padrao_cx)), int(ultimo_dia_cx))
 
+        _cx_dia_key = f"cx_dia::{setor}::{ano_cx}::{mes_cx}"
+        _cx_dia_stamp_key = f"cx_dia_auto_stamp::{setor}::{ano_cx}::{mes_cx}"
+        _hoje_real = datetime.now().date()
+        _mes_atual_real = (int(ano_cx) == _hoje_real.year and int(mes_cx) == _hoje_real.month)
+        if _mes_atual_real:
+            _stamp_hoje = _hoje_real.isoformat()
+            if st.session_state.get(_cx_dia_stamp_key) != _stamp_hoje:
+                st.session_state[_cx_dia_key] = min(max(1, int(_hoje_real.day)), int(ultimo_dia_cx))
+                st.session_state[_cx_dia_stamp_key] = _stamp_hoje
+        elif _cx_dia_key not in st.session_state:
+            st.session_state[_cx_dia_key] = 1
+
         cxa, cxb, cxc, cxd = st.columns([1.3, 1.2, 1.3, 2.2])
         with cxa:
-            dia_cx = st.selectbox("Dia operacional", list(range(1, ultimo_dia_cx + 1)), index=dia_padrao_cx - 1, key=f"cx_dia::{setor}::{ano_cx}::{mes_cx}")
+            dia_cx = st.selectbox("Dia operacional", list(range(1, ultimo_dia_cx + 1)), index=max(0, int(st.session_state.get(_cx_dia_key, dia_padrao_cx)) - 1), key=_cx_dia_key)
         with cxb:
             postos_total = len(caixa_lista_postos())
             st.metric("Postos disponíveis", postos_total)
@@ -16685,6 +16697,7 @@ def page_app():
         base_operadores_cx = caixa_montar_base_operadores(setor, ano_cx, mes_cx, int(dia_cx))
         df_mapa_cx = caixa_load_operacao_dia(setor, ano_cx, mes_cx, int(dia_cx))
         postos_cx = caixa_lista_postos()
+        st.caption(f"Operação exibida somente para {int(dia_cx):02d}/{int(mes_cx):02d}/{int(ano_cx)} no setor {str(setor or '-').strip() or '-'}.")
 
         ocupados_cx = int(len(df_mapa_cx))
         almoco_cx = int((df_mapa_cx['status_operacao'].astype(str) == 'Em almoço').sum()) if not df_mapa_cx.empty else 0
@@ -16772,8 +16785,9 @@ def page_app():
                         'almoco_fim': 'Volta almoço',
                         'status_operacao': 'Status',
                         'observacao': 'Observação',
+                        'atualizado_em': 'Adicionado em',
                     })
-                    st.dataframe(df_view_cx[['Posto','Operador','Subgrupo','Entrada','Saída','Sai almoço','Volta almoço','Status','Observação']], use_container_width=True, height=520)
+                    st.dataframe(df_view_cx[['Posto','Operador','Subgrupo','Entrada','Saída','Sai almoço','Volta almoço','Status','Adicionado em','Observação']], use_container_width=True, height=520)
 
         with tab_status_cx:
             st.markdown("#### Atualização rápida de almoço e trocas")
