@@ -2810,6 +2810,13 @@ def get_app_like_nav_config(is_admin_area: bool, setor: str = "", modo_gestao_so
                 ("🖨️ Imprimir escala parede", {"sec_main": "🖨️ Impressão", "sec_imp": "🖨️ Imprimir escala parede"}),
             ],
         },
+        "caixa": {
+            "label": "💳 Caixa",
+            "default_sub": "Operação dos caixas",
+            "submenus": [
+                ("Operação dos caixas", {"sec_main": "💳 Caixa"}),
+            ],
+        },
         "gestao": {
             "label": "⚙️ Gestão",
             "default_sub": "📂 Menu Gestão",
@@ -2839,7 +2846,7 @@ def get_app_like_nav_config(is_admin_area: bool, setor: str = "", modo_gestao_so
 
 def render_app_like_sidebar_nav(is_admin_area: bool, setor: str = "", modo_gestao_somente: bool = False):
     cfg = get_app_like_nav_config(is_admin_area, setor, modo_gestao_somente)
-    main_keys = ["admin"] if is_admin_area else (["gestao"] if modo_gestao_somente else ["dashboard", "colaboradores", "escala", "gestao"])
+    main_keys = ["admin"] if is_admin_area else (["gestao", "caixa"] if modo_gestao_somente else ["dashboard", "colaboradores", "escala", "caixa", "gestao"])
     default_main = main_keys[0]
     if st.session_state.get("app_like_main") not in main_keys:
         st.session_state["app_like_main"] = default_main
@@ -2865,7 +2872,7 @@ def render_app_like_sidebar_nav(is_admin_area: bool, setor: str = "", modo_gesta
 
 def render_app_like_top_nav(is_admin_area: bool, setor: str = "", modo_gestao_somente: bool = False):
     cfg = get_app_like_nav_config(is_admin_area, setor, modo_gestao_somente)
-    main_keys = ["admin"] if is_admin_area else (["gestao"] if modo_gestao_somente else ["dashboard", "colaboradores", "escala", "gestao"])
+    main_keys = ["admin"] if is_admin_area else (["gestao", "caixa"] if modo_gestao_somente else ["dashboard", "colaboradores", "escala", "caixa", "gestao"])
     default_main = main_keys[0]
     if st.session_state.get("app_like_main") not in main_keys:
         st.session_state["app_like_main"] = default_main
@@ -2901,7 +2908,7 @@ def render_app_like_top_nav(is_admin_area: bool, setor: str = "", modo_gestao_so
 
 def resolve_app_like_route(is_admin_area: bool, setor: str = "", modo_gestao_somente: bool = False):
     cfg = get_app_like_nav_config(is_admin_area, setor, modo_gestao_somente)
-    main_keys = ["admin"] if is_admin_area else (["gestao"] if modo_gestao_somente else ["dashboard", "colaboradores", "escala", "gestao"])
+    main_keys = ["admin"] if is_admin_area else (["gestao", "caixa"] if modo_gestao_somente else ["dashboard", "colaboradores", "escala", "caixa", "gestao"])
     current_main = st.session_state.get("app_like_main")
     if current_main not in main_keys:
         current_main = main_keys[0]
@@ -5255,6 +5262,28 @@ def db_init_fast_login():
     )
     """)
 
+
+    _safe_exec(cur, """
+    CREATE TABLE IF NOT EXISTS caixa_operacao_dia (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        setor TEXT NOT NULL,
+        ano INTEGER NOT NULL,
+        mes INTEGER NOT NULL,
+        dia INTEGER NOT NULL,
+        posto TEXT NOT NULL,
+        chapa TEXT DEFAULT '',
+        nome TEXT DEFAULT '',
+        subgrupo TEXT DEFAULT '',
+        entrada_prevista TEXT DEFAULT '',
+        saida_prevista TEXT DEFAULT '',
+        status_operacao TEXT NOT NULL DEFAULT 'Em operação',
+        observacao TEXT DEFAULT '',
+        atualizado_em TEXT NOT NULL,
+        atualizado_por TEXT DEFAULT '',
+        UNIQUE(setor, ano, mes, dia, posto)
+    )
+    """)
+
     _safe_exec(cur, """
     CREATE TABLE IF NOT EXISTS ax_lider_aprovacoes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -5444,6 +5473,28 @@ def db_init():
         setor TEXT NOT NULL,
         chapa TEXT NOT NULL,
         ts TEXT NOT NULL
+    )
+    """)
+
+
+    _safe_exec(cur, """
+    CREATE TABLE IF NOT EXISTS caixa_operacao_dia (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        setor TEXT NOT NULL,
+        ano INTEGER NOT NULL,
+        mes INTEGER NOT NULL,
+        dia INTEGER NOT NULL,
+        posto TEXT NOT NULL,
+        chapa TEXT DEFAULT '',
+        nome TEXT DEFAULT '',
+        subgrupo TEXT DEFAULT '',
+        entrada_prevista TEXT DEFAULT '',
+        saida_prevista TEXT DEFAULT '',
+        status_operacao TEXT NOT NULL DEFAULT 'Em operação',
+        observacao TEXT DEFAULT '',
+        atualizado_em TEXT NOT NULL,
+        atualizado_por TEXT DEFAULT '',
+        UNIQUE(setor, ano, mes, dia, posto)
     )
     """)
 
@@ -6915,6 +6966,156 @@ def _hora_to_min(h: str) -> int | None:
         return int(hh) * 60 + int(mm)
     except Exception:
         return None
+
+def _min_to_hora(total_min: int | None) -> str:
+    if total_min is None:
+        return ""
+    total_min = int(total_min) % (24 * 60)
+    hh = total_min // 60
+    mm = total_min % 60
+    return f"{hh:02d}:{mm:02d}"
+
+
+def _caixa_saida_prevista(entrada: str, jornada_min: int = 500) -> str:
+    base = _hora_to_min(entrada)
+    if base is None:
+        return ""
+    return _min_to_hora(base + int(jornada_min))
+
+
+def caixa_lista_postos(qtd_caixas: int = 30, qtd_self: int = 6) -> list[str]:
+    postos = [f"CAIXA {i:02d}" for i in range(1, int(qtd_caixas) + 1)]
+    postos += [f"SELF {i:02d}" for i in range(1, int(qtd_self) + 1)]
+    return postos
+
+
+def caixa_load_operacao_dia(setor: str, ano: int, mes: int, dia: int) -> pd.DataFrame:
+    con = db_conn()
+    try:
+        return pd.read_sql_query(
+            """
+            SELECT posto, chapa, nome, subgrupo, entrada_prevista, saida_prevista,
+                   status_operacao, observacao, atualizado_em, atualizado_por
+            FROM caixa_operacao_dia
+            WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND dia=?
+            ORDER BY posto ASC
+            """,
+            con,
+            params=(str(setor or '').strip(), int(ano), int(mes), int(dia)),
+        )
+    except Exception:
+        return pd.DataFrame(columns=[
+            'posto','chapa','nome','subgrupo','entrada_prevista','saida_prevista',
+            'status_operacao','observacao','atualizado_em','atualizado_por'
+        ])
+    finally:
+        con.close()
+
+
+def caixa_upsert_operacao_dia(
+    setor: str,
+    ano: int,
+    mes: int,
+    dia: int,
+    posto: str,
+    chapa: str = "",
+    nome: str = "",
+    subgrupo: str = "",
+    entrada_prevista: str = "",
+    saida_prevista: str = "",
+    status_operacao: str = "Em operação",
+    observacao: str = "",
+    atualizado_por: str = "",
+):
+    con = db_conn()
+    cur = con.cursor()
+    try:
+        agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cur.execute(
+            """
+            INSERT INTO caixa_operacao_dia(
+                setor, ano, mes, dia, posto, chapa, nome, subgrupo,
+                entrada_prevista, saida_prevista, status_operacao,
+                observacao, atualizado_em, atualizado_por
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(setor, ano, mes, dia, posto) DO UPDATE SET
+                chapa=excluded.chapa,
+                nome=excluded.nome,
+                subgrupo=excluded.subgrupo,
+                entrada_prevista=excluded.entrada_prevista,
+                saida_prevista=excluded.saida_prevista,
+                status_operacao=excluded.status_operacao,
+                observacao=excluded.observacao,
+                atualizado_em=excluded.atualizado_em,
+                atualizado_por=excluded.atualizado_por
+            """,
+            (
+                str(setor or '').strip(), int(ano), int(mes), int(dia), str(posto or '').strip(),
+                str(chapa or '').strip(), str(nome or '').strip(), str(subgrupo or '').strip(),
+                str(entrada_prevista or '').strip(), str(saida_prevista or '').strip(),
+                str(status_operacao or 'Em operação').strip(), str(observacao or '').strip(),
+                agora, str(atualizado_por or '').strip(),
+            )
+        )
+        con.commit()
+    finally:
+        con.close()
+
+
+def caixa_limpar_posto_dia(setor: str, ano: int, mes: int, dia: int, posto: str):
+    con = db_conn()
+    cur = con.cursor()
+    try:
+        cur.execute(
+            "DELETE FROM caixa_operacao_dia WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND dia=? AND posto=?",
+            (str(setor or '').strip(), int(ano), int(mes), int(dia), str(posto or '').strip()),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+
+def caixa_montar_base_operadores(setor: str, ano: int, mes: int, dia: int) -> pd.DataFrame:
+    registros = []
+    colaboradores = load_colaboradores_setor(setor) or []
+    for colab in colaboradores:
+        nome = str(colab.get('Nome') or '').strip()
+        chapa = _norm_chapa(colab.get('Chapa') or '')
+        subgrupo = str(colab.get('Subgrupo') or '').strip() or 'SEM SUBGRUPO'
+        entrada_prev = str(colab.get('Entrada') or '06:00').strip() or '06:00'
+        saida_prev = _caixa_saida_prevista(entrada_prev)
+        status_dia = 'Trabalho'
+        try:
+            esc = get_escala_colaborador_mes(setor, chapa, int(ano), int(mes))
+            if esc is not None and not esc.empty:
+                row = esc[esc['Dia'].astype(int) == int(dia)]
+                if not row.empty:
+                    row = row.iloc[0]
+                    status_dia = str(row.get('Status') or 'Trabalho').strip() or 'Trabalho'
+                    entrada_prev = str(row.get('Entrada') or entrada_prev).strip() or entrada_prev
+                    saida_prev = str(row.get('Saída') or '').strip() or _caixa_saida_prevista(entrada_prev)
+        except Exception:
+            pass
+        registros.append({
+            'nome': nome,
+            'chapa': chapa,
+            'subgrupo': subgrupo,
+            'entrada_prevista': entrada_prev,
+            'saida_prevista': saida_prev,
+            'status_dia': status_dia,
+            'setor': str(colab.get('Setor') or setor).strip(),
+        })
+    df = pd.DataFrame(registros)
+    if df.empty:
+        return pd.DataFrame(columns=['nome','chapa','subgrupo','entrada_prevista','saida_prevista','status_dia','setor'])
+    try:
+        ordem = {'Trabalho': 0, 'Folga': 1, 'Férias': 2, 'Afastamento': 3}
+        df['_ordem_status'] = df['status_dia'].map(lambda x: ordem.get(str(x), 9))
+        df['_ordem_hora'] = df['entrada_prevista'].map(lambda x: _hora_to_min(x) if _hora_to_min(x) is not None else 9999)
+        df = df.sort_values(['_ordem_status', '_ordem_hora', 'nome']).drop(columns=['_ordem_status', '_ordem_hora'])
+    except Exception:
+        df = df.sort_values(['nome'])
+    return df.reset_index(drop=True)
 
 
 def _classificar_compat_horario(h1: str, h2: str, tolerancia_min: int = 20) -> str:
@@ -16060,6 +16261,187 @@ def page_app():
                             st.rerun()
                     idx_btn_ges += 1
             st.info("Clique em uma das opções acima para abrir o conteúdo de Gestão.")
+
+    elif sec_main == "💳 Caixa":
+        ui_section("Caixa", "Operação diária da frente de caixa com controle de postos, almoço e trocas sem alterar a escala oficial.")
+        ano_cx = int(st.session_state["cfg_ano"])
+        mes_cx = int(st.session_state["cfg_mes"])
+        ultimo_dia_cx = calendar.monthrange(ano_cx, mes_cx)[1]
+        dia_padrao_cx = datetime.now().day if (ano_cx == datetime.now().year and mes_cx == datetime.now().month) else 1
+        dia_padrao_cx = min(max(1, int(dia_padrao_cx)), int(ultimo_dia_cx))
+
+        cxa, cxb, cxc, cxd = st.columns([1.3, 1.2, 1.3, 2.2])
+        with cxa:
+            dia_cx = st.selectbox("Dia operacional", list(range(1, ultimo_dia_cx + 1)), index=dia_padrao_cx - 1, key=f"cx_dia::{setor}::{ano_cx}::{mes_cx}")
+        with cxb:
+            postos_total = len(caixa_lista_postos())
+            st.metric("Postos disponíveis", postos_total)
+        with cxc:
+            st.metric("Setor ativo", str(setor or '-'))
+        with cxd:
+            st.caption("Use esta aba para planejar quem abriu cada caixa, almoço, trocas e cobertura ao longo do dia.")
+
+        base_operadores_cx = caixa_montar_base_operadores(setor, ano_cx, mes_cx, int(dia_cx))
+        df_mapa_cx = caixa_load_operacao_dia(setor, ano_cx, mes_cx, int(dia_cx))
+        postos_cx = caixa_lista_postos()
+
+        ocupados_cx = int(len(df_mapa_cx))
+        almoco_cx = int((df_mapa_cx['status_operacao'].astype(str) == 'Em almoço').sum()) if not df_mapa_cx.empty else 0
+        troca_cx = int((df_mapa_cx['status_operacao'].astype(str) == 'Em troca').sum()) if not df_mapa_cx.empty else 0
+        vazios_cx = max(0, len(postos_cx) - ocupados_cx)
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Caixas ocupados", ocupados_cx)
+        k2.metric("Em almoço", almoco_cx)
+        k3.metric("Em troca", troca_cx)
+        k4.metric("Sem operador", vazios_cx)
+
+        tab_mapa_cx, tab_status_cx, tab_cobertura_cx = st.tabs(["🗺️ Mapa dos caixas", "🍽️ Almoço e trocas", "📊 Cobertura do dia"])
+
+        with tab_mapa_cx:
+            fm1, fm2 = st.columns([1.2, 1.8])
+            candidatos_cx = []
+            if base_operadores_cx.empty:
+                candidatos_cx = ["Nenhum colaborador disponível"]
+            else:
+                for _, row_cx in base_operadores_cx.iterrows():
+                    candidatos_cx.append(
+                        f"{row_cx['nome']} — {row_cx['chapa']} — {row_cx['subgrupo']} — entra {row_cx['entrada_prevista']} / sai {row_cx['saida_prevista']} — {row_cx['status_dia']}"
+                    )
+
+            with fm1:
+                st.markdown("#### Alocar operador no posto")
+                posto_sel_cx = st.selectbox("Posto", postos_cx, key=f"cx_posto::{setor}")
+                candidato_sel_cx = st.selectbox("Colaborador", candidatos_cx, key=f"cx_colab::{setor}")
+                status_sel_cx = st.selectbox("Status do posto", ["Em operação", "Em almoço", "Em troca", "Livre", "Fechado", "Reserva"], key=f"cx_status::{setor}")
+                obs_sel_cx = st.text_input("Observação", key=f"cx_obs::{setor}", placeholder="Ex.: cobrir almoço do Caixa 03")
+                csave1, csave2 = st.columns(2)
+                if csave1.button("💾 Salvar posto", key=f"cx_salvar::{setor}", use_container_width=True):
+                    if not base_operadores_cx.empty and candidato_sel_cx != "Nenhum colaborador disponível":
+                        parte = [p.strip() for p in candidato_sel_cx.split("—")]
+                        chapa_sel = parte[1] if len(parte) > 1 else ""
+                        reg = base_operadores_cx[base_operadores_cx['chapa'].astype(str) == str(chapa_sel).strip()]
+                        if not reg.empty:
+                            reg = reg.iloc[0]
+                            caixa_upsert_operacao_dia(
+                                setor=setor,
+                                ano=ano_cx,
+                                mes=mes_cx,
+                                dia=int(dia_cx),
+                                posto=posto_sel_cx,
+                                chapa=str(reg.get('chapa') or ''),
+                                nome=str(reg.get('nome') or ''),
+                                subgrupo=str(reg.get('subgrupo') or ''),
+                                entrada_prevista=str(reg.get('entrada_prevista') or ''),
+                                saida_prevista=str(reg.get('saida_prevista') or ''),
+                                status_operacao=status_sel_cx,
+                                observacao=obs_sel_cx,
+                                atualizado_por=str((auth or {}).get('nome') or (auth or {}).get('chapa') or ''),
+                            )
+                            st.success(f"{posto_sel_cx} atualizado com sucesso.")
+                            st.rerun()
+                    st.warning("Selecione um colaborador válido para salvar o posto.")
+                if csave2.button("🧹 Limpar posto", key=f"cx_limpar::{setor}", use_container_width=True):
+                    caixa_limpar_posto_dia(setor, ano_cx, mes_cx, int(dia_cx), posto_sel_cx)
+                    st.success(f"{posto_sel_cx} liberado.")
+                    st.rerun()
+                st.caption("Dica: selecione o caixa, procure a pessoa e marque se está operando, em almoço, troca ou reserva.")
+
+            with fm2:
+                st.markdown("#### Mapa operacional do dia")
+                if df_mapa_cx.empty:
+                    st.info("Nenhum posto preenchido ainda para este dia.")
+                else:
+                    df_view_cx = df_mapa_cx.copy()
+                    df_view_cx = df_view_cx.rename(columns={
+                        'posto': 'Posto',
+                        'nome': 'Operador',
+                        'subgrupo': 'Subgrupo',
+                        'entrada_prevista': 'Entrada',
+                        'saida_prevista': 'Saída',
+                        'status_operacao': 'Status',
+                        'observacao': 'Observação',
+                    })
+                    st.dataframe(df_view_cx[['Posto','Operador','Subgrupo','Entrada','Saída','Status','Observação']], use_container_width=True, height=520)
+
+        with tab_status_cx:
+            st.markdown("#### Atualização rápida de almoço e trocas")
+            if df_mapa_cx.empty:
+                st.info("Preencha ao menos um posto no mapa dos caixas para controlar almoço e trocas.")
+            else:
+                postos_alocados = df_mapa_cx['posto'].astype(str).tolist()
+                su1, su2, su3 = st.columns([1.2, 1.2, 2.0])
+                with su1:
+                    posto_update_cx = st.selectbox("Posto alocado", postos_alocados, key=f"cx_update_posto::{setor}")
+                registro_update_cx = df_mapa_cx[df_mapa_cx['posto'].astype(str) == str(posto_update_cx)].iloc[0]
+                with su2:
+                    novo_status_cx = st.selectbox("Novo status", ["Em operação", "Em almoço", "Em troca", "Livre", "Fechado", "Reserva"], index=max(0, ["Em operação", "Em almoço", "Em troca", "Livre", "Fechado", "Reserva"].index(str(registro_update_cx.get('status_operacao') or 'Em operação')) if str(registro_update_cx.get('status_operacao') or 'Em operação') in ["Em operação", "Em almoço", "Em troca", "Livre", "Fechado", "Reserva"] else 0), key=f"cx_update_status::{setor}")
+                with su3:
+                    nova_obs_cx = st.text_input("Observação operacional", value=str(registro_update_cx.get('observacao') or ''), key=f"cx_update_obs::{setor}")
+                if st.button("✅ Atualizar status do posto", key=f"cx_update_btn::{setor}"):
+                    caixa_upsert_operacao_dia(
+                        setor=setor,
+                        ano=ano_cx,
+                        mes=mes_cx,
+                        dia=int(dia_cx),
+                        posto=str(registro_update_cx.get('posto') or ''),
+                        chapa=str(registro_update_cx.get('chapa') or ''),
+                        nome=str(registro_update_cx.get('nome') or ''),
+                        subgrupo=str(registro_update_cx.get('subgrupo') or ''),
+                        entrada_prevista=str(registro_update_cx.get('entrada_prevista') or ''),
+                        saida_prevista=str(registro_update_cx.get('saida_prevista') or ''),
+                        status_operacao=novo_status_cx,
+                        observacao=nova_obs_cx,
+                        atualizado_por=str((auth or {}).get('nome') or (auth or {}).get('chapa') or ''),
+                    )
+                    st.success("Status operacional atualizado.")
+                    st.rerun()
+                df_status_cx = df_mapa_cx.copy()
+                st.dataframe(df_status_cx.rename(columns={'posto':'Posto','nome':'Operador','status_operacao':'Status','entrada_prevista':'Entrada','saida_prevista':'Saída','subgrupo':'Subgrupo'})[['Posto','Operador','Subgrupo','Entrada','Saída','Status','observacao']], use_container_width=True, height=420)
+
+        with tab_cobertura_cx:
+            st.markdown("#### Cobertura e planejamento do dia")
+            base_trabalho_cx = base_operadores_cx[base_operadores_cx['status_dia'].astype(str).str.upper().str.contains('TRAB')].copy() if not base_operadores_cx.empty else pd.DataFrame()
+            nomes_alocados_cx = set(df_mapa_cx['chapa'].astype(str).tolist()) if not df_mapa_cx.empty else set()
+            disponiveis_cx = base_trabalho_cx[~base_trabalho_cx['chapa'].astype(str).isin(nomes_alocados_cx)].copy() if not base_trabalho_cx.empty else pd.DataFrame()
+            prox_saida_cx = pd.DataFrame()
+            if not df_mapa_cx.empty:
+                agora_min = _hora_to_min(datetime.now().strftime('%H:%M')) or 0
+                aux_saida = df_mapa_cx.copy()
+                aux_saida['_saida_min'] = aux_saida['saida_prevista'].map(_hora_to_min)
+                prox_saida_cx = aux_saida[(aux_saida['_saida_min'].notna()) & (aux_saida['_saida_min'] >= agora_min) & (aux_saida['_saida_min'] <= agora_min + 90)].copy()
+                prox_saida_cx = prox_saida_cx.sort_values('_saida_min')
+            cc1, cc2, cc3 = st.columns(3)
+            cc1.metric("Trabalho hoje", int(len(base_trabalho_cx)))
+            cc2.metric("Disponíveis para cobrir", int(len(disponiveis_cx)))
+            cc3.metric("Saídas nos próximos 90 min", int(len(prox_saida_cx)))
+
+            cgr1, cgr2 = st.columns(2)
+            with cgr1:
+                st.markdown("##### Postos por status")
+                if not df_mapa_cx.empty:
+                    st.bar_chart(df_mapa_cx.groupby('status_operacao').size())
+                else:
+                    st.info("Sem postos alocados para gerar gráfico.")
+            with cgr2:
+                st.markdown("##### Equipe disponível por subgrupo")
+                if not disponiveis_cx.empty:
+                    st.bar_chart(disponiveis_cx.groupby('subgrupo').size())
+                else:
+                    st.info("Sem colaboradores livres no status Trabalho para cobrir neste momento.")
+
+            dc1, dc2 = st.columns(2)
+            with dc1:
+                st.markdown("##### Próximos a sair")
+                if prox_saida_cx.empty:
+                    st.info("Nenhuma saída prevista nos próximos 90 minutos.")
+                else:
+                    st.dataframe(prox_saida_cx.rename(columns={'posto':'Posto','nome':'Operador','saida_prevista':'Saída','status_operacao':'Status','subgrupo':'Subgrupo'})[['Posto','Operador','Subgrupo','Saída','Status']], use_container_width=True, height=260)
+            with dc2:
+                st.markdown("##### Colaboradores disponíveis para reposição")
+                if disponiveis_cx.empty:
+                    st.info("Todos os colaboradores em trabalho já estão alocados ou não há equipe disponível para cobrir.")
+                else:
+                    st.dataframe(disponiveis_cx.rename(columns={'nome':'Operador','subgrupo':'Subgrupo','entrada_prevista':'Entrada','saida_prevista':'Saída','status_dia':'Status do dia'})[['Operador','Subgrupo','Entrada','Saída','Status do dia']], use_container_width=True, height=260)
 
     elif sec_main == "🚀 Gerar Escala":
         st.subheader("🚀 Gerar escala")
