@@ -17791,6 +17791,24 @@ def page_app():
         else:
             ui_section("Férias", f"Subaba ativa: {sec_fer}")
 
+            botoes_ferias = [
+                ("🗺️ Mapa anual de férias", "🗺️ Mapa anual de férias", "fer_menu_mapa"),
+                ("➕ Lançar Férias", "➕ Lançar Férias", "fer_menu_lancar"),
+                ("📊 Controle (histórico)", "📊 Controle (histórico)", "fer_menu_controle"),
+                ("📋 Férias cadastradas", "📋 Férias cadastradas", "fer_menu_cadastradas"),
+                ("❌ Remover férias", "❌ Remover férias", "fer_menu_remover"),
+            ]
+            idx_btn_fer = 0
+            while idx_btn_fer < len(botoes_ferias):
+                linha = st.columns(min(4, len(botoes_ferias) - idx_btn_fer))
+                for col_btn in linha:
+                    label_btn, destino_btn, key_btn = botoes_ferias[idx_btn_fer]
+                    with col_btn:
+                        if st.button(label_btn, key=key_btn, use_container_width=True):
+                            st.session_state["app_like_sub"] = destino_btn
+                            st.rerun()
+                    idx_btn_fer += 1
+
             # ---------------------------
             # TAB 1 — MAPA ANUAL
             # ---------------------------
