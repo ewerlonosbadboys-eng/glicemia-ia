@@ -17584,12 +17584,42 @@ def page_app():
                                     preview_rows = []
 
                                 st.markdown("#### 📋 Conferência das alterações marcadas")
-                                st.caption("Esta tabela mostra o resultado previsto para cada quadradinho marcado, permitindo conferir os horários exatos antes de salvar.")
+                                st.caption("Visual em grade para conferência rápida: cada coluna é um dia e cada célula mostra o horário/resultado previsto para aquele colaborador.")
                                 if preview_rows:
-                                    df_preview_th = pd.DataFrame(preview_rows)
-                                    st.dataframe(df_preview_th, use_container_width=True, hide_index=True)
+                                    try:
+                                        df_preview_th = pd.DataFrame(preview_rows)
+                                        ordem_cols_prev = ["Nome", "Chapa"] + [str(int(d)) for d in dias2]
+                                        preview_grade_rows = []
+                                        for (nm_prev, ch_prev), grp_prev in df_preview_th.groupby(["Nome", "Chapa"], dropna=False):
+                                            row_prev = {"Nome": nm_prev, "Chapa": ch_prev}
+                                            for d_prev in dias2:
+                                                row_prev[str(int(d_prev))] = ""
+                                            for _, rr_prev in grp_prev.iterrows():
+                                                dia_prev = int(rr_prev.get("Dia") or 0)
+                                                novo_prev = str(rr_prev.get("Novo valor") or "").strip()
+                                                if not dia_prev:
+                                                    continue
+                                                if novo_prev.startswith("Não aplica"):
+                                                    valor_prev = "-"
+                                                elif novo_prev.lower() == "folga":
+                                                    valor_prev = "Folga"
+                                                elif novo_prev.lower() == "afastamento":
+                                                    valor_prev = "Afast."
+                                                else:
+                                                    valor_prev = novo_prev
+                                                row_prev[str(dia_prev)] = valor_prev
+                                            preview_grade_rows.append(row_prev)
+                                        df_preview_grade = pd.DataFrame(preview_grade_rows)
+                                        for c_prev in ordem_cols_prev:
+                                            if c_prev not in df_preview_grade.columns:
+                                                df_preview_grade[c_prev] = ""
+                                        df_preview_grade = df_preview_grade[ordem_cols_prev]
+                                        st.dataframe(df_preview_grade, use_container_width=True, hide_index=True)
+                                    except Exception:
+                                        df_preview_th = pd.DataFrame(preview_rows)
+                                        st.dataframe(df_preview_th, use_container_width=True, hide_index=True)
                                 else:
-                                    st.info("Marque os quadradinhos na grade acima para visualizar aqui os horários e alterações previstas.")
+                                    st.info("Marque os quadradinhos na grade acima para visualizar aqui a conferência em grade dos horários previstos.")
 
                                 auto_readequar_th = st.checkbox("🔄 Readequar escala ao salvar", value=True, key="th_auto_regen")
 
