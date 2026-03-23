@@ -15708,10 +15708,31 @@ def page_app():
                                 subgrupo_neg = str(item_neg.get('subgrupo') or '-').strip()
                                 domingos_neg = int(item_neg.get('domingos', 0) or 0)
                                 ultima_vez_neg = str(item_neg.get('ultima_vez_caixa02') or 'Nunca fez rodízio para o destino').strip()
+                                slot_neg = str(item_neg.get('slot_key') or '').strip()
                                 with st.container(border=True):
                                     st.markdown(f"**{i}. {nome_neg}**")
                                     st.write(f"Chapa: {chapa_neg} | Horário: {entrada_neg} | Subgrupo: {subgrupo_neg} | Domingos: {domingos_neg}")
                                     st.write(f"Última vez que entrou no Caixa 02: {ultima_vez_neg}")
+                                    if chapa_neg:
+                                        if st.button('↩️ Remover negado', key=f'rod_caixa_remove_negado_{slot_neg or chapa_neg}_{i}', use_container_width=False):
+                                            try:
+                                                negs_tmp = [str(x).strip() for x in list(st.session_state.get(neg_key, [])) if str(x).strip()]
+                                                negs_tmp = [x for x in negs_tmp if x != chapa_neg]
+                                                logs_tmp = []
+                                                for _log_tmp in list(st.session_state.get(neg_log_key, [])):
+                                                    _log_ch = str((_log_tmp or {}).get('chapa') or '').strip()
+                                                    _log_slot = str((_log_tmp or {}).get('slot_key') or '').strip()
+                                                    if _log_ch == chapa_neg:
+                                                        continue
+                                                    if slot_neg and _log_slot == slot_neg:
+                                                        continue
+                                                    logs_tmp.append(_log_tmp)
+                                                st.session_state[neg_key] = negs_tmp
+                                                st.session_state[neg_log_key] = logs_tmp
+                                                st.success(f'{nome_neg or chapa_neg} voltou para Sugestões.')
+                                                st.rerun()
+                                            except Exception as e:
+                                                st.error(f'Não foi possível remover o negado: {e}')
                         else:
                             st.info('Nenhuma pessoa negada nesta competência.')
 
