@@ -17533,16 +17533,26 @@ def page_app():
                                     key="th_grid_editor"
                                 )
 
-                                # tabela extra de conferência: mostra exatamente o que será alterado
-                                preview_rows = []
+                                # grade de conferência: já traz o que está salvo hoje e vai mudando conforme marca os quadradinhos
+                                def _label_preview_troca(status_v, hora_v):
+                                    st_norm_v = str(status_v or "").strip().upper()
+                                    hora_v = str(hora_v or "").strip()
+                                    if st_norm_v in ("FOLGA", "FOLG"):
+                                        return "Folga"
+                                    if st_norm_v in ("FÉRIAS", "FERIAS", "FER"):
+                                        return "Férias"
+                                    if st_norm_v in ("AFA", "AFASTAMENTO"):
+                                        return "Afast."
+                                    return hora_v or "-"
+
+                                preview_grid_rows = []
                                 try:
                                     for _, r_prev in edited_th.iterrows():
                                         ch_prev = str(r_prev["Chapa"])
                                         nm_prev = str(r_prev.get("Nome", "") or "").strip()
                                         dfh_prev = hist_db.get(ch_prev)
+                                        row_prev = {"Nome": nm_prev, "Chapa": ch_prev}
                                         for d_prev in dias2:
-                                            if not bool(r_prev.get(str(d_prev), False)):
-                                                continue
                                             status_prev = ""
                                             hora_atual_prev = ""
                                             if dfh_prev is not None and len(dfh_prev) >= d_prev:
@@ -17554,6 +17564,7 @@ def page_app():
                                                     hora_atual_prev = str(dfh_prev.loc[d_prev - 1, "H_Entrada"] or "").strip()
                                                 except Exception:
                                                     hora_atual_prev = ""
+
                                             cur_prev = (ovmap.get(ch_prev, {}).get(d_prev, {}) or {})
                                             st_ov_prev = str(cur_prev.get("status") or "").strip()
                                             if st_ov_prev:
@@ -17564,62 +17575,28 @@ def page_app():
 
                                             status_norm_prev = str(status_prev or "").strip().upper()
                                             bloqueado_prev = status_norm_prev in ("FOLGA", "FOLG", "FÉRIAS", "FERIAS", "FER", "AFA", "AFASTAMENTO")
+                                            valor_prev = _label_preview_troca(status_prev, hora_atual_prev)
 
-                                            if acao_th == "Horário":
-                                                resultado_prev = "Não aplica (Folga/Férias/AFA)" if bloqueado_prev else str(horario_sel or "")
-                                            elif acao_th == "Folga":
-                                                resultado_prev = "Folga"
-                                            else:
-                                                resultado_prev = "Afastamento"
+                                            if bool(r_prev.get(str(d_prev), False)):
+                                                if acao_th == "Horário":
+                                                    valor_prev = valor_prev if bloqueado_prev else str(horario_sel or "-")
+                                                elif acao_th == "Folga":
+                                                    valor_prev = "Folga"
+                                                else:
+                                                    valor_prev = "Afast."
 
-                                            preview_rows.append({
-                                                "Nome": nm_prev,
-                                                "Chapa": ch_prev,
-                                                "Dia": int(d_prev),
-                                                "Status do dia": status_prev or "Trabalho",
-                                                "Horário atual": hora_atual_prev or "-",
-                                                "Novo valor": resultado_prev or "-",
-                                            })
+                                            row_prev[str(d_prev)] = valor_prev
+                                        preview_grid_rows.append(row_prev)
                                 except Exception:
-                                    preview_rows = []
+                                    preview_grid_rows = []
 
                                 st.markdown("#### 📋 Conferência das alterações marcadas")
-                                st.caption("Visual em grade para conferência rápida: cada coluna é um dia e cada célula mostra o horário/resultado previsto para aquele colaborador.")
-                                if preview_rows:
-                                    try:
-                                        df_preview_th = pd.DataFrame(preview_rows)
-                                        ordem_cols_prev = ["Nome", "Chapa"] + [str(int(d)) for d in dias2]
-                                        preview_grade_rows = []
-                                        for (nm_prev, ch_prev), grp_prev in df_preview_th.groupby(["Nome", "Chapa"], dropna=False):
-                                            row_prev = {"Nome": nm_prev, "Chapa": ch_prev}
-                                            for d_prev in dias2:
-                                                row_prev[str(int(d_prev))] = ""
-                                            for _, rr_prev in grp_prev.iterrows():
-                                                dia_prev = int(rr_prev.get("Dia") or 0)
-                                                novo_prev = str(rr_prev.get("Novo valor") or "").strip()
-                                                if not dia_prev:
-                                                    continue
-                                                if novo_prev.startswith("Não aplica"):
-                                                    valor_prev = "-"
-                                                elif novo_prev.lower() == "folga":
-                                                    valor_prev = "Folga"
-                                                elif novo_prev.lower() == "afastamento":
-                                                    valor_prev = "Afast."
-                                                else:
-                                                    valor_prev = novo_prev
-                                                row_prev[str(dia_prev)] = valor_prev
-                                            preview_grade_rows.append(row_prev)
-                                        df_preview_grade = pd.DataFrame(preview_grade_rows)
-                                        for c_prev in ordem_cols_prev:
-                                            if c_prev not in df_preview_grade.columns:
-                                                df_preview_grade[c_prev] = ""
-                                        df_preview_grade = df_preview_grade[ordem_cols_prev]
-                                        st.dataframe(df_preview_grade, use_container_width=True, hide_index=True)
-                                    except Exception:
-                                        df_preview_th = pd.DataFrame(preview_rows)
-                                        st.dataframe(df_preview_th, use_container_width=True, hide_index=True)
+                                st.caption("A grade abaixo já traz o que está salvo hoje para cada colaborador. Ao marcar os quadradinhos acima, os dias selecionados mudam aqui na prévia antes de salvar.")
+                                if preview_grid_rows:
+                                    df_preview_th = pd.DataFrame(preview_grid_rows)
+                                    st.dataframe(df_preview_th, use_container_width=True, hide_index=True)
                                 else:
-                                    st.info("Marque os quadradinhos na grade acima para visualizar aqui a conferência em grade dos horários previstos.")
+                                    st.info("A grade abaixo mostrará o que já está salvo e a prévia das mudanças conforme você marcar os quadradinhos acima.")
 
                                 auto_readequar_th = st.checkbox("🔄 Readequar escala ao salvar", value=True, key="th_auto_regen")
 
