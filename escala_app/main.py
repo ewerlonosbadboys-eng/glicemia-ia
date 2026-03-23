@@ -15355,6 +15355,43 @@ def page_app():
                         resumo_caixa02_df = resumo_caixa02_df.sort_values(by=['Entrada', 'Nome'], kind='stable').reset_index(drop=True)
                     st.dataframe(resumo_caixa02_df, use_container_width=True, height=340)
 
+                    caixa02_real_map = {}
+                    for _c_real in (colabs_caixa02_resumo or []):
+                        _ch_real = str(_c_real.get('Chapa') or '').strip()
+                        _sg_real = str(_c_real.get('Subgrupo') or '').strip()
+                        if _ch_real and _sg_real.upper() == str(subgrupo_destino or '').strip().upper():
+                            caixa02_real_map[_ch_real] = dict(_c_real)
+                    caixa02_real_chapas = set(caixa02_real_map.keys())
+
+                    def _montar_slot_aprovado_real(slot_base, chapa_real):
+                        chapa_real = str(chapa_real or '').strip()
+                        slot_real = dict(slot_base or {})
+                        if not chapa_real:
+                            return slot_real
+                        colab_real = dict(caixa02_real_map.get(chapa_real) or _transfer_get_colab_cached(chapa_real) or {})
+                        alt_map = {}
+                        for _alt in list(slot_real.get('alternativas_opcoes') or []):
+                            _ch_alt = str(_alt.get('chapa') or '').strip()
+                            if _ch_alt:
+                                alt_map[_ch_alt] = dict(_alt)
+                        alt_real = dict(alt_map.get(chapa_real) or {})
+                        dom_info_real = domingos_detalhe_resumo.get(chapa_real, {'trab': tuple(), 'folga': tuple()}) or {'trab': tuple(), 'folga': tuple()}
+                        domingos_trab_real = tuple(dom_info_real.get('trab') or ())
+                        slot_real['selected_chapa'] = chapa_real
+                        slot_real['origem_chapa'] = chapa_real
+                        slot_real['origem_nome'] = str((alt_real.get('nome') or colab_real.get('Nome') or chapa_real)).strip()
+                        slot_real['origem_entrada'] = str((alt_real.get('entrada') or colab_real.get('Entrada') or slot_real.get('origem_entrada') or '-')).strip()
+                        slot_real['origem_subgrupo'] = str((colab_real.get('Subgrupo') or alt_real.get('subgrupo') or slot_real.get('origem_subgrupo') or '')).strip()
+                        slot_real['origem_domingos'] = int(domingos_map_resumo.get(chapa_real, alt_real.get('domingos', slot_real.get('origem_domingos', 0))) or 0)
+                        slot_real['origem_domingos_qtd'] = int(domingos_map_resumo.get(chapa_real, alt_real.get('domingos', slot_real.get('origem_domingos_qtd', 0))) or 0)
+                        slot_real['origem_ultimo_mes_destino_label'] = _rodizio_format_ym(int(last_move_map_resumo.get(chapa_real, 0) or 0))
+                        slot_real['diff_domingos'] = int(alt_real.get('diff_domingos', slot_real.get('diff_domingos', 0)) or 0)
+                        slot_real['observacao'] = (
+                            f"Pessoa salva nesta competência no {subgrupo_destino}. "
+                            f"Domingos trabalhados no mês: {', '.join(domingos_trab_real) or '-'}"
+                        )
+                        return slot_real
+
                     def _render_transfer_slot_card(i, s):
                                             slot_key = str(s.get('slot_key') or '')
                                             chapa_aprovada_status = str(aprovados_atuais.get(slot_key) or '').strip()
@@ -15556,19 +15593,65 @@ def page_app():
                                                     bcol2.warning('Pendente. Ao negar, o sistema chama a próxima pessoa da fila desse horário.')
                     slots_pendentes = []
                     slots_aprovados_ui = []
+                    chapas_caixa02_mostradas = set()
                     for _s_tmp in slots:
                         _slot_key_tmp = str(_s_tmp.get('slot_key') or '')
                         _frozen_tmp = dict(st.session_state.get(freeze_slots_key, {}).get(_slot_key_tmp, {}) or {})
                         _frozen_ativo_tmp = bool(_frozen_tmp.get('manual_freeze') or _s_tmp.get('manual_freeze'))
                         _aprovado_chapa_tmp = str(aprovados_atuais.get(_slot_key_tmp) or '').strip()
                         _aprovado_tmp = bool(_aprovado_chapa_tmp)
+                        _candidatas_tmp = []
+                        for _cand_tmp in [
+                            _aprovado_chapa_tmp,
+                            str(_frozen_tmp.get('selected_chapa') or '').strip(),
+                            str(_s_tmp.get('selected_chapa') or '').strip(),
+                            str(_s_tmp.get('origem_chapa') or '').strip(),
+                        ]:
+                            if _cand_tmp and _cand_tmp not in _candidatas_tmp:
+                                _candidatas_tmp.append(_cand_tmp)
+                        for _alt_tmp in list(_s_tmp.get('alternativas_opcoes') or []):
+                            _ch_alt_tmp = str(_alt_tmp.get('chapa') or '').strip()
+                            if _ch_alt_tmp and _ch_alt_tmp not in _candidatas_tmp:
+                                _candidatas_tmp.append(_ch_alt_tmp)
+                        _chapa_real_slot = ''
+                        for _cand_tmp in _candidatas_tmp:
+                            if _cand_tmp in caixa02_real_chapas:
+                                _chapa_real_slot = _cand_tmp
+                                break
                         _chapa_status_tmp = str(_aprovado_chapa_tmp or _frozen_tmp.get('selected_chapa') or _s_tmp.get('selected_chapa') or _s_tmp.get('origem_chapa') or '').strip()
                         _subgrupo_status_tmp = _transfer_get_subgrupo_cached(_chapa_status_tmp) if _chapa_status_tmp else ''
-                        _aprovado_real_tmp = bool(_chapa_status_tmp and str(_subgrupo_status_tmp or '').strip().upper() == str(subgrupo_destino or '').strip().upper())
+                        _aprovado_real_tmp = bool(_chapa_real_slot) or bool(_chapa_status_tmp and str(_subgrupo_status_tmp or '').strip().upper() == str(subgrupo_destino or '').strip().upper())
+                        if _chapa_real_slot:
+                            chapas_caixa02_mostradas.add(_chapa_real_slot)
                         if _frozen_ativo_tmp or _aprovado_tmp or _aprovado_real_tmp:
-                            slots_aprovados_ui.append(_s_tmp)
+                            slots_aprovados_ui.append(_montar_slot_aprovado_real(_s_tmp, _chapa_real_slot or _chapa_status_tmp))
                         else:
                             slots_pendentes.append(_s_tmp)
+
+                    for _chapa_real_extra in sorted(caixa02_real_chapas - chapas_caixa02_mostradas):
+                        _colab_real_extra = dict(caixa02_real_map.get(_chapa_real_extra) or {})
+                        slots_aprovados_ui.append({
+                            'slot_key': f'real_caixa02::{_chapa_real_extra}',
+                            'origem_chapa': _chapa_real_extra,
+                            'selected_chapa': _chapa_real_extra,
+                            'origem_nome': str(_colab_real_extra.get('Nome') or _chapa_real_extra).strip(),
+                            'origem_entrada': str(_colab_real_extra.get('Entrada') or '-').strip(),
+                            'origem_subgrupo': str(_colab_real_extra.get('Subgrupo') or subgrupo_destino).strip(),
+                            'origem_domingos': int(domingos_map_resumo.get(_chapa_real_extra, 0) or 0),
+                            'origem_domingos_qtd': int(domingos_map_resumo.get(_chapa_real_extra, 0) or 0),
+                            'origem_ultimo_mes_destino_label': _rodizio_format_ym(int(last_move_map_resumo.get(_chapa_real_extra, 0) or 0)),
+                            'diff_domingos': 0,
+                            'alternativas_mesmo_horario': 0,
+                            'alternativas_opcoes': [{
+                                'chapa': _chapa_real_extra,
+                                'nome': str(_colab_real_extra.get('Nome') or _chapa_real_extra).strip(),
+                                'entrada': str(_colab_real_extra.get('Entrada') or '-').strip(),
+                                'domingos': int(domingos_map_resumo.get(_chapa_real_extra, 0) or 0),
+                                'ultimo_mes_destino_label': _rodizio_format_ym(int(last_move_map_resumo.get(_chapa_real_extra, 0) or 0)),
+                                'diff_horario_ref_min': 0,
+                            }],
+                            'observacao': f'Pessoa salva nesta competência no {subgrupo_destino}.',
+                        })
 
                     negados_logs_ui = list(st.session_state.get(neg_log_key, []))
                     tab_sugestoes_transfer, tab_aprovados_transfer, tab_negados_transfer, tab_analise_transfer = st.tabs(['Sugestões', 'Aprovados', 'Negados', 'Análises'])
