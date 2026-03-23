@@ -2778,6 +2778,13 @@ def get_app_like_nav_config(is_admin_area: bool, setor: str = "", modo_gestao_so
                     ("📂 Menu Gestão", {"sec_main": "📂 Menu Gestão"}),
                 ],
             },
+            "caixa": {
+                "label": "💳 Caixa",
+                "default_sub": "Operação dos caixas",
+                "submenus": [
+                    ("Operação dos caixas", {"sec_main": "💳 Caixa"}),
+                ],
+            },
             "admin": {
                 "label": "🔒 Admin",
                 "default_sub": "Painel admin",
