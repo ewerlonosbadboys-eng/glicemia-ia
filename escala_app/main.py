@@ -7054,36 +7054,74 @@ def caixa_upsert_operacao_dia(
     con = db_conn()
     cur = con.cursor()
     try:
+        try:
+            cols_cx = {str(r[1]).strip().lower() for r in cur.execute("PRAGMA table_info(caixa_operacao_dia)").fetchall()}
+            if 'almoco_inicio' not in cols_cx:
+                cur.execute("ALTER TABLE caixa_operacao_dia ADD COLUMN almoco_inicio TEXT DEFAULT ''")
+            if 'almoco_fim' not in cols_cx:
+                cur.execute("ALTER TABLE caixa_operacao_dia ADD COLUMN almoco_fim TEXT DEFAULT ''")
+        except Exception:
+            pass
+
         agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        setor_v = str(setor or '').strip()
+        posto_v = str(posto or '').strip()
+        values = (
+            str(chapa or '').strip(),
+            str(nome or '').strip(),
+            str(subgrupo or '').strip(),
+            str(entrada_prevista or '').strip(),
+            str(saida_prevista or '').strip(),
+            str(almoco_inicio or '').strip(),
+            str(almoco_fim or '').strip(),
+            str(status_operacao or 'Em operação').strip(),
+            str(observacao or '').strip(),
+            agora,
+            str(atualizado_por or '').strip(),
+            setor_v,
+            int(ano),
+            int(mes),
+            int(dia),
+            posto_v,
+        )
         cur.execute(
             """
-            INSERT INTO caixa_operacao_dia(
-                setor, ano, mes, dia, posto, chapa, nome, subgrupo,
-                entrada_prevista, saida_prevista, almoco_inicio, almoco_fim, status_operacao,
-                observacao, atualizado_em, atualizado_por
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(setor, ano, mes, dia, posto) DO UPDATE SET
-                chapa=excluded.chapa,
-                nome=excluded.nome,
-                subgrupo=excluded.subgrupo,
-                entrada_prevista=excluded.entrada_prevista,
-                saida_prevista=excluded.saida_prevista,
-                almoco_inicio=excluded.almoco_inicio,
-                almoco_fim=excluded.almoco_fim,
-                status_operacao=excluded.status_operacao,
-                observacao=excluded.observacao,
-                atualizado_em=excluded.atualizado_em,
-                atualizado_por=excluded.atualizado_por
+            UPDATE caixa_operacao_dia
+               SET chapa=?,
+                   nome=?,
+                   subgrupo=?,
+                   entrada_prevista=?,
+                   saida_prevista=?,
+                   almoco_inicio=?,
+                   almoco_fim=?,
+                   status_operacao=?,
+                   observacao=?,
+                   atualizado_em=?,
+                   atualizado_por=?
+             WHERE UPPER(TRIM(setor))=UPPER(TRIM(?))
+               AND ano=? AND mes=? AND dia=?
+               AND posto=?
             """,
-            (
-                str(setor or '').strip(), int(ano), int(mes), int(dia), str(posto or '').strip(),
-                str(chapa or '').strip(), str(nome or '').strip(), str(subgrupo or '').strip(),
-                str(entrada_prevista or '').strip(), str(saida_prevista or '').strip(),
-                str(almoco_inicio or '').strip(), str(almoco_fim or '').strip(),
-                str(status_operacao or 'Em operação').strip(), str(observacao or '').strip(),
-                agora, str(atualizado_por or '').strip(),
-            )
+            values,
         )
+        if cur.rowcount == 0:
+            cur.execute(
+                """
+                INSERT INTO caixa_operacao_dia(
+                    setor, ano, mes, dia, posto, chapa, nome, subgrupo,
+                    entrada_prevista, saida_prevista, almoco_inicio, almoco_fim,
+                    status_operacao, observacao, atualizado_em, atualizado_por
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    setor_v, int(ano), int(mes), int(dia), posto_v,
+                    str(chapa or '').strip(), str(nome or '').strip(), str(subgrupo or '').strip(),
+                    str(entrada_prevista or '').strip(), str(saida_prevista or '').strip(),
+                    str(almoco_inicio or '').strip(), str(almoco_fim or '').strip(),
+                    str(status_operacao or 'Em operação').strip(), str(observacao or '').strip(),
+                    agora, str(atualizado_por or '').strip(),
+                )
+            )
         con.commit()
     finally:
         con.close()
