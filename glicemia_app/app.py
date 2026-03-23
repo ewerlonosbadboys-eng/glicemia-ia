@@ -2283,6 +2283,62 @@ else:
 
             df_hist = df_hist[cols_order].tail(80).reset_index(drop=True)
 
+            # 🔎 filtro por data do histórico (somente visual, sem mexer no salvamento)
+            try:
+                df_hist["_data_filtro"] = pd.to_datetime(
+                    df_hist["Data"].astype(str).str.strip(),
+                    format="%d/%m/%Y",
+                    errors="coerce"
+                )
+            except Exception:
+                df_hist["_data_filtro"] = pd.NaT
+
+            datas_validas = df_hist["_data_filtro"].dropna()
+            if not datas_validas.empty:
+                data_min_hist = datas_validas.min().date()
+                data_max_hist = datas_validas.max().date()
+            else:
+                hoje_hist = agora_br().date()
+                data_min_hist = hoje_hist
+                data_max_hist = hoje_hist
+
+            colf1, colf2 = st.columns(2)
+            with colf1:
+                data_inicio_hist = st.date_input(
+                    "Data inicial",
+                    value=data_min_hist,
+                    min_value=data_min_hist,
+                    max_value=data_max_hist,
+                    format="DD/MM/YYYY",
+                    key="glicemia_hist_data_inicio"
+                )
+            with colf2:
+                data_fim_hist = st.date_input(
+                    "Data final",
+                    value=data_max_hist,
+                    min_value=data_min_hist,
+                    max_value=data_max_hist,
+                    format="DD/MM/YYYY",
+                    key="glicemia_hist_data_fim"
+                )
+
+            if data_inicio_hist and data_fim_hist and data_inicio_hist > data_fim_hist:
+                st.warning("A data inicial não pode ser maior que a data final.")
+                df_hist_filtrado = df_hist.iloc[0:0].copy()
+            else:
+                df_hist_filtrado = df_hist.copy()
+                if "_data_filtro" in df_hist_filtrado.columns:
+                    if data_inicio_hist:
+                        df_hist_filtrado = df_hist_filtrado[
+                            df_hist_filtrado["_data_filtro"] >= pd.to_datetime(data_inicio_hist)
+                        ]
+                    if data_fim_hist:
+                        df_hist_filtrado = df_hist_filtrado[
+                            df_hist_filtrado["_data_filtro"] <= pd.to_datetime(data_fim_hist)
+                        ]
+
+            df_hist = df_hist_filtrado.drop(columns=["_data_filtro"], errors="ignore").reset_index(drop=True)
+
             # Normaliza tipos para o st.data_editor não quebrar
             df_hist["Excluir"] = df_hist["Excluir"].fillna(False).astype(bool)
             for col in ["ID", "Data", "Hora", "Momento", "Dose_Rapida", "Dose_Longa"]:
@@ -2293,34 +2349,37 @@ else:
                 df_hist["Valor"] = 0
             df_hist["Valor"] = pd.to_numeric(df_hist["Valor"], errors="coerce").fillna(0).astype(int)
 
-            df_edit = st.data_editor(
-                df_hist,
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "Excluir": st.column_config.CheckboxColumn("Excluir"),
-                    "ID": st.column_config.TextColumn("ID", disabled=True),
-                    "Data": st.column_config.TextColumn("Data", disabled=True),
-                    "Hora": st.column_config.TextColumn("Hora", disabled=True),
-                    "Momento": st.column_config.TextColumn("Momento"),
-                    "Valor": st.column_config.NumberColumn("Valor", min_value=0, max_value=600, step=1),
-                    "Dose_Rapida": st.column_config.TextColumn("Dose Rápida"),
-                    "Dose_Longa": st.column_config.TextColumn("Dose Longa"),
-                },
-                key="glicemia_editor",
-            )
+            if df_hist.empty:
+                st.info("Nenhum registro encontrado no período selecionado.")
+            else:
+                df_edit = st.data_editor(
+                    df_hist,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Excluir": st.column_config.CheckboxColumn("Excluir"),
+                        "ID": st.column_config.TextColumn("ID", disabled=True),
+                        "Data": st.column_config.TextColumn("Data", disabled=True),
+                        "Hora": st.column_config.TextColumn("Hora", disabled=True),
+                        "Momento": st.column_config.TextColumn("Momento"),
+                        "Valor": st.column_config.NumberColumn("Valor", min_value=0, max_value=600, step=1),
+                        "Dose_Rapida": st.column_config.TextColumn("Dose Rápida"),
+                        "Dose_Longa": st.column_config.TextColumn("Dose Longa"),
+                    },
+                    key="glicemia_editor",
+                )
 
-            col_a, col_b = st.columns(2)
-            with col_a:
-                if st.button("✅ Salvar alterações do histórico", use_container_width=True):
-                    aplicar_edicoes_e_exclusoes_glicemia(df_edit)
-                    st.success("Histórico atualizado!")
-                    # ✅ limpa o cache/estado do data_editor para recarregar do CSV
-                    st.session_state.pop("glicemia_editor", None)
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    if st.button("✅ Salvar alterações do histórico", use_container_width=True):
+                        aplicar_edicoes_e_exclusoes_glicemia(df_edit)
+                        st.success("Histórico atualizado!")
+                        # ✅ limpa o cache/estado do data_editor para recarregar do CSV
+                        st.session_state.pop("glicemia_editor", None)
 
-                    st.rerun()
-            with col_b:
-                st.caption("Marque 'Excluir' e clique em salvar para remover.")
+                        st.rerun()
+                with col_b:
+                    st.caption("Marque 'Excluir' e clique em salvar para remover.")
         else:
             st.info("Sem registros ainda.")
 
