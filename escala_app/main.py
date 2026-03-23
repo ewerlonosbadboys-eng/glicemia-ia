@@ -6994,6 +6994,19 @@ def _hora_to_min(h: str) -> int | None:
         return None
 
 
+
+
+def _min_to_hora(v: int | None) -> str:
+    try:
+        if v is None:
+            return ""
+        v = int(v) % (24 * 60)
+        hh = v // 60
+        mm = v % 60
+        return f"{hh:02d}:{mm:02d}"
+    except Exception:
+        return ""
+
 def _caixa_saida_prevista(entrada: str, jornada_min: int = 500) -> str:
     base = _hora_to_min(entrada)
     if base is None:
