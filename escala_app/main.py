@@ -16612,6 +16612,41 @@ def page_app():
                     st.caption(f"Exibindo somente a competência vigente: {int(mes_r):02d}/{int(ano_r)}")
                     st.dataframe(pd.DataFrame(hist_view), use_container_width=True, height=320)
 
+    # ------------------------------------------------------
+    # ABA 2: Férias
+    # ------------------------------------------------------
+    elif sec_main == "🏖️ Férias":
+        ui_section("Férias", f"Subaba ativa: {sec_fer}")
+
+        botoes_ferias = [
+            ("🗺️ Mapa anual de férias", "🗺️ Mapa anual de férias", "fer_menu_mapa"),
+            ("➕ Lançar Férias", "➕ Lançar Férias", "fer_menu_lancar"),
+            ("📊 Controle (histórico)", "📊 Controle (histórico)", "fer_menu_controle"),
+            ("📋 Férias cadastradas", "📋 Férias cadastradas", "fer_menu_cadastradas"),
+            ("❌ Remover férias", "❌ Remover férias", "fer_menu_remover"),
+        ]
+        idx_btn_fer = 0
+        while idx_btn_fer < len(botoes_ferias):
+            linha = st.columns(min(4, len(botoes_ferias) - idx_btn_fer))
+            for col_btn in linha:
+                label_btn, destino_btn, key_btn = botoes_ferias[idx_btn_fer]
+                with col_btn:
+                    if st.button(label_btn, key=key_btn, use_container_width=True):
+                        st.session_state["app_like_sub"] = destino_btn
+                        st.rerun()
+                idx_btn_fer += 1
+
+        if sec_fer == "🗺️ Mapa anual de férias":
+            st.markdown("### 🗺️ Mapa anual de férias")
+        elif sec_fer == "➕ Lançar Férias":
+            st.markdown("### ➕ Lançar Férias")
+        elif sec_fer == "📊 Controle (histórico)":
+            st.markdown("### 📊 Controle de Férias (histórico por mês)")
+        elif sec_fer == "📋 Férias cadastradas":
+            st.markdown("### 📋 Férias cadastradas")
+        elif sec_fer == "❌ Remover férias":
+            st.markdown("### ❌ Remover férias")
+
     elif sec_main == "📂 Menu Escala":
         ui_section("Escala", "Clique em uma opção para abrir as telas da área de escala.")
         botoes_escala = [
