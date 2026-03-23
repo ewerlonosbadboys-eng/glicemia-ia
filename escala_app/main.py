@@ -15357,7 +15357,11 @@ def page_app():
 
                     def _render_transfer_slot_card(i, s):
                                             slot_key = str(s.get('slot_key') or '')
-                                            aprovado = bool(str(aprovados_atuais.get(slot_key) or '').strip())
+                                            chapa_aprovada_status = str(aprovados_atuais.get(slot_key) or '').strip()
+                                            frozen_item_status = dict(st.session_state.get(freeze_slots_key, {}).get(slot_key, {}) or {})
+                                            chapa_status = str(chapa_aprovada_status or frozen_item_status.get('selected_chapa') or s.get('selected_chapa') or s.get('origem_chapa') or '').strip()
+                                            subgrupo_status = _transfer_get_subgrupo_cached(chapa_status) if chapa_status else ''
+                                            aprovado = bool(chapa_aprovada_status) or bool(chapa_status and str(subgrupo_status or '').strip().upper() == str(subgrupo_destino or '').strip().upper())
                                             with st.container(border=True):
                                                 cinfo1, cinfo2, cinfo3 = st.columns([3.2, 2.1, 2.2])
                                                 cinfo1.markdown(
@@ -15556,8 +15560,12 @@ def page_app():
                         _slot_key_tmp = str(_s_tmp.get('slot_key') or '')
                         _frozen_tmp = dict(st.session_state.get(freeze_slots_key, {}).get(_slot_key_tmp, {}) or {})
                         _frozen_ativo_tmp = bool(_frozen_tmp.get('manual_freeze') or _s_tmp.get('manual_freeze'))
-                        _aprovado_tmp = bool(str(aprovados_atuais.get(_slot_key_tmp) or '').strip())
-                        if _frozen_ativo_tmp or _aprovado_tmp:
+                        _aprovado_chapa_tmp = str(aprovados_atuais.get(_slot_key_tmp) or '').strip()
+                        _aprovado_tmp = bool(_aprovado_chapa_tmp)
+                        _chapa_status_tmp = str(_aprovado_chapa_tmp or _frozen_tmp.get('selected_chapa') or _s_tmp.get('selected_chapa') or _s_tmp.get('origem_chapa') or '').strip()
+                        _subgrupo_status_tmp = _transfer_get_subgrupo_cached(_chapa_status_tmp) if _chapa_status_tmp else ''
+                        _aprovado_real_tmp = bool(_chapa_status_tmp and str(_subgrupo_status_tmp or '').strip().upper() == str(subgrupo_destino or '').strip().upper())
+                        if _frozen_ativo_tmp or _aprovado_tmp or _aprovado_real_tmp:
                             slots_aprovados_ui.append(_s_tmp)
                         else:
                             slots_pendentes.append(_s_tmp)
