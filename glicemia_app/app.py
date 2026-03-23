@@ -1965,8 +1965,11 @@ if st.session_state.user_email == "admin":
                     st.rerun()
 
 else:
-    render_dashboard_premium_real()
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Glicemia", "🩺 Última medição", "🍽️ Nutrição", "⚙️ Receita", "📩 Sugerir Melhoria"])
+    tab_visao_geral, tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Visão Geral", "📊 Glicemia", "🩺 Última medição", "🍽️ Nutrição", "⚙️ Receita", "📩 Sugerir Melhoria"])
+
+    # ====== VISÃO GERAL ======
+    with tab_visao_geral:
+        render_dashboard_premium_real()
 
     # ====== GLICEMIA ======
     with tab1:
