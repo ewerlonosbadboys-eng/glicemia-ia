@@ -14123,10 +14123,18 @@ def page_gestao_dashboard(ano: int, mes: int):
                             sub["nome"] = sub.get("nome", "").fillna("")
                             sub["status"] = sub.get("status", "").fillna("")
                             sub["subgrupo"] = sub.get("subgrupo", "SEM SUBGRUPO").fillna("SEM SUBGRUPO")
-                            sub = sub[["nome", "chapa", "subgrupo", "status"]].rename(columns={"nome": "Nome", "chapa": "Chapa", "subgrupo": "Subgrupo", "status": "Status"})
+                            sub["entrada"] = sub.get("entrada", "").fillna("").astype(str).str.strip()
+                            if "saida_prevista_calc" not in sub.columns:
+                                try:
+                                    sub["saida_prevista_calc"] = sub["entrada"].apply(lambda x: _saida_from_entrada(str(x or "").strip()) if str(x or "").strip() else "")
+                                except Exception:
+                                    sub["saida_prevista_calc"] = ""
+                            else:
+                                sub["saida_prevista_calc"] = sub.get("saida_prevista_calc", "").fillna("").astype(str).str.strip()
+                            sub = sub[["nome", "chapa", "subgrupo", "entrada", "saida_prevista_calc", "status"]].rename(columns={"nome": "Nome", "chapa": "Chapa", "subgrupo": "Subgrupo", "entrada": "Entrada", "saida_prevista_calc": "Saída prevista", "status": "Status"})
                             st.markdown(f"#### {icon} {title} ({len(sub)})")
                             with st.expander(f"Abrir lista de {title.lower()}", expanded=(cat == "TRABALHO")):
-                                st.dataframe(sub.sort_values(["Subgrupo", "Nome", "Chapa"]), use_container_width=True, hide_index=True, height=250)
+                                st.dataframe(sub.sort_values(["Subgrupo", "Entrada", "Nome", "Chapa"]), use_container_width=True, hide_index=True, height=250)
                         cA, cB = st.columns(2)
                         with cA:
                             _show_cat("Trabalhando", "TRABALHO", "🟩")
