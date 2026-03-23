@@ -2808,6 +2808,11 @@ def get_app_like_nav_config(is_admin_area: bool, setor: str = "", modo_gestao_so
             "label": "🏖️ Férias",
             "default_sub": "🗺️ Mapa anual de férias",
             "submenus": [
+                ("🗺️ Mapa anual de férias", {"sec_main": "🏖️ Férias", "sec_fer": "🗺️ Mapa anual de férias"}),
+                ("➕ Lançar Férias", {"sec_main": "🏖️ Férias", "sec_fer": "➕ Lançar Férias"}),
+                ("📊 Controle (histórico)", {"sec_main": "🏖️ Férias", "sec_fer": "📊 Controle (histórico)"}),
+                ("📋 Férias cadastradas", {"sec_main": "🏖️ Férias", "sec_fer": "📋 Férias cadastradas"}),
+                ("❌ Remover férias", {"sec_main": "🏖️ Férias", "sec_fer": "❌ Remover férias"}),
             ],
         },
         "escala": {
