@@ -15192,10 +15192,21 @@ def page_app():
                     neg_state_key = neg_key
                     aprovados_atuais = st.session_state.get(aprov_state_key, {})
                     aprovados_validos = sum(1 for s in slots if str(aprovados_atuais.get(s.get('slot_key')) or '').strip())
+
+                    # Painel do topo: "Aprovadas" precisa refletir a quantidade REAL já salva
+                    # no subgrupo destino da competência atual, e não apenas os cliques de aprovação da fila.
+                    colabs_destino_real = _transferencia_colaboradores_mes_atual(setor, int(ano_r), int(mes_r)) or []
+                    qtd_destino_real = 0
+                    for _c_dest_real in colabs_destino_real:
+                        _sub_dest_real = str(_c_dest_real.get('Subgrupo') or '').strip().upper()
+                        if _sub_dest_real == str(subgrupo_destino or '').strip().upper():
+                            qtd_destino_real += 1
+
+                    qtd_obrigatoria = int(sim.get('qtd_destino_obrigatoria', 14) or 14)
                     top1, top2, top3 = st.columns(3)
                     top1.metric('Sugestões montadas', len(slots))
-                    top2.metric('Aprovadas', aprovados_validos)
-                    top3.metric('Pendentes', max(0, len(slots) - aprovados_validos))
+                    top2.metric('Aprovadas', qtd_destino_real)
+                    top3.metric('Pendentes', max(0, int(qtd_obrigatoria) - int(qtd_destino_real)))
                     if st.session_state.get(force_review_key):
                         st.warning(f"Revisão manual ativa em {mes_r:02d}/{ano_r}: trocar a pessoa no seletor NÃO aplica nada sozinho. Só aplica quando você clicar em 'Aplicar mudança de subgrupos agora'.")
 
