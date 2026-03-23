@@ -15013,7 +15013,7 @@ def page_app():
                         st.warning('Modo supremo: esta ação manual ignora a regra de manter 14 pessoas no Caixa 02 e esvazia o subgrupo destino nesta competência.')
                         res_mass = transferencia_suprema_caixa_02_para_01(setor, ano_r, mes_r, 'OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02')
                         base_reset = f"rod_caixa_aprov::{setor}::{ano_r}::{mes_r}::{subgrupo_origem}::{subgrupo_destino}"
-                        for suf in ["::aprovados", "::negados", "::aplicado", "::complementar_aprovados"]:
+                        for suf in ["::aprovados", "::negados", "::negados_log", "::aplicado", "::complementar_aprovados"]:
                             st.session_state.pop(base_reset + suf, None)
                         st.session_state[_rod_reset_defaults_key] = True
                         st.session_state[force_review_key] = True
@@ -15030,7 +15030,7 @@ def page_app():
                             if res_reset.get('ok'):
                                 # limpa aprovações/negações da rodada para permitir nova escolha
                                 base_reset = f"rod_caixa_aprov::{setor}::{ano_r}::{mes_r}::{subgrupo_origem}::{subgrupo_destino}"
-                                for suf in ["::aprovados", "::negados", "::aplicado", "::complementar_aprovados"]:
+                                for suf in ["::aprovados", "::negados", "::negados_log", "::aplicado", "::complementar_aprovados"]:
                                     st.session_state.pop(base_reset + suf, None)
                                 st.session_state[force_review_key] = True
                                 st.success(res_reset.get('msg', 'Rodízio zerado com sucesso. A fila foi reaberta para nova aprovação manual.'))
@@ -15044,7 +15044,7 @@ def page_app():
                             res_reset = resetar_rodizio_caixa_mes(setor, ano_r, mes_r, 'OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02')
                             if res_reset.get('ok'):
                                 base_reset = f"rod_caixa_aprov::{setor}::{ano_r}::{mes_r}::{subgrupo_origem}::{subgrupo_destino}"
-                                for suf in ["::aprovados", "::negados", "::aplicado", "::complementar_aprovados"]:
+                                for suf in ["::aprovados", "::negados", "::negados_log", "::aplicado", "::complementar_aprovados"]:
                                     st.session_state.pop(base_reset + suf, None)
                                 set_rodizio_caixa_cfg(setor, 'OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02', 14, 20, True)
                                 st.session_state[_rod_reset_defaults_key] = True
@@ -15221,6 +15221,7 @@ def page_app():
                             if chapa_sel_tmp:
                                 st.session_state[aprov_key] = {}
                         st.session_state[neg_key] = []
+                        st.session_state[neg_log_key] = []
                         st.session_state[freeze_slots_key] = {}
                         st.session_state.pop(state_base + "::aplicado", None)
                         st.rerun()
@@ -15654,6 +15655,33 @@ def page_app():
                         })
 
                     negados_logs_ui = list(st.session_state.get(neg_log_key, []))
+                    if not negados_logs_ui:
+                        negados_reconstruidos = []
+                        for _ch_neg_tmp in list(st.session_state.get(neg_key, [])):
+                            _ch_neg_tmp = str(_ch_neg_tmp or '').strip()
+                            if not _ch_neg_tmp:
+                                continue
+                            _colab_neg_tmp = _transfer_get_colab_cached(_ch_neg_tmp) or {}
+                            negados_reconstruidos.append({
+                                'slot_key': f'recuperado::{_ch_neg_tmp}',
+                                'nome': str((_colab_neg_tmp or {}).get('Nome') or _ch_neg_tmp).strip(),
+                                'chapa': _ch_neg_tmp,
+                                'entrada': str((_colab_neg_tmp or {}).get('Entrada') or '-').strip(),
+                                'subgrupo': str((_colab_neg_tmp or {}).get('Subgrupo') or subgrupo_origem).strip(),
+                                'domingos': int(transfer_domingos_map.get(_ch_neg_tmp, 0) or 0),
+                                'ultima_vez_caixa02': _rodizio_format_ym(int(last_move_map_resumo.get(_ch_neg_tmp, 0) or 0)),
+                            })
+                        negados_logs_ui = negados_reconstruidos
+                    if negados_logs_ui:
+                        _neg_seen_ui = set()
+                        _neg_filtrados_ui = []
+                        for _item_neg_ui in negados_logs_ui:
+                            _ch_neg_ui = str((_item_neg_ui or {}).get('chapa') or '').strip()
+                            if not _ch_neg_ui or _ch_neg_ui in _neg_seen_ui:
+                                continue
+                            _neg_seen_ui.add(_ch_neg_ui)
+                            _neg_filtrados_ui.append(_item_neg_ui)
+                        negados_logs_ui = _neg_filtrados_ui
                     tab_sugestoes_transfer, tab_aprovados_transfer, tab_negados_transfer, tab_analise_transfer = st.tabs(['Sugestões', 'Aprovados', 'Negados', 'Análises'])
 
                     with tab_sugestoes_transfer:
