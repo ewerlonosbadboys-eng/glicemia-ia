@@ -14973,11 +14973,10 @@ def page_app():
                         st.dataframe(histg[['id','setor','resumo','status','observacao','criado_em','aprovado_por','aprovado_em']], use_container_width=True, height=220)
 
         elif sec_col in ["🔄 Rodízio Caixa", "🔁 Transferência"]:
-            ui_back_header("🔁 Transferência — Caixa 01 ↔ Caixa 02", "colaboradores", "👥 Colaboradores")
+            ui_back_header("", "colaboradores", "👥 Colaboradores")
             if not str(setor).strip().upper().startswith("FRENTECAIXA"):
                 st.info("A subaba Transferência está disponível somente para setores FRENTECAIXA.")
             else:
-                st.markdown("### 🔁 Subaba Transferência")
                 cfg = get_rodizio_caixa_cfg(setor)
                 _rod_reset_defaults_key = f"rod_caixa_reset_defaults::{setor}"
                 if st.session_state.get(_rod_reset_defaults_key, False):
