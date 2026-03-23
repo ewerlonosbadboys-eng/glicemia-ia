@@ -433,7 +433,9 @@ def apagar_backups_antigos(dias_manter=7) -> int:
                 pass
     return apagados
 
-backup_automatico_diario_3h()
+if not st.session_state.get("_startup_backup_done", False):
+    backup_automatico_diario_3h()
+    st.session_state["_startup_backup_done"] = True
 
 # ================= DESIGN PREMIUM =================
 def aplicar_layout_premium():
@@ -849,32 +851,12 @@ def migrar_csvs_para_sqlite():
                     except Exception:
                         pass
 
-migrar_csvs_para_sqlite()
+if not st.session_state.get("_startup_migracao_done", False):
+    migrar_csvs_para_sqlite()
+    st.session_state["_startup_migracao_done"] = True
 
-def carregar_dados_seguro(arq: str) -> pd.DataFrame:
-    table = _table_for_file(arq)
-    if table:
-        return _read_table_df(table, "Usuario=?", (st.session_state.user_email,))
-    if not os.path.exists(arq):
-        return pd.DataFrame()
-    df = pd.read_csv(arq)
-    if "Usuario" not in df.columns:
-        df["Usuario"] = ""
-    return df[df["Usuario"] == st.session_state.user_email].copy()
-
-# ================= IDs + CRUD GLICEMIA =================
-def _ensure_id_column(df: pd.DataFrame, col_name="ID", prefix="GL") -> pd.DataFrame:
-    if df is None or df.empty:
-        return df
-    if col_name not in df.columns:
-        df[col_name] = [f"{prefix}-{uuid.uuid4().hex[:12]}" for _ in range(len(df))]
-    else:
-        mask = df[col_name].isna() | (df[col_name].astype(str).str.strip() == "")
-        if mask.any():
-            df.loc[mask, col_name] = [f"{prefix}-{uuid.uuid4().hex[:12]}" for _ in range(int(mask.sum()))]
-    return df
-
-def carregar_glicemia_com_id() -> pd.DataFrame:
+@st.cache_data(show_spinner=False, ttl=60)
+def _cached_glicemia_usuario(user_email: str) -> pd.DataFrame:
     df_all = _read_table_df("glicemia")
     if df_all.empty:
         return pd.DataFrame(columns=["ID", "Usuario", "Data", "Hora", "Valor", "Momento", "Dose", "Dose_Rapida", "Dose_Longa"])
@@ -915,7 +897,40 @@ def carregar_glicemia_com_id() -> pd.DataFrame:
         return out
 
     df_all["Dose"] = df_all.apply(_mk_dose_display, axis=1)
-    return df_all[df_all["Usuario"] == st.session_state.user_email].copy()
+    return df_all[df_all["Usuario"] == user_email].copy()
+
+
+def _limpar_cache_glicemia():
+    try:
+        _cached_glicemia_usuario.clear()
+    except Exception:
+        pass
+
+def carregar_dados_seguro(arq: str) -> pd.DataFrame:
+    table = _table_for_file(arq)
+    if table:
+        return _read_table_df(table, "Usuario=?", (st.session_state.user_email,))
+    if not os.path.exists(arq):
+        return pd.DataFrame()
+    df = pd.read_csv(arq)
+    if "Usuario" not in df.columns:
+        df["Usuario"] = ""
+    return df[df["Usuario"] == st.session_state.user_email].copy()
+
+# ================= IDs + CRUD GLICEMIA =================
+def _ensure_id_column(df: pd.DataFrame, col_name="ID", prefix="GL") -> pd.DataFrame:
+    if df is None or df.empty:
+        return df
+    if col_name not in df.columns:
+        df[col_name] = [f"{prefix}-{uuid.uuid4().hex[:12]}" for _ in range(len(df))]
+    else:
+        mask = df[col_name].isna() | (df[col_name].astype(str).str.strip() == "")
+        if mask.any():
+            df.loc[mask, col_name] = [f"{prefix}-{uuid.uuid4().hex[:12]}" for _ in range(int(mask.sum()))]
+    return df
+
+def carregar_glicemia_com_id() -> pd.DataFrame:
+    return _cached_glicemia_usuario(st.session_state.user_email)
 
 
 def carregar_historico_ultima_medida() -> pd.DataFrame:
@@ -1125,6 +1140,7 @@ def salvar_registro_glicemia(valor: int, momento: str, dose: str, dt: datetime, 
         "Dose_Longa": dl,
     }])
     _append_df_table("glicemia", novo)
+    _limpar_cache_glicemia()
 
 
 def aplicar_edicoes_e_exclusoes_glicemia(df_editado: pd.DataFrame):
@@ -1172,6 +1188,7 @@ def aplicar_edicoes_e_exclusoes_glicemia(df_editado: pd.DataFrame):
             'dose_longa': r.get('Dose_Longa', ''),
             'dose': r.get('Dose', ''),
         }, {'usuario': st.session_state.user_email, 'id': str(r['ID'])})
+    _limpar_cache_glicemia()
 
 # ================= RECEITA (RÁPIDA/LONGA) =================
 def _schema_receita_nova(rec: pd.Series, periodo: str) -> bool:
@@ -2273,6 +2290,7 @@ else:
                     novo["Dose"] = novo.apply(lambda r: f"{r['Dose_Rapida']} | Longa: {r['Dose_Longa']}" if str(r['Dose_Longa']).strip() else str(r['Dose_Rapida']), axis=1)
 
                     _append_df_table("glicemia", novo[["ID", "Usuario", "Data", "Hora", "Valor", "Momento", "Dose", "Dose_Rapida", "Dose_Longa"]])
+                    _limpar_cache_glicemia()
 
                     st.success("Medida manual salva com sucesso!")
                     st.rerun()
