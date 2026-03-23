@@ -12682,42 +12682,16 @@ def style_ferias_mapa(df: pd.DataFrame):
     def cell(v, col):
         if col in meses:
             if str(v) == "FER":
-                return (
-                    "background: linear-gradient(180deg, #245b97 0%, #173e69 100%); "
-                    "color:#FFFFFF; font-weight:800; text-align:center; "
-                    "border:1px solid rgba(255,255,255,0.08);"
-                )
-            return (
-                "background-color: rgba(7,18,38,0.96); color:#9fb8e7; text-align:center; "
-                "border:1px solid rgba(255,255,255,0.03);"
-            )
+                return "background-color:#1F4E78; color:#FFFFFF; font-weight:800; text-align:center;"
+            return "background-color:#F2F2F2; color:#000000; text-align:center;"
         if col == "Nome":
-            return "font-weight:800; color:#F8FBFF; background-color:rgba(4,12,28,0.98);"
-        if col == "Chapa":
-            return "font-weight:700; color:#D7E6FF; background-color:rgba(6,16,35,0.98);"
+            return "font-weight:700;"
         return ""
 
     styles = pd.DataFrame("", index=df.index, columns=df.columns)
     for col in df.columns:
         styles[col] = df[col].apply(lambda v: cell(v, col))
-
-    styler = df.style.apply(lambda _: styles, axis=None)
-    try:
-        styler = styler.set_table_styles([
-            {"selector": "th", "props": [
-                ("background", "linear-gradient(180deg, #113068 0%, #081630 100%)"),
-                ("color", "#EFF6FF"),
-                ("font-weight", "800"),
-                ("border-bottom", "1px solid rgba(96,165,250,0.25)"),
-            ]},
-            {"selector": "td", "props": [
-                ("padding", "6px 8px"),
-                ("font-size", "12px"),
-            ]},
-        ])
-    except Exception:
-        pass
-    return styler
+    return df.style.apply(lambda _: styles, axis=None)
 
 
 # =========================================================
@@ -17559,6 +17533,64 @@ def page_app():
                                     key="th_grid_editor"
                                 )
 
+                                # tabela extra de conferência: mostra exatamente o que será alterado
+                                preview_rows = []
+                                try:
+                                    for _, r_prev in edited_th.iterrows():
+                                        ch_prev = str(r_prev["Chapa"])
+                                        nm_prev = str(r_prev.get("Nome", "") or "").strip()
+                                        dfh_prev = hist_db.get(ch_prev)
+                                        for d_prev in dias2:
+                                            if not bool(r_prev.get(str(d_prev), False)):
+                                                continue
+                                            status_prev = ""
+                                            hora_atual_prev = ""
+                                            if dfh_prev is not None and len(dfh_prev) >= d_prev:
+                                                try:
+                                                    status_prev = str(dfh_prev.loc[d_prev - 1, "Status"] or "").strip()
+                                                except Exception:
+                                                    status_prev = ""
+                                                try:
+                                                    hora_atual_prev = str(dfh_prev.loc[d_prev - 1, "H_Entrada"] or "").strip()
+                                                except Exception:
+                                                    hora_atual_prev = ""
+                                            cur_prev = (ovmap.get(ch_prev, {}).get(d_prev, {}) or {})
+                                            st_ov_prev = str(cur_prev.get("status") or "").strip()
+                                            if st_ov_prev:
+                                                status_prev = st_ov_prev
+                                            h_ov_prev = str(cur_prev.get("h_entrada") or "").strip()
+                                            if h_ov_prev:
+                                                hora_atual_prev = h_ov_prev
+
+                                            status_norm_prev = str(status_prev or "").strip().upper()
+                                            bloqueado_prev = status_norm_prev in ("FOLGA", "FOLG", "FÉRIAS", "FERIAS", "FER", "AFA", "AFASTAMENTO")
+
+                                            if acao_th == "Horário":
+                                                resultado_prev = "Não aplica (Folga/Férias/AFA)" if bloqueado_prev else str(horario_sel or "")
+                                            elif acao_th == "Folga":
+                                                resultado_prev = "Folga"
+                                            else:
+                                                resultado_prev = "Afastamento"
+
+                                            preview_rows.append({
+                                                "Nome": nm_prev,
+                                                "Chapa": ch_prev,
+                                                "Dia": int(d_prev),
+                                                "Status do dia": status_prev or "Trabalho",
+                                                "Horário atual": hora_atual_prev or "-",
+                                                "Novo valor": resultado_prev or "-",
+                                            })
+                                except Exception:
+                                    preview_rows = []
+
+                                st.markdown("#### 📋 Conferência das alterações marcadas")
+                                st.caption("Esta tabela mostra o resultado previsto para cada quadradinho marcado, permitindo conferir os horários exatos antes de salvar.")
+                                if preview_rows:
+                                    df_preview_th = pd.DataFrame(preview_rows)
+                                    st.dataframe(df_preview_th, use_container_width=True, hide_index=True)
+                                else:
+                                    st.info("Marque os quadradinhos na grade acima para visualizar aqui os horários e alterações previstas.")
+
                                 auto_readequar_th = st.checkbox("🔄 Readequar escala ao salvar", value=True, key="th_auto_regen")
 
                                 if st.button("💾 Salvar troca de horários (aplicar nos dias marcados)", key="th_save"):
@@ -17839,44 +17871,14 @@ def page_app():
             # TAB 1 — MAPA ANUAL
             # ---------------------------
             if sec_fer == "🗺️ Mapa anual de férias":
-                st.markdown("## 🗺️ Mapa anual de férias (executivo)")
+                st.markdown("## 🗺️ Mapa anual de férias (visual)")
                 col_map1, col_map2 = st.columns([1, 3])
                 ano_mapa = col_map1.number_input("Ano do mapa", value=int(st.session_state.get("cfg_ano", datetime.now().year)), step=1, key="fer_mapa_ano")
-                col_map2.caption("Visão executiva dos meses com férias programadas por colaborador. Qualquer dia de férias no mês marca o mês correspondente.")
-
+                col_map2.caption("Mostra em quais meses cada colaborador tem férias cadastradas (qualquer dia no mês marca o mês).")
                 df_mapa = ferias_mapa_ano_df(setor, int(ano_mapa), colaboradores)
-
-                meses_cols = [c for c in df_mapa.columns if c in MESES_PT]
-                total_colaboradores = int(len(df_mapa.index))
-                total_marcacoes = int((df_mapa[meses_cols] == "FER").sum().sum()) if meses_cols else 0
-                colaboradores_com_ferias = int(((df_mapa[meses_cols] == "FER").any(axis=1)).sum()) if meses_cols else 0
-
-                mes_top = "-"
-                qtd_mes_top = 0
-                if meses_cols:
-                    serie_mes = (df_mapa[meses_cols] == "FER").sum()
-                    if not serie_mes.empty:
-                        mes_top = str(serie_mes.idxmax())
-                        qtd_mes_top = int(serie_mes.max() or 0)
-
-                kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-                kpi1.metric("Colaboradores no mapa", total_colaboradores)
-                kpi2.metric("Com férias no ano", colaboradores_com_ferias)
-                kpi3.metric("Marcações de férias", total_marcacoes)
-                kpi4.metric("Mês mais concentrado", f"{mes_top} ({qtd_mes_top})" if mes_top != "-" else "-")
-
-                leg1, leg2, leg3 = st.columns([1.2, 1.2, 3])
-                with leg1:
-                    st.caption("⬛ Sem férias no mês")
-                with leg2:
-                    st.caption("🟦 Férias programadas")
-                with leg3:
-                    st.caption("Leitura executiva: os nomes ficam fixos à esquerda e os meses marcados mostram concentração anual de férias.")
-
                 show_chapa = st.checkbox("Mostrar coluna Chapa no mapa", value=False, key="fer_mapa_show_chapa")
                 df_mapa_show = df_mapa if show_chapa else df_mapa.drop(columns=["Chapa"])
-
-                st.dataframe(style_ferias_mapa(df_mapa_show), use_container_width=True, height=520)
+                st.dataframe(style_ferias_mapa(df_mapa_show), use_container_width=True, height=420)
 
             # ---------------------------
             # TAB 2 — LANÇAR
