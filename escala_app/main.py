@@ -6994,6 +6994,13 @@ def _hora_to_min(h: str) -> int | None:
         return None
 
 
+def _caixa_saida_prevista(entrada: str, jornada_min: int = 500) -> str:
+    base = _hora_to_min(entrada)
+    if base is None:
+        return ""
+    return _min_to_hora(base + int(jornada_min))
+
+
 def caixa_lista_postos(qtd_caixas: int = 30, qtd_self: int = 6) -> list[str]:
     postos = [f"CAIXA {i:02d}" for i in range(1, int(qtd_caixas) + 1)]
     postos += [f"SELF {i:02d}" for i in range(1, int(qtd_self) + 1)]
@@ -13531,149 +13538,616 @@ def listar_permissoes_gestao_df() -> pd.DataFrame:
 
 
 def page_gestao_dashboard(ano: int, mes: int):
-    st.title("📊 Gestão — Visão Geral (todos os setores)")
-    st.caption("Indicadores de trabalho, folgas, férias e afastamentos. Use os filtros para cruzar setor e período.")
-    ui_section("Filtros executivos", "Cruze setores e competência para enxergar volume de trabalho, folgas, férias e afastamentos sem mexer nos dados-base.")
+    import html
+
+    st.markdown(
+        """
+        <style>
+        .gestao-pro-wrap {margin-top:.2rem;}
+        .gestao-hero {
+            position: relative;
+            overflow: hidden;
+            border: 1px solid rgba(108,140,255,.22);
+            background: linear-gradient(135deg, rgba(8,20,48,.94), rgba(7,34,78,.88));
+            border-radius: 22px;
+            padding: 22px 24px;
+            box-shadow: 0 12px 34px rgba(0,0,0,.28);
+            margin-bottom: 14px;
+        }
+        .gestao-hero:before {
+            content: "";
+            position:absolute;
+            width: 260px;
+            height: 260px;
+            right: -70px;
+            top: -120px;
+            background: radial-gradient(circle, rgba(111,173,255,.30), rgba(111,173,255,0));
+            pointer-events:none;
+        }
+        .gestao-kpi {
+            border: 1px solid rgba(105,135,255,.20);
+            background: linear-gradient(180deg, rgba(10,31,68,.95), rgba(6,20,45,.95));
+            border-radius: 18px;
+            padding: 16px 18px;
+            min-height: 112px;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.03);
+        }
+        .gestao-kpi-label {font-size:.78rem; color:#9bb5ff; letter-spacing:.02em; margin-bottom:8px; text-transform:uppercase;}
+        .gestao-kpi-value {font-size:1.95rem; font-weight:800; color:#f4f7ff; line-height:1;}
+        .gestao-kpi-sub {font-size:.84rem; color:#9eb0d9; margin-top:8px;}
+        .gestao-panel {
+            border: 1px solid rgba(105,135,255,.16);
+            background: linear-gradient(180deg, rgba(7,23,50,.96), rgba(5,17,37,.96));
+            border-radius: 20px;
+            padding: 16px 18px;
+            margin-bottom: 12px;
+            box-shadow: 0 10px 28px rgba(0,0,0,.18);
+        }
+        .gestao-panel-title {font-size:1.05rem; font-weight:700; color:#f2f6ff; margin-bottom:6px;}
+        .gestao-panel-sub {font-size:.83rem; color:#8fa4d1; margin-bottom:8px;}
+        .gestao-alert {
+            display:flex; gap:10px; align-items:flex-start; padding:12px 14px; margin-bottom:10px;
+            border-radius:14px; border:1px solid rgba(255,255,255,.06); background:rgba(255,255,255,.02);
+        }
+        .gestao-alert-badge {width:10px; height:10px; border-radius:999px; margin-top:6px; flex:0 0 auto;}
+        .gestao-alert-title {font-weight:700; color:#f6f8ff; font-size:.92rem;}
+        .gestao-alert-sub {font-size:.82rem; color:#9eb0d9;}
+        .gestao-mini-list {display:flex; flex-direction:column; gap:8px;}
+        .gestao-mini-item {padding:10px 12px; border-radius:12px; background:rgba(255,255,255,.025); border:1px solid rgba(255,255,255,.05);}
+        .gestao-mini-item strong {color:#f4f7ff;}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
     auth = st.session_state.get("auth") or {}
-    setores_permitidos = []
+    auth_setor = str(auth.get("setor") or "")
+    auth_chapa = str(auth.get("chapa") or "")
+    is_admin = bool(auth.get("is_admin", False))
+
     try:
-        if not bool(auth.get('is_admin', False)):
-            setores_permitidos = get_setores_permitidos_gestao(str(auth.get('setor') or ''), str(auth.get('chapa') or ''))
+        setores_permitidos = [] if is_admin else get_setores_permitidos_gestao(auth_setor, auth_chapa)
     except Exception:
         setores_permitidos = []
 
     con = db_conn()
     try:
-        setores_all = pd.read_sql_query("SELECT nome FROM setores ORDER BY nome ASC", con)["nome"].tolist()
-    except Exception:
+        # A lista do dashboard precisa seguir exatamente a permissão salva.
+        # Não pode depender apenas da tabela `setores`, porque isso reduz a visão
+        # quando algum setor liberado não está cadastrado ali com o mesmo nome.
         setores_all = []
-    # remove setores técnicos
-    setores_all = [s for s in setores_all if s and s.upper() not in ("ADMIN", "GESTAO", "GERENCIA", "GERENTE")]
-    if setores_permitidos:
-        permitidos_norm = {_norm_setor(s) for s in setores_permitidos if str(s or '').strip()}
-        setores_all = [s for s in setores_all if _norm_setor(s) in permitidos_norm]
-    if not setores_all:
-        st.warning("Nenhum setor liberado para esta gestão.")
-        return
+        try:
+            setores_cadastrados = pd.read_sql_query("SELECT nome FROM setores ORDER BY nome ASC", con)["nome"].tolist()
+        except Exception:
+            setores_cadastrados = []
 
-    if setores_permitidos:
-        st.info("Esta gestão está limitada aos setores liberados no Admin.")
+        setores_cadastrados = [
+            _norm_setor(s)
+            for s in setores_cadastrados
+            if str(s or '').strip() and _norm_setor(s) not in {"ADMIN", "GESTAO", "GERENCIA", "GERENTE"}
+        ]
 
-    c1, c2, c3 = st.columns([2,1,1])
-    setores_sel = c1.multiselect("Setores", setores_all, default=setores_all, key="gest_setores")
-    ano = int(c2.number_input("Ano", value=int(ano), step=1, key="gest_ano"))
-    mes = int(c3.selectbox("Mês", list(range(1,13)), index=int(mes)-1, key="gest_mes"))
+        permitidos_norm = [
+            _norm_setor(s)
+            for s in (setores_permitidos or [])
+            if str(s or '').strip() and _norm_setor(s) not in {"ADMIN", "GESTAO", "GERENCIA", "GERENTE"}
+        ]
 
-    if not setores_sel:
-        st.warning("Selecione ao menos 1 setor.")
-        return
+        if permitidos_norm:
+            # Usa a permissão como fonte de verdade e mantém todos os setores liberados.
+            setores_all = list(dict.fromkeys(permitidos_norm))
+        else:
+            # Fallback para perfis sem permissão explícita.
+            setores_all = list(dict.fromkeys(setores_cadastrados))
 
-    # Base: escala_mes
-    q = """
-        SELECT setor, chapa, dia, status
-        FROM escala_mes
-        WHERE ano=? AND mes=? AND setor IN ({})
-    """.format(",".join(["?"]*len(setores_sel)))
+        if not setores_all:
+            st.warning("Nenhum setor liberado para esta gestão.")
+            return
 
-    df = pd.read_sql_query(q, con, params=[ano, mes, *setores_sel])
+        hoje = dt.date.today()
+        ano = int(ano)
+        mes = int(mes)
+        ref_dia_default = min(hoje.day, calendar.monthrange(ano, mes)[1]) if (ano == hoje.year and mes == hoje.month) else 1
 
+        st.markdown("<div class='gestao-pro-wrap'>", unsafe_allow_html=True)
+        st.markdown(
+            f"""
+            <div class='gestao-hero' style='padding:18px 18px 16px 18px;'>
+                <div style='font-size:.72rem;color:#9eb5ff;font-weight:700;letter-spacing:.08em;text-transform:uppercase;'>Modo gestão executivo</div>
+                <div style='font-size:1.55rem;font-weight:800;color:#f6f8ff;line-height:1.08;margin-top:6px;'>Painel corporativo da gestão</div>
+                <div style='display:flex;flex-wrap:wrap;gap:8px;margin-top:12px;'>
+                    <div style='padding:7px 11px;border-radius:999px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);color:#dfe7ff;font-size:.80rem;'>Base <strong>{html.escape(auth_setor or "-")}</strong></div>
+                    <div style='padding:7px 11px;border-radius:999px;background:rgba(86,140,255,.12);border:1px solid rgba(86,140,255,.22);color:#dfe7ff;font-size:.80rem;'>{len(setores_all)} setor(es) liberado(s)</div>
+                    <div style='padding:7px 11px;border-radius:999px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);color:#dfe7ff;font-size:.80rem;'>{mes:02d}/{ano}</div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
-    # --- Nomes (merge opcional com tabela colaboradores)
-    try:
-        qn = "SELECT setor, chapa, nome FROM colaboradores WHERE setor IN ({})".format(",".join(["?"]*len(setores_sel)))
-        df_n = pd.read_sql_query(qn, con, params=[*setores_sel])
-        df_n["chapa"] = df_n["chapa"].astype(str).str.strip()
-        df["chapa"] = df["chapa"].astype(str).str.strip()
-        df = df.merge(df_n.drop_duplicates(subset=["setor","chapa"]), on=["setor","chapa"], how="left")
-    except Exception:
-        df["nome"] = ""
+        filtro_box = st.container()
+        with filtro_box:
+            c1, c2, c3, c4 = st.columns([2.2, 1, 1, 1])
+            setores_sel = c1.multiselect("Setores estratégicos", setores_all, default=setores_all, key="gest_setores")
+            ano = int(c2.number_input("Ano", value=int(ano), step=1, key="gest_ano"))
+            mes = int(c3.selectbox("Mês", list(range(1, 13)), index=max(0, int(mes)-1), key="gest_mes"))
+            ref_dia = int(c4.selectbox("Dia de referência", list(range(1, calendar.monthrange(int(ano), int(mes))[1] + 1)), index=max(0, min(ref_dia_default, calendar.monthrange(int(ano), int(mes))[1]) - 1), key="gest_ref_dia"))
 
+        if not setores_sel:
+            st.warning("Selecione ao menos 1 setor para montar o painel.")
+            return
 
-    # Normalização de status
-    df["status_norm"] = df["status"].fillna("").astype(str).str.strip().str.upper()
-    # categorias
-    is_fer = df["status_norm"].str.contains("F[ÉE]RIAS", regex=True)
-    is_afa = df["status_norm"].isin(["AFA", "AFASTAMENTO"]) | df["status_norm"].str.contains("AFAST", regex=True)
-    is_folga = df["status_norm"].str.contains("FOLG", regex=True) | df["status_norm"].isin(["FOLGA"])
-    is_trab = ~(is_fer | is_afa | is_folga)
+        q = """
+            SELECT setor, chapa, dia, status
+            FROM escala_mes
+            WHERE ano=? AND mes=? AND setor IN ({})
+        """.format(",".join(["?"]*len(setores_sel)))
+        df = pd.read_sql_query(q, con, params=[int(ano), int(mes), *setores_sel])
+        if df is None or df.empty:
+            st.info("Não há registros de escala para o filtro selecionado.")
+            return
 
-    df["cat"] = "TRABALHO"
-    df.loc[is_folga, "cat"] = "FOLGA"
-    df.loc[is_fer, "cat"] = "FÉRIAS"
-    df.loc[is_afa, "cat"] = "AFASTAMENTO"
+        try:
+            qn = "SELECT setor, chapa, nome, COALESCE(subgrupo,'SEM SUBGRUPO') AS subgrupo, COALESCE(entrada,'') AS entrada FROM colaboradores WHERE setor IN ({})".format(",".join(["?"]*len(setores_sel)))
+            df_n = pd.read_sql_query(qn, con, params=[*setores_sel])
+            df_n["chapa"] = df_n["chapa"].astype(str).str.strip()
+            df["chapa"] = df["chapa"].astype(str).str.strip()
+            df = df.merge(df_n.drop_duplicates(subset=["setor", "chapa"]), on=["setor", "chapa"], how="left")
+        except Exception:
+            df["nome"] = ""
+            df["subgrupo"] = "SEM SUBGRUPO"
 
-    # Resumo por setor
-    pivot = (
-        df.pivot_table(index="setor", columns="cat", values="dia", aggfunc="count", fill_value=0)
-          .reset_index()
-    )
-    for col in ["TRABALHO","FOLGA","FÉRIAS","AFASTAMENTO"]:
-        if col not in pivot.columns:
-            pivot[col] = 0
-    pivot["TOTAL_REGISTROS"] = pivot[["TRABALHO","FOLGA","FÉRIAS","AFASTAMENTO"]].sum(axis=1)
+        df["nome"] = df.get("nome", "").fillna("")
+        df["subgrupo"] = df.get("subgrupo", "SEM SUBGRUPO").fillna("SEM SUBGRUPO").astype(str).str.strip().replace("", "SEM SUBGRUPO")
+        df["entrada"] = df.get("entrada", "").fillna("").astype(str).str.strip()
+        try:
+            df["saida_prevista_calc"] = df["entrada"].apply(lambda x: _saida_from_entrada(str(x or "").strip()) if str(x or "").strip() else "")
+        except Exception:
+            df["saida_prevista_calc"] = ""
+        df["status_norm"] = df["status"].fillna("").astype(str).str.strip().str.upper()
+        is_fer = df["status_norm"].str.contains("F[ÉE]RIAS", regex=True)
+        is_afa = df["status_norm"].isin(["AFA", "AFASTAMENTO"]) | df["status_norm"].str.contains("AFAST", regex=True)
+        is_folga = df["status_norm"].str.contains("FOLG", regex=True) | df["status_norm"].isin(["FOLGA"])
+        is_trab = ~(is_fer | is_afa | is_folga)
+        df["cat"] = "TRABALHO"
+        df.loc[is_folga, "cat"] = "FOLGA"
+        df.loc[is_fer, "cat"] = "FÉRIAS"
+        df.loc[is_afa, "cat"] = "AFASTAMENTO"
 
-    ui_section("Resumo por setor (mês)", "Leitura consolidada da competência filtrada por setor.")
-    st.dataframe(pivot.sort_values("setor"), use_container_width=True, hide_index=True)
+        df_ref = df[df["dia"] == int(ref_dia)].copy()
+        if df_ref.empty:
+            ref_dia = int(df["dia"].min())
+            df_ref = df[df["dia"] == int(ref_dia)].copy()
 
-    # Filtro detalhado
-    ui_section("Detalhe", "Aprofunde por setor e escolha a visão diária ou por colaborador.")
-    sA, sB = st.columns([2,1])
-    setor_det = sA.selectbox("Setor (detalhe)", setores_sel, key="gest_setor_det")
-    modo = sB.selectbox("Visão", ["Por dia (contagem)", "Por colaborador (totais)"], key="gest_modo")
+        total_colabs = int(df[["setor", "chapa"]].drop_duplicates().shape[0])
+        total_trab = int((df_ref["cat"] == "TRABALHO").sum())
+        total_folga = int((df_ref["cat"] == "FOLGA").sum())
+        total_fer = int((df_ref["cat"] == "FÉRIAS").sum())
+        total_afa = int((df_ref["cat"] == "AFASTAMENTO").sum())
+        total_fer_prog = int(df[df["cat"] == "FÉRIAS"][["setor", "chapa"]].drop_duplicates().shape[0])
 
-    df_det = df[df["setor"] == setor_det].copy()
+        k1, k2, k3, k4, k5, k6 = st.columns(6)
+        kpis = [
+            (k1, "Colaboradores ativos", total_colabs, f"Base única dos setores liberados"),
+            (k2, f"Trabalhando no dia {ref_dia:02d}", total_trab, "Cobertura operacional do dia"),
+            (k3, "De folga", total_folga, "Leitura rápida de descanso"),
+            (k4, "Em férias", total_fer, "Foto do dia selecionado"),
+            (k5, "Afastados", total_afa, "Atenção para cobertura"),
+            (k6, "Férias programadas", total_fer_prog, "Quantidade única no mês"),
+        ]
+        for col, titulo, valor, subtitulo in kpis:
+            with col:
+                st.markdown(
+                    f"<div class='gestao-kpi'><div class='gestao-kpi-label'>{html.escape(titulo)}</div><div class='gestao-kpi-value'>{int(valor)}</div><div class='gestao-kpi-sub'>{html.escape(subtitulo)}</div></div>",
+                    unsafe_allow_html=True,
+                )
 
-    if modo.startswith("Por dia"):
-        tabC, tabL = st.tabs(["📈 Contagem por dia", "👥 Listas do dia"])
-        with tabC:
-            by = df_det.groupby(["dia","cat"]).size().reset_index(name="qtd")
-            piv = by.pivot_table(index="dia", columns="cat", values="qtd", fill_value=0).reset_index()
-            for col in ["TRABALHO","FOLGA","FÉRIAS","AFASTAMENTO"]:
-                if col not in piv.columns:
-                    piv[col] = 0
-            piv["TOTAL"] = piv[["TRABALHO","FOLGA","FÉRIAS","AFASTAMENTO"]].sum(axis=1)
+        by_day = df.groupby(["dia", "cat"]).size().reset_index(name="qtd")
+        piv_day = by_day.pivot_table(index="dia", columns="cat", values="qtd", fill_value=0).reset_index()
+        for col_name in ["TRABALHO", "FOLGA", "FÉRIAS", "AFASTAMENTO"]:
+            if col_name not in piv_day.columns:
+                piv_day[col_name] = 0
+        status_counts = pd.DataFrame({
+            "Status": ["Trabalhando", "Folga", "Férias", "Afastamento"],
+            "Qtd": [total_trab, total_folga, total_fer, total_afa],
+        })
 
-            # Dia da semana (pt-br)
-            DPT = {0:"Seg",1:"Ter",2:"Qua",3:"Qui",4:"Sex",5:"Sáb",6:"Dom"}
-            piv["DIA_SEMANA"] = piv["dia"].apply(lambda d: DPT.get(dt.date(int(ano), int(mes), int(d)).weekday(), ""))
-            piv = piv[["dia","DIA_SEMANA","TRABALHO","FOLGA","FÉRIAS","AFASTAMENTO","TOTAL"]]
+        resumo_setor = (
+            df.groupby(["setor", "cat"]).size().reset_index(name="qtd")
+              .pivot_table(index="setor", columns="cat", values="qtd", fill_value=0)
+              .reset_index()
+        )
+        resumo_subgrupo = (
+            df_ref.groupby(["setor", "subgrupo", "cat"]).size().reset_index(name="qtd")
+                 .pivot_table(index=["setor", "subgrupo"], columns="cat", values="qtd", fill_value=0)
+                 .reset_index()
+        ) if not df_ref.empty else pd.DataFrame(columns=["setor", "subgrupo", "TRABALHO", "FOLGA", "FÉRIAS", "AFASTAMENTO"])
+        for col_name in ["TRABALHO", "FOLGA", "FÉRIAS", "AFASTAMENTO"]:
+            if col_name not in resumo_setor.columns:
+                resumo_setor[col_name] = 0
+            if col_name not in resumo_subgrupo.columns:
+                resumo_subgrupo[col_name] = 0
+        resumo_setor["TOTAL_REGISTROS"] = resumo_setor[["TRABALHO", "FOLGA", "FÉRIAS", "AFASTAMENTO"]].sum(axis=1)
+        resumo_setor = resumo_setor.sort_values(["TRABALHO", "TOTAL_REGISTROS"], ascending=[False, False])
+        resumo_subgrupo["TOTAL"] = resumo_subgrupo[["TRABALHO", "FOLGA", "FÉRIAS", "AFASTAMENTO"]].sum(axis=1)
+        resumo_subgrupo = resumo_subgrupo.sort_values(["TRABALHO", "TOTAL", "setor", "subgrupo"], ascending=[False, False, True, True])
 
-            st.dataframe(piv.sort_values("dia"), use_container_width=True, hide_index=True)
+        ferias_prog = df[df["cat"] == "FÉRIAS"][["setor", "chapa", "nome", "dia"]].copy()
+        ferias_prog["nome"] = ferias_prog["nome"].fillna("")
+        ferias_prog = ferias_prog.sort_values(["dia", "setor", "nome", "chapa"])
 
-        with tabL:
-            last_day = calendar.monthrange(int(ano), int(mes))[1]
-            dia_sel = st.selectbox("Dia para detalhar", list(range(1, last_day+1)), index=0, key="gest_dia_sel")
-            dname = ["Segunda","Terça","Quarta","Quinta","Sexta","Sábado","Domingo"][dt.date(int(ano), int(mes), int(dia_sel)).weekday()]
-            st.caption(f"Detalhe do dia **{dia_sel:02d}/{int(mes):02d}/{int(ano)}** — {dname}")
+        media_trabalho = (df_ref.groupby("setor").size().mean() if not df_ref.empty else 0) or 0
+        alertas = []
+        for _, row in resumo_setor.iterrows():
+            setor_nome = str(row.get("setor") or "")
+            trab_setor = int(row.get("TRABALHO", 0) or 0)
+            fer_setor = int(row.get("FÉRIAS", 0) or 0)
+            fol_setor = int(row.get("FOLGA", 0) or 0)
+            if media_trabalho and trab_setor < max(1, int(media_trabalho * 0.65)):
+                alertas.append(("#ffb84d", f"Cobertura abaixo da média em {setor_nome}", f"O setor está com {trab_setor} registros de trabalho no dia {ref_dia:02d}, abaixo da média comparativa dos setores liberados."))
+            if fer_setor >= max(2, int(total_colabs * 0.05)):
+                alertas.append(("#6fa7ff", f"Férias relevantes em {setor_nome}", f"Existem {fer_setor} registros de férias no dia de referência. Vale validar cobertura e substituições."))
+            if fol_setor >= max(3, int(total_colabs * 0.08)):
+                alertas.append(("#7de2a8", f"Volume de folgas elevado em {setor_nome}", f"Há {fol_setor} registros de folga no dia de referência, o que pode impactar a operação dependendo do pico do setor."))
+        if not alertas:
+            alertas.append(("#7de2a8", "Operação estável no recorte atual", "Os setores liberados não apresentaram desvios relevantes na leitura inicial do dia selecionado."))
 
-            df_day = df_det[df_det["dia"] == int(dia_sel)].copy()
+        tab_visao, tab_caixa_exec, tab_horarios, tab_setores, tab_subgrupos, tab_alertas, tab_detalhe = st.tabs([
+            "📊 Visão geral",
+            "💳 Caixa",
+            "🕒 Horários",
+            "🏬 Setores",
+            "🧩 Subgrupos",
+            "📅 Férias e alertas",
+            "🔎 Detalhe operacional",
+        ])
 
-            def _show_cat(title, cat, icon):
-                sub = df_day[df_day["cat"] == cat].copy()
-                sub["nome"] = sub.get("nome", "").fillna("")
-                sub["status"] = sub.get("status", "").fillna("")
-                sub = sub[["nome","chapa","status"]].rename(columns={"nome":"Nome","chapa":"Chapa","status":"Status"})
-                st.markdown(f"#### {icon} {title} ({len(sub)})")
-                st.dataframe(sub.sort_values(["Nome","Chapa"]), use_container_width=True, hide_index=True, height=280)
+        with tab_visao:
+            g1, g2 = st.columns([1.0, 1.4])
+            with g1:
+                st.markdown("<div class='gestao-panel'><div class='gestao-panel-title'>Distribuição atual do status</div><div class='gestao-panel-sub'>Foto do dia de referência para leitura rápida de diretoria.</div>", unsafe_allow_html=True)
+                try:
+                    import plotly.express as px
+                    fig_status = px.pie(status_counts, names="Status", values="Qtd", hole=0.62)
+                    fig_status.update_traces(textposition='outside', textinfo='percent+label')
+                    fig_status.update_layout(margin=dict(l=10, r=10, t=10, b=10), height=300, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', legend_title_text='')
+                    st.plotly_chart(fig_status, use_container_width=True)
+                except Exception:
+                    st.bar_chart(status_counts.set_index("Status"))
+                st.markdown("</div>", unsafe_allow_html=True)
 
-            cA, cB = st.columns(2)
-            with cA:
-                _show_cat("Trabalhando", "TRABALHO", "🟩")
-                _show_cat("Férias", "FÉRIAS", "🟦")
-            with cB:
-                _show_cat("Folga", "FOLGA", "🟨")
-                _show_cat("Afastamento", "AFASTAMENTO", "🟥")
-    else:
-        by = df_det.groupby(["chapa","cat"]).size().reset_index(name="qtd")
-        piv = by.pivot_table(index="chapa", columns="cat", values="qtd", fill_value=0).reset_index()
-        for col in ["TRABALHO","FOLGA","FÉRIAS","AFASTAMENTO"]:
-            if col not in piv.columns:
-                piv[col] = 0
-        piv["TOTAL"] = piv[["TRABALHO","FOLGA","FÉRIAS","AFASTAMENTO"]].sum(axis=1)
-        st.dataframe(piv.sort_values("TOTAL", ascending=False), use_container_width=True, hide_index=True)
+            with g2:
+                st.markdown("<div class='gestao-panel'><div class='gestao-panel-title'>Cobertura dos próximos dias</div><div class='gestao-panel-sub'>Evolução diária de trabalho, folga, férias e afastamento na competência selecionada.</div>", unsafe_allow_html=True)
+                prox = piv_day.sort_values("dia").copy()
+                try:
+                    import plotly.graph_objects as go
+                    fig = go.Figure()
+                    for nome, cor in [("TRABALHO", "#5B8CFF"), ("FOLGA", "#6FD3A3"), ("FÉRIAS", "#F9C74F"), ("AFASTAMENTO", "#F76E6E")]:
+                        fig.add_trace(go.Bar(x=prox["dia"], y=prox[nome], name=nome.title(), opacity=0.9))
+                    fig.update_layout(barmode='stack', margin=dict(l=10, r=10, t=10, b=10), height=300, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', xaxis_title='Dia', yaxis_title='Registros')
+                    st.plotly_chart(fig, use_container_width=True)
+                except Exception:
+                    st.bar_chart(prox.set_index("dia")[["TRABALHO", "FOLGA", "FÉRIAS", "AFASTAMENTO"]])
+                st.markdown("</div>", unsafe_allow_html=True)
 
-    st.info("Dica: para o gerente, esta tela é a única exibida — as outras abas ficam ocultas para reduzir poluição visual.")
+        with tab_caixa_exec:
+            st.markdown("<div class='gestao-panel'><div class='gestao-panel-title'>Resumo executivo da frente de caixa</div><div class='gestao-panel-sub'>Leitura rápida da operação dos postos, almoço, trocas e cobertura do dia selecionado.</div>", unsafe_allow_html=True)
+            setor_caixa_base = next((s for s in setores_sel if str(s).strip().upper().replace(" ", "").startswith("FRENTECAIXA")), None)
+            if not setor_caixa_base:
+                st.info("Nenhum setor de frente de caixa está entre os setores liberados neste filtro.")
+            else:
+                df_cx_exec = caixa_load_operacao_dia(setor_caixa_base, int(ano), int(mes), int(ref_dia))
+                postos_exec = caixa_lista_postos()
+                total_postos_exec = len(postos_exec)
+                if df_cx_exec is None or df_cx_exec.empty:
+                    st.warning(f"Ainda não há movimentação registrada para {setor_caixa_base} no dia {int(ref_dia):02d}/{int(mes):02d}/{int(ano)}.")
+                    kcx1, kcx2, kcx3, kcx4 = st.columns(4)
+                    kcx1.metric("Postos disponíveis", total_postos_exec)
+                    kcx2.metric("Ocupados", 0)
+                    kcx3.metric("Em almoço", 0)
+                    kcx4.metric("Sem operador", total_postos_exec)
+                else:
+                    df_cx_exec = df_cx_exec.copy()
+                    df_cx_exec["status_operacao"] = df_cx_exec["status_operacao"].fillna("").astype(str)
+                    ocupados_exec = int(df_cx_exec["chapa"].fillna("").astype(str).str.strip().ne("").sum())
+                    almoco_exec = int(df_cx_exec["status_operacao"].str.upper().eq("EM ALMOÇO").sum())
+                    troca_exec = int(df_cx_exec["status_operacao"].str.upper().eq("EM TROCA").sum())
+                    vazios_exec = max(0, total_postos_exec - ocupados_exec)
+                    kcx1, kcx2, kcx3, kcx4 = st.columns(4)
+                    kcx1.metric("Postos disponíveis", total_postos_exec)
+                    kcx2.metric("Ocupados", ocupados_exec)
+                    kcx3.metric("Em almoço", almoco_exec)
+                    kcx4.metric("Sem operador", vazios_exec)
+
+                    cxa, cxb = st.columns([1.0, 1.25])
+                    with cxa:
+                        status_cx = df_cx_exec["status_operacao"].replace("", "Sem status").value_counts().reset_index()
+                        status_cx.columns = ["Status", "Qtd"]
+                        st.markdown("<div class='gestao-panel-title' style='margin-top:10px;'>Status dos postos</div>", unsafe_allow_html=True)
+                        try:
+                            import plotly.express as px
+                            fig_cx = px.pie(status_cx, names="Status", values="Qtd", hole=0.62)
+                            fig_cx.update_traces(textposition='outside', textinfo='percent+label')
+                            fig_cx.update_layout(margin=dict(l=10, r=10, t=10, b=10), height=290, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', legend_title_text='')
+                            st.plotly_chart(fig_cx, use_container_width=True)
+                        except Exception:
+                            st.bar_chart(status_cx.set_index("Status"))
+
+                    with cxb:
+                        st.markdown("<div class='gestao-panel-title' style='margin-top:10px;'>Mapa resumido dos postos</div>", unsafe_allow_html=True)
+                        exibir_cols = [c for c in ["posto", "nome", "subgrupo", "entrada_prevista", "saida_prevista", "almoco_inicio", "almoco_fim", "status_operacao"] if c in df_cx_exec.columns]
+                        df_show = df_cx_exec[exibir_cols].copy()
+                        ren = {"posto":"Posto","nome":"Operador","subgrupo":"Subgrupo","entrada_prevista":"Entrada","saida_prevista":"Saída","almoco_inicio":"Sai almoço","almoco_fim":"Volta almoço","status_operacao":"Status"}
+                        st.dataframe(df_show.rename(columns=ren), use_container_width=True, hide_index=True, height=295)
+
+                    ca1, ca2 = st.columns(2)
+                    with ca1:
+                        em_almoco = df_cx_exec[df_cx_exec["status_operacao"].str.upper().eq("EM ALMOÇO")].copy()
+                        st.markdown("<div class='gestao-panel-title' style='margin-top:6px;'>Quem está em almoço agora</div>", unsafe_allow_html=True)
+                        if em_almoco.empty:
+                            st.info("Nenhum posto em almoço neste momento.")
+                        else:
+                            cols_alm = [c for c in ["posto", "nome", "almoco_inicio", "almoco_fim"] if c in em_almoco.columns]
+                            st.dataframe(em_almoco[cols_alm].rename(columns={"posto":"Posto","nome":"Operador","almoco_inicio":"Saiu","almoco_fim":"Volta"}), use_container_width=True, hide_index=True, height=210)
+                    with ca2:
+                        sem_operador = [p for p in postos_exec if p not in set(df_cx_exec["posto"].astype(str))]
+                        st.markdown("<div class='gestao-panel-title' style='margin-top:6px;'>Postos sem operador</div>", unsafe_allow_html=True)
+                        if not sem_operador:
+                            st.success("Todos os postos registrados hoje já têm movimentação.")
+                        else:
+                            st.dataframe(pd.DataFrame({"Posto": sem_operador[:36]}), use_container_width=True, hide_index=True, height=210)
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        with tab_horarios:
+            st.markdown("<div class='gestao-panel'><div class='gestao-panel-title'>Leitura executiva de horários</div><div class='gestao-panel-sub'>Entradas, saídas previstas e cobertura por faixa no recorte selecionado.</div>", unsafe_allow_html=True)
+            df_hor = df_ref[df_ref["cat"] == "TRABALHO"].copy()
+            if df_hor.empty:
+                st.info("Não há pessoas em trabalho no dia de referência para montar a visão de horários.")
+            else:
+                df_hor["entrada"] = df_hor.get("entrada", "").fillna("").astype(str).str.strip()
+                df_hor["saida_prevista_calc"] = df_hor.get("saida_prevista_calc", "").fillna("").astype(str).str.strip()
+                df_hor["entrada_ord"] = df_hor["entrada"].apply(lambda x: _hora_to_min(x) if str(x or "").strip() else 9999)
+                df_hor["saida_ord"] = df_hor["saida_prevista_calc"].apply(lambda x: _hora_to_min(x) if str(x or "").strip() else 9999)
+
+                sem_hor = int(df_hor["entrada"].eq("").sum())
+                horarios_unicos = int(df_hor.loc[df_hor["entrada"].ne(""), "entrada"].nunique())
+                primeira_entrada = "-"
+                ultima_saida = "-"
+                try:
+                    entradas_validas = sorted([x for x in df_hor["entrada"].tolist() if str(x).strip()], key=lambda x: _hora_to_min(str(x)))
+                    saidas_validas = sorted([x for x in df_hor["saida_prevista_calc"].tolist() if str(x).strip()], key=lambda x: _hora_to_min(str(x)))
+                    if entradas_validas:
+                        primeira_entrada = entradas_validas[0]
+                    if saidas_validas:
+                        ultima_saida = saidas_validas[-1]
+                except Exception:
+                    pass
+
+                hh1, hh2, hh3, hh4 = st.columns(4)
+                hh1.metric("Horários únicos", horarios_unicos)
+                hh2.metric("Primeira entrada", primeira_entrada)
+                hh3.metric("Última saída", ultima_saida)
+                hh4.metric("Sem horário", sem_hor)
+
+                faixas = [
+                    ("06:00–08:00", 360, 480),
+                    ("08:01–10:00", 481, 600),
+                    ("10:01–12:00", 601, 720),
+                    ("12:01–14:00", 721, 840),
+                    ("14:01+", 841, 2000),
+                ]
+                rows_faixa = []
+                for rotulo, ini_m, fim_m in faixas:
+                    qtd = int(df_hor["entrada_ord"].apply(lambda v: ini_m <= int(v) <= fim_m if pd.notna(v) else False).sum())
+                    rows_faixa.append({"Faixa": rotulo, "Pessoas": qtd})
+                df_faixa = pd.DataFrame(rows_faixa)
+
+                por_entrada = (
+                    df_hor[df_hor["entrada"].ne("")].groupby("entrada").size().reset_index(name="Pessoas")
+                          .sort_values("entrada", key=lambda s: s.map(lambda x: _hora_to_min(str(x))))
+                )
+                por_saida = (
+                    df_hor[df_hor["saida_prevista_calc"].ne("")].groupby("saida_prevista_calc").size().reset_index(name="Pessoas")
+                          .sort_values("saida_prevista_calc", key=lambda s: s.map(lambda x: _hora_to_min(str(x))))
+                )
+
+                hcol1, hcol2 = st.columns([1.1, 1.1])
+                with hcol1:
+                    st.markdown("<div class='gestao-panel-title' style='margin-top:10px;'>Cobertura por faixa de entrada</div>", unsafe_allow_html=True)
+                    try:
+                        import plotly.express as px
+                        fig_fx = px.bar(df_faixa, x="Faixa", y="Pessoas", text_auto=True)
+                        fig_fx.update_layout(margin=dict(l=10, r=10, t=10, b=10), height=300, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', xaxis_title='', yaxis_title='Pessoas')
+                        st.plotly_chart(fig_fx, use_container_width=True)
+                    except Exception:
+                        st.bar_chart(df_faixa.set_index("Faixa"))
+
+                with hcol2:
+                    st.markdown("<div class='gestao-panel-title' style='margin-top:10px;'>Entradas programadas</div>", unsafe_allow_html=True)
+                    if por_entrada.empty:
+                        st.info("Nenhum horário de entrada encontrado para o filtro atual.")
+                    else:
+                        try:
+                            import plotly.express as px
+                            fig_ent = px.bar(por_entrada, x="entrada", y="Pessoas", text_auto=True)
+                            fig_ent.update_layout(margin=dict(l=10, r=10, t=10, b=10), height=300, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', xaxis_title='Entrada', yaxis_title='Pessoas')
+                            st.plotly_chart(fig_ent, use_container_width=True)
+                        except Exception:
+                            st.bar_chart(por_entrada.set_index("entrada"))
+
+                hdet1, hdet2 = st.columns([1.05, 1.15])
+                with hdet1:
+                    st.markdown("<div class='gestao-panel-title' style='margin-top:8px;'>Próximas entradas e saídas</div>", unsafe_allow_html=True)
+                    top_hor = df_hor[[c for c in ["setor", "subgrupo", "nome", "entrada", "saida_prevista_calc"] if c in df_hor.columns]].copy()
+                    top_hor = top_hor.sort_values(["entrada", "saida_prevista_calc", "setor", "subgrupo", "nome"], key=lambda s: s.map(lambda x: _hora_to_min(str(x)) if re.match(r"^\d{2}:\d{2}$", str(x or "")) else 9999) if s.name in ["entrada", "saida_prevista_calc"] else s.astype(str))
+                    top_hor = top_hor.rename(columns={"setor":"Setor","subgrupo":"Subgrupo","nome":"Nome","entrada":"Entrada","saida_prevista_calc":"Saída prevista"})
+                    st.dataframe(top_hor, use_container_width=True, hide_index=True, height=320)
+
+                with hdet2:
+                    st.markdown("<div class='gestao-panel-title' style='margin-top:8px;'>Saídas previstas</div>", unsafe_allow_html=True)
+                    if por_saida.empty:
+                        st.info("Não foi possível montar a previsão de saída com os dados atuais.")
+                    else:
+                        try:
+                            import plotly.express as px
+                            fig_sai = px.line(por_saida.rename(columns={"saida_prevista_calc":"Saída"}), x="Saída", y="Pessoas", markers=True)
+                            fig_sai.update_layout(margin=dict(l=10, r=10, t=10, b=10), height=320, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', xaxis_title='Saída prevista', yaxis_title='Pessoas')
+                            st.plotly_chart(fig_sai, use_container_width=True)
+                        except Exception:
+                            st.bar_chart(por_saida.set_index("saida_prevista_calc"))
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        with tab_setores:
+            r1, r2 = st.columns([1.25, .95])
+            with r1:
+                st.markdown("<div class='gestao-panel'><div class='gestao-panel-title'>Resumo operacional por setor</div><div class='gestao-panel-sub'>Comparativo consolidado dos setores liberados para decisão rápida.</div>", unsafe_allow_html=True)
+                resumo_exib = resumo_setor.rename(columns={"TRABALHO": "TRABALHO", "FOLGA": "FOLGA", "FÉRIAS": "FÉRIAS", "AFASTAMENTO": "AFASTAMENTO", "TOTAL_REGISTROS": "TOTAL"})
+                st.dataframe(resumo_exib, use_container_width=True, hide_index=True, height=320)
+                st.markdown("</div>", unsafe_allow_html=True)
+
+            with r2:
+                st.markdown("<div class='gestao-panel'><div class='gestao-panel-title'>Participação por setor</div><div class='gestao-panel-sub'>Peso operacional dos setores liberados na base filtrada.</div>", unsafe_allow_html=True)
+                part = resumo_setor[["setor", "TOTAL_REGISTROS"]].copy().sort_values("TOTAL_REGISTROS", ascending=False)
+                try:
+                    import plotly.express as px
+                    fig_bar = px.bar(part, x="setor", y="TOTAL_REGISTROS", text_auto=True)
+                    fig_bar.update_layout(margin=dict(l=10, r=10, t=10, b=10), height=320, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', xaxis_title='', yaxis_title='Registros')
+                    st.plotly_chart(fig_bar, use_container_width=True)
+                except Exception:
+                    st.bar_chart(part.set_index("setor"))
+                st.markdown("</div>", unsafe_allow_html=True)
+
+        with tab_subgrupos:
+            sg1, sg2 = st.columns([1.0, 1.0])
+            with sg1:
+                st.markdown("<div class='gestao-panel'><div class='gestao-panel-title'>Distribuição por subgrupo</div><div class='gestao-panel-sub'>Leitura do dia de referência para saber onde a equipe está posicionada dentro de cada setor.</div>", unsafe_allow_html=True)
+                sub_chart = resumo_subgrupo[["setor", "subgrupo", "TOTAL"]].copy()
+                if sub_chart.empty:
+                    st.info("Sem dados de subgrupo para o dia de referência.")
+                else:
+                    sub_chart["rotulo"] = sub_chart["setor"].astype(str) + " • " + sub_chart["subgrupo"].astype(str)
+                    try:
+                        import plotly.express as px
+                        fig_sub = px.bar(sub_chart.head(14), x="rotulo", y="TOTAL", text_auto=True)
+                        fig_sub.update_layout(margin=dict(l=10, r=10, t=10, b=10), height=320, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', xaxis_title='', yaxis_title='Pessoas')
+                        fig_sub.update_xaxes(tickangle=-25)
+                        st.plotly_chart(fig_sub, use_container_width=True)
+                    except Exception:
+                        st.bar_chart(sub_chart.set_index("rotulo")["TOTAL"])
+                st.markdown("</div>", unsafe_allow_html=True)
+
+            with sg2:
+                st.markdown("<div class='gestao-panel'><div class='gestao-panel-title'>Resumo por subgrupo</div><div class='gestao-panel-sub'>Mostra subgrupos como Caixa 01, Caixa 02, Carrinho e outros, com os status do dia selecionado.</div>", unsafe_allow_html=True)
+                if resumo_subgrupo.empty:
+                    st.info("Sem subgrupos para exibir no recorte atual.")
+                else:
+                    resumo_sub_exib = resumo_subgrupo.rename(columns={"setor": "SETOR", "subgrupo": "SUBGRUPO", "TRABALHO": "TRABALHO", "FOLGA": "FOLGA", "FÉRIAS": "FÉRIAS", "AFASTAMENTO": "AFASTAMENTO", "TOTAL": "TOTAL"})
+                    st.dataframe(resumo_sub_exib, use_container_width=True, hide_index=True, height=320)
+                st.markdown("</div>", unsafe_allow_html=True)
+
+        with tab_alertas:
+            b1, b2 = st.columns([.95, 1.05])
+            with b1:
+                st.markdown("<div class='gestao-panel'><div class='gestao-panel-title'>Alertas executivos</div><div class='gestao-panel-sub'>Leitura automática do recorte para apoiar reunião de diretoria e gerência.</div>", unsafe_allow_html=True)
+                for cor, titulo, subt in alertas[:6]:
+                    st.markdown(f"<div class='gestao-alert'><div class='gestao-alert-badge' style='background:{cor};'></div><div><div class='gestao-alert-title'>{html.escape(titulo)}</div><div class='gestao-alert-sub'>{html.escape(subt)}</div></div></div>", unsafe_allow_html=True)
+                st.markdown("</div>", unsafe_allow_html=True)
+
+            with b2:
+                st.markdown("<div class='gestao-panel'><div class='gestao-panel-title'>Férias programadas na competência</div><div class='gestao-panel-sub'>Pessoas com férias dentro do recorte filtrado para conferência imediata.</div>", unsafe_allow_html=True)
+                if ferias_prog.empty:
+                    st.markdown("<div class='gestao-mini-list'><div class='gestao-mini-item'><strong>Sem férias programadas</strong><br><span style='color:#9eb0d9;font-size:.82rem;'>Nenhum registro de férias foi encontrado na competência atual para os setores selecionados.</span></div></div>", unsafe_allow_html=True)
+                else:
+                    preview = ferias_prog.drop_duplicates(subset=["setor", "chapa"]).head(10)
+                    items = []
+                    for _, row in preview.iterrows():
+                        nome = str(row.get("nome") or "").strip() or f"Chapa {row.get('chapa')}"
+                        items.append(f"<div class='gestao-mini-item'><strong>{html.escape(nome)}</strong><br><span style='color:#9eb0d9;font-size:.82rem;'>{html.escape(str(row.get('setor') or ''))} · início identificado no dia {int(row.get('dia') or 0):02d}</span></div>")
+                    st.markdown(f"<div class='gestao-mini-list'>{''.join(items)}</div>", unsafe_allow_html=True)
+                st.markdown("</div>", unsafe_allow_html=True)
+
+        with tab_detalhe:
+            ui_section("Detalhe tático", "Quando precisar sair da visão executiva e conferir o detalhe do setor liberado.")
+            with st.expander("Abrir detalhe operacional por setor", expanded=False):
+                sA, sB = st.columns([2, 1])
+                setor_det = sA.selectbox("Setor (detalhe)", setores_sel, key="gest_setor_det")
+                modo = sB.selectbox("Visão", ["Por dia (contagem)", "Por colaborador (totais)"], key="gest_modo")
+                df_det = df[df["setor"] == setor_det].copy()
+                if modo.startswith("Por dia"):
+                    tabC, tabL = st.tabs(["📈 Contagem por dia", "👥 Listas do dia"])
+                    with tabC:
+                        by = df_det.groupby(["dia", "cat"]).size().reset_index(name="qtd")
+                        piv = by.pivot_table(index="dia", columns="cat", values="qtd", fill_value=0).reset_index()
+                        for col_name in ["TRABALHO", "FOLGA", "FÉRIAS", "AFASTAMENTO"]:
+                            if col_name not in piv.columns:
+                                piv[col_name] = 0
+                        DPT = {0:"Seg", 1:"Ter", 2:"Qua", 3:"Qui", 4:"Sex", 5:"Sáb", 6:"Dom"}
+                        piv["DIA_SEMANA"] = piv["dia"].apply(lambda d: DPT.get(dt.date(int(ano), int(mes), int(d)).weekday(), ""))
+                        piv = piv[["dia", "DIA_SEMANA", "TRABALHO", "FOLGA", "FÉRIAS", "AFASTAMENTO"]]
+                        st.dataframe(piv.sort_values("dia"), use_container_width=True, hide_index=True)
+                    with tabL:
+                        last_day = calendar.monthrange(int(ano), int(mes))[1]
+                        dia_sel = st.selectbox("Dia para detalhar", list(range(1, last_day + 1)), index=max(0, min(ref_dia, last_day)-1), key="gest_dia_sel")
+                        dname = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"][dt.date(int(ano), int(mes), int(dia_sel)).weekday()]
+                        st.caption(f"Detalhe do dia **{dia_sel:02d}/{int(mes):02d}/{int(ano)}** — {dname}")
+                        df_day = df_det[df_det["dia"] == int(dia_sel)].copy()
+                        resumo_day_subgrupo = (
+                            df_day.groupby(["subgrupo", "cat"]).size().reset_index(name="qtd")
+                                 .pivot_table(index="subgrupo", columns="cat", values="qtd", fill_value=0)
+                                 .reset_index()
+                        ) if not df_day.empty else pd.DataFrame(columns=["subgrupo", "TRABALHO", "FOLGA", "FÉRIAS", "AFASTAMENTO"])
+                        for col_name in ["TRABALHO", "FOLGA", "FÉRIAS", "AFASTAMENTO"]:
+                            if col_name not in resumo_day_subgrupo.columns:
+                                resumo_day_subgrupo[col_name] = 0
+                        if not resumo_day_subgrupo.empty:
+                            resumo_day_subgrupo["TOTAL"] = resumo_day_subgrupo[["TRABALHO", "FOLGA", "FÉRIAS", "AFASTAMENTO"]].sum(axis=1)
+                            st.markdown("##### Subgrupos do dia")
+                            st.dataframe(
+                                resumo_day_subgrupo.rename(columns={"subgrupo": "Subgrupo", "TRABALHO": "Trabalho", "FOLGA": "Folga", "FÉRIAS": "Férias", "AFASTAMENTO": "Afastamento", "TOTAL": "Total"}).sort_values(["Total", "Subgrupo"], ascending=[False, True]),
+                                use_container_width=True,
+                                hide_index=True,
+                                height=220,
+                            )
+                        def _show_cat(title, cat, icon):
+                            sub = df_day[df_day["cat"] == cat].copy()
+                            sub["nome"] = sub.get("nome", "").fillna("")
+                            sub["status"] = sub.get("status", "").fillna("")
+                            sub["subgrupo"] = sub.get("subgrupo", "SEM SUBGRUPO").fillna("SEM SUBGRUPO")
+                            sub["entrada"] = sub.get("entrada", "").fillna("").astype(str).str.strip()
+                            if "saida_prevista_calc" not in sub.columns:
+                                try:
+                                    sub["saida_prevista_calc"] = sub["entrada"].apply(lambda x: _saida_from_entrada(str(x or "").strip()) if str(x or "").strip() else "")
+                                except Exception:
+                                    sub["saida_prevista_calc"] = ""
+                            else:
+                                sub["saida_prevista_calc"] = sub.get("saida_prevista_calc", "").fillna("").astype(str).str.strip()
+                            sub = sub[["nome", "chapa", "subgrupo", "entrada", "saida_prevista_calc", "status"]].rename(columns={"nome": "Nome", "chapa": "Chapa", "subgrupo": "Subgrupo", "entrada": "Entrada", "saida_prevista_calc": "Saída prevista", "status": "Status"})
+                            st.markdown(f"#### {icon} {title} ({len(sub)})")
+                            with st.expander(f"Abrir lista de {title.lower()}", expanded=(cat == "TRABALHO")):
+                                st.dataframe(sub.sort_values(["Subgrupo", "Entrada", "Nome", "Chapa"]), use_container_width=True, hide_index=True, height=250)
+                        cA, cB = st.columns(2)
+                        with cA:
+                            _show_cat("Trabalhando", "TRABALHO", "🟩")
+                            _show_cat("Férias", "FÉRIAS", "🟦")
+                        with cB:
+                            _show_cat("Folga", "FOLGA", "🟨")
+                            _show_cat("Afastamento", "AFASTAMENTO", "🟥")
+                else:
+                    by = df_det.groupby(["chapa", "cat"]).size().reset_index(name="qtd")
+                    piv = by.pivot_table(index="chapa", columns="cat", values="qtd", fill_value=0).reset_index()
+                    for col_name in ["TRABALHO", "FOLGA", "FÉRIAS", "AFASTAMENTO"]:
+                        if col_name not in piv.columns:
+                            piv[col_name] = 0
+                    piv["TOTAL"] = piv[["TRABALHO", "FOLGA", "FÉRIAS", "AFASTAMENTO"]].sum(axis=1)
+                    st.dataframe(piv.sort_values("TOTAL", ascending=False), use_container_width=True, hide_index=True)
+    
+        st.caption("Painel executivo do modo gestão: visual profissional para leitura de diretoria, mantendo o detalhe operacional acessível somente quando necessário.")
+        st.markdown("</div>", unsafe_allow_html=True)
+    finally:
+        try:
+            con.close()
+        except Exception:
+            pass
 
 
 
