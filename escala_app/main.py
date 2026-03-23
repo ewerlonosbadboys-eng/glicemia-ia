@@ -12683,9 +12683,9 @@ def style_ferias_mapa(df: pd.DataFrame):
         if col in meses:
             if str(v) == "FER":
                 return "background-color:#1F4E78; color:#FFFFFF; font-weight:800; text-align:center;"
-            return "background-color:#F2F2F2; color:#000000; text-align:center;"
+            return "background-color:#07162d; color:#dbeafe; text-align:center; border:1px solid rgba(96,165,250,0.08);"
         if col == "Nome":
-            return "font-weight:700;"
+            return "font-weight:700; color:#f8fbff; background-color:#061125;"
         return ""
 
     styles = pd.DataFrame("", index=df.index, columns=df.columns)
@@ -15181,109 +15181,31 @@ def page_app():
     if sec_main == "dashboard":
         ui_section("Dashboard", "Área inicial do app.")
         st.markdown("<div class='ax-loading'></div>", unsafe_allow_html=True)
-        st.markdown("""
-        <div class='ax-hero' style='padding:18px 20px;border-radius:22px;background:linear-gradient(135deg, rgba(9,23,49,0.98), rgba(12,31,66,0.98));border:1px solid rgba(96,165,250,0.20);margin-bottom:16px;'>
-            <div style='display:flex;justify-content:space-between;gap:16px;align-items:flex-start;flex-wrap:wrap;'>
-                <div>
-                    <div style='font-size:0.86rem;letter-spacing:.08em;text-transform:uppercase;color:#9fb8e7;font-weight:700;'>Painel executivo</div>
-                    <div class='ax-hero-title' style='font-size:1.7rem;font-weight:800;color:#f8fbff;margin-top:4px;'>Visão gerencial da operação</div>
-                    <div class='ax-hero-sub' style='margin-top:8px;color:#d7e6ff;max-width:900px;'>Resumo visual da competência selecionada, com indicadores principais, leitura operacional e alertas automáticos para apoiar apresentação à diretoria.</div>
-                </div>
-                <div style='padding:10px 14px;border-radius:16px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.08);'>
-                    <div style='font-size:0.78rem;color:#9fb8e7;text-transform:uppercase;font-weight:700;'>Competência</div>
-                    <div style='font-size:1.1rem;color:#ffffff;font-weight:800;'>{mes_k:02d}/{ano_k}</div>
-                </div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-        st.markdown("#### 📈 Painel executivo")
+        st.markdown("#### 📈 Painel rápido")
         if setores_visao_gestao and not bool(auth.get('is_admin', False)):
             render_gestao_dashboard_executivo(auth_setor, auth_chapa, int(ano_k), int(mes_k), list(setores_visao_gestao))
         else:
-            colaboradores_base = []
-            resumo_sub = {}
-            try:
-                colaboradores_base = load_colaboradores_setor(setor) or []
-                for c in colaboradores_base:
-                    sg = str(c.get("Subgrupo") or "SEM SUBGRUPO").strip() or "SEM SUBGRUPO"
-                    resumo_sub[sg] = resumo_sub.get(sg, 0) + 1
-            except Exception:
-                colaboradores_base = []
-                resumo_sub = {}
-
-            total_subgrupos = len(resumo_sub)
-            media_trabalho_por_colab = round((trabalhos_mes / total_colab), 1) if total_colab > 0 else 0.0
-            cobertura_pct = round(((trabalhos_mes / max(1, (total_colab * max(1, calendar.monthrange(ano_k, mes_k)[1])))) * 100), 1) if total_colab > 0 else 0.0
-            taxa_ferias_pct = round((ferias_mes / max(1, trabalhos_mes + folgas_mes + ferias_mes)) * 100, 1)
-
-            a1, a2, a3, a4 = st.columns(4)
-            a1.metric("Colaboradores ativos", total_colab)
-            a2.metric("Cobertura do mês", f"{cobertura_pct}%")
-            a3.metric("Média de trabalho / colaborador", f"{media_trabalho_por_colab}")
-            a4.metric("Subgrupos monitorados", total_subgrupos)
-
-            st.markdown("### 🚨 Alertas automáticos")
-            alertas = []
-            if total_colab == 0:
-                alertas.append(("error", "Nenhum colaborador ativo encontrado na competência selecionada."))
-            if taxa_ferias_pct >= 12:
-                alertas.append(("warning", f"Alta concentração de férias no mês: {taxa_ferias_pct}% dos registros da competência estão marcados como férias."))
-            if folgas_mes > trabalhos_mes:
-                alertas.append(("warning", "Quantidade de folgas do mês está acima dos dias de trabalho registrados. Vale revisar a distribuição da competência."))
-            if total_colab > 0 and media_trabalho_por_colab < 10:
-                alertas.append(("info", "Média de dias trabalhados por colaborador abaixo do esperado para a competência. Vale revisar cobertura e férias."))
-            if not resumo_sub:
-                alertas.append(("info", "Não foi possível montar a distribuição por subgrupo nesta competência."))
-
-            if alertas:
-                for nivel, mensagem in alertas:
-                    if nivel == "error":
-                        st.error(mensagem)
-                    elif nivel == "warning":
-                        st.warning(mensagem)
-                    else:
-                        st.info(mensagem)
-            else:
-                st.success("Operação sem alertas críticos nesta competência.")
-
-            g1, g2 = st.columns([1.25, 1])
+            g1, g2 = st.columns([1.2, 1])
             with g1:
-                st.markdown("##### Indicadores consolidados")
                 df_kpi_ultra = pd.DataFrame({
                     "Indicador": ["Colaboradores", "Folgas", "Férias", "Trabalho"],
                     "Quantidade": [total_colab, folgas_mes, ferias_mes, trabalhos_mes],
                 }).set_index("Indicador")
                 st.bar_chart(df_kpi_ultra)
             with g2:
-                st.markdown("##### Distribuição por subgrupo")
-                if resumo_sub:
-                    df_sub = pd.DataFrame({"Subgrupo": list(resumo_sub.keys()), "Total": list(resumo_sub.values())}).set_index("Subgrupo")
-                    st.line_chart(df_sub)
-                else:
-                    st.caption("Sem dados suficientes para gráfico por subgrupo.")
-
-            st.markdown("### 🧭 Resumo gerencial")
-            r1, r2 = st.columns([1.1, 1])
-            with r1:
-                st.markdown(
-                    f"""
-                    <div class='app-nav-note'>
-                    <strong>Leitura executiva:</strong><br>
-                    • Base ativa monitorada: <strong>{total_colab}</strong> colaboradores.<br>
-                    • Dias de trabalho lançados no mês: <strong>{trabalhos_mes}</strong>.<br>
-                    • Dias de folga lançados no mês: <strong>{folgas_mes}</strong>.<br>
-                    • Dias de férias lançados no mês: <strong>{ferias_mes}</strong>.
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-            with r2:
-                top_sub = sorted(resumo_sub.items(), key=lambda x: x[1], reverse=True)[:5]
-                if top_sub:
-                    df_top = pd.DataFrame(top_sub, columns=["Subgrupo", "Total"])
-                    st.dataframe(df_top, use_container_width=True, hide_index=True)
-                else:
-                    st.caption("Sem subgrupos suficientes para resumo executivo.")
+                try:
+                    colaboradores_base = load_colaboradores_setor(setor) or []
+                    resumo_sub = {}
+                    for c in colaboradores_base:
+                        sg = str(c.get("Subgrupo") or "SEM SUBGRUPO").strip() or "SEM SUBGRUPO"
+                        resumo_sub[sg] = resumo_sub.get(sg, 0) + 1
+                    if resumo_sub:
+                        df_sub = pd.DataFrame({"Subgrupo": list(resumo_sub.keys()), "Total": list(resumo_sub.values())}).set_index("Subgrupo")
+                        st.line_chart(df_sub)
+                    else:
+                        st.caption("Sem dados suficientes para gráfico por subgrupo.")
+                except Exception:
+                    st.caption("Não foi possível montar o gráfico por subgrupo nesta competência.")
         return
 
     # ------------------------------------------------------
@@ -17013,7 +16935,7 @@ def page_app():
             ano = int(st.session_state["cfg_ano"])
             c1.markdown(f"**Mês/Ano:** {mes:02d}/{ano}")
             c2.caption("Alterar em 🗓️ Competência (sidebar)")
-            seed = c3.number_input("Semente", min_value=0, max_value=999999, value=int(st.session_state.get("last_seed", 0)), key="gen_seed")
+            seed = c3.number_input("Geração de Escala (Nível Aleatório)", min_value=0, max_value=999999, value=int(st.session_state.get("last_seed", 0)), key="gen_seed")
 
 
         colaboradores = load_colaboradores_setor(setor)
