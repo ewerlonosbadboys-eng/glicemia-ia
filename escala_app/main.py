@@ -12682,16 +12682,42 @@ def style_ferias_mapa(df: pd.DataFrame):
     def cell(v, col):
         if col in meses:
             if str(v) == "FER":
-                return "background-color:#1F4E78; color:#FFFFFF; font-weight:800; text-align:center;"
-            return "background-color:#F2F2F2; color:#000000; text-align:center;"
+                return (
+                    "background: linear-gradient(180deg, #245b97 0%, #173e69 100%); "
+                    "color:#FFFFFF; font-weight:800; text-align:center; "
+                    "border:1px solid rgba(255,255,255,0.08);"
+                )
+            return (
+                "background-color: rgba(7,18,38,0.96); color:#9fb8e7; text-align:center; "
+                "border:1px solid rgba(255,255,255,0.03);"
+            )
         if col == "Nome":
-            return "font-weight:700;"
+            return "font-weight:800; color:#F8FBFF; background-color:rgba(4,12,28,0.98);"
+        if col == "Chapa":
+            return "font-weight:700; color:#D7E6FF; background-color:rgba(6,16,35,0.98);"
         return ""
 
     styles = pd.DataFrame("", index=df.index, columns=df.columns)
     for col in df.columns:
         styles[col] = df[col].apply(lambda v: cell(v, col))
-    return df.style.apply(lambda _: styles, axis=None)
+
+    styler = df.style.apply(lambda _: styles, axis=None)
+    try:
+        styler = styler.set_table_styles([
+            {"selector": "th", "props": [
+                ("background", "linear-gradient(180deg, #113068 0%, #081630 100%)"),
+                ("color", "#EFF6FF"),
+                ("font-weight", "800"),
+                ("border-bottom", "1px solid rgba(96,165,250,0.25)"),
+            ]},
+            {"selector": "td", "props": [
+                ("padding", "6px 8px"),
+                ("font-size", "12px"),
+            ]},
+        ])
+    except Exception:
+        pass
+    return styler
 
 
 # =========================================================
@@ -17789,18 +17815,6 @@ def page_app():
         if not colaboradores:
             st.warning("Sem colaboradores cadastrados.")
         else:
-            sec_fer = str(st.session_state.get("app_like_sub", sec_fer) or "🗺️ Mapa anual de férias")
-            opcoes_ferias_validas = {
-                "🗺️ Mapa anual de férias",
-                "➕ Lançar Férias",
-                "📊 Controle (histórico)",
-                "📋 Férias cadastradas",
-                "❌ Remover férias",
-            }
-            if sec_fer not in opcoes_ferias_validas:
-                sec_fer = "🗺️ Mapa anual de férias"
-                st.session_state["app_like_sub"] = sec_fer
-
             ui_section("Férias", f"Subaba ativa: {sec_fer}")
 
             botoes_ferias = [
@@ -17816,13 +17830,7 @@ def page_app():
                 for col_btn in linha:
                     label_btn, destino_btn, key_btn = botoes_ferias[idx_btn_fer]
                     with col_btn:
-                        if st.button(
-                            label_btn,
-                            key=key_btn,
-                            use_container_width=True,
-                            type="primary" if sec_fer == destino_btn else "secondary",
-                        ):
-                            st.session_state["app_like_main"] = "ferias"
+                        if st.button(label_btn, key=key_btn, use_container_width=True):
                             st.session_state["app_like_sub"] = destino_btn
                             st.rerun()
                     idx_btn_fer += 1
@@ -17831,14 +17839,44 @@ def page_app():
             # TAB 1 — MAPA ANUAL
             # ---------------------------
             if sec_fer == "🗺️ Mapa anual de férias":
-                st.markdown("## 🗺️ Mapa anual de férias (visual)")
+                st.markdown("## 🗺️ Mapa anual de férias (executivo)")
                 col_map1, col_map2 = st.columns([1, 3])
                 ano_mapa = col_map1.number_input("Ano do mapa", value=int(st.session_state.get("cfg_ano", datetime.now().year)), step=1, key="fer_mapa_ano")
-                col_map2.caption("Mostra em quais meses cada colaborador tem férias cadastradas (qualquer dia no mês marca o mês).")
+                col_map2.caption("Visão executiva dos meses com férias programadas por colaborador. Qualquer dia de férias no mês marca o mês correspondente.")
+
                 df_mapa = ferias_mapa_ano_df(setor, int(ano_mapa), colaboradores)
+
+                meses_cols = [c for c in df_mapa.columns if c in MESES_PT]
+                total_colaboradores = int(len(df_mapa.index))
+                total_marcacoes = int((df_mapa[meses_cols] == "FER").sum().sum()) if meses_cols else 0
+                colaboradores_com_ferias = int(((df_mapa[meses_cols] == "FER").any(axis=1)).sum()) if meses_cols else 0
+
+                mes_top = "-"
+                qtd_mes_top = 0
+                if meses_cols:
+                    serie_mes = (df_mapa[meses_cols] == "FER").sum()
+                    if not serie_mes.empty:
+                        mes_top = str(serie_mes.idxmax())
+                        qtd_mes_top = int(serie_mes.max() or 0)
+
+                kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+                kpi1.metric("Colaboradores no mapa", total_colaboradores)
+                kpi2.metric("Com férias no ano", colaboradores_com_ferias)
+                kpi3.metric("Marcações de férias", total_marcacoes)
+                kpi4.metric("Mês mais concentrado", f"{mes_top} ({qtd_mes_top})" if mes_top != "-" else "-")
+
+                leg1, leg2, leg3 = st.columns([1.2, 1.2, 3])
+                with leg1:
+                    st.caption("⬛ Sem férias no mês")
+                with leg2:
+                    st.caption("🟦 Férias programadas")
+                with leg3:
+                    st.caption("Leitura executiva: os nomes ficam fixos à esquerda e os meses marcados mostram concentração anual de férias.")
+
                 show_chapa = st.checkbox("Mostrar coluna Chapa no mapa", value=False, key="fer_mapa_show_chapa")
                 df_mapa_show = df_mapa if show_chapa else df_mapa.drop(columns=["Chapa"])
-                st.dataframe(style_ferias_mapa(df_mapa_show), use_container_width=True, height=420)
+
+                st.dataframe(style_ferias_mapa(df_mapa_show), use_container_width=True, height=520)
 
             # ---------------------------
             # TAB 2 — LANÇAR
