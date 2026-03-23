@@ -7014,6 +7014,21 @@ def _caixa_saida_prevista(entrada: str, jornada_min: int = 500) -> str:
     return _min_to_hora(base + int(jornada_min))
 
 
+def _caixa_janela_tolerancia(entrada: str, tolerancia_min: int = 120) -> tuple[str, str]:
+    base = _hora_to_min(entrada)
+    if base is None:
+        return "", ""
+    tol = int(tolerancia_min or 0)
+    return _min_to_hora(base - tol), _min_to_hora(base + tol)
+
+
+def _caixa_janela_tolerancia_str(entrada: str, tolerancia_min: int = 120) -> str:
+    ini, fim = _caixa_janela_tolerancia(entrada, tolerancia_min=tolerancia_min)
+    if not ini or not fim:
+        return ""
+    return f"{ini} → {fim}"
+
+
 def caixa_lista_postos(qtd_caixas: int = 30, qtd_self: int = 6) -> list[str]:
     postos = [f"CAIXA {i:02d}" for i in range(1, int(qtd_caixas) + 1)]
     postos += [f"SELF {i:02d}" for i in range(1, int(qtd_self) + 1)]
@@ -7170,23 +7185,29 @@ def caixa_montar_base_operadores(setor: str, ano: int, mes: int, dia: int) -> pd
                     saida_prev = str(row.get('Saída') or '').strip() or _caixa_saida_prevista(entrada_prev)
         except Exception:
             pass
+        st_norm = str(status_dia or '').strip().upper()
+        trabalha_hoje = ('TRAB' in st_norm) or (st_norm in {'', 'TRABALHO'})
+        if not trabalha_hoje:
+            continue
+        janela_ini, janela_fim = _caixa_janela_tolerancia(entrada_prev, tolerancia_min=120)
         registros.append({
             'nome': nome,
             'chapa': chapa,
             'subgrupo': subgrupo,
             'entrada_prevista': entrada_prev,
             'saida_prevista': saida_prev,
-            'status_dia': status_dia,
+            'janela_inicio': janela_ini,
+            'janela_fim': janela_fim,
+            'janela_tolerancia': _caixa_janela_tolerancia_str(entrada_prev, tolerancia_min=120),
+            'status_dia': 'Trabalho',
             'setor': str(colab.get('Setor') or setor).strip(),
         })
     df = pd.DataFrame(registros)
     if df.empty:
-        return pd.DataFrame(columns=['nome','chapa','subgrupo','entrada_prevista','saida_prevista','status_dia','setor'])
+        return pd.DataFrame(columns=['nome','chapa','subgrupo','entrada_prevista','saida_prevista','janela_inicio','janela_fim','janela_tolerancia','status_dia','setor'])
     try:
-        ordem = {'Trabalho': 0, 'Folga': 1, 'Férias': 2, 'Afastamento': 3}
-        df['_ordem_status'] = df['status_dia'].map(lambda x: ordem.get(str(x), 9))
         df['_ordem_hora'] = df['entrada_prevista'].map(lambda x: _hora_to_min(x) if _hora_to_min(x) is not None else 9999)
-        df = df.sort_values(['_ordem_status', '_ordem_hora', 'nome']).drop(columns=['_ordem_status', '_ordem_hora'])
+        df = df.sort_values(['_ordem_hora', 'nome']).drop(columns=['_ordem_hora'])
     except Exception:
         df = df.sort_values(['nome'])
     return df.reset_index(drop=True)
@@ -16719,7 +16740,7 @@ def page_app():
             else:
                 for _, row_cx in base_operadores_cx.iterrows():
                     candidatos_cx.append(
-                        f"{row_cx['nome']} — {row_cx['chapa']} — {row_cx['subgrupo']} — entra {row_cx['entrada_prevista']} / sai {row_cx['saida_prevista']} — {row_cx['status_dia']}"
+                        f"{row_cx['nome']} — {row_cx['chapa']} — {row_cx['subgrupo']} — escala {row_cx['entrada_prevista']} / {row_cx['saida_prevista']} — janela {row_cx.get('janela_tolerancia', '')} — Trabalho"
                     )
 
             with fm1:
@@ -16767,7 +16788,7 @@ def page_app():
                     caixa_limpar_posto_dia(setor, ano_cx, mes_cx, int(dia_cx), posto_sel_cx)
                     st.success(f"{posto_sel_cx} liberado.")
                     st.rerun()
-                st.caption("Dica: selecione o caixa, procure a pessoa e marque se está operando, em almoço, troca ou reserva.")
+                st.caption("Dica: aqui aparecem somente pessoas escaladas para TRABALHO no dia selecionado. A janela operacional mostra tolerância de 2h para menos e 2h para mais sobre a entrada da escala.")
 
             with fm2:
                 st.markdown("#### Mapa operacional do dia")
