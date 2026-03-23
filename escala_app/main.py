@@ -13425,14 +13425,17 @@ def page_gestao_dashboard(ano: int, mes: int):
             return
 
         try:
-            qn = "SELECT setor, chapa, nome FROM colaboradores WHERE setor IN ({})".format(",".join(["?"]*len(setores_sel)))
+            qn = "SELECT setor, chapa, nome, COALESCE(subgrupo,'SEM SUBGRUPO') AS subgrupo FROM colaboradores WHERE setor IN ({})".format(",".join(["?"]*len(setores_sel)))
             df_n = pd.read_sql_query(qn, con, params=[*setores_sel])
             df_n["chapa"] = df_n["chapa"].astype(str).str.strip()
             df["chapa"] = df["chapa"].astype(str).str.strip()
             df = df.merge(df_n.drop_duplicates(subset=["setor", "chapa"]), on=["setor", "chapa"], how="left")
         except Exception:
             df["nome"] = ""
+            df["subgrupo"] = "SEM SUBGRUPO"
 
+        df["nome"] = df.get("nome", "").fillna("")
+        df["subgrupo"] = df.get("subgrupo", "SEM SUBGRUPO").fillna("SEM SUBGRUPO").astype(str).str.strip().replace("", "SEM SUBGRUPO")
         df["status_norm"] = df["status"].fillna("").astype(str).str.strip().str.upper()
         is_fer = df["status_norm"].str.contains("F[ÉE]RIAS", regex=True)
         is_afa = df["status_norm"].isin(["AFA", "AFASTAMENTO"]) | df["status_norm"].str.contains("AFAST", regex=True)
@@ -13486,11 +13489,20 @@ def page_gestao_dashboard(ano: int, mes: int):
               .pivot_table(index="setor", columns="cat", values="qtd", fill_value=0)
               .reset_index()
         )
+        resumo_subgrupo = (
+            df_ref.groupby(["setor", "subgrupo", "cat"]).size().reset_index(name="qtd")
+                 .pivot_table(index=["setor", "subgrupo"], columns="cat", values="qtd", fill_value=0)
+                 .reset_index()
+        ) if not df_ref.empty else pd.DataFrame(columns=["setor", "subgrupo", "TRABALHO", "FOLGA", "FÉRIAS", "AFASTAMENTO"])
         for col_name in ["TRABALHO", "FOLGA", "FÉRIAS", "AFASTAMENTO"]:
             if col_name not in resumo_setor.columns:
                 resumo_setor[col_name] = 0
+            if col_name not in resumo_subgrupo.columns:
+                resumo_subgrupo[col_name] = 0
         resumo_setor["TOTAL_REGISTROS"] = resumo_setor[["TRABALHO", "FOLGA", "FÉRIAS", "AFASTAMENTO"]].sum(axis=1)
         resumo_setor = resumo_setor.sort_values(["TRABALHO", "TOTAL_REGISTROS"], ascending=[False, False])
+        resumo_subgrupo["TOTAL"] = resumo_subgrupo[["TRABALHO", "FOLGA", "FÉRIAS", "AFASTAMENTO"]].sum(axis=1)
+        resumo_subgrupo = resumo_subgrupo.sort_values(["TRABALHO", "TOTAL", "setor", "subgrupo"], ascending=[False, False, True, True])
 
         ferias_prog = df[df["cat"] == "FÉRIAS"][["setor", "chapa", "nome", "dia"]].copy()
         ferias_prog["nome"] = ferias_prog["nome"].fillna("")
@@ -13578,6 +13590,33 @@ def page_gestao_dashboard(ano: int, mes: int):
                 st.markdown(f"<div class='gestao-mini-list'>{''.join(items)}</div>", unsafe_allow_html=True)
             st.markdown("</div>", unsafe_allow_html=True)
 
+        sg1, sg2 = st.columns([1.05, .95])
+        with sg1:
+            st.markdown("<div class='gestao-panel'><div class='gestao-panel-title'>Distribuição por subgrupo</div><div class='gestao-panel-sub'>Leitura do dia de referência para saber onde a equipe está posicionada dentro de cada setor.</div>", unsafe_allow_html=True)
+            sub_chart = resumo_subgrupo[["setor", "subgrupo", "TOTAL"]].copy()
+            if sub_chart.empty:
+                st.info("Sem dados de subgrupo para o dia de referência.")
+            else:
+                sub_chart["rotulo"] = sub_chart["setor"].astype(str) + " • " + sub_chart["subgrupo"].astype(str)
+                try:
+                    import plotly.express as px
+                    fig_sub = px.bar(sub_chart.head(14), x="rotulo", y="TOTAL", text_auto=True)
+                    fig_sub.update_layout(margin=dict(l=10, r=10, t=10, b=10), height=300, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', xaxis_title='', yaxis_title='Pessoas')
+                    fig_sub.update_xaxes(tickangle=-25)
+                    st.plotly_chart(fig_sub, use_container_width=True)
+                except Exception:
+                    st.bar_chart(sub_chart.set_index("rotulo")["TOTAL"])
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        with sg2:
+            st.markdown("<div class='gestao-panel'><div class='gestao-panel-title'>Resumo por subgrupo</div><div class='gestao-panel-sub'>Mostra subgrupos como Caixa 01, Caixa 02, Carrinho e outros, com os status do dia selecionado.</div>", unsafe_allow_html=True)
+            if resumo_subgrupo.empty:
+                st.info("Sem subgrupos para exibir no recorte atual.")
+            else:
+                resumo_sub_exib = resumo_subgrupo.rename(columns={"setor": "SETOR", "subgrupo": "SUBGRUPO", "TRABALHO": "TRABALHO", "FOLGA": "FOLGA", "FÉRIAS": "FÉRIAS", "AFASTAMENTO": "AFASTAMENTO", "TOTAL": "TOTAL"})
+                st.dataframe(resumo_sub_exib, use_container_width=True, hide_index=True, height=300)
+            st.markdown("</div>", unsafe_allow_html=True)
+
         with st.expander("Abrir detalhe operacional por setor", expanded=False):
             ui_section("Detalhe tático", "Quando precisar sair da visão executiva e conferir o detalhe do setor liberado.")
             sA, sB = st.columns([2, 1])
@@ -13602,13 +13641,32 @@ def page_gestao_dashboard(ano: int, mes: int):
                     dname = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"][dt.date(int(ano), int(mes), int(dia_sel)).weekday()]
                     st.caption(f"Detalhe do dia **{dia_sel:02d}/{int(mes):02d}/{int(ano)}** — {dname}")
                     df_day = df_det[df_det["dia"] == int(dia_sel)].copy()
+                    resumo_day_subgrupo = (
+                        df_day.groupby(["subgrupo", "cat"]).size().reset_index(name="qtd")
+                             .pivot_table(index="subgrupo", columns="cat", values="qtd", fill_value=0)
+                             .reset_index()
+                    ) if not df_day.empty else pd.DataFrame(columns=["subgrupo", "TRABALHO", "FOLGA", "FÉRIAS", "AFASTAMENTO"])
+                    for col_name in ["TRABALHO", "FOLGA", "FÉRIAS", "AFASTAMENTO"]:
+                        if col_name not in resumo_day_subgrupo.columns:
+                            resumo_day_subgrupo[col_name] = 0
+                    if not resumo_day_subgrupo.empty:
+                        resumo_day_subgrupo["TOTAL"] = resumo_day_subgrupo[["TRABALHO", "FOLGA", "FÉRIAS", "AFASTAMENTO"]].sum(axis=1)
+                        st.markdown("##### Subgrupos do dia")
+                        st.dataframe(
+                            resumo_day_subgrupo.rename(columns={"subgrupo": "Subgrupo", "TRABALHO": "Trabalho", "FOLGA": "Folga", "FÉRIAS": "Férias", "AFASTAMENTO": "Afastamento", "TOTAL": "Total"}).sort_values(["Total", "Subgrupo"], ascending=[False, True]),
+                            use_container_width=True,
+                            hide_index=True,
+                            height=220,
+                        )
                     def _show_cat(title, cat, icon):
                         sub = df_day[df_day["cat"] == cat].copy()
                         sub["nome"] = sub.get("nome", "").fillna("")
                         sub["status"] = sub.get("status", "").fillna("")
-                        sub = sub[["nome", "chapa", "status"]].rename(columns={"nome": "Nome", "chapa": "Chapa", "status": "Status"})
+                        sub["subgrupo"] = sub.get("subgrupo", "SEM SUBGRUPO").fillna("SEM SUBGRUPO")
+                        sub = sub[["nome", "chapa", "subgrupo", "status"]].rename(columns={"nome": "Nome", "chapa": "Chapa", "subgrupo": "Subgrupo", "status": "Status"})
                         st.markdown(f"#### {icon} {title} ({len(sub)})")
-                        st.dataframe(sub.sort_values(["Nome", "Chapa"]), use_container_width=True, hide_index=True, height=250)
+                        with st.expander(f"Abrir lista de {title.lower()}", expanded=(cat == "TRABALHO")):
+                            st.dataframe(sub.sort_values(["Subgrupo", "Nome", "Chapa"]), use_container_width=True, hide_index=True, height=250)
                     cA, cB = st.columns(2)
                     with cA:
                         _show_cat("Trabalhando", "TRABALHO", "🟩")
