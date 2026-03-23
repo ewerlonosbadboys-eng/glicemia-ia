@@ -13797,8 +13797,9 @@ def page_gestao_dashboard(ano: int, mes: int):
         if not alertas:
             alertas.append(("#7de2a8", "Operação estável no recorte atual", "Os setores liberados não apresentaram desvios relevantes na leitura inicial do dia selecionado."))
 
-        tab_visao, tab_setores, tab_subgrupos, tab_alertas, tab_detalhe = st.tabs([
+        tab_visao, tab_caixa_exec, tab_setores, tab_subgrupos, tab_alertas, tab_detalhe = st.tabs([
             "📊 Visão geral",
+            "💳 Caixa",
             "🏬 Setores",
             "🧩 Subgrupos",
             "📅 Férias e alertas",
@@ -13832,6 +13833,74 @@ def page_gestao_dashboard(ano: int, mes: int):
                 except Exception:
                     st.bar_chart(prox.set_index("dia")[["TRABALHO", "FOLGA", "FÉRIAS", "AFASTAMENTO"]])
                 st.markdown("</div>", unsafe_allow_html=True)
+
+        with tab_caixa_exec:
+            st.markdown("<div class='gestao-panel'><div class='gestao-panel-title'>Resumo executivo da frente de caixa</div><div class='gestao-panel-sub'>Leitura rápida da operação dos postos, almoço, trocas e cobertura do dia selecionado.</div>", unsafe_allow_html=True)
+            setor_caixa_base = next((s for s in setores_sel if str(s).strip().upper().replace(" ", "").startswith("FRENTECAIXA")), None)
+            if not setor_caixa_base:
+                st.info("Nenhum setor de frente de caixa está entre os setores liberados neste filtro.")
+            else:
+                df_cx_exec = caixa_load_operacao_dia(setor_caixa_base, int(ano), int(mes), int(ref_dia))
+                postos_exec = caixa_lista_postos()
+                total_postos_exec = len(postos_exec)
+                if df_cx_exec is None or df_cx_exec.empty:
+                    st.warning(f"Ainda não há movimentação registrada para {setor_caixa_base} no dia {int(ref_dia):02d}/{int(mes):02d}/{int(ano)}.")
+                    kcx1, kcx2, kcx3, kcx4 = st.columns(4)
+                    kcx1.metric("Postos disponíveis", total_postos_exec)
+                    kcx2.metric("Ocupados", 0)
+                    kcx3.metric("Em almoço", 0)
+                    kcx4.metric("Sem operador", total_postos_exec)
+                else:
+                    df_cx_exec = df_cx_exec.copy()
+                    df_cx_exec["status_operacao"] = df_cx_exec["status_operacao"].fillna("").astype(str)
+                    ocupados_exec = int(df_cx_exec["chapa"].fillna("").astype(str).str.strip().ne("").sum())
+                    almoco_exec = int(df_cx_exec["status_operacao"].str.upper().eq("EM ALMOÇO").sum())
+                    troca_exec = int(df_cx_exec["status_operacao"].str.upper().eq("EM TROCA").sum())
+                    vazios_exec = max(0, total_postos_exec - ocupados_exec)
+                    kcx1, kcx2, kcx3, kcx4 = st.columns(4)
+                    kcx1.metric("Postos disponíveis", total_postos_exec)
+                    kcx2.metric("Ocupados", ocupados_exec)
+                    kcx3.metric("Em almoço", almoco_exec)
+                    kcx4.metric("Sem operador", vazios_exec)
+
+                    cxa, cxb = st.columns([1.0, 1.25])
+                    with cxa:
+                        status_cx = df_cx_exec["status_operacao"].replace("", "Sem status").value_counts().reset_index()
+                        status_cx.columns = ["Status", "Qtd"]
+                        st.markdown("<div class='gestao-panel-title' style='margin-top:10px;'>Status dos postos</div>", unsafe_allow_html=True)
+                        try:
+                            import plotly.express as px
+                            fig_cx = px.pie(status_cx, names="Status", values="Qtd", hole=0.62)
+                            fig_cx.update_traces(textposition='outside', textinfo='percent+label')
+                            fig_cx.update_layout(margin=dict(l=10, r=10, t=10, b=10), height=290, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', legend_title_text='')
+                            st.plotly_chart(fig_cx, use_container_width=True)
+                        except Exception:
+                            st.bar_chart(status_cx.set_index("Status"))
+
+                    with cxb:
+                        st.markdown("<div class='gestao-panel-title' style='margin-top:10px;'>Mapa resumido dos postos</div>", unsafe_allow_html=True)
+                        exibir_cols = [c for c in ["posto", "nome", "subgrupo", "entrada_prevista", "saida_prevista", "almoco_inicio", "almoco_fim", "status_operacao"] if c in df_cx_exec.columns]
+                        df_show = df_cx_exec[exibir_cols].copy()
+                        ren = {"posto":"Posto","nome":"Operador","subgrupo":"Subgrupo","entrada_prevista":"Entrada","saida_prevista":"Saída","almoco_inicio":"Sai almoço","almoco_fim":"Volta almoço","status_operacao":"Status"}
+                        st.dataframe(df_show.rename(columns=ren), use_container_width=True, hide_index=True, height=295)
+
+                    ca1, ca2 = st.columns(2)
+                    with ca1:
+                        em_almoco = df_cx_exec[df_cx_exec["status_operacao"].str.upper().eq("EM ALMOÇO")].copy()
+                        st.markdown("<div class='gestao-panel-title' style='margin-top:6px;'>Quem está em almoço agora</div>", unsafe_allow_html=True)
+                        if em_almoco.empty:
+                            st.info("Nenhum posto em almoço neste momento.")
+                        else:
+                            cols_alm = [c for c in ["posto", "nome", "almoco_inicio", "almoco_fim"] if c in em_almoco.columns]
+                            st.dataframe(em_almoco[cols_alm].rename(columns={"posto":"Posto","nome":"Operador","almoco_inicio":"Saiu","almoco_fim":"Volta"}), use_container_width=True, hide_index=True, height=210)
+                    with ca2:
+                        sem_operador = [p for p in postos_exec if p not in set(df_cx_exec["posto"].astype(str))]
+                        st.markdown("<div class='gestao-panel-title' style='margin-top:6px;'>Postos sem operador</div>", unsafe_allow_html=True)
+                        if not sem_operador:
+                            st.success("Todos os postos registrados hoje já têm movimentação.")
+                        else:
+                            st.dataframe(pd.DataFrame({"Posto": sem_operador[:36]}), use_container_width=True, hide_index=True, height=210)
+            st.markdown("</div>", unsafe_allow_html=True)
 
         with tab_setores:
             r1, r2 = st.columns([1.25, .95])
