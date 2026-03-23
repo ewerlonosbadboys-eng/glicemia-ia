@@ -2858,7 +2858,7 @@ def get_app_like_nav_config(is_admin_area: bool, setor: str = "", modo_gestao_so
 
 def render_app_like_sidebar_nav(is_admin_area: bool, setor: str = "", modo_gestao_somente: bool = False):
     cfg = get_app_like_nav_config(is_admin_area, setor, modo_gestao_somente)
-    main_keys = ["admin"] if is_admin_area else (["gestao", "caixa"] if modo_gestao_somente else ["dashboard", "colaboradores", "ferias", "escala", "caixa", "gestao"])
+    main_keys = ["admin"] if is_admin_area else (["gestao", "caixa"] if modo_gestao_somente else ["dashboard", "colaboradores", "ferias", "gestao", "caixa", "escala"])
     default_main = main_keys[0]
     if st.session_state.get("app_like_main") not in main_keys:
         st.session_state["app_like_main"] = default_main
@@ -2884,7 +2884,7 @@ def render_app_like_sidebar_nav(is_admin_area: bool, setor: str = "", modo_gesta
 
 def render_app_like_top_nav(is_admin_area: bool, setor: str = "", modo_gestao_somente: bool = False):
     cfg = get_app_like_nav_config(is_admin_area, setor, modo_gestao_somente)
-    main_keys = ["admin"] if is_admin_area else (["gestao", "caixa"] if modo_gestao_somente else ["dashboard", "colaboradores", "ferias", "escala", "caixa", "gestao"])
+    main_keys = ["admin"] if is_admin_area else (["gestao", "caixa"] if modo_gestao_somente else ["dashboard", "colaboradores", "ferias", "gestao", "caixa", "escala"])
     default_main = main_keys[0]
     if st.session_state.get("app_like_main") not in main_keys:
         st.session_state["app_like_main"] = default_main
@@ -2920,7 +2920,7 @@ def render_app_like_top_nav(is_admin_area: bool, setor: str = "", modo_gestao_so
 
 def resolve_app_like_route(is_admin_area: bool, setor: str = "", modo_gestao_somente: bool = False):
     cfg = get_app_like_nav_config(is_admin_area, setor, modo_gestao_somente)
-    main_keys = ["admin"] if is_admin_area else (["gestao", "caixa"] if modo_gestao_somente else ["dashboard", "colaboradores", "ferias", "escala", "caixa", "gestao"])
+    main_keys = ["admin"] if is_admin_area else (["gestao", "caixa"] if modo_gestao_somente else ["dashboard", "colaboradores", "ferias", "gestao", "caixa", "escala"])
     current_main = st.session_state.get("app_like_main")
     if current_main not in main_keys:
         current_main = main_keys[0]
@@ -12682,12 +12682,10 @@ def style_ferias_mapa(df: pd.DataFrame):
     def cell(v, col):
         if col in meses:
             if str(v) == "FER":
-                return "background:linear-gradient(135deg,#2563eb,#1d4ed8); color:#FFFFFF; font-weight:800; text-align:center; border:1px solid rgba(255,255,255,.08);"
-            return "background-color:rgba(15,23,42,.06); color:#64748b; text-align:center;"
+                return "background-color:#1F4E78; color:#FFFFFF; font-weight:800; text-align:center;"
+            return "background-color:#F2F2F2; color:#000000; text-align:center;"
         if col == "Nome":
-            return "font-weight:700; color:#f8fbff; background-color:rgba(2,8,22,.96);"
-        if col == "Chapa":
-            return "color:#dbeafe; background-color:rgba(2,8,22,.92);"
+            return "font-weight:700;"
         return ""
 
     styles = pd.DataFrame("", index=df.index, columns=df.columns)
@@ -15181,51 +15179,20 @@ def page_app():
     sec_imp = app_route.get("sec_imp", "📊 Excel modelo")
 
     if sec_main == "dashboard":
-        ui_section("Dashboard executivo", f"Competência {int(mes_k):02d}/{int(ano_k)} • visão gerencial pronta para apresentação.")
+        ui_section("Dashboard", "Área inicial do app.")
         st.markdown("<div class='ax-loading'></div>", unsafe_allow_html=True)
-
-        taxa_trabalho = round((float(trabalhos_mes) / max(float(total_colab or 1), 1.0)) * 100.0, 1) if total_colab else 0.0
-        taxa_folga = round((float(folgas_mes) / max(float(total_colab or 1), 1.0)) * 100.0, 1) if total_colab else 0.0
-        taxa_ferias = round((float(ferias_mes) / max(float(total_colab or 1), 1.0)) * 100.0, 1) if total_colab else 0.0
-
-        st.markdown(
-            f"""
-            <div class='ax-hero' style='padding:18px 20px;border:1px solid rgba(96,165,250,.18);border-radius:22px;background:linear-gradient(135deg, rgba(10,28,61,.98), rgba(5,15,33,.98));margin-bottom:14px;'>
-                <div style='display:flex;justify-content:space-between;gap:18px;align-items:flex-start;flex-wrap:wrap;'>
-                    <div>
-                        <div class='ax-hero-title' style='font-size:1.65rem;font-weight:800;color:#f8fbff;'>📊 Painel executivo da competência</div>
-                        <div class='ax-hero-sub' style='margin-top:6px;color:#b8caea;max-width:760px;'>Leitura rápida do mês para diretoria, com foco em capacidade operacional, descanso planejado e concentração de férias.</div>
-                    </div>
-                    <div style='min-width:260px;padding:12px 14px;border-radius:16px;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.04);'>
-                        <div style='font-size:.78rem;color:#9fb8e7;text-transform:uppercase;'>Setor em análise</div>
-                        <div style='font-size:1.15rem;font-weight:800;color:#ffffff;margin-top:4px;'>{str(setor or '').strip() or 'N/D'}</div>
-                        <div style='font-size:.83rem;color:#cfe0ff;margin-top:8px;'>Trabalho {taxa_trabalho}% • Folgas {taxa_folga}% • Férias {taxa_ferias}%</div>
-                    </div>
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        d1, d2, d3, d4 = st.columns(4)
-        d1.metric("Colaboradores ativos", int(total_colab or 0), border=False)
-        d2.metric("Dias de folga (mês)", int(folgas_mes or 0), border=False)
-        d3.metric("Dias de férias (mês)", int(ferias_mes or 0), border=False)
-        d4.metric("Dias de trabalho (mês)", int(trabalhos_mes or 0), border=False)
-
+        st.markdown("#### 📈 Painel rápido")
         if setores_visao_gestao and not bool(auth.get('is_admin', False)):
             render_gestao_dashboard_executivo(auth_setor, auth_chapa, int(ano_k), int(mes_k), list(setores_visao_gestao))
         else:
-            g1, g2 = st.columns([1.18, 0.82])
+            g1, g2 = st.columns([1.2, 1])
             with g1:
-                st.markdown("#### 📈 Resumo operacional")
                 df_kpi_ultra = pd.DataFrame({
                     "Indicador": ["Colaboradores", "Folgas", "Férias", "Trabalho"],
-                    "Quantidade": [int(total_colab or 0), int(folgas_mes or 0), int(ferias_mes or 0), int(trabalhos_mes or 0)],
+                    "Quantidade": [total_colab, folgas_mes, ferias_mes, trabalhos_mes],
                 }).set_index("Indicador")
-                st.bar_chart(df_kpi_ultra, height=320)
+                st.bar_chart(df_kpi_ultra)
             with g2:
-                st.markdown("#### 🧩 Distribuição por subgrupo")
                 try:
                     colaboradores_base = load_colaboradores_setor(setor) or []
                     resumo_sub = {}
@@ -15233,21 +15200,12 @@ def page_app():
                         sg = str(c.get("Subgrupo") or "SEM SUBGRUPO").strip() or "SEM SUBGRUPO"
                         resumo_sub[sg] = resumo_sub.get(sg, 0) + 1
                     if resumo_sub:
-                        df_sub = pd.DataFrame({"Subgrupo": list(resumo_sub.keys()), "Total": list(resumo_sub.values())}).sort_values("Total", ascending=False)
-                        st.dataframe(df_sub, use_container_width=True, height=320, hide_index=True)
+                        df_sub = pd.DataFrame({"Subgrupo": list(resumo_sub.keys()), "Total": list(resumo_sub.values())}).set_index("Subgrupo")
+                        st.line_chart(df_sub)
                     else:
                         st.caption("Sem dados suficientes para gráfico por subgrupo.")
                 except Exception:
-                    st.caption("Não foi possível montar o resumo por subgrupo nesta competência.")
-
-            st.markdown("#### 🧾 Leitura executiva")
-            resumo_exec = pd.DataFrame([
-                {"Indicador": "Capacidade ativa", "Valor": int(total_colab or 0), "Leitura": "Base total disponível para operação nesta competência."},
-                {"Indicador": "Cobertura de trabalho", "Valor": int(trabalhos_mes or 0), "Leitura": "Volume agregado de dias úteis lançados como trabalho."},
-                {"Indicador": "Descanso programado", "Valor": int(folgas_mes or 0), "Leitura": "Carga mensal de descanso distribuída no setor."},
-                {"Indicador": "Férias no mês", "Valor": int(ferias_mes or 0), "Leitura": "Impacto consolidado das férias lançadas na competência."},
-            ])
-            st.dataframe(resumo_exec, use_container_width=True, hide_index=True)
+                    st.caption("Não foi possível montar o gráfico por subgrupo nesta competência.")
         return
 
     # ------------------------------------------------------
@@ -17855,31 +17813,14 @@ def page_app():
             # TAB 1 — MAPA ANUAL
             # ---------------------------
             if sec_fer == "🗺️ Mapa anual de férias":
-                st.markdown("## 🗺️ Mapa anual de férias (visual executivo)")
+                st.markdown("## 🗺️ Mapa anual de férias (visual)")
                 col_map1, col_map2 = st.columns([1, 3])
                 ano_mapa = col_map1.number_input("Ano do mapa", value=int(st.session_state.get("cfg_ano", datetime.now().year)), step=1, key="fer_mapa_ano")
-                col_map2.caption("Mostra em quais meses cada colaborador tem férias cadastradas, com leitura rápida para apresentação gerencial.")
+                col_map2.caption("Mostra em quais meses cada colaborador tem férias cadastradas (qualquer dia no mês marca o mês).")
                 df_mapa = ferias_mapa_ano_df(setor, int(ano_mapa), colaboradores)
                 show_chapa = st.checkbox("Mostrar coluna Chapa no mapa", value=False, key="fer_mapa_show_chapa")
-                meses_cols = [c for c in df_mapa.columns if c in MESES_PT]
-                total_fer = 0
-                colaboradores_com_fer = 0
-                mes_top = "-"
-                qtd_top = 0
-                if not df_mapa.empty and meses_cols:
-                    total_fer = int((df_mapa[meses_cols] == "FER").sum().sum())
-                    colaboradores_com_fer = int(((df_mapa[meses_cols] == "FER").sum(axis=1) > 0).sum())
-                    cont_mes = (df_mapa[meses_cols] == "FER").sum(axis=0)
-                    if len(cont_mes):
-                        mes_top = str(cont_mes.idxmax())
-                        qtd_top = int(cont_mes.max())
-                ckm1, ckm2, ckm3, ckm4 = st.columns(4)
-                ckm1.metric("Colaboradores no mapa", int(len(df_mapa.index)), border=False)
-                ckm2.metric("Com férias no ano", int(colaboradores_com_fer), border=False)
-                ckm3.metric("Marcações FER", int(total_fer), border=False)
-                ckm4.metric("Pico do ano", f"{mes_top} ({qtd_top})" if mes_top != "-" else "-", border=False)
                 df_mapa_show = df_mapa if show_chapa else df_mapa.drop(columns=["Chapa"])
-                st.dataframe(style_ferias_mapa(df_mapa_show), use_container_width=True, height=520, hide_index=True)
+                st.dataframe(style_ferias_mapa(df_mapa_show), use_container_width=True, height=420)
 
             # ---------------------------
             # TAB 2 — LANÇAR
