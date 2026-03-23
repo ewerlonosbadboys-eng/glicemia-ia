@@ -13698,7 +13698,7 @@ def page_gestao_dashboard(ano: int, mes: int):
             return
 
         try:
-            qn = "SELECT setor, chapa, nome, COALESCE(subgrupo,'SEM SUBGRUPO') AS subgrupo FROM colaboradores WHERE setor IN ({})".format(",".join(["?"]*len(setores_sel)))
+            qn = "SELECT setor, chapa, nome, COALESCE(subgrupo,'SEM SUBGRUPO') AS subgrupo, COALESCE(entrada,'') AS entrada FROM colaboradores WHERE setor IN ({})".format(",".join(["?"]*len(setores_sel)))
             df_n = pd.read_sql_query(qn, con, params=[*setores_sel])
             df_n["chapa"] = df_n["chapa"].astype(str).str.strip()
             df["chapa"] = df["chapa"].astype(str).str.strip()
@@ -13709,6 +13709,11 @@ def page_gestao_dashboard(ano: int, mes: int):
 
         df["nome"] = df.get("nome", "").fillna("")
         df["subgrupo"] = df.get("subgrupo", "SEM SUBGRUPO").fillna("SEM SUBGRUPO").astype(str).str.strip().replace("", "SEM SUBGRUPO")
+        df["entrada"] = df.get("entrada", "").fillna("").astype(str).str.strip()
+        try:
+            df["saida_prevista_calc"] = df["entrada"].apply(lambda x: _saida_from_entrada(str(x or "").strip()) if str(x or "").strip() else "")
+        except Exception:
+            df["saida_prevista_calc"] = ""
         df["status_norm"] = df["status"].fillna("").astype(str).str.strip().str.upper()
         is_fer = df["status_norm"].str.contains("F[ÉE]RIAS", regex=True)
         is_afa = df["status_norm"].isin(["AFA", "AFASTAMENTO"]) | df["status_norm"].str.contains("AFAST", regex=True)
@@ -13797,9 +13802,10 @@ def page_gestao_dashboard(ano: int, mes: int):
         if not alertas:
             alertas.append(("#7de2a8", "Operação estável no recorte atual", "Os setores liberados não apresentaram desvios relevantes na leitura inicial do dia selecionado."))
 
-        tab_visao, tab_caixa_exec, tab_setores, tab_subgrupos, tab_alertas, tab_detalhe = st.tabs([
+        tab_visao, tab_caixa_exec, tab_horarios, tab_setores, tab_subgrupos, tab_alertas, tab_detalhe = st.tabs([
             "📊 Visão geral",
             "💳 Caixa",
+            "🕒 Horários",
             "🏬 Setores",
             "🧩 Subgrupos",
             "📅 Férias e alertas",
@@ -13900,6 +13906,105 @@ def page_gestao_dashboard(ano: int, mes: int):
                             st.success("Todos os postos registrados hoje já têm movimentação.")
                         else:
                             st.dataframe(pd.DataFrame({"Posto": sem_operador[:36]}), use_container_width=True, hide_index=True, height=210)
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        with tab_horarios:
+            st.markdown("<div class='gestao-panel'><div class='gestao-panel-title'>Leitura executiva de horários</div><div class='gestao-panel-sub'>Entradas, saídas previstas e cobertura por faixa no recorte selecionado.</div>", unsafe_allow_html=True)
+            df_hor = df_ref[df_ref["cat"] == "TRABALHO"].copy()
+            if df_hor.empty:
+                st.info("Não há pessoas em trabalho no dia de referência para montar a visão de horários.")
+            else:
+                df_hor["entrada"] = df_hor.get("entrada", "").fillna("").astype(str).str.strip()
+                df_hor["saida_prevista_calc"] = df_hor.get("saida_prevista_calc", "").fillna("").astype(str).str.strip()
+                df_hor["entrada_ord"] = df_hor["entrada"].apply(lambda x: _hora_to_min(x) if str(x or "").strip() else 9999)
+                df_hor["saida_ord"] = df_hor["saida_prevista_calc"].apply(lambda x: _hora_to_min(x) if str(x or "").strip() else 9999)
+
+                sem_hor = int(df_hor["entrada"].eq("").sum())
+                horarios_unicos = int(df_hor.loc[df_hor["entrada"].ne(""), "entrada"].nunique())
+                primeira_entrada = "-"
+                ultima_saida = "-"
+                try:
+                    entradas_validas = sorted([x for x in df_hor["entrada"].tolist() if str(x).strip()], key=lambda x: _hora_to_min(str(x)))
+                    saidas_validas = sorted([x for x in df_hor["saida_prevista_calc"].tolist() if str(x).strip()], key=lambda x: _hora_to_min(str(x)))
+                    if entradas_validas:
+                        primeira_entrada = entradas_validas[0]
+                    if saidas_validas:
+                        ultima_saida = saidas_validas[-1]
+                except Exception:
+                    pass
+
+                hh1, hh2, hh3, hh4 = st.columns(4)
+                hh1.metric("Horários únicos", horarios_unicos)
+                hh2.metric("Primeira entrada", primeira_entrada)
+                hh3.metric("Última saída", ultima_saida)
+                hh4.metric("Sem horário", sem_hor)
+
+                faixas = [
+                    ("06:00–08:00", 360, 480),
+                    ("08:01–10:00", 481, 600),
+                    ("10:01–12:00", 601, 720),
+                    ("12:01–14:00", 721, 840),
+                    ("14:01+", 841, 2000),
+                ]
+                rows_faixa = []
+                for rotulo, ini_m, fim_m in faixas:
+                    qtd = int(df_hor["entrada_ord"].apply(lambda v: ini_m <= int(v) <= fim_m if pd.notna(v) else False).sum())
+                    rows_faixa.append({"Faixa": rotulo, "Pessoas": qtd})
+                df_faixa = pd.DataFrame(rows_faixa)
+
+                por_entrada = (
+                    df_hor[df_hor["entrada"].ne("")].groupby("entrada").size().reset_index(name="Pessoas")
+                          .sort_values("entrada", key=lambda s: s.map(lambda x: _hora_to_min(str(x))))
+                )
+                por_saida = (
+                    df_hor[df_hor["saida_prevista_calc"].ne("")].groupby("saida_prevista_calc").size().reset_index(name="Pessoas")
+                          .sort_values("saida_prevista_calc", key=lambda s: s.map(lambda x: _hora_to_min(str(x))))
+                )
+
+                hcol1, hcol2 = st.columns([1.1, 1.1])
+                with hcol1:
+                    st.markdown("<div class='gestao-panel-title' style='margin-top:10px;'>Cobertura por faixa de entrada</div>", unsafe_allow_html=True)
+                    try:
+                        import plotly.express as px
+                        fig_fx = px.bar(df_faixa, x="Faixa", y="Pessoas", text_auto=True)
+                        fig_fx.update_layout(margin=dict(l=10, r=10, t=10, b=10), height=300, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', xaxis_title='', yaxis_title='Pessoas')
+                        st.plotly_chart(fig_fx, use_container_width=True)
+                    except Exception:
+                        st.bar_chart(df_faixa.set_index("Faixa"))
+
+                with hcol2:
+                    st.markdown("<div class='gestao-panel-title' style='margin-top:10px;'>Entradas programadas</div>", unsafe_allow_html=True)
+                    if por_entrada.empty:
+                        st.info("Nenhum horário de entrada encontrado para o filtro atual.")
+                    else:
+                        try:
+                            import plotly.express as px
+                            fig_ent = px.bar(por_entrada, x="entrada", y="Pessoas", text_auto=True)
+                            fig_ent.update_layout(margin=dict(l=10, r=10, t=10, b=10), height=300, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', xaxis_title='Entrada', yaxis_title='Pessoas')
+                            st.plotly_chart(fig_ent, use_container_width=True)
+                        except Exception:
+                            st.bar_chart(por_entrada.set_index("entrada"))
+
+                hdet1, hdet2 = st.columns([1.05, 1.15])
+                with hdet1:
+                    st.markdown("<div class='gestao-panel-title' style='margin-top:8px;'>Próximas entradas e saídas</div>", unsafe_allow_html=True)
+                    top_hor = df_hor[[c for c in ["setor", "subgrupo", "nome", "entrada", "saida_prevista_calc"] if c in df_hor.columns]].copy()
+                    top_hor = top_hor.sort_values(["entrada", "saida_prevista_calc", "setor", "subgrupo", "nome"], key=lambda s: s.map(lambda x: _hora_to_min(str(x)) if re.match(r"^\d{2}:\d{2}$", str(x or "")) else 9999) if s.name in ["entrada", "saida_prevista_calc"] else s.astype(str))
+                    top_hor = top_hor.rename(columns={"setor":"Setor","subgrupo":"Subgrupo","nome":"Nome","entrada":"Entrada","saida_prevista_calc":"Saída prevista"})
+                    st.dataframe(top_hor, use_container_width=True, hide_index=True, height=320)
+
+                with hdet2:
+                    st.markdown("<div class='gestao-panel-title' style='margin-top:8px;'>Saídas previstas</div>", unsafe_allow_html=True)
+                    if por_saida.empty:
+                        st.info("Não foi possível montar a previsão de saída com os dados atuais.")
+                    else:
+                        try:
+                            import plotly.express as px
+                            fig_sai = px.line(por_saida.rename(columns={"saida_prevista_calc":"Saída"}), x="Saída", y="Pessoas", markers=True)
+                            fig_sai.update_layout(margin=dict(l=10, r=10, t=10, b=10), height=320, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', xaxis_title='Saída prevista', yaxis_title='Pessoas')
+                            st.plotly_chart(fig_sai, use_container_width=True)
+                        except Exception:
+                            st.bar_chart(por_saida.set_index("saida_prevista_calc"))
             st.markdown("</div>", unsafe_allow_html=True)
 
         with tab_setores:
