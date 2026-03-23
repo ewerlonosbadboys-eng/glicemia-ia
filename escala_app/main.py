@@ -2858,7 +2858,7 @@ def get_app_like_nav_config(is_admin_area: bool, setor: str = "", modo_gestao_so
 
 def render_app_like_sidebar_nav(is_admin_area: bool, setor: str = "", modo_gestao_somente: bool = False):
     cfg = get_app_like_nav_config(is_admin_area, setor, modo_gestao_somente)
-    main_keys = ["admin"] if is_admin_area else (["gestao", "caixa"] if modo_gestao_somente else ["dashboard", "colaboradores", "ferias", "escala", "caixa", "gestao"])
+    main_keys = ["admin"] if is_admin_area else (["gestao", "caixa"] if modo_gestao_somente else ["dashboard", "colaboradores", "ferias", "gestao", "caixa", "escala"])
     default_main = main_keys[0]
     if st.session_state.get("app_like_main") not in main_keys:
         st.session_state["app_like_main"] = default_main
@@ -2884,7 +2884,7 @@ def render_app_like_sidebar_nav(is_admin_area: bool, setor: str = "", modo_gesta
 
 def render_app_like_top_nav(is_admin_area: bool, setor: str = "", modo_gestao_somente: bool = False):
     cfg = get_app_like_nav_config(is_admin_area, setor, modo_gestao_somente)
-    main_keys = ["admin"] if is_admin_area else (["gestao", "caixa"] if modo_gestao_somente else ["dashboard", "colaboradores", "ferias", "escala", "caixa", "gestao"])
+    main_keys = ["admin"] if is_admin_area else (["gestao", "caixa"] if modo_gestao_somente else ["dashboard", "colaboradores", "ferias", "gestao", "caixa", "escala"])
     default_main = main_keys[0]
     if st.session_state.get("app_like_main") not in main_keys:
         st.session_state["app_like_main"] = default_main
@@ -2920,7 +2920,7 @@ def render_app_like_top_nav(is_admin_area: bool, setor: str = "", modo_gestao_so
 
 def resolve_app_like_route(is_admin_area: bool, setor: str = "", modo_gestao_somente: bool = False):
     cfg = get_app_like_nav_config(is_admin_area, setor, modo_gestao_somente)
-    main_keys = ["admin"] if is_admin_area else (["gestao", "caixa"] if modo_gestao_somente else ["dashboard", "colaboradores", "ferias", "escala", "caixa", "gestao"])
+    main_keys = ["admin"] if is_admin_area else (["gestao", "caixa"] if modo_gestao_somente else ["dashboard", "colaboradores", "ferias", "gestao", "caixa", "escala"])
     current_main = st.session_state.get("app_like_main")
     if current_main not in main_keys:
         current_main = main_keys[0]
