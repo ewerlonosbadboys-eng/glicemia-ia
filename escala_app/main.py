@@ -685,45 +685,77 @@ def render_escala_espelho_colaborador(df_mes: pd.DataFrame, titulo: str = "") ->
         if df.empty:
             st.info('Nenhum dado disponível para exibir no formato espelho.')
             return
+
         cols_lower = {str(c).strip().lower(): c for c in df.columns}
         col_dia = cols_lower.get('dia') or cols_lower.get('dia do mês') or cols_lower.get('dia_mes')
+        col_data = cols_lower.get('data')
         col_dow = cols_lower.get('dia da semana') or cols_lower.get('dia_semana') or cols_lower.get('semana')
         col_status = cols_lower.get('status')
         col_ent = cols_lower.get('entrada')
         col_saida = cols_lower.get('saída') or cols_lower.get('saida')
-        if not all([col_dia, col_dow, col_status]):
+
+        if not all([col_status]):
             st.dataframe(df, use_container_width=True, hide_index=True)
             return
+
         dias = []
-        for v in df[col_dia].tolist():
-            try:
-                dias.append(int(v))
-            except Exception:
-                dias.append(len(dias)+1)
-        dow_vals = [str(v or '').strip() for v in df[col_dow].tolist()]
+        if col_dia:
+            for v in df[col_dia].tolist():
+                try:
+                    dias.append(int(v))
+                except Exception:
+                    dias.append(len(dias) + 1)
+        elif col_data:
+            for v in df[col_data].tolist():
+                try:
+                    dias.append(int(pd.to_datetime(v).day))
+                except Exception:
+                    dias.append(len(dias) + 1)
+        else:
+            dias = list(range(1, len(df) + 1))
+
+        if col_data:
+            datas_vals = []
+            for v in df[col_data].tolist():
+                try:
+                    datas_vals.append(pd.to_datetime(v).strftime('%d'))
+                except Exception:
+                    datas_vals.append('')
+        else:
+            datas_vals = [str(d) for d in dias]
+
+        dow_vals = [str(v or '').strip() for v in (df[col_dow].tolist() if col_dow else [''] * len(df))]
         status_vals = [str(v or '').strip() for v in df[col_status].tolist()]
         ent_vals = [str(v or '').strip() for v in (df[col_ent].tolist() if col_ent else [''] * len(df))]
         saida_vals = [str(v or '').strip() for v in (df[col_saida].tolist() if col_saida else [''] * len(df))]
 
-        def _lbl_status(stt, ent):
+        def _status_token(stt: str) -> str:
             s = str(stt or '').strip().lower()
-            if s == 'trabalho':
-                return ent or 'TRAB'
             if s == 'folga':
                 return 'FOLG'
-            if s == 'férias' or s == 'ferias':
+            if s in ('férias', 'ferias'):
                 return 'FER'
             if s == 'afastamento':
                 return 'AFA'
-            return str(stt or '').strip() or '-'
+            return ''
 
         tabela = {
-            'Data / Dia': ['Dia / Semana', 'Entrada', 'Saída'],
+            'Linha': ['Data / Dia', 'Dia / Semana', 'Entrada', 'Saída']
         }
+
         for i, dia in enumerate(dias):
-            tabela[str(dia)] = [dow_vals[i], _lbl_status(status_vals[i], ent_vals[i]), (saida_vals[i] if status_vals[i].strip().lower() == 'trabalho' else '')]
+            tok = _status_token(status_vals[i])
+            entrada_cell = tok if tok else (ent_vals[i] or '')
+            saida_cell = '' if tok else (saida_vals[i] or '')
+            tabela[str(dia)] = [
+                datas_vals[i] or str(dia),
+                dow_vals[i],
+                entrada_cell,
+                saida_cell,
+            ]
+
         df_show = pd.DataFrame(tabela)
-        st.dataframe(df_show, use_container_width=True, hide_index=True)
+        st.dataframe(df_show, use_container_width=True, hide_index=True, height=220)
     except Exception:
         st.dataframe(df_mes, use_container_width=True, hide_index=True)
 
@@ -17543,7 +17575,7 @@ def page_app():
                                     'motivo_ret': motivo_ret,
                                     'usuario': str(st.session_state.get('auth_nome') or st.session_state.get('auth_chapa') or ''),
                                 }
-                                if bool(auth.get('is_ax_lider', False)) and not bool(auth.get('is_admin', False)) and not bool(auth.get('is_lider', False)):
+                                if bool(auth.get('is_ax_lider', False)) and not (bool(auth.get('is_admin', False)) or bool(auth.get('is_lider', False)) or str(auth.get('perfil','')).strip().lower() == 'lider'):
                                     registrar_pendencia_ax_generica(
                                         setor=setor,
                                         modulo='retificacao',
@@ -17911,7 +17943,7 @@ def page_app():
                             'motivo_ret': motivo_ret,
                             'usuario': str(st.session_state.get('auth_nome') or st.session_state.get('auth_chapa') or ''),
                         }
-                        if bool(auth.get('is_ax_lider', False)) and not bool(auth.get('is_admin', False)) and not bool(auth.get('is_lider', False)):
+                        if bool(auth.get('is_ax_lider', False)) and not (bool(auth.get('is_admin', False)) or bool(auth.get('is_lider', False)) or str(auth.get('perfil','')).strip().lower() == 'lider'):
                             registrar_pendencia_ax_generica(
                                 setor=setor,
                                 modulo='retificacao',
@@ -18214,7 +18246,7 @@ def page_app():
                     alvo_rem = st.selectbox("Selecionar férias para remover", options=opcoes_rem, key="fer_rem_sel")
                     if st.button("Remover férias selecionada e readequar mês", key="fer_rem_btn"):
                         r = df_f.iloc[opcoes_rem.index(alvo_rem)]
-                        if bool(auth.get('is_ax_lider', False)) and not bool(auth.get('is_admin', False)) and not bool(auth.get('is_lider', False)):
+                        if bool(auth.get('is_ax_lider', False)) and not (bool(auth.get('is_admin', False)) or bool(auth.get('is_lider', False)) or str(auth.get('perfil','')).strip().lower() == 'lider'):
                             rid = registrar_pendencia_ax_generica(setor, 'ferias_remove', 'remover', {'_modulo':'ferias_remove','_acao':'remover','setor':setor,'chapa':r['Chapa'],'inicio':r['Início'],'fim':r['Fim'],'ano':int(st.session_state['cfg_ano']),'mes':int(st.session_state['cfg_mes']),'seed':int(st.session_state.get('last_seed', 0))}, str(auth.get('nome') or '').strip(), str(auth.get('chapa') or '').strip(), 'Remoção de férias enviada pelo AX do Líder')
                             st.warning(f'Solicitação enviada para aprovação do líder. Protocolo #{rid}.')
                             st.rerun()
