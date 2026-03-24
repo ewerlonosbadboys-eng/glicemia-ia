@@ -15188,30 +15188,117 @@ def page_app():
     if sec_main == "dashboard":
         ui_section("Dashboard", "Área inicial do app.")
         st.markdown("<div class='ax-loading'></div>", unsafe_allow_html=True)
-        st.markdown("### 📊 Painel executivo")
-        d1, d2, d3, d4 = st.columns(4)
-        d1.metric("Colaboradores", int(total_colab))
-        d2.metric("Trabalhando no mês", int(trabalhos_mes))
-        d3.metric("Folgas no mês", int(folgas_mes))
-        d4.metric("Férias no mês", int(ferias_mes))
+        st.markdown(f"""
+        <style>
+        .dir-hero {{background: linear-gradient(135deg, rgba(11,28,60,0.98), rgba(6,18,40,0.98)); border: 1px solid rgba(96,165,250,0.20); border-radius: 22px; padding: 18px 20px; box-shadow: 0 18px 40px rgba(0,0,0,0.22); margin-bottom: 14px;}}
+        .dir-hero-title {{font-size: 1.35rem; font-weight: 800; color: #f8fbff; margin-bottom: 4px;}}
+        .dir-hero-sub {{font-size: 0.92rem; color: #cfe0ff;}}
+        .dir-card {{border-radius: 18px; padding: 16px 18px; min-height: 108px; border: 1px solid rgba(255,255,255,0.08); box-shadow: 0 16px 30px rgba(0,0,0,0.20);}}
+        .dir-card .t {{font-size: 0.78rem; color: #d9e8ff; text-transform: uppercase; letter-spacing: .04em;}}
+        .dir-card .v {{font-size: 2rem; color: #ffffff; font-weight: 800; margin-top: 6px; line-height: 1;}}
+        .dir-card .s {{font-size: 0.85rem; color: #ecf4ff; margin-top: 10px;}}
+        .dir-green {{background: linear-gradient(135deg, rgba(8,68,42,0.98), rgba(6,37,28,0.98));}}
+        .dir-amber {{background: linear-gradient(135deg, rgba(104,74,8,0.98), rgba(56,39,5,0.98));}}
+        .dir-red {{background: linear-gradient(135deg, rgba(98,23,23,0.98), rgba(52,11,11,0.98));}}
+        .dir-blue {{background: linear-gradient(135deg, rgba(18,48,102,0.98), rgba(7,19,45,0.98));}}
+        </style>
+        <div class='dir-hero'>
+            <div class='dir-hero-title'>📊 Visão executiva da operação</div>
+            <div class='dir-hero-sub'>Competência {int(mes_k):02d}/{int(ano_k)} • Monitoramento consolidado da escala, cobertura e riscos operacionais.</div>
+        </div>
+        """, unsafe_allow_html=True)
 
+        dias_mes_comp = max(1, calendar.monthrange(int(ano_k), int(mes_k))[1])
+        capacidade_mes = max(1, int(total_colab) * dias_mes_comp)
+        cobertura_pct = round((float(trabalhos_mes) / float(capacidade_mes)) * 100.0, 1) if capacidade_mes else 0.0
+        ferias_pct = round((float(ferias_mes) / float(max(1, total_colab))) * 100.0, 1) if int(total_colab) > 0 else 0.0
+        folgas_pct = round((float(folgas_mes) / float(capacidade_mes)) * 100.0, 1) if capacidade_mes else 0.0
+
+        if int(total_colab) == 0:
+            status_label, status_color = "Sem base", "dir-red"
+        elif cobertura_pct >= 70 and ferias_pct <= 20:
+            status_label, status_color = "Operação equilibrada", "dir-green"
+        elif cobertura_pct >= 55:
+            status_label, status_color = "Atenção operacional", "dir-amber"
+        else:
+            status_label, status_color = "Risco operacional", "dir-red"
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.markdown(f"<div class='dir-card dir-blue'><div class='t'>Colaboradores</div><div class='v'>{int(total_colab)}</div><div class='s'>Base ativa consolidada</div></div>", unsafe_allow_html=True)
+        c2.markdown(f"<div class='dir-card {status_color}'><div class='t'>Cobertura operacional</div><div class='v'>{cobertura_pct:.1f}%</div><div class='s'>{status_label}</div></div>", unsafe_allow_html=True)
+        c3.markdown(f"<div class='dir-card dir-blue'><div class='t'>Folgas no mês</div><div class='v'>{int(folgas_mes)}</div><div class='s'>{folgas_pct:.1f}% da capacidade mensal</div></div>", unsafe_allow_html=True)
+        c4.markdown(f"<div class='dir-card {'dir-red' if ferias_pct > 20 else 'dir-blue'}'><div class='t'>Férias no mês</div><div class='v'>{int(ferias_mes)}</div><div class='s'>{ferias_pct:.1f}% da equipe</div></div>", unsafe_allow_html=True)
+
+        st.markdown("#### 🚨 Alertas automáticos")
         alerta_msgs = []
+        problemas_rank = []
         try:
-            if int(ferias_mes) > max(1, int(total_colab) * 0.30):
-                alerta_msgs.append(("warning", "Alta concentração de férias na competência."))
-            if int(folgas_mes) > max(1, int(trabalhos_mes)):
-                alerta_msgs.append(("info", "Volume de folgas acima do volume de trabalho do mês. Verifique concentração por dia."))
             if int(total_colab) == 0:
                 alerta_msgs.append(("error", "Nenhum colaborador encontrado no setor selecionado."))
+                problemas_rank.append((100, "Base sem colaboradores"))
+            if ferias_pct > 20:
+                alerta_msgs.append(("warning", f"{int(ferias_mes)} colaboradores em férias ({ferias_pct:.1f}% da equipe)."))
+                problemas_rank.append((int(ferias_mes) * 3, "Alta concentração de férias"))
+            if cobertura_pct < 55:
+                alerta_msgs.append(("error", f"Cobertura operacional crítica: {cobertura_pct:.1f}% da capacidade mensal."))
+                problemas_rank.append((90, "Cobertura operacional crítica"))
+            elif cobertura_pct < 70:
+                alerta_msgs.append(("warning", f"Cobertura operacional em atenção: {cobertura_pct:.1f}% da capacidade mensal."))
+                problemas_rank.append((55, "Cobertura abaixo do ideal"))
+            if folgas_pct > 35:
+                alerta_msgs.append(("info", f"Folgas representam {folgas_pct:.1f}% da capacidade mensal. Verifique concentração por dia."))
+                problemas_rank.append((int(folgas_pct), "Carga de folgas elevada"))
         except Exception:
             pass
 
         if alerta_msgs:
-            st.markdown("#### 🚨 Alertas automáticos")
             for lvl, msg in alerta_msgs:
                 getattr(st, lvl)(msg)
         else:
             st.success("Sem alertas críticos na competência selecionada.")
+
+        def _risk_by_sector(_setores_list):
+            rows = []
+            for stx in _setores_list:
+                try:
+                    colabs_loc = load_colaboradores_setor(stx) or []
+                    hist_loc = get_hist_mes_com_overrides_cached(stx, int(ano_k), int(mes_k)) or {}
+                    total_loc = len(colabs_loc)
+                    trab = folg = feri = afas = 0
+                    for _, dfh in (hist_loc or {}).items():
+                        if dfh is None or dfh.empty or 'Status' not in dfh.columns:
+                            continue
+                        st_ser = dfh['Status'].astype(str)
+                        trab += int(st_ser.isin(WORK_STATUSES).sum())
+                        folg += int((st_ser == 'Folga').sum())
+                        feri += int((st_ser == 'Férias').sum())
+                        afas += int((st_ser == 'Afastamento').sum())
+                    capacidade_loc = max(1, int(total_loc) * dias_mes_comp)
+                    cobertura_loc = round((float(trab) / float(capacidade_loc)) * 100.0, 1) if capacidade_loc else 0.0
+                    ferias_loc_pct = round((float(feri) / float(max(1, total_loc))) * 100.0, 1) if total_loc > 0 else 0.0
+                    risco = round(max(0.0, (100.0 - cobertura_loc)) * 0.6 + ferias_loc_pct * 2.0 + (float(afas) / float(capacidade_loc)) * 100.0 * 1.2, 1)
+                    faixa = 'Alto' if risco >= 45 else ('Médio' if risco >= 25 else 'Baixo')
+                    rows.append({'Setor': str(stx), 'Cobertura %': cobertura_loc, 'Férias % equipe': ferias_loc_pct, 'Risco': risco, 'Faixa': faixa})
+                except Exception:
+                    continue
+            return pd.DataFrame(rows)
+
+        setores_dashboard = list(setores_visao_gestao) if setores_visao_gestao else [setor]
+        df_risco = _risk_by_sector(setores_dashboard)
+        if not df_risco.empty:
+            st.markdown("#### 🧭 Indicador de risco por setor")
+            st.dataframe(df_risco.sort_values(['Risco', 'Setor'], ascending=[False, True]), use_container_width=True, hide_index=True)
+            top_risk = df_risco.sort_values('Risco', ascending=False).head(3)
+            for _, rr in top_risk.iterrows():
+                problemas_rank.append((float(rr.get('Risco', 0) or 0), f"{rr.get('Setor', '')}: risco {rr.get('Faixa', '')} ({float(rr.get('Risco', 0) or 0):.1f})"))
+
+        st.markdown("#### 🏁 Ranking automático de problemas")
+        if problemas_rank:
+            df_prob = pd.DataFrame(sorted(problemas_rank, key=lambda x: x[0], reverse=True), columns=['Impacto', 'Problema'])
+            df_prob = df_prob.drop_duplicates(subset=['Problema']).head(5)
+            st.dataframe(df_prob, use_container_width=True, hide_index=True)
+        else:
+            st.success("Nenhum problema relevante detectado nesta competência.")
 
         st.markdown("#### 📈 Resumo gerencial")
         if setores_visao_gestao and not bool(auth.get('is_admin', False)):
@@ -15219,10 +15306,7 @@ def page_app():
         else:
             g1, g2 = st.columns([1.2, 1])
             with g1:
-                df_kpi_ultra = pd.DataFrame({
-                    "Indicador": ["Colaboradores", "Folgas", "Férias", "Trabalho"],
-                    "Quantidade": [total_colab, folgas_mes, ferias_mes, trabalhos_mes],
-                }).set_index("Indicador")
+                df_kpi_ultra = pd.DataFrame({"Indicador": ["Colaboradores", "Folgas", "Férias", "Trabalho"], "Quantidade": [total_colab, folgas_mes, ferias_mes, trabalhos_mes]}).set_index("Indicador")
                 st.bar_chart(df_kpi_ultra)
             with g2:
                 try:
@@ -15238,9 +15322,7 @@ def page_app():
                         st.caption("Sem dados suficientes para gráfico por subgrupo.")
                 except Exception:
                     st.caption("Não foi possível montar o gráfico por subgrupo nesta competência.")
-        return
 
-    # ------------------------------------------------------
     # ABA 1: Colaboradores
     # ------------------------------------------------------
     if sec_main == "👥 Colaboradores":
