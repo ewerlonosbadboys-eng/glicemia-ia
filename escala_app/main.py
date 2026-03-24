@@ -681,47 +681,81 @@ def aplicar_ultra_visual_empresa_total(sidebar_compact: bool = False):
 
 def render_escala_espelho_colaborador(df_mes: pd.DataFrame, titulo: str = "") -> None:
     try:
-        df = pd.DataFrame(df_mes or []).copy()
+        if isinstance(df_mes, pd.DataFrame):
+            df = df_mes.copy()
+        else:
+            df = pd.DataFrame(df_mes or []).copy()
         if df.empty:
             st.info('Nenhum dado disponível para exibir no formato espelho.')
             return
+
         cols_lower = {str(c).strip().lower(): c for c in df.columns}
         col_dia = cols_lower.get('dia') or cols_lower.get('dia do mês') or cols_lower.get('dia_mes')
+        col_data = cols_lower.get('data')
         col_dow = cols_lower.get('dia da semana') or cols_lower.get('dia_semana') or cols_lower.get('semana')
         col_status = cols_lower.get('status')
-        col_ent = cols_lower.get('entrada')
-        col_saida = cols_lower.get('saída') or cols_lower.get('saida')
-        if not all([col_dia, col_dow, col_status]):
+        col_ent = cols_lower.get('entrada') or cols_lower.get('h_entrada')
+        col_saida = cols_lower.get('saída') or cols_lower.get('saida') or cols_lower.get('h_saida')
+
+        if not col_dia and col_data:
+            try:
+                serie_data = pd.to_datetime(df[col_data], errors='coerce')
+                df['_dia_tmp_espelho'] = serie_data.dt.day
+                col_dia = '_dia_tmp_espelho'
+            except Exception:
+                pass
+
+        if not col_dow and col_data:
+            try:
+                serie_data = pd.to_datetime(df[col_data], errors='coerce')
+                mapa = {0: 'Seg', 1: 'Ter', 2: 'Qua', 3: 'Qui', 4: 'Sex', 5: 'Sáb', 6: 'Dom'}
+                df['_dow_tmp_espelho'] = serie_data.dt.dayofweek.map(mapa).fillna('')
+                col_dow = '_dow_tmp_espelho'
+            except Exception:
+                pass
+
+        if not all([col_dia, col_status]):
             st.dataframe(df, use_container_width=True, hide_index=True)
             return
+
         dias = []
-        for v in df[col_dia].tolist():
+        for i, v in enumerate(df[col_dia].tolist()):
             try:
                 dias.append(int(v))
             except Exception:
-                dias.append(len(dias)+1)
-        dow_vals = [str(v or '').strip() for v in df[col_dow].tolist()]
+                dias.append(i + 1)
+
+        dow_vals = [str(v or '').strip() for v in (df[col_dow].tolist() if col_dow else [''] * len(df))]
         status_vals = [str(v or '').strip() for v in df[col_status].tolist()]
         ent_vals = [str(v or '').strip() for v in (df[col_ent].tolist() if col_ent else [''] * len(df))]
         saida_vals = [str(v or '').strip() for v in (df[col_saida].tolist() if col_saida else [''] * len(df))]
 
-        def _lbl_status(stt, ent):
-            s = str(stt or '').strip().lower()
+        def _rotulo_status(status, entrada):
+            s = str(status or '').strip().lower()
             if s == 'trabalho':
-                return ent or 'TRAB'
+                return entrada or 'TRAB'
             if s == 'folga':
                 return 'FOLG'
-            if s == 'férias' or s == 'ferias':
+            if s in ('férias', 'ferias'):
                 return 'FER'
             if s == 'afastamento':
                 return 'AFA'
-            return str(stt or '').strip() or '-'
+            return str(status or '').strip() or '-'
 
-        tabela = {
-            'Data / Dia': ['Dia / Semana', 'Entrada', 'Saída'],
-        }
+        tabela = {'Data / Dia': ['Dia / Semana', 'Entrada', 'Saída']}
         for i, dia in enumerate(dias):
-            tabela[str(dia)] = [dow_vals[i], _lbl_status(status_vals[i], ent_vals[i]), (saida_vals[i] if status_vals[i].strip().lower() == 'trabalho' else '')]
+            status_i = status_vals[i] if i < len(status_vals) else ''
+            entrada_i = ent_vals[i] if i < len(ent_vals) else ''
+            saida_i = saida_vals[i] if i < len(saida_vals) else ''
+            dow_i = dow_vals[i] if i < len(dow_vals) else ''
+            tabela[str(dia)] = [
+                dow_i,
+                _rotulo_status(status_i, entrada_i),
+                saida_i if str(status_i).strip().lower() == 'trabalho' else ''
+            ]
+
+        if titulo:
+            st.markdown(f'#### {titulo}')
         df_show = pd.DataFrame(tabela)
         st.dataframe(df_show, use_container_width=True, hide_index=True)
     except Exception:
