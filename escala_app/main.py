@@ -14854,30 +14854,60 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
 
         with suba:
             st.caption('Envie sugestões de folgas e ajustes de forma organizada para o líder analisar.')
-            mes_atual = int(getattr(hoje, 'month', datetime.now().month))
-            ano_atual = int(getattr(hoje, 'year', datetime.now().year))
-            prox_mes = mes_atual + 1
-            prox_ano = ano_atual
+
+            hoje_base = hoje.date()
+            ano_base = int(hoje_base.year)
+            mes_base = int(hoje_base.month)
+            dia_base = int(hoje_base.day)
+
+            prox_mes = mes_base + 1
+            prox_ano = ano_base
             if prox_mes == 13:
                 prox_mes = 1
                 prox_ano += 1
 
-            competencia_eh_mes_seguinte = (int(mes_ref) == int(prox_mes) and int(ano_ref) == int(prox_ano))
+            inicio_janela = date(ano_base, mes_base, 1)
+            fim_janela = date(ano_base, mes_base, 20)
+            janela_aberta = inicio_janela <= hoje_base <= fim_janela
 
-            if not competencia_eh_mes_seguinte:
-                st.info(f'Sugestões de folga e ajuste de horário só ficam liberadas para a próxima competência ({prox_mes:02d}/{prox_ano}).')
+            inicio_prox_comp = date(prox_ano, prox_mes, 1)
+            ultimo_dia_prox = calendar.monthrange(prox_ano, prox_mes)[1]
+            fim_prox_comp = date(prox_ano, prox_mes, ultimo_dia_prox)
+
+            st.info(
+                f'Solicitações de folga e ajuste de horário ficam abertas somente do dia 01 ao dia 20 do mês vigente, sempre para a próxima competência ({prox_mes:02d}/{prox_ano}).'
+            )
+
+            if not janela_aberta:
+                st.warning(
+                    f'Prazo encerrado nesta competência. As solicitações reabrem no próximo mês para a competência seguinte.'
+                )
             else:
                 c1, c2 = st.columns(2)
-                try:
-                    data_padrao = date(int(ano_ref), int(mes_ref), 1)
-                except Exception:
-                    data_padrao = hoje.date()
-                data_sol = c1.date_input('Data desejada', value=data_padrao, key=f'data_folga_{setor}_{chapa}')
-                tipo_sol = c2.selectbox('Tipo da sugestão', ['Folga', 'Troca de plantão', 'Ajuste de horário'], key=f'tipo_folga_{setor}_{chapa}')
+                data_sol = c1.date_input(
+                    'Data desejada (somente próxima competência)',
+                    value=inicio_prox_comp,
+                    min_value=inicio_prox_comp,
+                    max_value=fim_prox_comp,
+                    key=f'data_folga_{setor}_{chapa}'
+                )
+                tipo_sol = c2.selectbox(
+                    'Tipo da sugestão',
+                    ['Folga', 'Troca de plantão', 'Ajuste de horário'],
+                    key=f'tipo_folga_{setor}_{chapa}'
+                )
                 motivo = st.text_input('Motivo', key=f'motivo_folga_{setor}_{chapa}')
                 observacao = st.text_area('Observação', key=f'obs_folga_{setor}_{chapa}')
-                if st.button('📨 Enviar sugestão', key=f'env_folga_{setor}_{chapa}'):
-                    criar_solicitacao_folga(setor, chapa, str(data_sol), tipo_sol, motivo, observacao)
+
+                data_sol_date = pd.to_datetime(data_sol).date() if data_sol else inicio_prox_comp
+                data_ok = inicio_prox_comp <= data_sol_date <= fim_prox_comp
+
+                if not data_ok:
+                    st.error(
+                        f'A data escolhida precisa estar dentro da próxima competência ({prox_mes:02d}/{prox_ano}).'
+                    )
+                elif st.button('📨 Enviar sugestão', key=f'env_folga_{setor}_{chapa}'):
+                    criar_solicitacao_folga(setor, chapa, str(data_sol_date), tipo_sol, motivo, observacao)
                     st.success('Sugestão enviada para análise.')
                     st.rerun()
 
