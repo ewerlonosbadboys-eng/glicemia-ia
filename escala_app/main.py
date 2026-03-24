@@ -18136,61 +18136,21 @@ def page_app():
                     st.info("Nenhuma férias cadastrada.")
                 else:
                     df_f = pd.DataFrame(rows, columns=["Chapa", "Início", "Fim"])
-                    nome_by = {str(c.get("Chapa", "")): str(c.get("Nome", "") or "") for c in (colaboradores or [])}
+                    nome_by = {str(c.get("Chapa","")): str(c.get("Nome","") or "") for c in (colaboradores or [])}
                     df_f.insert(1, "Nome", df_f["Chapa"].astype(str).map(nome_by).fillna(""))
-                    df_f = df_f.reset_index(drop=True)
-                    df_f.insert(0, "Linha", df_f.index + 1)
                     st.dataframe(df_f, use_container_width=True, height=260)
-
-                    opcoes_rem = [
-                        f"{int(row['Linha'])} - {str(row['Nome'] or '').strip()} | {str(row['Chapa'] or '').strip()} | {str(row['Início'])} até {str(row['Fim'])}"
-                        for _, row in df_f.iterrows()
-                    ]
-                    escolha_rem = st.selectbox(
-                        "Selecionar férias para remover",
-                        options=opcoes_rem,
-                        key="fer_rem_sel"
-                    )
-
-                    if st.button("Remover férias selecionada (e readequar mês)", key="fer_rem_btn"):
-                        try:
-                            linha_sel = int(str(escolha_rem).split(" - ", 1)[0])
-                            r = df_f.iloc[linha_sel - 1]
-                        except Exception:
-                            st.error("Não foi possível identificar a linha selecionada para remoção.")
-                            st.stop()
-
-                        if bool(auth.get('is_ax_lider', False)) and not bool(auth.get('is_admin', False)):
-                            rid = registrar_pendencia_ax_generica(
-                                setor,
-                                'ferias_remove',
-                                'remover',
-                                {
-                                    '_modulo': 'ferias_remove',
-                                    '_acao': 'remover',
-                                    'setor': setor,
-                                    'chapa': r['Chapa'],
-                                    'inicio': r['Início'],
-                                    'fim': r['Fim'],
-                                    'ano': int(st.session_state['cfg_ano']),
-                                    'mes': int(st.session_state['cfg_mes']),
-                                    'seed': int(st.session_state.get('last_seed', 0))
-                                },
-                                str(auth.get('nome') or '').strip(),
-                                str(auth.get('chapa') or '').strip(),
-                                'Remoção de férias enviada pelo AX do Líder'
-                            )
+                    rem_idx = st.number_input("Linha para remover (1,2,3...)", min_value=1, max_value=len(df_f), value=1, key="fer_rem_idx")
+                    if st.button("Remover linha (e readequar mês)", key="fer_rem_btn"):
+                        r = df_f.iloc[int(rem_idx) - 1]
+                        is_admin = bool(auth.get('is_admin', False))
+                        is_lider = bool(auth.get('is_lider', False))
+                        is_ax_lider = bool(auth.get('is_ax_lider', False))
+                        if is_ax_lider and not is_admin and not is_lider:
+                            rid = registrar_pendencia_ax_generica(setor, 'ferias_remove', 'remover', {'_modulo':'ferias_remove','_acao':'remover','setor':setor,'chapa':r['Chapa'],'inicio':r['Início'],'fim':r['Fim'],'ano':int(st.session_state['cfg_ano']),'mes':int(st.session_state['cfg_mes']),'seed':int(st.session_state.get('last_seed', 0))}, str(auth.get('nome') or '').strip(), str(auth.get('chapa') or '').strip(), 'Remoção de férias enviada pelo AX do Líder')
                             st.warning(f'Solicitação enviada para aprovação do líder. Protocolo #{rid}.')
                             st.rerun()
-
                         delete_ferias_row(setor, r["Chapa"], r["Início"], r["Fim"])
-                        _regenerar_mes_inteiro(
-                            setor,
-                            int(st.session_state["cfg_ano"]),
-                            int(st.session_state["cfg_mes"]),
-                            seed=int(st.session_state.get("last_seed", 0)),
-                            respeitar_ajustes=True
-                        )
+                        _regenerar_mes_inteiro(setor, int(st.session_state["cfg_ano"]), int(st.session_state["cfg_mes"]), seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
                         st.success("Férias removidas e escala readequada!")
                         st.rerun()
 
