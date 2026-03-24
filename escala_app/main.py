@@ -14657,6 +14657,99 @@ def atualizar_status_solicitacao(solicitacao_id: int, novo_status: str):
     con.commit()
     con.close()
 
+
+
+def _render_espelho_colaborador_portal(df_mes: pd.DataFrame, titulo_bloco: str = ""):
+    """Renderiza a escala do colaborador no formato espelho mensal parecido com o PDF oficial."""
+    if df_mes is None or df_mes.empty:
+        st.info('Sem dados para exibir neste formato.')
+        return
+
+    df = df_mes.copy().reset_index(drop=True)
+    if 'Dia' not in df.columns:
+        df.insert(0, 'Dia', list(range(1, len(df) + 1)))
+    if 'Data' in df.columns:
+        try:
+            df['Data'] = pd.to_datetime(df['Data'], errors='coerce')
+        except Exception:
+            pass
+    else:
+        df['Data'] = pd.NaT
+
+    if 'Dia da semana' not in df.columns:
+        df['Dia da semana'] = ''
+    if 'Status' not in df.columns:
+        df['Status'] = ''
+    if 'Entrada' not in df.columns:
+        df['Entrada'] = ''
+    if 'Saída' not in df.columns:
+        df['Saída'] = ''
+
+    dias_nums = [str(int(x)) if str(x).strip() else '' for x in df['Dia'].tolist()]
+    dias_sem = [str(x or '').strip() for x in df['Dia da semana'].tolist()]
+
+    row_ent = ['Entrada']
+    row_sref = ['Saída Refeição']
+    row_entref = ['Entrada']
+    row_sai = ['Saída']
+    row_h = ['Horas Trab.']
+
+    for _, r in df.iterrows():
+        status = str(r.get('Status', '') or '').strip()
+        entrada = str(r.get('Entrada', '') or '').strip()
+        saida = str(r.get('Saída', '') or '').strip()
+        status_up = status.upper()
+
+        if status_up and status_up not in {s.upper() for s in WORK_STATUSES}:
+            token = 'FOLG' if status_up.startswith('FOLGA') else ('FER' if status_up.startswith('FÉRIAS') or status_up.startswith('FERIAS') else ('AFA' if status_up.startswith('AFA') else status_up[:4]))
+            row_ent.append(token)
+            row_sref.append(token)
+            row_entref.append(token)
+            row_sai.append(token)
+            row_h.append('')
+        else:
+            if entrada:
+                ent1, sref, ent2, sai_pdf, horas = _montar_batidas_modelo(entrada)
+                row_ent.append(ent1)
+                row_sref.append(sref)
+                row_entref.append(ent2)
+                row_sai.append(saida or sai_pdf)
+                row_h.append(horas)
+            else:
+                row_ent.append('')
+                row_sref.append('')
+                row_entref.append('')
+                row_sai.append(saida or '')
+                row_h.append('')
+
+    espelho = pd.DataFrame([
+        ['Data / Dia'] + dias_nums,
+        ['Dia / Semana'] + dias_sem,
+        row_ent,
+        row_sref,
+        row_entref,
+        row_sai,
+        row_h,
+    ])
+    espelho.columns = ['Linha'] + dias_nums
+
+    def _style_portal(v):
+        t = str(v or '').strip().upper()
+        if t == 'FOLG':
+            return 'background-color:#f3ea54;color:#111;font-weight:700;text-align:center;'
+        if t == 'FER':
+            return 'background-color:#1f4f82;color:#fff;font-weight:700;text-align:center;'
+        if t == 'AFA':
+            return 'background-color:#7a1f2b;color:#fff;font-weight:700;text-align:center;'
+        if re.fullmatch(r'\d{2}:\d{2}', t):
+            return 'text-align:center;font-weight:600;'
+        return 'text-align:center;'
+
+    if titulo_bloco:
+        st.markdown(f'##### {titulo_bloco}')
+    st.dataframe(espelho.style.map(_style_portal, subset=pd.IndexSlice[:, espelho.columns[1:]]), use_container_width=True, hide_index=True)
+
+
 def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
     setor = _norm_setor(auth.get('setor', ''))
     chapa = _norm_chapa(auth.get('chapa', ''))
@@ -14710,7 +14803,7 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
         '📝 Histórico de Mudanças',
         '✍️ Assinaturas',
         '🏖️ Férias',
-        '🌴 Sugestão de Folgas',
+        '⚙️ Ajustes',
     ])
 
     with tab1:
@@ -14730,7 +14823,7 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
         if df_oficial.empty:
             st.info('Ainda não há escala oficial carregada para o mês vigente.')
         else:
-            st.dataframe(df_oficial, use_container_width=True, hide_index=True)
+            _render_espelho_colaborador_portal(df_oficial, f"Espelho da escala oficial — {mes_ref:02d}/{ano_ref}")
             if ass_escala.get('status') == 'Assinado':
                 st.success('Escala do mês vigente já assinada. Botão ocultado automaticamente.')
             else:
@@ -14742,7 +14835,7 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
         if df_pre.empty:
             st.info('Ainda não há pré-escala disponível para o próximo mês.')
         else:
-            st.dataframe(df_pre, use_container_width=True, hide_index=True)
+            _render_espelho_colaborador_portal(df_pre, f"Espelho da pré-escala — {prox_mes:02d}/{prox_ano}")
             st.caption('Assinatura bloqueada até o início do mês vigente correspondente.')
 
     with tab3:
@@ -14849,7 +14942,7 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
             st.caption('As férias exibidas aqui são somente do colaborador logado.')
 
     with tab6:
-        st.markdown('#### Sugestão de Folgas')
+        st.markdown('#### Ajustes')
         suba, subb = st.tabs(['🌴 Sugestão de Folgas', '📨 Minhas solicitações'])
 
         with suba:
