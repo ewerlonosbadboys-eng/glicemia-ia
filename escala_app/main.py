@@ -14854,16 +14854,32 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
 
         with suba:
             st.caption('Envie sugestões de folgas e ajustes de forma organizada para o líder analisar.')
-            c1, c2 = st.columns(2)
-            data_padrao = hoje.date()
-            data_sol = c1.date_input('Data desejada', value=data_padrao, key=f'data_folga_{setor}_{chapa}')
-            tipo_sol = c2.selectbox('Tipo da sugestão', ['Folga', 'Troca de plantão', 'Ajuste de horário'], key=f'tipo_folga_{setor}_{chapa}')
-            motivo = st.text_input('Motivo', key=f'motivo_folga_{setor}_{chapa}')
-            observacao = st.text_area('Observação', key=f'obs_folga_{setor}_{chapa}')
-            if st.button('📨 Enviar sugestão', key=f'env_folga_{setor}_{chapa}'):
-                criar_solicitacao_folga(setor, chapa, str(data_sol), tipo_sol, motivo, observacao)
-                st.success('Sugestão enviada para análise.')
-                st.rerun()
+            mes_atual = int(getattr(hoje, 'month', datetime.now().month))
+            ano_atual = int(getattr(hoje, 'year', datetime.now().year))
+            prox_mes = mes_atual + 1
+            prox_ano = ano_atual
+            if prox_mes == 13:
+                prox_mes = 1
+                prox_ano += 1
+
+            competencia_eh_mes_seguinte = (int(mes_ref) == int(prox_mes) and int(ano_ref) == int(prox_ano))
+
+            if not competencia_eh_mes_seguinte:
+                st.info(f'Sugestões de folga e ajuste de horário só ficam liberadas para a próxima competência ({prox_mes:02d}/{prox_ano}).')
+            else:
+                c1, c2 = st.columns(2)
+                try:
+                    data_padrao = date(int(ano_ref), int(mes_ref), 1)
+                except Exception:
+                    data_padrao = hoje.date()
+                data_sol = c1.date_input('Data desejada', value=data_padrao, key=f'data_folga_{setor}_{chapa}')
+                tipo_sol = c2.selectbox('Tipo da sugestão', ['Folga', 'Troca de plantão', 'Ajuste de horário'], key=f'tipo_folga_{setor}_{chapa}')
+                motivo = st.text_input('Motivo', key=f'motivo_folga_{setor}_{chapa}')
+                observacao = st.text_area('Observação', key=f'obs_folga_{setor}_{chapa}')
+                if st.button('📨 Enviar sugestão', key=f'env_folga_{setor}_{chapa}'):
+                    criar_solicitacao_folga(setor, chapa, str(data_sol), tipo_sol, motivo, observacao)
+                    st.success('Sugestão enviada para análise.')
+                    st.rerun()
 
         with subb:
             df_sol = list_solicitacoes_colaborador(setor, chapa)
