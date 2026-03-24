@@ -14657,99 +14657,6 @@ def atualizar_status_solicitacao(solicitacao_id: int, novo_status: str):
     con.commit()
     con.close()
 
-
-
-def _render_espelho_colaborador_portal(df_mes: pd.DataFrame, titulo_bloco: str = ""):
-    """Renderiza a escala do colaborador no formato espelho mensal parecido com o PDF oficial."""
-    if df_mes is None or df_mes.empty:
-        st.info('Sem dados para exibir neste formato.')
-        return
-
-    df = df_mes.copy().reset_index(drop=True)
-    if 'Dia' not in df.columns:
-        df.insert(0, 'Dia', list(range(1, len(df) + 1)))
-    if 'Data' in df.columns:
-        try:
-            df['Data'] = pd.to_datetime(df['Data'], errors='coerce')
-        except Exception:
-            pass
-    else:
-        df['Data'] = pd.NaT
-
-    if 'Dia da semana' not in df.columns:
-        df['Dia da semana'] = ''
-    if 'Status' not in df.columns:
-        df['Status'] = ''
-    if 'Entrada' not in df.columns:
-        df['Entrada'] = ''
-    if 'Saída' not in df.columns:
-        df['Saída'] = ''
-
-    dias_nums = [str(int(x)) if str(x).strip() else '' for x in df['Dia'].tolist()]
-    dias_sem = [str(x or '').strip() for x in df['Dia da semana'].tolist()]
-
-    row_ent = ['Entrada']
-    row_sref = ['Saída Refeição']
-    row_entref = ['Entrada']
-    row_sai = ['Saída']
-    row_h = ['Horas Trab.']
-
-    for _, r in df.iterrows():
-        status = str(r.get('Status', '') or '').strip()
-        entrada = str(r.get('Entrada', '') or '').strip()
-        saida = str(r.get('Saída', '') or '').strip()
-        status_up = status.upper()
-
-        if status_up and status_up not in {s.upper() for s in WORK_STATUSES}:
-            token = 'FOLG' if status_up.startswith('FOLGA') else ('FER' if status_up.startswith('FÉRIAS') or status_up.startswith('FERIAS') else ('AFA' if status_up.startswith('AFA') else status_up[:4]))
-            row_ent.append(token)
-            row_sref.append(token)
-            row_entref.append(token)
-            row_sai.append(token)
-            row_h.append('')
-        else:
-            if entrada:
-                ent1, sref, ent2, sai_pdf, horas = _montar_batidas_modelo(entrada)
-                row_ent.append(ent1)
-                row_sref.append(sref)
-                row_entref.append(ent2)
-                row_sai.append(saida or sai_pdf)
-                row_h.append(horas)
-            else:
-                row_ent.append('')
-                row_sref.append('')
-                row_entref.append('')
-                row_sai.append(saida or '')
-                row_h.append('')
-
-    espelho = pd.DataFrame([
-        ['Data / Dia'] + dias_nums,
-        ['Dia / Semana'] + dias_sem,
-        row_ent,
-        row_sref,
-        row_entref,
-        row_sai,
-        row_h,
-    ])
-    espelho.columns = ['Linha'] + dias_nums
-
-    def _style_portal(v):
-        t = str(v or '').strip().upper()
-        if t == 'FOLG':
-            return 'background-color:#f3ea54;color:#111;font-weight:700;text-align:center;'
-        if t == 'FER':
-            return 'background-color:#1f4f82;color:#fff;font-weight:700;text-align:center;'
-        if t == 'AFA':
-            return 'background-color:#7a1f2b;color:#fff;font-weight:700;text-align:center;'
-        if re.fullmatch(r'\d{2}:\d{2}', t):
-            return 'text-align:center;font-weight:600;'
-        return 'text-align:center;'
-
-    if titulo_bloco:
-        st.markdown(f'##### {titulo_bloco}')
-    st.dataframe(espelho.style.map(_style_portal, subset=pd.IndexSlice[:, espelho.columns[1:]]), use_container_width=True, hide_index=True)
-
-
 def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
     setor = _norm_setor(auth.get('setor', ''))
     chapa = _norm_chapa(auth.get('chapa', ''))
@@ -14823,7 +14730,7 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
         if df_oficial.empty:
             st.info('Ainda não há escala oficial carregada para o mês vigente.')
         else:
-            _render_espelho_colaborador_portal(df_oficial, f"Espelho da escala oficial — {mes_ref:02d}/{ano_ref}")
+            st.dataframe(df_oficial, use_container_width=True, hide_index=True)
             if ass_escala.get('status') == 'Assinado':
                 st.success('Escala do mês vigente já assinada. Botão ocultado automaticamente.')
             else:
@@ -14835,7 +14742,7 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
         if df_pre.empty:
             st.info('Ainda não há pré-escala disponível para o próximo mês.')
         else:
-            _render_espelho_colaborador_portal(df_pre, f"Espelho da pré-escala — {prox_mes:02d}/{prox_ano}")
+            st.dataframe(df_pre, use_container_width=True, hide_index=True)
             st.caption('Assinatura bloqueada até o início do mês vigente correspondente.')
 
     with tab3:
@@ -18229,18 +18136,61 @@ def page_app():
                     st.info("Nenhuma férias cadastrada.")
                 else:
                     df_f = pd.DataFrame(rows, columns=["Chapa", "Início", "Fim"])
-                    nome_by = {str(c.get("Chapa","")): str(c.get("Nome","") or "") for c in (colaboradores or [])}
+                    nome_by = {str(c.get("Chapa", "")): str(c.get("Nome", "") or "") for c in (colaboradores or [])}
                     df_f.insert(1, "Nome", df_f["Chapa"].astype(str).map(nome_by).fillna(""))
+                    df_f = df_f.reset_index(drop=True)
+                    df_f.insert(0, "Linha", df_f.index + 1)
                     st.dataframe(df_f, use_container_width=True, height=260)
-                    rem_idx = st.number_input("Linha para remover (1,2,3...)", min_value=1, max_value=len(df_f), value=1, key="fer_rem_idx")
-                    if st.button("Remover linha (e readequar mês)", key="fer_rem_btn"):
-                        r = df_f.iloc[int(rem_idx) - 1]
+
+                    opcoes_rem = [
+                        f"{int(row['Linha'])} - {str(row['Nome'] or '').strip()} | {str(row['Chapa'] or '').strip()} | {str(row['Início'])} até {str(row['Fim'])}"
+                        for _, row in df_f.iterrows()
+                    ]
+                    escolha_rem = st.selectbox(
+                        "Selecionar férias para remover",
+                        options=opcoes_rem,
+                        key="fer_rem_sel"
+                    )
+
+                    if st.button("Remover férias selecionada (e readequar mês)", key="fer_rem_btn"):
+                        try:
+                            linha_sel = int(str(escolha_rem).split(" - ", 1)[0])
+                            r = df_f.iloc[linha_sel - 1]
+                        except Exception:
+                            st.error("Não foi possível identificar a linha selecionada para remoção.")
+                            st.stop()
+
                         if bool(auth.get('is_ax_lider', False)) and not bool(auth.get('is_admin', False)):
-                            rid = registrar_pendencia_ax_generica(setor, 'ferias_remove', 'remover', {'_modulo':'ferias_remove','_acao':'remover','setor':setor,'chapa':r['Chapa'],'inicio':r['Início'],'fim':r['Fim'],'ano':int(st.session_state['cfg_ano']),'mes':int(st.session_state['cfg_mes']),'seed':int(st.session_state.get('last_seed', 0))}, str(auth.get('nome') or '').strip(), str(auth.get('chapa') or '').strip(), 'Remoção de férias enviada pelo AX do Líder')
+                            rid = registrar_pendencia_ax_generica(
+                                setor,
+                                'ferias_remove',
+                                'remover',
+                                {
+                                    '_modulo': 'ferias_remove',
+                                    '_acao': 'remover',
+                                    'setor': setor,
+                                    'chapa': r['Chapa'],
+                                    'inicio': r['Início'],
+                                    'fim': r['Fim'],
+                                    'ano': int(st.session_state['cfg_ano']),
+                                    'mes': int(st.session_state['cfg_mes']),
+                                    'seed': int(st.session_state.get('last_seed', 0))
+                                },
+                                str(auth.get('nome') or '').strip(),
+                                str(auth.get('chapa') or '').strip(),
+                                'Remoção de férias enviada pelo AX do Líder'
+                            )
                             st.warning(f'Solicitação enviada para aprovação do líder. Protocolo #{rid}.')
                             st.rerun()
+
                         delete_ferias_row(setor, r["Chapa"], r["Início"], r["Fim"])
-                        _regenerar_mes_inteiro(setor, int(st.session_state["cfg_ano"]), int(st.session_state["cfg_mes"]), seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
+                        _regenerar_mes_inteiro(
+                            setor,
+                            int(st.session_state["cfg_ano"]),
+                            int(st.session_state["cfg_mes"]),
+                            seed=int(st.session_state.get("last_seed", 0)),
+                            respeitar_ajustes=True
+                        )
                         st.success("Férias removidas e escala readequada!")
                         st.rerun()
 
