@@ -9863,19 +9863,40 @@ def add_ferias(setor: str, chapa: str, inicio: date, fim: date):
     except Exception:
         pass
 
-def delete_ferias_row(setor: str, chapa: str, inicio: str, fim: str):
+def delete_ferias_row(setor: str, chapa: str, inicio: str, fim: str) -> int:
+    """
+    Remove a linha de férias de forma robusta e retorna a quantidade de registros removidos.
+    Usa comparação normalizada de setor/chapa e date() para início/fim.
+    """
     con = db_conn()
     cur = con.cursor()
-    cur.execute("""
-        DELETE FROM ferias
-        WHERE setor=? AND chapa=? AND inicio=? AND fim=?
-    """, (setor, chapa, inicio, fim))
-    con.commit()
-    con.close()
+    try:
+        setor_n = str(setor or '').strip()
+        chapa_n = str(chapa or '').strip()
+        inicio_n = str(inicio or '').strip()[:10]
+        fim_n = str(fim or '').strip()[:10]
+
+        cur.execute("""
+            DELETE FROM ferias
+            WHERE UPPER(TRIM(setor)) = UPPER(TRIM(?))
+              AND TRIM(chapa) = TRIM(?)
+              AND date(inicio) = date(?)
+              AND date(fim) = date(?)
+        """, (setor_n, chapa_n, inicio_n, fim_n))
+        removidas = int(cur.rowcount or 0)
+        con.commit()
+    finally:
+        con.close()
+
+    try:
+        list_ferias.clear()
+    except Exception:
+        pass
     try:
         st.cache_data.clear()
     except Exception:
         pass
+    return removidas
 
 @st.cache_data(show_spinner=False, ttl=120)
 def list_ferias(setor: str):
@@ -18306,8 +18327,15 @@ def page_app():
                             rid = registrar_pendencia_ax_generica(setor, 'ferias_remove', 'remover', {'_modulo':'ferias_remove','_acao':'remover','setor':setor,'chapa':r['Chapa'],'inicio':r['Início'],'fim':r['Fim'],'ano':int(st.session_state['cfg_ano']),'mes':int(st.session_state['cfg_mes']),'seed':int(st.session_state.get('last_seed', 0))}, str(auth.get('nome') or '').strip(), str(auth.get('chapa') or '').strip(), 'Remoção de férias enviada pelo AX do Líder')
                             st.warning(f'Solicitação enviada para aprovação do líder. Protocolo #{rid}.')
                             st.rerun()
-                        delete_ferias_row(setor, r["Chapa"], r["Início"], r["Fim"])
+                        removidas = delete_ferias_row(setor, r["Chapa"], r["Início"], r["Fim"])
+                        if removidas <= 0:
+                            st.error("Nenhuma férias foi removida. Verifique se o registro ainda existe exatamente com essa chapa e período.")
+                            st.rerun()
                         _regenerar_mes_inteiro(setor, int(st.session_state["cfg_ano"]), int(st.session_state["cfg_mes"]), seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
+                        try:
+                            list_ferias.clear()
+                        except Exception:
+                            pass
                         st.success("Férias removidas e escala readequada!")
                         st.rerun()
 
