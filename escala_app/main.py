@@ -9863,19 +9863,34 @@ def add_ferias(setor: str, chapa: str, inicio: date, fim: date):
     except Exception:
         pass
 
-def delete_ferias_row(setor: str, chapa: str, inicio: str, fim: str):
+def delete_ferias_row(setor: str, chapa: str, inicio: str, fim: str) -> bool:
+    setor = str(setor or '').strip()
+    chapa = str(chapa or '').strip()
+    inicio = str(inicio or '').strip()[:10]
+    fim = str(fim or '').strip()[:10]
     con = db_conn()
     cur = con.cursor()
-    cur.execute("""
-        DELETE FROM ferias
-        WHERE setor=? AND chapa=? AND inicio=? AND fim=?
-    """, (setor, chapa, inicio, fim))
-    con.commit()
-    con.close()
+    try:
+        try:
+            cur.execute("PRAGMA busy_timeout = 5000")
+        except Exception:
+            pass
+        cur.execute("""
+            DELETE FROM ferias
+            WHERE UPPER(TRIM(setor)) = UPPER(TRIM(?))
+              AND TRIM(chapa) = TRIM(?)
+              AND SUBSTR(TRIM(inicio),1,10) = ?
+              AND SUBSTR(TRIM(fim),1,10) = ?
+        """, (setor, chapa, inicio, fim))
+        removed = int(cur.rowcount or 0)
+        con.commit()
+    finally:
+        con.close()
     try:
         st.cache_data.clear()
     except Exception:
         pass
+    return removed > 0
 
 @st.cache_data(show_spinner=False, ttl=120)
 def list_ferias(setor: str):
@@ -18302,11 +18317,17 @@ def page_app():
                     alvo_rem = st.selectbox("Selecionar férias para remover", options=opcoes_rem, key="fer_rem_sel")
                     if st.button("Remover férias selecionada e readequar mês", key="fer_rem_btn"):
                         r = df_f.iloc[opcoes_rem.index(alvo_rem)]
-                        if bool(auth.get('is_ax_lider', False)) and not bool(auth.get('is_admin', False)) and not bool(auth.get('is_lider', False)):
+                        _auth_setor = str(auth.get('setor') or setor).strip()
+                        _auth_chapa = str(auth.get('chapa') or '').strip()
+                        _pode_remover_direto = bool(auth.get('is_admin', False)) or bool(auth.get('is_lider', False)) or colaborador_eh_lideranca(_auth_setor, _auth_chapa)
+                        if bool(auth.get('is_ax_lider', False)) and not _pode_remover_direto:
                             rid = registrar_pendencia_ax_generica(setor, 'ferias_remove', 'remover', {'_modulo':'ferias_remove','_acao':'remover','setor':setor,'chapa':r['Chapa'],'inicio':r['Início'],'fim':r['Fim'],'ano':int(st.session_state['cfg_ano']),'mes':int(st.session_state['cfg_mes']),'seed':int(st.session_state.get('last_seed', 0))}, str(auth.get('nome') or '').strip(), str(auth.get('chapa') or '').strip(), 'Remoção de férias enviada pelo AX do Líder')
                             st.warning(f'Solicitação enviada para aprovação do líder. Protocolo #{rid}.')
                             st.rerun()
-                        delete_ferias_row(setor, r["Chapa"], r["Início"], r["Fim"])
+                        ok_del = delete_ferias_row(setor, r["Chapa"], r["Início"], r["Fim"])
+                        if not ok_del:
+                            st.error("Não foi possível remover essa férias. Verifique se ela ainda está cadastrada exatamente com essas datas.")
+                            st.stop()
                         _regenerar_mes_inteiro(setor, int(st.session_state["cfg_ano"]), int(st.session_state["cfg_mes"]), seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
                         st.success("Férias removidas e escala readequada!")
                         st.rerun()
