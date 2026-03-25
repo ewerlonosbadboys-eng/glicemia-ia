@@ -14451,19 +14451,10 @@ def _apply_subgrupo_competencia_to_hist(setor: str, ano: int, mes: int, hist_db:
 def get_escala_colaborador_mes(setor: str, chapa: str, ano: int, mes: int) -> pd.DataFrame:
     setor = _norm_setor(setor)
     chapa = _norm_chapa(chapa)
-    hist_db = get_hist_mes_com_overrides_cached(setor, int(ano), int(mes)) or {}
-    df_hist = hist_db.get(chapa)
-    if df_hist is None:
-        # compatibilidade extra caso alguma chave histórica tenha vindo sem normalização
-        for k, v in (hist_db or {}).items():
-            if _norm_chapa(k) == chapa:
-                df_hist = v
-                break
-    if df_hist is not None and not df_hist.empty:
-        out = df_hist.copy().reset_index(drop=True)
 
-        # O histórico pode já vir com a coluna "Dia" contendo o dia da semana.
-        # Renomeia antes de recriar a coluna numérica do dia do mês.
+    def _normalizar_df_portal(df_in: pd.DataFrame) -> pd.DataFrame:
+        out = (df_in.copy() if isinstance(df_in, pd.DataFrame) else pd.DataFrame()).reset_index(drop=True)
+
         if 'Dia' in out.columns:
             out = out.rename(columns={'Dia': 'Dia da semana'})
         elif 'dia_sem' in out.columns:
@@ -14477,9 +14468,15 @@ def get_escala_colaborador_mes(setor: str, chapa: str, ano: int, mes: int) -> pd
             try:
                 out['Data'] = pd.to_datetime(out['Data'], errors='coerce')
             except Exception:
-                pass
+                out['Data'] = pd.NaT
         else:
-            out['Data'] = pd.NaT
+            try:
+                out['Data'] = pd.to_datetime(
+                    [date(int(ano), int(mes), i + 1) for i in range(len(out))],
+                    errors='coerce'
+                )
+            except Exception:
+                out['Data'] = pd.NaT
 
         if 'Status' not in out.columns:
             out['Status'] = ''
@@ -14494,11 +14491,44 @@ def get_escala_colaborador_mes(setor: str, chapa: str, ano: int, mes: int) -> pd
         if 'Saída' not in out.columns:
             out['Saída'] = ''
 
+        # garante continuidade de férias entre meses também no portal do colaborador
+        for i in range(len(out)):
+            try:
+                data_obj = pd.to_datetime(out.loc[i, 'Data'], errors='coerce')
+                if pd.isna(data_obj):
+                    data_obj = date(int(ano), int(mes), int(i) + 1)
+                else:
+                    data_obj = data_obj.date()
+            except Exception:
+                try:
+                    data_obj = date(int(ano), int(mes), int(i) + 1)
+                except Exception:
+                    continue
+
+            try:
+                if is_de_ferias(setor, chapa, data_obj):
+                    out.loc[i, 'Status'] = 'Férias'
+                    out.loc[i, 'Entrada'] = ''
+                    out.loc[i, 'Saída'] = ''
+            except Exception:
+                pass
+
         keep = ['Dia', 'Data', 'Dia da semana', 'Status', 'Entrada', 'Saída']
         for c in keep:
             if c not in out.columns:
                 out[c] = ''
         return out[keep].copy()
+
+    hist_db = get_hist_mes_com_overrides_cached(setor, int(ano), int(mes)) or {}
+    df_hist = hist_db.get(chapa)
+    if df_hist is None:
+        for k, v in (hist_db or {}).items():
+            if _norm_chapa(k) == chapa:
+                df_hist = v
+                break
+    if df_hist is not None and not df_hist.empty:
+        return _normalizar_df_portal(df_hist)
+
     con = db_conn()
     try:
         df = pd.read_sql_query(
@@ -14514,7 +14544,7 @@ def get_escala_colaborador_mes(setor: str, chapa: str, ano: int, mes: int) -> pd
         )
     finally:
         con.close()
-    return df
+    return _normalizar_df_portal(df)
 @st.cache_data(show_spinner=False, ttl=120)
 def get_overrides_colaborador_mes(setor: str, chapa: str, ano: int, mes: int) -> pd.DataFrame:
     setor = _norm_setor(setor)
