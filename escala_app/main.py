@@ -9863,34 +9863,19 @@ def add_ferias(setor: str, chapa: str, inicio: date, fim: date):
     except Exception:
         pass
 
-def delete_ferias_row(setor: str, chapa: str, inicio: str, fim: str) -> int:
-    setor_n = str(setor or '').strip()
-    chapa_n = str(chapa or '').strip()
-    inicio_n = str(inicio or '').strip()[:10]
-    fim_n = str(fim or '').strip()[:10]
-
+def delete_ferias_row(setor: str, chapa: str, inicio: str, fim: str):
     con = db_conn()
     cur = con.cursor()
-    try:
-        cur.execute("PRAGMA busy_timeout = 5000")
-    except Exception:
-        pass
-
     cur.execute("""
         DELETE FROM ferias
-        WHERE UPPER(TRIM(setor)) = UPPER(TRIM(?))
-          AND TRIM(chapa) = TRIM(?)
-          AND date(inicio) = date(?)
-          AND date(fim) = date(?)
-    """, (setor_n, chapa_n, inicio_n, fim_n))
-    removidas = int(cur.rowcount or 0)
+        WHERE setor=? AND chapa=? AND inicio=? AND fim=?
+    """, (setor, chapa, inicio, fim))
     con.commit()
     con.close()
     try:
         st.cache_data.clear()
     except Exception:
         pass
-    return removidas
 
 @st.cache_data(show_spinner=False, ttl=120)
 def list_ferias(setor: str):
@@ -18321,17 +18306,10 @@ def page_app():
                             rid = registrar_pendencia_ax_generica(setor, 'ferias_remove', 'remover', {'_modulo':'ferias_remove','_acao':'remover','setor':setor,'chapa':r['Chapa'],'inicio':r['Início'],'fim':r['Fim'],'ano':int(st.session_state['cfg_ano']),'mes':int(st.session_state['cfg_mes']),'seed':int(st.session_state.get('last_seed', 0))}, str(auth.get('nome') or '').strip(), str(auth.get('chapa') or '').strip(), 'Remoção de férias enviada pelo AX do Líder')
                             st.warning(f'Solicitação enviada para aprovação do líder. Protocolo #{rid}.')
                             st.rerun()
-                        qtd_rem = delete_ferias_row(setor, r["Chapa"], r["Início"], r["Fim"])
-                        if qtd_rem <= 0:
-                            st.error("Não foi possível remover esta férias no banco. Verifique a linha selecionada.")
-                        else:
-                            try:
-                                list_ferias.clear()
-                            except Exception:
-                                pass
-                            _regenerar_mes_inteiro(setor, int(st.session_state["cfg_ano"]), int(st.session_state["cfg_mes"]), seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
-                            st.success(f"Férias removida com sucesso ({qtd_rem} registro).")
-                            st.rerun()
+                        delete_ferias_row(setor, r["Chapa"], r["Início"], r["Fim"])
+                        _regenerar_mes_inteiro(setor, int(st.session_state["cfg_ano"]), int(st.session_state["cfg_mes"]), seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
+                        st.success("Férias removidas e escala readequada!")
+                        st.rerun()
 
     elif sec_main == "🖨️ Impressão":
         ui_section("Impressão", f"Subaba ativa: {sec_imp}")
