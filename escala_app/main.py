@@ -679,6 +679,7 @@ def aplicar_ultra_visual_empresa_total(sidebar_compact: bool = False):
 
 
 
+
 def render_escala_espelho_colaborador(df_mes: pd.DataFrame, titulo: str = "") -> None:
     try:
         if isinstance(df_mes, pd.DataFrame):
@@ -757,7 +758,20 @@ def render_escala_espelho_colaborador(df_mes: pd.DataFrame, titulo: str = "") ->
         if titulo:
             st.markdown(f'#### {titulo}')
         df_show = pd.DataFrame(tabela)
-        st.dataframe(df_show, use_container_width=True, hide_index=True)
+
+        def _cor_espelho(v):
+            txt = str(v or '').strip().upper()
+            if txt == 'FOLG':
+                return 'background-color: #f3e36a; color: #111111; font-weight: 700;'
+            if txt == 'FER':
+                return 'background-color: #5ad07a; color: #08120a; font-weight: 700;'
+            return ''
+
+        styler = (
+            df_show.style
+            .applymap(_cor_espelho)
+        )
+        st.dataframe(styler, use_container_width=True, hide_index=True)
     except Exception:
         st.dataframe(df_mes, use_container_width=True, hide_index=True)
 
@@ -14955,12 +14969,22 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
                 primeiro_dia = date(prox_ano_sol, prox_mes_sol, 1)
                 ultimo_dia_num = calendar.monthrange(prox_ano_sol, prox_mes_sol)[1]
                 ultimo_dia = date(prox_ano_sol, prox_mes_sol, ultimo_dia_num)
+                while primeiro_dia.weekday() == 6 and primeiro_dia <= ultimo_dia:
+                    primeiro_dia = primeiro_dia + timedelta(days=1)
+
                 c1, c2 = st.columns(2)
-                data_sol = c1.date_input('Data desejada', value=primeiro_dia, min_value=primeiro_dia, max_value=ultimo_dia, key=f'data_folga_{setor}_{chapa}')
+                data_sol = c1.date_input('Data desejada', value=primeiro_dia, min_value=date(prox_ano_sol, prox_mes_sol, 1), max_value=ultimo_dia, key=f'data_folga_{setor}_{chapa}')
                 tipo_sol = c2.selectbox('Tipo da sugestão', ['Folga', 'Troca de plantão', 'Ajuste de horário'], key=f'tipo_folga_{setor}_{chapa}')
+                if tipo_sol == 'Folga':
+                    st.caption('Domingos não podem ser enviados como sugestão de folga, porque já são tratados pela regra fixa do sistema.')
                 motivo = st.text_input('Motivo', key=f'motivo_folga_{setor}_{chapa}')
                 observacao = st.text_area('Observação', key=f'obs_folga_{setor}_{chapa}')
-                if st.button('📨 Enviar sugestão', key=f'env_folga_{setor}_{chapa}'):
+
+                domingo_bloqueado = (tipo_sol == 'Folga' and pd.to_datetime(data_sol).weekday() == 6)
+                if domingo_bloqueado:
+                    st.warning('Domingos não podem ser selecionados para sugestão de folga. Escolha outro dia da próxima competência.')
+
+                if st.button('📨 Enviar sugestão', key=f'env_folga_{setor}_{chapa}', disabled=domingo_bloqueado):
                     criar_solicitacao_folga(setor, chapa, str(data_sol), tipo_sol, motivo, observacao)
                     st.success('Sugestão enviada para análise.')
                     st.rerun()
