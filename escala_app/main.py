@@ -18021,7 +18021,24 @@ def page_app():
                                         linha_prev[str(d)] = cell_val
                                     preview_rows.append(linha_prev)
                                 if preview_rows:
-                                    st.dataframe(pd.DataFrame(preview_rows), use_container_width=True, height=260, hide_index=True)
+                                    df_preview = pd.DataFrame(preview_rows)
+
+                                    def _style_preview_grade(val):
+                                        txt = str(val or "").strip().upper()
+                                        if txt == "FOLGA":
+                                            return "background-color: #f3e36a; color: #111111; font-weight: 700;"
+                                        if txt == "FÉRIAS" or txt == "FERIAS":
+                                            return "background-color: #5ad07a; color: #08120a; font-weight: 700;"
+                                        if txt in ("AFAST.", "AFASTAMENTO", "AFA"):
+                                            return "background-color: #ff6b6b; color: #ffffff; font-weight: 700;"
+                                        return ""
+
+                                    cols_preview_dias = [c for c in df_preview.columns if str(c).isdigit()]
+                                    styler_preview = df_preview.style
+                                    if cols_preview_dias:
+                                        styler_preview = styler_preview.map(_style_preview_grade, subset=cols_preview_dias)
+
+                                    st.dataframe(styler_preview, use_container_width=True, height=260, hide_index=True)
 
                                 auto_readequar_th = st.checkbox("🔄 Readequar escala ao salvar", value=True, key="th_auto_regen")
 
