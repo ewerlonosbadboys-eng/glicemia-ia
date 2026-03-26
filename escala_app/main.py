@@ -9863,20 +9863,6 @@ def add_ferias(setor: str, chapa: str, inicio: date, fim: date):
     except Exception:
         pass
 
-def _clear_ferias_caches():
-    for fn_name in ("list_ferias", "list_ferias_detalhada"):
-        try:
-            fn = globals().get(fn_name)
-            if fn is not None and hasattr(fn, "clear"):
-                fn.clear()
-        except Exception:
-            pass
-    try:
-        st.cache_data.clear()
-    except Exception:
-        pass
-
-
 def delete_ferias_row(setor: str, chapa: str, inicio: str, fim: str):
     con = db_conn()
     cur = con.cursor()
@@ -9890,7 +9876,10 @@ def delete_ferias_row(setor: str, chapa: str, inicio: str, fim: str):
     removidas = int(cur.rowcount or 0)
     con.commit()
     con.close()
-    _clear_ferias_caches()
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
     return removidas
 
 
@@ -9905,14 +9894,17 @@ def delete_ferias_rowid(setor: str, rowid_val: int):
     removidas = int(cur.rowcount or 0)
     con.commit()
     con.close()
-    _clear_ferias_caches()
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
     return removidas
 
 
-def delete_ferias_global(setor: str, chapa: str, inicio: str, fim: str) -> int:
-    """Remove todas as ocorrências compatíveis do mesmo período de férias.
-    Usa sobreposição de intervalo para limpar duplicidades e registros divergentes
-    salvos em meses diferentes para o mesmo colaborador.
+def delete_ferias_global(setor: str, chapa: str, inicio: str, fim: str):
+    """
+    Remove todos os registros de férias do colaborador que se sobrepõem ao
+    período selecionado. Isso evita sobras/duplicidades do mesmo bloco de férias.
     """
     con = db_conn()
     cur = con.cursor()
@@ -9926,28 +9918,11 @@ def delete_ferias_global(setor: str, chapa: str, inicio: str, fim: str) -> int:
     removidas = int(cur.rowcount or 0)
     con.commit()
     con.close()
-    _clear_ferias_caches()
-    return removidas
-
-
-def _iter_competencias_entre_datas(inicio_str: str, fim_str: str):
     try:
-        ini = pd.to_datetime(inicio_str).date()
-        fim = pd.to_datetime(fim_str).date()
+        st.cache_data.clear()
     except Exception:
-        return []
-    if fim < ini:
-        ini, fim = fim, ini
-    competencias = []
-    ano, mes = ini.year, ini.month
-    while (ano, mes) <= (fim.year, fim.month):
-        competencias.append((int(ano), int(mes)))
-        if mes == 12:
-            ano += 1
-            mes = 1
-        else:
-            mes += 1
-    return competencias
+        pass
+    return removidas
 
 
 @st.cache_data(show_spinner=False, ttl=120)
@@ -18395,28 +18370,52 @@ def page_app():
                             st.warning(f'Solicitação enviada para aprovação do líder. Protocolo #{rid}.')
                             st.rerun()
                         removidas = 0
+                        # 1) tenta remover todo o bloco de férias do colaborador por sobreposição
                         try:
                             removidas = delete_ferias_global(setor, str(r["Chapa"]), str(r["Início"]), str(r["Fim"]))
                         except Exception:
                             removidas = 0
+                        # 2) fallback por rowid específico
                         if removidas <= 0:
                             try:
                                 removidas = delete_ferias_rowid(setor, int(r["FeriasRowID"]))
                             except Exception:
                                 removidas = 0
+                        # 3) fallback por match exato antigo
                         if removidas <= 0:
                             removidas = delete_ferias_row(setor, r["Chapa"], r["Início"], r["Fim"])
                         if removidas > 0:
-                            competencias_afetadas = _iter_competencias_entre_datas(str(r["Início"]), str(r["Fim"]))
-                            if not competencias_afetadas:
-                                competencias_afetadas = [(int(st.session_state["cfg_ano"]), int(st.session_state["cfg_mes"]))]
-                            seed_ref = int(st.session_state.get("last_seed", 0))
-                            for ano_i, mes_i in competencias_afetadas:
+                            # readequa todos os meses impactados pelo período selecionado
+                            try:
+                                dt_ini = pd.to_datetime(str(r["Início"])).date()
+                                dt_fim = pd.to_datetime(str(r["Fim"])).date()
+                                cursor_mes = date(dt_ini.year, dt_ini.month, 1)
+                                ultimo_mes = date(dt_fim.year, dt_fim.month, 1)
+                                while cursor_mes <= ultimo_mes:
+                                    _regenerar_mes_inteiro(
+                                        setor,
+                                        int(cursor_mes.year),
+                                        int(cursor_mes.month),
+                                        seed=int(st.session_state.get("last_seed", 0)),
+                                        respeitar_ajustes=True
+                                    )
+                                    if cursor_mes.month == 12:
+                                        cursor_mes = date(cursor_mes.year + 1, 1, 1)
+                                    else:
+                                        cursor_mes = date(cursor_mes.year, cursor_mes.month + 1, 1)
+                            except Exception:
                                 try:
-                                    _regenerar_mes_inteiro(setor, int(ano_i), int(mes_i), seed=seed_ref, respeitar_ajustes=True)
+                                    _regenerar_mes_inteiro(setor, int(st.session_state["cfg_ano"]), int(st.session_state["cfg_mes"]), seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
                                 except Exception:
                                     pass
-                            _clear_ferias_caches()
+                            try:
+                                list_ferias.clear()
+                            except Exception:
+                                pass
+                            try:
+                                list_ferias_detalhada.clear()
+                            except Exception:
+                                pass
                             st.success(f"Férias removida com sucesso ({removidas} registro(s)).")
                             st.rerun()
                         else:
