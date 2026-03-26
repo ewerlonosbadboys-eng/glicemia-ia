@@ -17529,7 +17529,7 @@ def page_app():
                     # Regra v8.4:
                     # - Se você selecionar 1+ colaboradores, a grade mostra SOMENTE os selecionados (mesmo se "Mostrar todos" estiver marcado).
                     # - Se não selecionar ninguém, a grade respeita o checkbox (todos ou nenhum).
-                    show_all = st.checkbox("👥 Mostrar todos os colaboradores", value=True, key="grid_show_all")
+                    show_all = st.checkbox("👥 Mostrar todos os colaboradores", value=False, key="grid_show_all")
 
                     labels_opts = [f'{c["Nome"]} ({c["Chapa"]})' for c in colaboradores]
                     inv_label = {f'{c["Nome"]} ({c["Chapa"]})': str(c["Chapa"]) for c in colaboradores}
@@ -17899,7 +17899,7 @@ def page_app():
                                 dias2 = list(range(1, qtd2 + 1))
 
                                 # --- filtro/seleção de colaboradores (mesmo layout da grade de folgas)
-                                show_all_th = st.checkbox("👥 Mostrar todos os colaboradores", value=True, key="th_show_all")
+                                show_all_th = st.checkbox("👥 Mostrar todos os colaboradores", value=False, key="th_show_all")
 
                                 labels_opts_th = [f'{c["Nome"]} ({c["Chapa"]})' for c in colaboradores]
                                 inv_label_th = {f'{c["Nome"]} ({c["Chapa"]})': str(c["Chapa"]) for c in colaboradores}
@@ -18078,7 +18078,7 @@ def page_app():
 
                                     st.dataframe(styler_preview, use_container_width=True, height=260, hide_index=True)
 
-                                auto_readequar_th = st.checkbox("🔄 Readequar escala ao salvar (somente se você quiser)", value=False, key="th_auto_regen")
+                                auto_readequar_th = st.checkbox("🔄 Readequar escala ao salvar", value=False, key="th_auto_regen")
 
                                 if st.button("💾 Salvar troca de horários (aplicar nos dias marcados)", key="th_save"):
                                     if bool(auth.get('is_ax_lider', False)) and not bool(auth.get('is_admin', False)):
@@ -19365,7 +19365,7 @@ def page_app():
                         folga_sab_func = st.checkbox("Folga sábado", key='adm_func_folga_sab')
 
                     perfil_func_novo = st.selectbox("Perfil do sistema", ['COLABORADOR', 'AX_LIDER', 'LIDER', 'ADMIN'], key='adm_func_perfil')
-                    criar_login_func = st.checkbox("Criar login do sistema se não existir", value=True, key='adm_func_criar_login')
+                    criar_login_func = st.checkbox("Criar login do sistema se não existir", value=False, key='adm_func_criar_login')
 
                     if st.button("Salvar atualização do funcionário", key='adm_func_salvar'):
                         try:
@@ -19450,7 +19450,7 @@ def page_app():
             with cman5:
                 admin_man = st.checkbox("É admin", value=False, key="adm_man_admin")
             with cman6:
-                criar_colab_man = st.checkbox("Criar colaborador junto", value=True, key="adm_man_colab")
+                criar_colab_man = st.checkbox("Criar colaborador junto", value=False, key="adm_man_colab")
             if st.button("Salvar usuário manualmente", key="adm_man_btn"):
                 setor_norm = _norm_setor(setor_man)
                 chapa_norm = _norm_chapa(chapa_man)
@@ -19775,7 +19775,7 @@ def page_app():
 
             with colB:
 
-                criar_colabs = st.checkbox("Criar/atualizar colaboradores", value=True, key="pdf_criar_colabs")
+                criar_colabs = st.checkbox("Criar/atualizar colaboradores", value=False, key="pdf_criar_colabs")
 
             with colC:
 
@@ -19783,11 +19783,11 @@ def page_app():
 
             with colD:
 
-                cadastrar_ferias = st.checkbox("Cadastrar férias (FER)", value=True, key="pdf_cad_ferias")
+                cadastrar_ferias = st.checkbox("Cadastrar férias (FER)", value=False, key="pdf_cad_ferias")
 
 
             map_afa = st.checkbox("Tratar AFA como Folga", value=False, key="pdf_map_afa")
-            auto_gerar_pdf = st.checkbox("Após importar, gerar mês automaticamente respeitando ajustes", value=True, key="pdf_auto_gerar")
+            auto_gerar_pdf = st.checkbox("Após importar, gerar mês automaticamente respeitando ajustes", value=False, key="pdf_auto_gerar")
 
 
             pdf = st.file_uploader("Enviar PDF da escala (ESCALA_PONTO_NEW)", type=["pdf"], key="adm_pdf_auto")
