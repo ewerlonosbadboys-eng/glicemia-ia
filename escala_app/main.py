@@ -697,6 +697,8 @@ def render_escala_espelho_colaborador(df_mes: pd.DataFrame, titulo: str = "") ->
         col_status = cols_lower.get('status')
         col_ent = cols_lower.get('entrada') or cols_lower.get('h_entrada')
         col_saida = cols_lower.get('saída') or cols_lower.get('saida') or cols_lower.get('h_saida')
+        col_alm_ini = cols_lower.get('almoco_inicio') or cols_lower.get('almoço_inicio') or cols_lower.get('almoco inicio')
+        col_alm_fim = cols_lower.get('almoco_fim') or cols_lower.get('almoço_fim') or cols_lower.get('almoco fim')
 
         if not col_dia and col_data:
             try:
@@ -730,6 +732,8 @@ def render_escala_espelho_colaborador(df_mes: pd.DataFrame, titulo: str = "") ->
         status_vals = [str(v or '').strip() for v in df[col_status].tolist()]
         ent_vals = [str(v or '').strip() for v in (df[col_ent].tolist() if col_ent else [''] * len(df))]
         saida_vals = [str(v or '').strip() for v in (df[col_saida].tolist() if col_saida else [''] * len(df))]
+        alm_ini_vals = [str(v or '').strip() for v in (df[col_alm_ini].tolist() if col_alm_ini else [''] * len(df))]
+        alm_fim_vals = [str(v or '').strip() for v in (df[col_alm_fim].tolist() if col_alm_fim else [''] * len(df))]
 
         def _rotulo_status(status, entrada):
             s = str(status or '').strip().lower()
@@ -743,17 +747,28 @@ def render_escala_espelho_colaborador(df_mes: pd.DataFrame, titulo: str = "") ->
                 return 'AFA'
             return str(status or '').strip() or '-'
 
-        tabela = {'Data / Dia': ['Dia / Semana', 'Entrada', 'Saída']}
+        mostrar_almoco = any(v for v in alm_ini_vals) or any(v for v in alm_fim_vals)
+        tabela = {'Data / Dia': ['Dia / Semana', 'Entrada'] + (['Almoço'] if mostrar_almoco else []) + ['Saída']}
         for i, dia in enumerate(dias):
             status_i = status_vals[i] if i < len(status_vals) else ''
             entrada_i = ent_vals[i] if i < len(ent_vals) else ''
             saida_i = saida_vals[i] if i < len(saida_vals) else ''
+            alm_ini_i = alm_ini_vals[i] if i < len(alm_ini_vals) else ''
+            alm_fim_i = alm_fim_vals[i] if i < len(alm_fim_vals) else ''
             dow_i = dow_vals[i] if i < len(dow_vals) else ''
-            tabela[str(dia)] = [
-                dow_i,
-                _rotulo_status(status_i, entrada_i),
-                saida_i if str(status_i).strip().lower() == 'trabalho' else ''
-            ]
+            almoco_txt = ''
+            if str(status_i).strip().lower() == 'trabalho':
+                if alm_ini_i and alm_fim_i:
+                    almoco_txt = f'{alm_ini_i}-{alm_fim_i}'
+                elif alm_ini_i:
+                    almoco_txt = alm_ini_i
+                elif alm_fim_i:
+                    almoco_txt = alm_fim_i
+            row_vals = [dow_i, _rotulo_status(status_i, entrada_i)]
+            if mostrar_almoco:
+                row_vals.append(almoco_txt)
+            row_vals.append(saida_i if str(status_i).strip().lower() == 'trabalho' else '')
+            tabela[str(dia)] = row_vals
 
         if titulo:
             st.markdown(f'#### {titulo}')
@@ -14631,11 +14646,19 @@ def get_escala_colaborador_mes(setor: str, chapa: str, ano: int, mes: int) -> pd
             out = out.rename(columns={'H_Entrada': 'Entrada'})
         if 'H_Saida' in out.columns and 'Saída' not in out.columns:
             out = out.rename(columns={'H_Saida': 'Saída'})
+        if 'Almoco_Inicio' in out.columns and 'Almoço início' not in out.columns:
+            out = out.rename(columns={'Almoco_Inicio': 'Almoço início'})
+        if 'Almoco_Fim' in out.columns and 'Almoço fim' not in out.columns:
+            out = out.rename(columns={'Almoco_Fim': 'Almoço fim'})
 
         if 'Entrada' not in out.columns:
             out['Entrada'] = ''
         if 'Saída' not in out.columns:
             out['Saída'] = ''
+        if 'Almoço início' not in out.columns:
+            out['Almoço início'] = ''
+        if 'Almoço fim' not in out.columns:
+            out['Almoço fim'] = ''
 
         # garante continuidade de férias entre meses também no portal do colaborador
         for i in range(len(out)):
@@ -14656,10 +14679,12 @@ def get_escala_colaborador_mes(setor: str, chapa: str, ano: int, mes: int) -> pd
                     out.loc[i, 'Status'] = 'Férias'
                     out.loc[i, 'Entrada'] = ''
                     out.loc[i, 'Saída'] = ''
+                    out.loc[i, 'Almoço início'] = ''
+                    out.loc[i, 'Almoço fim'] = ''
             except Exception:
                 pass
 
-        keep = ['Dia', 'Data', 'Dia da semana', 'Status', 'Entrada', 'Saída']
+        keep = ['Dia', 'Data', 'Dia da semana', 'Status', 'Entrada', 'Almoço início', 'Almoço fim', 'Saída']
         for c in keep:
             if c not in out.columns:
                 out[c] = ''
@@ -15005,6 +15030,7 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
             st.info('Ainda não há escala oficial carregada para o mês vigente.')
         else:
             render_escala_espelho_colaborador(df_oficial, f'Escala oficial — {mes_ref:02d}/{ano_ref}')
+            st.caption('Quando houver horário de almoço salvo na grade, ele aparece na linha Almoço do espelho.')
             if ass_escala.get('status') == 'Assinado':
                 st.success('Escala do mês vigente já assinada. Botão ocultado automaticamente.')
             else:
@@ -15017,7 +15043,7 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
             st.info('Ainda não há pré-escala disponível para o próximo mês.')
         else:
             render_escala_espelho_colaborador(df_pre, f'Pré-escala — {prox_mes:02d}/{prox_ano}')
-            st.caption('Assinatura bloqueada até o início do mês vigente correspondente.')
+            st.caption('Assinatura bloqueada até o início do mês vigente correspondente. A pré-escala sempre mostra o próximo mês da competência selecionada.')
 
     with tab3:
         ui_section(f"Histórico de mudanças — {mes_ref:02d}/{ano_ref}", "Acompanhe retificações e alterações registradas sem perder o histórico do mês.")
