@@ -18023,6 +18023,11 @@ def page_app():
                                 if preview_rows:
                                     df_preview = pd.DataFrame(preview_rows)
 
+                                    domingos_preview = {
+                                        str(d) for d in dias2
+                                        if datetime(int(ano), int(mes), int(d)).weekday() == 6
+                                    }
+
                                     def _style_preview_grade(val):
                                         txt = str(val or "").strip().upper()
                                         if txt == "FOLGA":
@@ -18033,9 +18038,16 @@ def page_app():
                                             return "background-color: #ff6b6b; color: #ffffff; font-weight: 700;"
                                         return ""
 
+                                    def _style_domingo_columns(col):
+                                        nome_col = str(col.name)
+                                        if nome_col in domingos_preview:
+                                            return ["background-color: rgba(255, 77, 77, 0.20); color: #ffffff; font-weight: 700;" for _ in col]
+                                        return ["" for _ in col]
+
                                     cols_preview_dias = [c for c in df_preview.columns if str(c).isdigit()]
                                     styler_preview = df_preview.style
                                     if cols_preview_dias:
+                                        styler_preview = styler_preview.apply(_style_domingo_columns, subset=cols_preview_dias, axis=0)
                                         styler_preview = styler_preview.map(_style_preview_grade, subset=cols_preview_dias)
 
                                     st.dataframe(styler_preview, use_container_width=True, height=260, hide_index=True)
@@ -19914,7 +19926,7 @@ def _fast_restore_bundled_latest_before_start() -> None:
 
 # =========================================================
 # MAIN
-# ========================================================= 
+# =========================================================
 _fast_restore_bundled_latest_before_start()
 validar_contrato_sistema()
 
