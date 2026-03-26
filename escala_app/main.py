@@ -7111,6 +7111,29 @@ def _min_to_hora(v: int | None) -> str:
     except Exception:
         return ""
 
+
+def _calcular_fim_almoco(almoco_inicio: str, duracao_almoco: str) -> str:
+    ini_min = _hora_to_min(almoco_inicio)
+    if ini_min is None:
+        return ""
+    dur_min = _hora_to_min(duracao_almoco)
+    if dur_min is None:
+        return ""
+    return _min_to_hora(ini_min + dur_min)
+
+
+def _montar_rotulo_horario_com_almoco(entrada: str, almoco_inicio: str = "", almoco_fim: str = "") -> str:
+    entrada = str(entrada or '').strip()
+    almoco_inicio = str(almoco_inicio or '').strip()
+    almoco_fim = str(almoco_fim or '').strip()
+    if not entrada:
+        return "-"
+    if almoco_inicio and almoco_fim:
+        return f"{entrada} | Almoço {almoco_inicio}-{almoco_fim}"
+    if almoco_inicio:
+        return f"{entrada} | Almoço {almoco_inicio}"
+    return entrada
+
 def _caixa_saida_prevista(entrada: str, jornada_min: int = 500) -> str:
     base = _hora_to_min(entrada)
     if base is None:
@@ -11180,6 +11203,16 @@ def apply_overrides_to_hist(setor: str, ano: int, mes: int, hist_db: dict[str, p
 
             elif campo == "h_saida":
                 df.loc[idx, "H_Saida"] = valor
+
+            elif campo == "almoco_inicio":
+                if "Almoco_Inicio" not in df.columns:
+                    df["Almoco_Inicio"] = ""
+                df.loc[idx, "Almoco_Inicio"] = valor
+
+            elif campo == "almoco_fim":
+                if "Almoco_Fim" not in df.columns:
+                    df["Almoco_Fim"] = ""
+                df.loc[idx, "Almoco_Fim"] = valor
 
             hist_db[ch] = df
 
@@ -17872,6 +17905,9 @@ def page_app():
                                 )
 
                                 horario_sel = None
+                                almoco_inicio_sel_th = ""
+                                duracao_almoco_sel_th = "01:10"
+                                almoco_fim_sel_th = ""
                                 if acao_th == "Horário":
                                     horario_sel = st.selectbox(
                                         "Horário (Entrada) para aplicar nos dias marcados:",
@@ -17879,6 +17915,26 @@ def page_app():
                                         index=HORARIOS_ENTRADA_PRESET.index(BALANCO_DIA_ENTRADA) if BALANCO_DIA_ENTRADA in HORARIOS_ENTRADA_PRESET else 0,
                                         key="th_horario_sel"
                                     )
+                                    th_al1, th_al2, th_al3 = st.columns([1, 1, 2])
+                                    almoco_inicio_sel_th = th_al1.text_input(
+                                        "Saída para almoço (opcional):",
+                                        value=st.session_state.get("th_almoco_inicio_sel", ""),
+                                        key="th_almoco_inicio_sel",
+                                        placeholder="12:00"
+                                    ).strip()
+                                    duracao_almoco_sel_th = th_al2.selectbox(
+                                        "Duração do almoço:",
+                                        options=["00:30", "00:45", "01:00", "01:10", "01:20", "01:30", "02:00"],
+                                        index=3,
+                                        key="th_duracao_almoco_sel"
+                                    )
+                                    almoco_fim_sel_th = _calcular_fim_almoco(almoco_inicio_sel_th, duracao_almoco_sel_th) if almoco_inicio_sel_th else ""
+                                    if almoco_inicio_sel_th and not almoco_fim_sel_th:
+                                        th_al3.error("Horário do almoço inválido. Use HH:MM.")
+                                    elif almoco_inicio_sel_th:
+                                        th_al3.info(f"Volta do almoço calculada: {almoco_fim_sel_th}")
+                                    else:
+                                        th_al3.caption("Se quiser, deixe em branco para salvar só o horário de entrada.")
                                 elif acao_th == "Folga":
                                     st.info("Dias marcados serão salvos como **Folga**. (Folga sempre prevalece sobre horário.)")
                                 else:
@@ -17935,9 +17991,11 @@ def page_app():
                                                 ent_atual = ""
                                         st_ov = str((ovmap.get(ch_prev, {}).get(d, {}) or {}).get("status") or "").strip()
                                         ent_ov = str((ovmap.get(ch_prev, {}).get(d, {}) or {}).get("h_entrada") or "").strip()
+                                        almoco_ini_ov = str((ovmap.get(ch_prev, {}).get(d, {}) or {}).get("almoco_inicio") or "").strip()
+                                        almoco_fim_ov = str((ovmap.get(ch_prev, {}).get(d, {}) or {}).get("almoco_fim") or "").strip()
                                         status_base = st_ov or status_dia
                                         horario_base = ent_ov or ent_atual
-                                        cell_val = horario_base
+                                        cell_val = _montar_rotulo_horario_com_almoco(horario_base, almoco_ini_ov, almoco_fim_ov) if horario_base else horario_base
                                         status_norm = status_base.upper()
                                         if status_norm in ("FOLGA", "FOLG"):
                                             cell_val = "Folga"
@@ -17953,7 +18011,7 @@ def page_app():
                                                 if status_norm in ("FOLGA", "FOLG", "FÉRIAS", "FERIAS", "FER", "AFA", "AFASTAMENTO"):
                                                     pass
                                                 else:
-                                                    cell_val = str(horario_sel)
+                                                    cell_val = _montar_rotulo_horario_com_almoco(str(horario_sel), almoco_inicio_sel_th, almoco_fim_sel_th)
                                             elif acao_th == "Folga":
                                                 if status_norm not in ("FÉRIAS", "FERIAS", "FER"):
                                                     cell_val = "Folga"
@@ -17969,7 +18027,7 @@ def page_app():
 
                                 if st.button("💾 Salvar troca de horários (aplicar nos dias marcados)", key="th_save"):
                                     if bool(auth.get('is_ax_lider', False)) and not bool(auth.get('is_admin', False)):
-                                        rid = registrar_pendencia_ax_generica(setor, 'troca_horarios', 'salvar', {'_modulo':'troca_horarios','_acao':'salvar','setor':setor,'ano':int(ano),'mes':int(mes),'qtd2':int(qtd2),'edited':edited_th.to_dict(orient='records'),'acao_th':acao_th,'horario_sel':horario_sel,'auto_readequar':bool(auto_readequar_th),'seed':int(st.session_state.get('last_seed', 0))}, str(auth.get('nome') or '').strip(), str(auth.get('chapa') or '').strip(), 'Troca de horários enviada pelo AX do Líder')
+                                        rid = registrar_pendencia_ax_generica(setor, 'troca_horarios', 'salvar', {'_modulo':'troca_horarios','_acao':'salvar','setor':setor,'ano':int(ano),'mes':int(mes),'qtd2':int(qtd2),'edited':edited_th.to_dict(orient='records'),'acao_th':acao_th,'horario_sel':horario_sel,'almoco_inicio_sel_th':almoco_inicio_sel_th,'duracao_almoco_sel_th':duracao_almoco_sel_th,'almoco_fim_sel_th':almoco_fim_sel_th,'auto_readequar':bool(auto_readequar_th),'seed':int(st.session_state.get('last_seed', 0))}, str(auth.get('nome') or '').strip(), str(auth.get('chapa') or '').strip(), 'Troca de horários enviada pelo AX do Líder')
                                         st.warning(f'Solicitação enviada para aprovação do líder. Protocolo #{rid}.')
                                         st.rerun()
                                     applied = 0
@@ -18002,10 +18060,18 @@ def page_app():
 
                                                 if want:
                                                     set_override(setor, ano, mes, ch, d, "h_entrada", horario_sel)
+                                                    if almoco_inicio_sel_th and almoco_fim_sel_th:
+                                                        set_override(setor, ano, mes, ch, d, "almoco_inicio", almoco_inicio_sel_th)
+                                                        set_override(setor, ano, mes, ch, d, "almoco_fim", almoco_fim_sel_th)
+                                                    else:
+                                                        del_override(setor, ano, mes, ch, d, "almoco_inicio")
+                                                        del_override(setor, ano, mes, ch, d, "almoco_fim")
                                                     applied += 1
                                                 else:
                                                     # desmarcado: remove override de horário (limpa h_entrada do dia)
                                                     del_override(setor, ano, mes, ch, d, "h_entrada")
+                                                    del_override(setor, ano, mes, ch, d, "almoco_inicio")
+                                                    del_override(setor, ano, mes, ch, d, "almoco_fim")
 
                                             elif acao_th == "Folga":
                                                 # Folga sobrepõe qualquer horário: salva status e remove h_entrada
@@ -18016,6 +18082,8 @@ def page_app():
                                                 if want:
                                                     set_override(setor, ano, mes, ch, d, "status", "Folga")
                                                     del_override(setor, ano, mes, ch, d, "h_entrada")
+                                                    del_override(setor, ano, mes, ch, d, "almoco_inicio")
+                                                    del_override(setor, ano, mes, ch, d, "almoco_fim")
                                                     applied += 1
                                                 else:
                                                     del_override(setor, ano, mes, ch, d, "status")
@@ -18028,6 +18096,8 @@ def page_app():
                                                 if want:
                                                     set_override(setor, ano, mes, ch, d, "status", "AFA")
                                                     del_override(setor, ano, mes, ch, d, "h_entrada")
+                                                    del_override(setor, ano, mes, ch, d, "almoco_inicio")
+                                                    del_override(setor, ano, mes, ch, d, "almoco_fim")
                                                     applied += 1
                                                 else:
                                                     del_override(setor, ano, mes, ch, d, "status")
