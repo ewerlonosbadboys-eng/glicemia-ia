@@ -9864,36 +9864,36 @@ def add_ferias(setor: str, chapa: str, inicio: date, fim: date):
         pass
 
 def delete_ferias_row(setor: str, chapa: str, inicio: str, fim: str):
-    """
-    Remove férias de forma GLOBAL para evitar sobras duplicadas em outros pontos.
-    Apaga todos os registros compatíveis da pessoa no mesmo período.
-    Retorna a quantidade de linhas removidas.
-    """
     con = db_conn()
     cur = con.cursor()
+    cur.execute("""
+        DELETE FROM ferias
+        WHERE UPPER(TRIM(setor)) = UPPER(TRIM(?))
+          AND TRIM(chapa) = TRIM(?)
+          AND date(inicio) = date(?)
+          AND date(fim) = date(?)
+    """, (setor, chapa, inicio, fim))
+    removidas = int(cur.rowcount or 0)
+    con.commit()
+    con.close()
     try:
-        cur.execute("""
-            DELETE FROM ferias
-            WHERE TRIM(chapa) = TRIM(?)
-              AND date(inicio) = date(?)
-              AND date(fim) = date(?)
-        """, (chapa, inicio, fim))
-        removidas = int(cur.rowcount or 0)
+        st.cache_data.clear()
+    except Exception:
+        pass
+    return removidas
 
-        if removidas <= 0:
-            cur.execute("""
-                DELETE FROM ferias
-                WHERE UPPER(TRIM(setor)) = UPPER(TRIM(?))
-                  AND TRIM(chapa) = TRIM(?)
-                  AND date(inicio) = date(?)
-                  AND date(fim) = date(?)
-            """, (setor, chapa, inicio, fim))
-            removidas = int(cur.rowcount or 0)
 
-        con.commit()
-    finally:
-        con.close()
-
+def delete_ferias_rowid(setor: str, rowid_val: int):
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute("""
+        DELETE FROM ferias
+        WHERE rowid = ?
+          AND UPPER(TRIM(setor)) = UPPER(TRIM(?))
+    """, (int(rowid_val), setor))
+    removidas = int(cur.rowcount or 0)
+    con.commit()
+    con.close()
     try:
         st.cache_data.clear()
     except Exception:
@@ -9902,26 +9902,25 @@ def delete_ferias_row(setor: str, chapa: str, inicio: str, fim: str):
 
 
 @st.cache_data(show_spinner=False, ttl=120)
-def list_ferias_detalhada(setor: str):
-    con = db_conn()
-    cur = con.cursor()
-    try:
-        cur.execute("""
-            SELECT rowid as ferias_rowid, setor, chapa, inicio, fim
-            FROM ferias
-            WHERE UPPER(TRIM(setor)) = UPPER(TRIM(?))
-            ORDER BY date(inicio) ASC, date(fim) ASC, TRIM(chapa) ASC, rowid ASC
-        """, (setor,))
-        rows = cur.fetchall()
-        return rows
-    finally:
-        con.close()
-
-@st.cache_data(show_spinner=False, ttl=120)
 def list_ferias(setor: str):
     con = db_conn()
     cur = con.cursor()
     cur.execute("SELECT chapa, inicio, fim FROM ferias WHERE setor=? ORDER BY date(inicio) ASC", (setor,))
+    rows = cur.fetchall()
+    con.close()
+    return rows
+
+
+@st.cache_data(show_spinner=False, ttl=120)
+def list_ferias_detalhada(setor: str):
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute("""
+        SELECT rowid as ferias_rowid, chapa, inicio, fim
+        FROM ferias
+        WHERE UPPER(TRIM(setor)) = UPPER(TRIM(?))
+        ORDER BY date(inicio) ASC, date(fim) ASC, TRIM(chapa) ASC, rowid ASC
+    """, (setor,))
     rows = cur.fetchall()
     con.close()
     return rows
@@ -18329,9 +18328,9 @@ def page_app():
                 if not rows:
                     st.info("Nenhuma férias cadastrada.")
                 else:
-                    df_f = pd.DataFrame(rows, columns=["FeriasRowID", "Setor", "Chapa", "Início", "Fim"])
+                    df_f = pd.DataFrame(rows, columns=["FeriasRowID", "Chapa", "Início", "Fim"])
                     nome_by = {str(c.get("Chapa","")): str(c.get("Nome","") or "") for c in (colaboradores or [])}
-                    df_f.insert(3, "Nome", df_f["Chapa"].astype(str).map(nome_by).fillna(""))
+                    df_f.insert(2, "Nome", df_f["Chapa"].astype(str).map(nome_by).fillna(""))
                     df_f = df_f.reset_index(drop=True)
                     df_f.insert(0, "Linha", df_f.index + 1)
                     st.dataframe(df_f[["Linha", "Chapa", "Nome", "Início", "Fim"]], use_container_width=True, height=260)
@@ -18346,41 +18345,27 @@ def page_app():
                             rid = registrar_pendencia_ax_generica(setor, 'ferias_remove', 'remover', {'_modulo':'ferias_remove','_acao':'remover','setor':setor,'chapa':r['Chapa'],'inicio':r['Início'],'fim':r['Fim'],'ano':int(st.session_state['cfg_ano']),'mes':int(st.session_state['cfg_mes']),'seed':int(st.session_state.get('last_seed', 0))}, str(auth.get('nome') or '').strip(), str(auth.get('chapa') or '').strip(), 'Remoção de férias enviada pelo AX do Líder')
                             st.warning(f'Solicitação enviada para aprovação do líder. Protocolo #{rid}.')
                             st.rerun()
-
-                        removidas = delete_ferias_row(setor, r["Chapa"], r["Início"], r["Fim"])
-
+                        removidas = 0
+                        try:
+                            removidas = delete_ferias_rowid(setor, int(r["FeriasRowID"]))
+                        except Exception:
+                            removidas = 0
                         if removidas <= 0:
-                            st.error("Nenhum registro de férias foi removido.")
-                        else:
-                            ano_atual = int(st.session_state["cfg_ano"])
-                            mes_atual = int(st.session_state["cfg_mes"])
+                            removidas = delete_ferias_row(setor, r["Chapa"], r["Início"], r["Fim"])
+                        if removidas > 0:
+                            _regenerar_mes_inteiro(setor, int(st.session_state["cfg_ano"]), int(st.session_state["cfg_mes"]), seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
                             try:
-                                dt_ini = pd.to_datetime(str(r["Início"])).date()
-                                dt_fim = pd.to_datetime(str(r["Fim"])).date()
-                                competencias = set()
-                                d = dt_ini.replace(day=1)
-                                while d <= dt_fim:
-                                    competencias.add((d.year, d.month))
-                                    if d.month == 12:
-                                        d = d.replace(year=d.year + 1, month=1, day=1)
-                                    else:
-                                        d = d.replace(month=d.month + 1, day=1)
-                            except Exception:
-                                competencias = {(ano_atual, mes_atual)}
-
-                            for ano_rg, mes_rg in sorted(competencias):
-                                try:
-                                    _regenerar_mes_inteiro(setor, int(ano_rg), int(mes_rg), seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
-                                except Exception:
-                                    pass
-
-                            try:
-                                st.cache_data.clear()
+                                list_ferias.clear()
                             except Exception:
                                 pass
-
-                            st.success(f"Férias removidas e meses readequados! Registros apagados: {removidas}")
+                            try:
+                                list_ferias_detalhada.clear()
+                            except Exception:
+                                pass
+                            st.success(f"Férias removida com sucesso ({removidas} registro).")
                             st.rerun()
+                        else:
+                            st.error("Nenhuma férias foi removida do banco. Verifique se esse período ainda existe no cadastro.")
 
     elif sec_main == "🖨️ Impressão":
         ui_section("Impressão", f"Subaba ativa: {sec_imp}")
