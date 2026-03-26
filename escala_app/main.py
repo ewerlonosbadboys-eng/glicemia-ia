@@ -9877,11 +9877,18 @@ def delete_ferias_row(setor: str, chapa: str, inicio: str, fim: str):
     con.commit()
     con.close()
     try:
+        list_ferias.clear()
+    except Exception:
+        pass
+    try:
+        list_ferias_detalhada.clear()
+    except Exception:
+        pass
+    try:
         st.cache_data.clear()
     except Exception:
         pass
     return removidas
-
 
 def delete_ferias_rowid(setor: str, rowid_val: int):
     con = db_conn()
@@ -9894,6 +9901,14 @@ def delete_ferias_rowid(setor: str, rowid_val: int):
     removidas = int(cur.rowcount or 0)
     con.commit()
     con.close()
+    try:
+        list_ferias.clear()
+    except Exception:
+        pass
+    try:
+        list_ferias_detalhada.clear()
+    except Exception:
+        pass
     try:
         st.cache_data.clear()
     except Exception:
@@ -18332,7 +18347,7 @@ def page_app():
                     df_f.insert(2, "Nome", df_f["Chapa"].astype(str).map(nome_by).fillna(""))
                     df_f = df_f.reset_index(drop=True)
                     df_f.insert(0, "Linha", df_f.index + 1)
-                    st.dataframe(df_f[["Linha", "Chapa", "Nome", "Início", "Fim"]], use_container_width=True, height=260)
+                    st.dataframe(df_f[["Linha","Chapa","Nome","Início","Fim"]], use_container_width=True, height=260)
                     opcoes_rem = [
                         f"{int(row['Linha'])} - {str(row['Nome']).strip()} | {str(row['Chapa']).strip()} | {str(row['Início']).strip()} até {str(row['Fim']).strip()}"
                         for _, row in df_f.iterrows()
@@ -18344,14 +18359,18 @@ def page_app():
                             rid = registrar_pendencia_ax_generica(setor, 'ferias_remove', 'remover', {'_modulo':'ferias_remove','_acao':'remover','setor':setor,'chapa':r['Chapa'],'inicio':r['Início'],'fim':r['Fim'],'ano':int(st.session_state['cfg_ano']),'mes':int(st.session_state['cfg_mes']),'seed':int(st.session_state.get('last_seed', 0))}, str(auth.get('nome') or '').strip(), str(auth.get('chapa') or '').strip(), 'Remoção de férias enviada pelo AX do Líder')
                             st.warning(f'Solicitação enviada para aprovação do líder. Protocolo #{rid}.')
                             st.rerun()
+
                         removidas = 0
                         try:
                             removidas = delete_ferias_rowid(setor, int(r["FeriasRowID"]))
                         except Exception:
                             removidas = 0
                         if removidas <= 0:
-                            removidas = delete_ferias_row(setor, r["Chapa"], r["Início"], r["Fim"])
-                        if removidas > 0:
+                            removidas = delete_ferias_row(setor, str(r["Chapa"]), str(r["Início"]), str(r["Fim"]))
+
+                        if removidas <= 0:
+                            st.error("Nenhuma férias foi removida. A linha selecionada não foi encontrada no banco.")
+                        else:
                             _regenerar_mes_inteiro(setor, int(st.session_state["cfg_ano"]), int(st.session_state["cfg_mes"]), seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
                             try:
                                 list_ferias.clear()
@@ -18361,10 +18380,8 @@ def page_app():
                                 list_ferias_detalhada.clear()
                             except Exception:
                                 pass
-                            st.success(f"Férias removida com sucesso ({removidas} registro).")
+                            st.success("Férias removida(s) com sucesso e escala readequada!")
                             st.rerun()
-                        else:
-                            st.error("Nenhuma férias foi removida do banco. Verifique se esse período ainda existe no cadastro.")
 
     elif sec_main == "🖨️ Impressão":
         ui_section("Impressão", f"Subaba ativa: {sec_imp}")
