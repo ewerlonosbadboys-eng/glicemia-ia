@@ -18123,10 +18123,10 @@ def page_app():
                                                         delete_override(setor, ano, mes, ch, d, "almoco_fim")
                                                     applied += 1
                                                 else:
-                                                    # desmarcado: remove override de horário (limpa h_entrada do dia)
-                                                    delete_override(setor, ano, mes, ch, d, "h_entrada")
-                                                    delete_override(setor, ano, mes, ch, d, "almoco_inicio")
-                                                    delete_override(setor, ano, mes, ch, d, "almoco_fim")
+                                                    # desmarcado: NÃO desfaz salvamento manual anterior.
+                                                    # Regra pedida: o último salvamento manual do mês vigente deve permanecer
+                                                    # até que o usuário altere esse mesmo dia manualmente.
+                                                    pass
 
                                             elif acao_th == "Folga":
                                                 # Folga sobrepõe qualquer horário: salva status e remove h_entrada
