@@ -19743,7 +19743,7 @@ def _fast_restore_bundled_latest_before_start() -> None:
 
 # =========================================================
 # MAIN
-# ========================================================= 
+# =========================================================
 _fast_restore_bundled_latest_before_start()
 validar_contrato_sistema()
 
