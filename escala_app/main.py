@@ -6361,23 +6361,23 @@ def _aplicar_pendencia_ax_generica(payload: dict):
                     if want:
                         set_override(payload['setor'], int(payload['ano']), int(payload['mes']), ch, d, 'h_entrada', horario_sel)
                     else:
-                        del_override(payload['setor'], int(payload['ano']), int(payload['mes']), ch, d, 'h_entrada')
+                        delete_override(payload['setor'], int(payload['ano']), int(payload['mes']), ch, d, 'h_entrada')
                 elif acao_th == 'Folga':
                     if st_norm in ('FER','FÉRIAS','FERIAS'):
                         continue
                     if want:
                         set_override(payload['setor'], int(payload['ano']), int(payload['mes']), ch, d, 'status', 'Folga')
-                        del_override(payload['setor'], int(payload['ano']), int(payload['mes']), ch, d, 'h_entrada')
+                        delete_override(payload['setor'], int(payload['ano']), int(payload['mes']), ch, d, 'h_entrada')
                     else:
-                        del_override(payload['setor'], int(payload['ano']), int(payload['mes']), ch, d, 'status')
+                        delete_override(payload['setor'], int(payload['ano']), int(payload['mes']), ch, d, 'status')
                 else:
                     if st_norm in ('FER','FÉRIAS','FERIAS'):
                         continue
                     if want:
                         set_override(payload['setor'], int(payload['ano']), int(payload['mes']), ch, d, 'status', 'AFA')
-                        del_override(payload['setor'], int(payload['ano']), int(payload['mes']), ch, d, 'h_entrada')
+                        delete_override(payload['setor'], int(payload['ano']), int(payload['mes']), ch, d, 'h_entrada')
                     else:
-                        del_override(payload['setor'], int(payload['ano']), int(payload['mes']), ch, d, 'status')
+                        delete_override(payload['setor'], int(payload['ano']), int(payload['mes']), ch, d, 'status')
         if bool(payload.get('auto_readequar', False)):
             _regenerar_mes_inteiro(payload['setor'], int(payload['ano']), int(payload['mes']), seed=int(payload.get('seed', 0)), respeitar_ajustes=True)
     elif modulo == 'preferencia_subgrupo':
@@ -18081,14 +18081,14 @@ def page_app():
                                                         set_override(setor, ano, mes, ch, d, "almoco_inicio", almoco_inicio_sel_th)
                                                         set_override(setor, ano, mes, ch, d, "almoco_fim", almoco_fim_sel_th)
                                                     else:
-                                                        del_override(setor, ano, mes, ch, d, "almoco_inicio")
-                                                        del_override(setor, ano, mes, ch, d, "almoco_fim")
+                                                        delete_override(setor, ano, mes, ch, d, "almoco_inicio")
+                                                        delete_override(setor, ano, mes, ch, d, "almoco_fim")
                                                     applied += 1
                                                 else:
                                                     # desmarcado: remove override de horário (limpa h_entrada do dia)
-                                                    del_override(setor, ano, mes, ch, d, "h_entrada")
-                                                    del_override(setor, ano, mes, ch, d, "almoco_inicio")
-                                                    del_override(setor, ano, mes, ch, d, "almoco_fim")
+                                                    delete_override(setor, ano, mes, ch, d, "h_entrada")
+                                                    delete_override(setor, ano, mes, ch, d, "almoco_inicio")
+                                                    delete_override(setor, ano, mes, ch, d, "almoco_fim")
 
                                             elif acao_th == "Folga":
                                                 # Folga sobrepõe qualquer horário: salva status e remove h_entrada
@@ -18098,12 +18098,12 @@ def page_app():
                                                     continue
                                                 if want:
                                                     set_override(setor, ano, mes, ch, d, "status", "Folga")
-                                                    del_override(setor, ano, mes, ch, d, "h_entrada")
-                                                    del_override(setor, ano, mes, ch, d, "almoco_inicio")
-                                                    del_override(setor, ano, mes, ch, d, "almoco_fim")
+                                                    delete_override(setor, ano, mes, ch, d, "h_entrada")
+                                                    delete_override(setor, ano, mes, ch, d, "almoco_inicio")
+                                                    delete_override(setor, ano, mes, ch, d, "almoco_fim")
                                                     applied += 1
                                                 else:
-                                                    del_override(setor, ano, mes, ch, d, "status")
+                                                    delete_override(setor, ano, mes, ch, d, "status")
 
                                             else:  # Afastamento
                                                 if st_norm in ("FER","FÉRIAS","FERIAS"):
@@ -18112,12 +18112,12 @@ def page_app():
                                                     continue
                                                 if want:
                                                     set_override(setor, ano, mes, ch, d, "status", "AFA")
-                                                    del_override(setor, ano, mes, ch, d, "h_entrada")
-                                                    del_override(setor, ano, mes, ch, d, "almoco_inicio")
-                                                    del_override(setor, ano, mes, ch, d, "almoco_fim")
+                                                    delete_override(setor, ano, mes, ch, d, "h_entrada")
+                                                    delete_override(setor, ano, mes, ch, d, "almoco_inicio")
+                                                    delete_override(setor, ano, mes, ch, d, "almoco_fim")
                                                     applied += 1
                                                 else:
-                                                    del_override(setor, ano, mes, ch, d, "status")
+                                                    delete_override(setor, ano, mes, ch, d, "status")
 
                                     if auto_readequar_th:
                                         _regenerar_mes_inteiro(setor, ano, mes, seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
