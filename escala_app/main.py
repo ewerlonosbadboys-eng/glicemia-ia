@@ -768,8 +768,7 @@ def render_escala_espelho_colaborador(df_mes: pd.DataFrame, titulo: str = "") ->
             if mostrar_almoco:
                 row_vals.append(almoco_txt)
             row_vals.append(saida_i if str(status_i).strip().lower() == 'trabalho' else '')
-            header_lbl = f"{dia} ({dow_i})" if dow_i else str(dia)
-            tabela[header_lbl] = row_vals
+            tabela[str(dia)] = row_vals
 
         if titulo:
             st.markdown(f'#### {titulo}')
@@ -10649,19 +10648,6 @@ def get_folga_fixa_weekdays(setor: str, chapa: str) -> list[int]:
     return sorted({int(x) for x in df["DiaSemana"].tolist() if pd.notna(x)})
 
 
-
-
-def get_dia_semana_labels(ano: int, mes: int, dias_mes: list[int]) -> dict[int, str]:
-    mapa = {0: "Seg", 1: "Ter", 2: "Qua", 3: "Qui", 4: "Sex", 5: "Sáb", 6: "Dom"}
-    out = {}
-    for d in dias_mes:
-        try:
-            dt_ref = date(int(ano), int(mes), int(d))
-            out[int(d)] = f"{int(d)} ({mapa.get(dt_ref.weekday(), '')})"
-        except Exception:
-            out[int(d)] = str(d)
-    return out
-
 def _dias_mes_por_weekdays(ano: int, mes: int, weekdays: list[int]) -> list[int]:
     out = []
     sel = set(int(x) for x in weekdays)
@@ -17567,7 +17553,6 @@ def page_app():
 
                     qtd = calendar.monthrange(int(ano), int(mes))[1]
                     dias = list(range(1, qtd + 1))
-                    dias_labels_map = get_dia_semana_labels(ano, mes, dias)
 
                     # pega overrides existentes
                     ovdf = load_overrides(setor, ano, mes)
@@ -17585,14 +17570,13 @@ def page_app():
                         row = {"Nome": c["Nome"], "Chapa": chg}
                         dfh = hist_db.get(chg)
                         for d in dias:
-                            dcol = dias_labels_map.get(int(d), str(d))
                             if dfh is not None and len(dfh) >= d:
                                 if dfh.loc[d - 1, "Status"] == "Férias":
-                                    row[dcol] = False
+                                    row[str(d)] = False
                                 else:
-                                    row[dcol] = (dfh.loc[d - 1, "Status"] == "Folga") or (d in ov_status.get(chg, set()))
+                                    row[str(d)] = (dfh.loc[d - 1, "Status"] == "Folga") or (d in ov_status.get(chg, set()))
                             else:
-                                row[dcol] = False
+                                row[str(d)] = False
                         rows.append(row)
 
                     df_grid = pd.DataFrame(rows)
@@ -17601,7 +17585,7 @@ def page_app():
                         use_container_width=True,
                         hide_index=True,
                         num_rows="fixed",
-                        column_config={dias_labels_map.get(int(d), str(d)): st.column_config.CheckboxColumn(dias_labels_map.get(int(d), str(d)), width="small") for d in dias},
+                        column_config={str(d): st.column_config.CheckboxColumn(str(d), width="small") for d in dias},
                         key="grid_editor"
                     )
 
@@ -17619,8 +17603,7 @@ def page_app():
                             dfh = hist_db.get(chg)
                             ent_pad_local = colab_by.get(chg, {}).get("Entrada", "06:00")
                             for d in dias:
-                                dcol = dias_labels_map.get(int(d), str(d))
-                                want_folga = bool(r[dcol])
+                                want_folga = bool(r[str(d)])
                                 if dfh is not None and len(dfh) >= d:
                                     if dfh.loc[d - 1, "Status"] == "Férias":
                                         continue
@@ -17914,7 +17897,6 @@ def page_app():
 
                                 qtd2 = calendar.monthrange(int(ano), int(mes))[1]
                                 dias2 = list(range(1, qtd2 + 1))
-                                dias2_labels_map = get_dia_semana_labels(ano, mes, dias2)
 
                                 # --- filtro/seleção de colaboradores (mesmo layout da grade de folgas)
                                 show_all_th = st.checkbox("👥 Mostrar todos os colaboradores", value=True, key="th_show_all")
@@ -17994,14 +17976,13 @@ def page_app():
                                     row = {"Nome": nm, "Chapa": ch}
                                     # pré-preenche conforme a ação selecionada
                                     for d in dias2:
-                                        dcol = dias2_labels_map.get(int(d), str(d))
                                         cur = (ovmap.get(ch, {}).get(d, {}) or {})
                                         if acao_th == "Horário":
-                                            row[dcol] = (cur.get("h_entrada") == horario_sel)
+                                            row[str(d)] = (cur.get("h_entrada") == horario_sel)
                                         elif acao_th == "Folga":
-                                            row[dcol] = str(cur.get("status") or "").strip().upper() in ("FOLGA","FOLG")
+                                            row[str(d)] = str(cur.get("status") or "").strip().upper() in ("FOLGA","FOLG")
                                         else:
-                                            row[dcol] = str(cur.get("status") or "").strip().upper() in ("AFASTAMENTO","AFA")
+                                            row[str(d)] = str(cur.get("status") or "").strip().upper() in ("AFASTAMENTO","AFA")
                                     rows.append(row)
 
                                 df_th = pd.DataFrame(rows)
@@ -18011,7 +17992,7 @@ def page_app():
                                     use_container_width=True,
                                     hide_index=True,
                                     num_rows="fixed",
-                                    column_config={dias2_labels_map.get(int(d), str(d)): st.column_config.CheckboxColumn(dias2_labels_map.get(int(d), str(d)), width="small") for d in dias2},
+                                    column_config={str(d): st.column_config.CheckboxColumn(str(d), width="small") for d in dias2},
                                     key="th_grid_editor"
                                 )
 
@@ -18025,7 +18006,6 @@ def page_app():
                                     dfh_prev = hist_db.get(ch_prev)
                                     linha_prev = {"Nome": nome_prev, "Chapa": ch_prev}
                                     for d in dias2:
-                                        dcol = dias2_labels_map.get(int(d), str(d))
                                         status_dia = ""
                                         ent_atual = ""
                                         if dfh_prev is not None and len(dfh_prev) >= d:
@@ -18052,7 +18032,7 @@ def page_app():
                                         elif not cell_val:
                                             cell_val = "-"
 
-                                        if bool(rprev[dcol]):
+                                        if bool(rprev[str(d)]):
                                             if acao_th == "Horário":
                                                 if status_norm in ("FOLGA", "FOLG", "FÉRIAS", "FERIAS", "FER", "AFA", "AFASTAMENTO"):
                                                     pass
@@ -18064,13 +18044,13 @@ def page_app():
                                             else:
                                                 if status_norm not in ("FÉRIAS", "FERIAS", "FER"):
                                                     cell_val = "Afast."
-                                        linha_prev[dcol] = cell_val
+                                        linha_prev[str(d)] = cell_val
                                     preview_rows.append(linha_prev)
                                 if preview_rows:
                                     df_preview = pd.DataFrame(preview_rows)
 
                                     domingos_preview = {
-                                        dias2_labels_map.get(int(d), str(d)) for d in dias2
+                                        str(d) for d in dias2
                                         if datetime(int(ano), int(mes), int(d)).weekday() == 6
                                     }
 
@@ -18090,7 +18070,7 @@ def page_app():
                                             return ["background-color: rgba(255, 77, 77, 0.20); color: #ffffff; font-weight: 700;" for _ in col]
                                         return ["" for _ in col]
 
-                                    cols_preview_dias = [c for c in df_preview.columns if c not in ("Nome", "Chapa")]
+                                    cols_preview_dias = [c for c in df_preview.columns if str(c).isdigit()]
                                     styler_preview = df_preview.style
                                     if cols_preview_dias:
                                         styler_preview = styler_preview.apply(_style_domingo_columns, subset=cols_preview_dias, axis=0)
@@ -18098,7 +18078,7 @@ def page_app():
 
                                     st.dataframe(styler_preview, use_container_width=True, height=260, hide_index=True)
 
-                                auto_readequar_th = st.checkbox("🔄 Readequar escala ao salvar", value=True, key="th_auto_regen")
+                                auto_readequar_th = st.checkbox("🔄 Readequar escala ao salvar (somente se você quiser)", value=False, key="th_auto_regen")
 
                                 if st.button("💾 Salvar troca de horários (aplicar nos dias marcados)", key="th_save"):
                                     if bool(auth.get('is_ax_lider', False)) and not bool(auth.get('is_admin', False)):
@@ -18114,8 +18094,7 @@ def page_app():
                                         ent_pad = (colab_by.get(ch, {}) or {}).get("Entrada", BALANCO_DIA_ENTRADA)
 
                                         for d in dias2:
-                                            dcol = dias2_labels_map.get(int(d), str(d))
-                                            want = bool(r[dcol])
+                                            want = bool(r[str(d)])
 
                                             # status do dia (já com overrides)
                                             status_dia = None
