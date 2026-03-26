@@ -9875,21 +9875,46 @@ def _clear_ferias_caches():
         st.cache_data.clear()
     except Exception:
         pass
+    try:
+        st.cache_resource.clear()
+    except Exception:
+        pass
+
+
+def _persist_ferias_delete_snapshot():
+    try:
+        fn = globals().get("_save_latest_stable_snapshot_safely")
+        if callable(fn):
+            fn()
+            return
+    except Exception:
+        pass
+    try:
+        fn = globals().get("_maybe_save_latest_stable_snapshot_fast")
+        if callable(fn):
+            fn("delete_ferias")
+    except Exception:
+        pass
+
+
+def _sql_chapa_match_expr() -> str:
+    return "REPLACE(REPLACE(REPLACE(TRIM(chapa), '.', ''), '-', ''), '/', '') = REPLACE(REPLACE(REPLACE(TRIM(?), '.', ''), '-', ''), '/', '')"
 
 
 def delete_ferias_row(setor: str, chapa: str, inicio: str, fim: str):
     con = db_conn()
     cur = con.cursor()
-    cur.execute("""
+    cur.execute(f"""
         DELETE FROM ferias
         WHERE UPPER(TRIM(setor)) = UPPER(TRIM(?))
-          AND TRIM(chapa) = TRIM(?)
+          AND {_sql_chapa_match_expr()}
           AND date(inicio) = date(?)
           AND date(fim) = date(?)
     """, (setor, chapa, inicio, fim))
     removidas = int(cur.rowcount or 0)
     con.commit()
     con.close()
+    _persist_ferias_delete_snapshot()
     _clear_ferias_caches()
     return removidas
 
@@ -9905,27 +9930,27 @@ def delete_ferias_rowid(setor: str, rowid_val: int):
     removidas = int(cur.rowcount or 0)
     con.commit()
     con.close()
+    _persist_ferias_delete_snapshot()
     _clear_ferias_caches()
     return removidas
 
 
 def delete_ferias_global(setor: str, chapa: str, inicio: str, fim: str) -> int:
-    """Remove todas as ocorrências compatíveis do mesmo período de férias.
-    Usa sobreposição de intervalo para limpar duplicidades e registros divergentes
-    salvos em meses diferentes para o mesmo colaborador.
+    """Remove ocorrências do colaborador por sobreposição de período.
+    Também tolera diferenças de formatação da chapa, como pontos e traços.
     """
     con = db_conn()
     cur = con.cursor()
-    cur.execute("""
+    cur.execute(f"""
         DELETE FROM ferias
         WHERE UPPER(TRIM(setor)) = UPPER(TRIM(?))
-          AND TRIM(chapa) = TRIM(?)
-          AND date(inicio) <= date(?)
-          AND date(fim) >= date(?)
-    """, (setor, chapa, fim, inicio))
+          AND {_sql_chapa_match_expr()}
+          AND NOT (date(fim) < date(?) OR date(inicio) > date(?))
+    """, (setor, chapa, inicio, fim))
     removidas = int(cur.rowcount or 0)
     con.commit()
     con.close()
+    _persist_ferias_delete_snapshot()
     _clear_ferias_caches()
     return removidas
 
@@ -18395,17 +18420,19 @@ def page_app():
                             st.warning(f'Solicitação enviada para aprovação do líder. Protocolo #{rid}.')
                             st.rerun()
                         removidas = 0
+                        erros_remocao = []
                         try:
-                            removidas = delete_ferias_global(setor, str(r["Chapa"]), str(r["Início"]), str(r["Fim"]))
-                        except Exception:
-                            removidas = 0
-                        if removidas <= 0:
-                            try:
-                                removidas = delete_ferias_rowid(setor, int(r["FeriasRowID"]))
-                            except Exception:
-                                removidas = 0
-                        if removidas <= 0:
-                            removidas = delete_ferias_row(setor, r["Chapa"], r["Início"], r["Fim"])
+                            removidas += int(delete_ferias_global(setor, str(r["Chapa"]), str(r["Início"]), str(r["Fim"])) or 0)
+                        except Exception as e:
+                            erros_remocao.append(f"global: {e}")
+                        try:
+                            removidas += int(delete_ferias_rowid(setor, int(r["FeriasRowID"])) or 0)
+                        except Exception as e:
+                            erros_remocao.append(f"rowid: {e}")
+                        try:
+                            removidas += int(delete_ferias_row(setor, str(r["Chapa"]), str(r["Início"]), str(r["Fim"])) or 0)
+                        except Exception as e:
+                            erros_remocao.append(f"exato: {e}")
                         if removidas > 0:
                             competencias_afetadas = _iter_competencias_entre_datas(str(r["Início"]), str(r["Fim"]))
                             if not competencias_afetadas:
@@ -18416,11 +18443,13 @@ def page_app():
                                     _regenerar_mes_inteiro(setor, int(ano_i), int(mes_i), seed=seed_ref, respeitar_ajustes=True)
                                 except Exception:
                                     pass
+                            _persist_ferias_delete_snapshot()
                             _clear_ferias_caches()
                             st.success(f"Férias removida com sucesso ({removidas} registro(s)).")
                             st.rerun()
                         else:
-                            st.error("Nenhuma férias foi removida do banco. Verifique se esse período ainda existe no cadastro.")
+                            detalhe = f" | Detalhes: {'; '.join(erros_remocao)}" if erros_remocao else ""
+                            st.error("Nenhuma férias foi removida do banco. Verifique se esse período ainda existe no cadastro." + detalhe)
 
     elif sec_main == "🖨️ Impressão":
         ui_section("Impressão", f"Subaba ativa: {sec_imp}")
