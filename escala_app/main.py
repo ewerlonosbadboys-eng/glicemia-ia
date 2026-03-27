@@ -15303,16 +15303,20 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
         cinfo2.caption('Sem comunicados ativos no portal no momento.')
 
     tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+        '📢 Informações',
         '📋 Escala Oficial',
         '🕒 Pré-Escala',
         '📝 Histórico de Mudanças',
         '✍️ Assinaturas',
-        '📢 Informações',
         '🏖️ Férias',
         '🌴 Sugestão de Folgas',
     ])
 
     with tab1:
+        ui_section('Informações do setor', 'Comunicados, orientações do RH, resultados, imagens e PDFs publicados pelo líder.')
+        render_portal_informativos(df_infos_ativas, key_prefix=f'portal_info_{setor}_{chapa}')
+
+    with tab2:
         ui_section(f"Escala oficial — {mes_ref:02d}/{ano_ref}", "Competência fechada e pronta para consulta, impressão e assinatura quando aplicável.")
         c1, c2, c3 = st.columns(3)
         c1.metric('Versão atual', ass_escala.get('versao', 1))
@@ -15336,7 +15340,7 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
             else:
                 st.info('A assinatura da escala do mês vigente fica na aba Assinaturas.')
 
-    with tab2:
+    with tab3:
         ui_section(f"Pré-escala — {prox_mes:02d}/{prox_ano}", "Prévia do próximo mês para consulta do colaborador antes da oficialização.")
         st.warning('Prévia do próximo mês. Ainda não é oficial, não pode ser assinada e pode ser alterada até a liberação do líder.')
         if df_pre.empty:
@@ -15345,7 +15349,7 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
             render_escala_espelho_colaborador(df_pre, f'Pré-escala — {prox_mes:02d}/{prox_ano}')
             st.caption('Assinatura bloqueada até o início do mês vigente correspondente. A pré-escala sempre mostra o próximo mês da competência selecionada.')
 
-    with tab3:
+    with tab4:
         ui_section(f"Histórico de mudanças — {mes_ref:02d}/{ano_ref}", "Acompanhe retificações e alterações registradas sem perder o histórico do mês.")
         m1, m2 = st.columns(2)
         m1.metric('Mudanças registradas no mês vigente', len(hist) if hasattr(hist, '__len__') else 0)
@@ -15362,7 +15366,7 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
             st.dataframe(hist_view[keep_cols], use_container_width=True, hide_index=True)
             st.caption('A assinatura dessas mudanças fica concentrada na aba Assinaturas.')
 
-    with tab4:
+    with tab5:
         ui_section(f"Assinaturas — {mes_ref:02d}/{ano_ref}", "Controle de assinatura da escala oficial e do histórico do mês selecionado.")
         sub1, sub2 = st.tabs(['🗓️ Assinatura da Escala do Mês', '🔁 Assinatura de Mudanças'])
 
@@ -15407,10 +15411,6 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
                         salvar_assinatura_portal(setor, chapa, ano_ref, mes_ref, 'historico')
                         st.success('Mudanças do mês vigente assinadas com sucesso.')
                         st.rerun()
-
-    with tab5:
-        ui_section('Informações do setor', 'Comunicados, orientações do RH, resultados, imagens e PDFs publicados pelo líder.')
-        render_portal_informativos(df_infos_ativas, key_prefix=f'portal_info_{setor}_{chapa}')
 
     with tab6:
         st.markdown(f"#### Férias — {mes_ref:02d}/{ano_ref}")
