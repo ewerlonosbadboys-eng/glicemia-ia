@@ -2958,6 +2958,7 @@ def get_app_like_nav_config(is_admin_area: bool, setor: str = "", modo_gestao_so
                 ("✅ Preferência por subgrupo", {"sec_main": "⚙️ Ajustes", "sec_aj": "✅ Preferência por subgrupo"}),
                 ("📌 Subgrupos (editável)", {"sec_main": "⚙️ Ajustes", "sec_aj": "📌 Subgrupos (editável)"}),
                 ("✏️ Retificar folga, horário e subgrupo", {"sec_main": "⚙️ Ajustes", "sec_aj": "✏️ Retificar folga, horário e subgrupo"}),
+                ("📢 Informações do portal", {"sec_main": "⚙️ Ajustes", "sec_aj": "📢 Informações do portal"}),
                 ("✍️ Assinaturas", {"sec_main": "✍️ Assinaturas"}),
                 ("📨 Minhas solicitações", {"sec_main": "📨 Minhas solicitações"}),
             ],
@@ -3057,6 +3058,7 @@ DATA_DIR = APP_DIR / "data"
 BACKUP_DIR = str(DATA_DIR / "backups")
 DB_PATH = str(DATA_DIR / "escala.db")
 ROOT_LEGACY_DB_PATH = str(APP_DIR / "escala.db")
+INFORMATIVOS_DIR = APP_DIR / "data" / "informativos"
 BUNDLED_LATEST_STABLE_CANDIDATES = [
     APP_DIR / "latest_stable.db",
     APP_DIR / "data" / "latest_stable.db",
@@ -5667,6 +5669,28 @@ def db_init():
         motivo TEXT,
         observacao TEXT,
         status TEXT NOT NULL DEFAULT 'Em análise',
+        criado_em TEXT NOT NULL,
+        atualizado_em TEXT NOT NULL
+    )
+    """)
+
+    _safe_exec(cur, """
+    CREATE TABLE IF NOT EXISTS portal_informativos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        setor TEXT NOT NULL,
+        titulo TEXT NOT NULL,
+        mensagem TEXT,
+        tipo TEXT NOT NULL DEFAULT 'Informativo',
+        prioridade TEXT NOT NULL DEFAULT 'Normal',
+        fixado INTEGER NOT NULL DEFAULT 0,
+        ativo INTEGER NOT NULL DEFAULT 1,
+        data_inicio TEXT,
+        data_fim TEXT,
+        nome_imagem TEXT,
+        caminho_imagem TEXT,
+        nome_pdf TEXT,
+        caminho_pdf TEXT,
+        criado_por TEXT,
         criado_em TEXT NOT NULL,
         atualizado_em TEXT NOT NULL
     )
@@ -14945,6 +14969,273 @@ def list_solicitacoes_setor(setor: str) -> pd.DataFrame:
     con.close()
     return q
 
+def _safe_informativo_filename(nome: str) -> str:
+    nome = str(nome or '').strip()
+    nome = os.path.basename(nome)
+    nome = re.sub(r'[^A-Za-z0-9._-]+', '_', nome)
+    return nome or 'arquivo'
+
+
+def ensure_portal_informativos_storage() -> Path:
+    INFORMATIVOS_DIR.mkdir(parents=True, exist_ok=True)
+    return INFORMATIVOS_DIR
+
+
+def ensure_portal_informativos_schema() -> None:
+    """
+    Garante a tabela e adiciona colunas faltantes sem quebrar bancos antigos.
+    Evita erro no portal quando a base já existia antes desta funcionalidade.
+    """
+    con = db_conn()
+    cur = con.cursor()
+    try:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS portal_informativos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                setor TEXT NOT NULL,
+                titulo TEXT NOT NULL,
+                mensagem TEXT,
+                tipo TEXT NOT NULL DEFAULT 'Informativo',
+                prioridade TEXT NOT NULL DEFAULT 'Normal',
+                fixado INTEGER NOT NULL DEFAULT 0,
+                ativo INTEGER NOT NULL DEFAULT 1,
+                data_inicio TEXT,
+                data_fim TEXT,
+                nome_imagem TEXT,
+                caminho_imagem TEXT,
+                nome_pdf TEXT,
+                caminho_pdf TEXT,
+                criado_por TEXT,
+                criado_em TEXT NOT NULL,
+                atualizado_em TEXT NOT NULL
+            )
+        """)
+
+        cur.execute("PRAGMA table_info(portal_informativos)")
+        cols = {str(r[1]).strip().lower() for r in (cur.fetchall() or []) if len(r) > 1}
+
+        adds = [
+            ("titulo", "TEXT NOT NULL DEFAULT ''"),
+            ("mensagem", "TEXT"),
+            ("tipo", "TEXT NOT NULL DEFAULT 'Informativo'"),
+            ("prioridade", "TEXT NOT NULL DEFAULT 'Normal'"),
+            ("fixado", "INTEGER NOT NULL DEFAULT 0"),
+            ("ativo", "INTEGER NOT NULL DEFAULT 1"),
+            ("data_inicio", "TEXT"),
+            ("data_fim", "TEXT"),
+            ("nome_imagem", "TEXT"),
+            ("caminho_imagem", "TEXT"),
+            ("nome_pdf", "TEXT"),
+            ("caminho_pdf", "TEXT"),
+            ("criado_por", "TEXT"),
+            ("criado_em", "TEXT NOT NULL DEFAULT ''"),
+            ("atualizado_em", "TEXT NOT NULL DEFAULT ''"),
+        ]
+        for col, ddl in adds:
+            if col.lower() not in cols:
+                cur.execute(f"ALTER TABLE portal_informativos ADD COLUMN {col} {ddl}")
+
+        con.commit()
+    finally:
+        con.close()
+
+
+def _save_informativo_upload(setor: str, uploaded_file, prefixo: str = 'arquivo'):
+    if uploaded_file is None:
+        return '', ''
+    base_dir = ensure_portal_informativos_storage() / _norm_setor(setor)
+    base_dir.mkdir(parents=True, exist_ok=True)
+    original_name = _safe_informativo_filename(getattr(uploaded_file, 'name', '') or f'{prefixo}.bin')
+    stem, ext = os.path.splitext(original_name)
+    if not ext:
+        ext = '.bin'
+    token = f"{prefixo}_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
+    final_name = _safe_informativo_filename(f"{token}_{stem}{ext}")
+    final_path = base_dir / final_name
+    data = uploaded_file.getvalue()
+    with open(final_path, 'wb') as f:
+        f.write(data)
+    return original_name, str(final_path)
+
+
+def criar_portal_informativo(setor: str, titulo: str, mensagem: str, tipo: str = 'Informativo', prioridade: str = 'Normal',
+                             fixado: bool = False, ativo: bool = True, data_inicio=None, data_fim=None,
+                             imagem_file=None, pdf_file=None, criado_por: str = '') -> int:
+    ensure_portal_informativos_schema()
+    agora = datetime.now().isoformat()
+    nome_img, caminho_img = _save_informativo_upload(setor, imagem_file, 'img') if imagem_file is not None else ('', '')
+    nome_pdf, caminho_pdf = _save_informativo_upload(setor, pdf_file, 'pdf') if pdf_file is not None else ('', '')
+
+    def _fmt_dt(v):
+        if v in (None, ''):
+            return ''
+        try:
+            return pd.to_datetime(v).date().isoformat()
+        except Exception:
+            return str(v)
+
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute(
+        """
+        INSERT INTO portal_informativos(
+            setor, titulo, mensagem, tipo, prioridade, fixado, ativo, data_inicio, data_fim,
+            nome_imagem, caminho_imagem, nome_pdf, caminho_pdf, criado_por, criado_em, atualizado_em
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            _norm_setor(setor),
+            str(titulo or '').strip(),
+            str(mensagem or '').strip(),
+            str(tipo or 'Informativo').strip() or 'Informativo',
+            str(prioridade or 'Normal').strip() or 'Normal',
+            1 if bool(fixado) else 0,
+            1 if bool(ativo) else 0,
+            _fmt_dt(data_inicio),
+            _fmt_dt(data_fim),
+            nome_img,
+            caminho_img,
+            nome_pdf,
+            caminho_pdf,
+            str(criado_por or '').strip(),
+            agora,
+            agora,
+        )
+    )
+    novo_id = int(cur.lastrowid or 0)
+    con.commit()
+    con.close()
+    return novo_id
+
+
+def atualizar_status_informativo(informativo_id: int, ativo: bool):
+    ensure_portal_informativos_schema()
+    agora = datetime.now().isoformat()
+    con = db_conn()
+    cur = con.cursor()
+    cur.execute('UPDATE portal_informativos SET ativo=?, atualizado_em=? WHERE id=?', (1 if bool(ativo) else 0, agora, int(informativo_id)))
+    con.commit()
+    con.close()
+
+
+def list_portal_informativos(setor: str, somente_ativos: bool = False, ref_date=None) -> pd.DataFrame:
+    ensure_portal_informativos_schema()
+    con = db_conn()
+    try:
+        q = pd.read_sql_query(
+            """
+            SELECT *
+            FROM portal_informativos
+            WHERE UPPER(TRIM(setor)) = ?
+            ORDER BY COALESCE(fixado, 0) DESC,
+                     CASE UPPER(TRIM(COALESCE(prioridade, 'NORMAL')))
+                        WHEN 'URGENTE' THEN 0
+                        WHEN 'IMPORTANTE' THEN 1
+                        ELSE 2
+                     END ASC,
+                     COALESCE(criado_em, '') DESC, id DESC
+            """,
+            con, params=(_norm_setor(setor),)
+        )
+    except Exception:
+        q = pd.DataFrame(columns=[
+            'id','setor','titulo','mensagem','tipo','prioridade','fixado','ativo','data_inicio','data_fim',
+            'nome_imagem','caminho_imagem','nome_pdf','caminho_pdf','criado_por','criado_em','atualizado_em'
+        ])
+    finally:
+        con.close()
+    if q.empty:
+        return q
+
+    if somente_ativos:
+        if ref_date is None:
+            ref_date = datetime.now().date()
+        else:
+            try:
+                ref_date = pd.to_datetime(ref_date).date()
+            except Exception:
+                ref_date = datetime.now().date()
+
+        def _ativo_row(r):
+            if int(r.get('ativo', 1) or 0) != 1:
+                return False
+            ini = str(r.get('data_inicio') or '').strip()
+            fim = str(r.get('data_fim') or '').strip()
+            try:
+                if ini and pd.to_datetime(ini).date() > ref_date:
+                    return False
+            except Exception:
+                pass
+            try:
+                if fim and pd.to_datetime(fim).date() < ref_date:
+                    return False
+            except Exception:
+                pass
+            return True
+
+        q = q[q.apply(_ativo_row, axis=1)].copy()
+    return q
+
+
+def _render_pdf_download_from_path(path_pdf: str, nome_pdf: str, key: str):
+    try:
+        if not path_pdf or not os.path.exists(path_pdf):
+            st.caption('PDF não encontrado no armazenamento local.')
+            return
+        with open(path_pdf, 'rb') as f:
+            pdf_bytes = f.read()
+        st.download_button(
+            '📄 Abrir / baixar PDF',
+            data=pdf_bytes,
+            file_name=(nome_pdf or os.path.basename(path_pdf) or 'informativo.pdf'),
+            mime='application/pdf',
+            key=key,
+            use_container_width=False,
+        )
+    except Exception as e:
+        st.caption(f'Falha ao preparar PDF: {e}')
+
+
+def render_portal_informativos(df_info: pd.DataFrame, key_prefix: str = 'portal_info'):
+    if df_info is None or df_info.empty:
+        st.info('Nenhum informativo ativo no momento.')
+        return
+
+    for idx, row in df_info.reset_index(drop=True).iterrows():
+        titulo = str(row.get('titulo') or 'Informativo').strip()
+        tipo = str(row.get('tipo') or 'Informativo').strip()
+        prioridade = str(row.get('prioridade') or 'Normal').strip()
+        criado_por = str(row.get('criado_por') or '').strip()
+        criado_em = str(row.get('criado_em') or '').strip()
+        mensagem = str(row.get('mensagem') or '').strip()
+        fixado = bool(int(row.get('fixado', 0) or 0))
+
+        badges = []
+        if fixado:
+            badges.append('📌 Fixado')
+        if prioridade:
+            badges.append(f'Prioridade: {prioridade}')
+        if tipo:
+            badges.append(tipo)
+
+        with st.container(border=True):
+            st.markdown(f"### {titulo}")
+            st.caption(' • '.join([b for b in badges if b]))
+            if criado_por or criado_em:
+                st.caption(f"Publicado por: {criado_por or '-'} | Em: {criado_em or '-'}")
+            if mensagem:
+                st.write(mensagem)
+            caminho_img = str(row.get('caminho_imagem') or '').strip()
+            if caminho_img and os.path.exists(caminho_img):
+                try:
+                    st.image(caminho_img, use_container_width=True)
+                except Exception:
+                    pass
+            caminho_pdf = str(row.get('caminho_pdf') or '').strip()
+            if caminho_pdf:
+                _render_pdf_download_from_path(caminho_pdf, str(row.get('nome_pdf') or '').strip(), key=f'{key_prefix}_pdf_{idx}_{int(row.get("id") or 0)}')
+
+
 def atualizar_status_solicitacao(solicitacao_id: int, novo_status: str):
     agora = datetime.now().isoformat()
     con = db_conn()
@@ -15002,12 +15293,21 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
     hist = get_overrides_colaborador_mes(setor, chapa, ano_ref, mes_ref)
     ass_escala = get_assinatura_status(setor, chapa, ano_ref, mes_ref, 'oficial')
     ass_mud = get_assinatura_status(setor, chapa, ano_ref, mes_ref, 'historico')
+    df_infos_ativas = list_portal_informativos(setor, somente_ativos=True)
 
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    cinfo1, cinfo2 = st.columns([1, 3])
+    cinfo1.metric('Informativos ativos', len(df_infos_ativas))
+    if len(df_infos_ativas) > 0:
+        cinfo2.info('Há comunicados do líder / RH disponíveis na aba Informações.')
+    else:
+        cinfo2.caption('Sem comunicados ativos no portal no momento.')
+
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
         '📋 Escala Oficial',
         '🕒 Pré-Escala',
         '📝 Histórico de Mudanças',
         '✍️ Assinaturas',
+        '📢 Informações',
         '🏖️ Férias',
         '🌴 Sugestão de Folgas',
     ])
@@ -15109,6 +15409,10 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
                         st.rerun()
 
     with tab5:
+        ui_section('Informações do setor', 'Comunicados, orientações do RH, resultados, imagens e PDFs publicados pelo líder.')
+        render_portal_informativos(df_infos_ativas, key_prefix=f'portal_info_{setor}_{chapa}')
+
+    with tab6:
         st.markdown(f"#### Férias — {mes_ref:02d}/{ano_ref}")
         rows_fer = [r for r in (list_ferias(setor) or []) if _norm_chapa(r[0]) == chapa]
         if not rows_fer:
@@ -15148,7 +15452,7 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
             st.dataframe(df_fer, use_container_width=True, hide_index=True)
             st.caption('As férias exibidas aqui são somente do colaborador logado.')
 
-    with tab6:
+    with tab7:
         st.markdown('#### Sugestão de Folgas')
         suba, subb = st.tabs(['🌴 Sugestão de Folgas', '📨 Minhas solicitações'])
 
@@ -17116,6 +17420,7 @@ def page_app():
                 ("✅ Preferência por subgrupo", "✅ Preferência por subgrupo", "ges_menu_preferencia"),
                 ("📌 Subgrupos (editável)", "📌 Subgrupos (editável)", "ges_menu_subgrupos"),
                 ("✏️ Retificar folga, horário e subgrupo", "✏️ Retificar folga, horário e subgrupo", "ges_menu_retificar"),
+                ("📢 Informações do portal", "📢 Informações do portal", "ges_menu_informativos"),
                 ("✍️ Assinaturas", "✍️ Assinaturas", "ges_menu_assinaturas"),
                 ("📨 Minhas solicitações", "📨 Minhas solicitações", "ges_menu_solicitacoes"),
             ]
@@ -17490,7 +17795,7 @@ def page_app():
                 st.rerun()
         else:
             cst3.caption('🔓 Reabrir competência: disponível somente para admin.')
-        if status_comp == 'FECHADA' and sec_aj != '✏️ Retificar folga, horário e subgrupo':
+        if status_comp == 'FECHADA' and sec_aj not in ('✏️ Retificar folga, horário e subgrupo', '📢 Informações do portal'):
             st.error('🔒 Competência fechada: nesta área a visualização é apenas leitura. Use a subaba de retificação para correções pontuais.')
 
         _ajustes_precisam_escala = sec_aj in ("🧩 Folgas manuais em grade", "📊 Contagens por dia", "🔁 Troca de horários")
@@ -18330,6 +18635,80 @@ def page_app():
                             st.rerun()
                     else:
                         st.caption("Nenhum subgrupo cadastrado.")
+
+        elif sec_aj == "📢 Informações do portal":
+                st.markdown("## 📢 Informações do portal")
+                st.caption("Publique comunicados do RH, avisos, resultados, imagens e PDFs para aparecer no portal do colaborador do setor.")
+
+                with st.form(f"form_info_portal::{setor}::{ano}::{mes}", clear_on_submit=False):
+                    ci1, ci2, ci3 = st.columns([2, 1, 1])
+                    titulo_info = ci1.text_input("Título do informativo")
+                    tipo_info = ci2.selectbox("Tipo", ['Informativo', 'RH', 'Aviso', 'Resultado', 'Treinamento', 'Escala', 'Outro'])
+                    prioridade_info = ci3.selectbox("Prioridade", ['Normal', 'Importante', 'Urgente'])
+                    mensagem_info = st.text_area("Mensagem", height=160)
+                    cd1, cd2, cd3 = st.columns([1, 1, 1])
+                    data_inicio_info = cd1.date_input("Data de início", value=datetime.now().date(), key=f"info_dt_ini::{setor}::{ano}::{mes}")
+                    usar_data_fim = cd2.checkbox("Definir data final", value=False, key=f"info_usa_fim::{setor}::{ano}::{mes}")
+                    data_fim_info = cd3.date_input("Data final", value=datetime.now().date(), key=f"info_dt_fim::{setor}::{ano}::{mes}", disabled=(not usar_data_fim))
+                    ce1, ce2, ce3 = st.columns([1, 1, 1])
+                    fixado_info = ce1.checkbox("Fixar no topo", value=False)
+                    ativo_info = ce2.checkbox("Publicar ativo", value=True)
+                    ce3.caption("Colaborador verá somente os comunicados ativos do próprio setor.")
+                    imagem_info = st.file_uploader("Imagem do comunicado (opcional)", type=['png', 'jpg', 'jpeg', 'webp'], key=f"info_img::{setor}::{ano}::{mes}")
+                    pdf_info = st.file_uploader("PDF anexo (opcional)", type=['pdf'], key=f"info_pdf::{setor}::{ano}::{mes}")
+                    salvar_info = st.form_submit_button("📢 Publicar informativo", use_container_width=True)
+
+                if salvar_info:
+                    titulo_limpo = str(titulo_info or '').strip()
+                    mensagem_limpa = str(mensagem_info or '').strip()
+                    if not titulo_limpo:
+                        st.warning('Informe um título para publicar o comunicado.')
+                    else:
+                        data_fim_final = data_fim_info if usar_data_fim else None
+                        criar_portal_informativo(
+                            setor=setor,
+                            titulo=titulo_limpo,
+                            mensagem=mensagem_limpa,
+                            tipo=tipo_info,
+                            prioridade=prioridade_info,
+                            fixado=fixado_info,
+                            ativo=ativo_info,
+                            data_inicio=data_inicio_info,
+                            data_fim=data_fim_final,
+                            imagem_file=imagem_info,
+                            pdf_file=pdf_info,
+                            criado_por=str(st.session_state.get('auth_nome') or st.session_state.get('auth_chapa') or ''),
+                        )
+                        st.success('Informativo publicado com sucesso no portal do colaborador.')
+                        st.rerun()
+
+                df_infos_admin = list_portal_informativos(setor, somente_ativos=False)
+                if df_infos_admin.empty:
+                    st.info('Nenhum informativo publicado ainda para este setor.')
+                else:
+                    st.markdown('### Informativos já publicados')
+                    for _, info_row in df_infos_admin.iterrows():
+                        info_id = int(info_row.get('id') or 0)
+                        ativo_row = bool(int(info_row.get('ativo', 0) or 0))
+                        titulo_row = str(info_row.get('titulo') or 'Informativo').strip()
+                        with st.container(border=True):
+                            top1, top2 = st.columns([3, 2])
+                            top1.markdown(f"**{titulo_row}**")
+                            top1.caption(f"Tipo: {str(info_row.get('tipo') or '-')} | Prioridade: {str(info_row.get('prioridade') or '-')} | Fixado: {'Sim' if bool(int(info_row.get('fixado', 0) or 0)) else 'Não'}")
+                            top2.caption(f"Publicado em: {str(info_row.get('criado_em') or '-')}")
+                            msg_row = str(info_row.get('mensagem') or '').strip()
+                            if msg_row:
+                                st.write(msg_row)
+                            if str(info_row.get('nome_imagem') or '').strip():
+                                st.caption(f"Imagem: {str(info_row.get('nome_imagem') or '').strip()}")
+                            if str(info_row.get('nome_pdf') or '').strip():
+                                st.caption(f"PDF: {str(info_row.get('nome_pdf') or '').strip()}")
+                            a1, a2 = st.columns([1, 4])
+                            label_btn = '🚫 Desativar' if ativo_row else '✅ Reativar'
+                            if a1.button(label_btn, key=f"info_toggle::{setor}::{info_id}", use_container_width=True):
+                                atualizar_status_informativo(info_id, not ativo_row)
+                                st.rerun()
+                            a2.caption('Desativado não aparece mais no portal, mas continua salvo no histórico do setor.')
 
     # ------------------------------------------------------
     # ABA 4: Férias
