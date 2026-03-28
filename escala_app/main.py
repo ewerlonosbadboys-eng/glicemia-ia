@@ -95,87 +95,6 @@ from reportlab.lib import colors
 st.set_page_config(page_title="Escala 5x2 Oficial", layout="wide")
 
 
-# =========================================================
-# PATCH ANTI-PERDA — CAMADA EXTRA DEFENSIVA
-# =========================================================
-def _anti_perda_db_tem_dados_reais(db_path: str | None = None) -> bool:
-    alvo = str(db_path or "")
-    if not alvo:
-        try:
-            alvo = str(DB_PATH)
-        except Exception:
-            return False
-    try:
-        db_file = Path(alvo)
-        if (not db_file.exists()) or db_file.stat().st_size <= 0:
-            return False
-        con = sqlite3.connect(str(db_file), check_same_thread=False)
-        try:
-            tabelas = [str(r[0]) for r in con.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-            ).fetchall() if r and r[0]]
-            if len(tabelas) >= 6:
-                return True
-            for tb in ("colaboradores", "escala_mes", "overrides", "ferias", "usuarios_sistema", "setores"):
-                if tb not in tabelas:
-                    continue
-                try:
-                    row = con.execute(f'SELECT COUNT(*) FROM "{tb}"').fetchone()
-                    if row and int(row[0] or 0) > 0:
-                        return True
-                except Exception:
-                    pass
-        finally:
-            con.close()
-    except Exception:
-        return False
-    return False
-
-def _anti_perda_snapshot_local(reason: str = "manual") -> None:
-    try:
-        fn = globals().get("_save_latest_stable_snapshot_safely")
-        if callable(fn):
-            try:
-                fn(include_rolling=True)
-                return
-            except TypeError:
-                fn()
-                return
-    except Exception:
-        pass
-    try:
-        origem = Path(str(DB_PATH))
-        if not origem.exists() or origem.stat().st_size <= 0:
-            return
-        pasta_backup = Path(str(BACKUP_DIR))
-        pasta_backup.mkdir(parents=True, exist_ok=True)
-        destino_latest = pasta_backup / "latest_stable.db"
-        try:
-            shutil.copy2(origem, destino_latest)
-        except Exception:
-            pass
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        destino_rolling = pasta_backup / f"anti_perda_{ts}.db"
-        try:
-            shutil.copy2(origem, destino_rolling)
-        except Exception:
-            pass
-    except Exception:
-        pass
-
-def protecao_inicial_anti_perda() -> None:
-    try:
-        if _anti_perda_db_tem_dados_reais():
-            print("✅ ANTI-PERDA: banco com dados detectado — restore agressivo evitado.")
-        else:
-            print("⚠️ ANTI-PERDA: banco sem dados relevantes detectado no boot.")
-    except Exception as e:
-        try:
-            print(f"⚠️ ANTI-PERDA: falha na verificação inicial: {e}")
-        except Exception:
-            pass
-
-
 def aplicar_tema_premium_etapa1():
     st.markdown("""
     <style>
@@ -1416,10 +1335,6 @@ def salvar_retificacao_competencia(setor: str, ano: int, mes: int, chapa: str, d
                 agora_iso,
             ))
         con.commit()
-        try:
-            _anti_perda_snapshot_local("salvar_retificacao_competencia")
-        except Exception:
-            pass
     finally:
         con.close()
 
@@ -20380,49 +20295,162 @@ def page_app():
 
 
 
-def _fast_restore_bundled_latest_before_start() -> None:
+def _db_tem_dados_reais(path) -> bool:
     """
-    Restore mínimo e rápido antes de qualquer inicialização pesada:
-    - só restaura se o banco local realmente estiver ausente/vazio
-    - evita sobrescrever um banco válido que já tenha dados reais
-    - copia latest_stable.db para data/escala.db somente quando necessário
+    Validação forte do banco atual.
+    Só considera válido quando o SQLite está íntegro e há dados reais
+    em pelo menos uma tabela crítica do app.
     """
     try:
-        app_dir = Path(__file__).resolve().parent
-        data_dir = app_dir / "data"
-        db_path = data_dir / "escala.db"
-        backup_candidates = [
-            app_dir / "latest_stable.db",
-            app_dir / "backups" / "latest_stable.db",
-            app_dir / "data" / "latest_stable.db",
-        ]
-        data_dir.mkdir(parents=True, exist_ok=True)
+        p = Path(path)
+        if not p.exists() or p.stat().st_size <= 0:
+            return False
+
+        conn = sqlite3.connect(str(p), check_same_thread=False)
+        try:
+            row = conn.execute("PRAGMA integrity_check").fetchone()
+            if not row or str(row[0]).strip().lower() != "ok":
+                return False
+
+            tabelas_criticas = [
+                "colaboradores",
+                "escala_mensal",
+                "escala_estado",
+                "ferias",
+                "retificacoes_competencia",
+                "subgrupo_competencia",
+                "competencia_status",
+            ]
+
+            total = 0
+            existentes = 0
+            for tb in tabelas_criticas:
+                try:
+                    r = conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                        (tb,)
+                    ).fetchone()
+                    if r:
+                        existentes += 1
+                        c = conn.execute(f"SELECT COUNT(*) FROM {tb}").fetchone()
+                        total += int((c[0] if c else 0) or 0)
+                except Exception:
+                    pass
+
+            if existentes == 0:
+                return False
+
+            return total > 0
+        finally:
+            conn.close()
+    except Exception:
+        return False
+
+
+
+def _restore_automatico_se_banco_vazio() -> bool:
+    """
+    Boot blindado:
+    1) se o banco atual já tem dados reais, mantém exatamente ele;
+    2) se estiver vazio/inválido, tenta restaurar automaticamente do melhor latest_stable disponível;
+    3) espelha o banco restaurado para BACKUP_DIR/latest_stable.db.
+    """
+    try:
+        _ensure_backup_dir()
+        current = Path(DB_PATH)
+
+        if _db_tem_dados_reais(current):
+            print("✅ Banco atual já tem dados reais. Restore ignorado.")
+            return False
+
+        print("⚠️ Banco vazio, ausente ou sem dados reais. Tentando restore automático...")
+
+        candidatos = []
 
         try:
-            if _anti_perda_db_tem_dados_reais(str(db_path)):
-                return
+            latest_local = Path(BACKUP_DIR) / "latest_stable.db"
+            if latest_local.exists():
+                candidatos.append(latest_local)
         except Exception:
             pass
 
-        db_ok = False
         try:
-            db_ok = db_path.exists() and db_path.stat().st_size > 0 and _validate_sqlite_file(str(db_path))
+            candidatos.extend(list(_bundled_latest_stable_paths()))
         except Exception:
-            db_ok = db_path.exists() and db_path.stat().st_size > 0
+            pass
 
-        if db_ok:
-            return
+        try:
+            app_dir = Path(__file__).resolve().parent
+            candidatos.extend([
+                app_dir / "latest_stable.db",
+                app_dir / "backups" / "latest_stable.db",
+                app_dir / "data" / "latest_stable.db",
+            ])
+        except Exception:
+            pass
 
-        for backup in backup_candidates:
-            if backup.exists() and backup.stat().st_size > 0:
-                shutil.copy2(backup, db_path)
+        vistos = set()
+        finais = []
+        for p in candidatos:
+            try:
+                rp = str(Path(p).resolve())
+            except Exception:
+                rp = str(p)
+            if rp not in vistos:
+                vistos.add(rp)
+                finais.append(Path(p))
+
+        for origem in finais:
+            try:
+                if not origem.exists() or origem == current:
+                    continue
+                if not _validate_sqlite_file(str(origem)):
+                    continue
+                if not _db_tem_dados_reais(origem):
+                    continue
+
+                current.parent.mkdir(parents=True, exist_ok=True)
                 try:
-                    latest_local = Path(BACKUP_DIR) / "latest_stable.db"
-                    latest_local.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(backup, latest_local)
+                    if current.exists():
+                        current.unlink(missing_ok=True)
                 except Exception:
                     pass
-                break
+
+                try:
+                    _sqlite_backup_copy(str(origem), str(current))
+                except Exception:
+                    shutil.copy2(origem, current)
+
+                if _db_tem_dados_reais(current):
+                    print(f"✅ Restore automático concluído a partir de: {origem}")
+                    try:
+                        latest_local = Path(BACKUP_DIR) / "latest_stable.db"
+                        latest_local.parent.mkdir(parents=True, exist_ok=True)
+                        _sqlite_backup_copy(str(current), str(latest_local))
+                    except Exception:
+                        try:
+                            shutil.copy2(current, latest_local)
+                        except Exception:
+                            pass
+                    return True
+            except Exception as e:
+                print(f"Erro ao tentar restore de {origem}: {e}")
+
+        print("❌ Nenhum backup válido com dados reais foi encontrado.")
+        return False
+    except Exception as e:
+        print(f"Erro no restore automático inteligente: {e}")
+        return False
+
+
+
+def _fast_restore_bundled_latest_before_start() -> None:
+    """
+    Mantido por compatibilidade.
+    Agora delega para o restore inteligente anti-perda.
+    """
+    try:
+        _restore_automatico_se_banco_vazio()
     except Exception:
         pass
 
@@ -20430,7 +20458,7 @@ def _fast_restore_bundled_latest_before_start() -> None:
 # =========================================================
 # MAIN
 # =========================================================
-_fast_restore_bundled_latest_before_start()
+_restore_automatico_se_banco_vazio()
 validar_contrato_sistema()
 
 if st.session_state["auth"] is None and QUICK_LOGIN_BOOT:
