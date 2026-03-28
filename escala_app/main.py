@@ -1339,6 +1339,10 @@ def salvar_retificacao_competencia(setor: str, ano: int, mes: int, chapa: str, d
         con.close()
 
     clear_retificacao_related_caches()
+    try:
+        _force_persist_latest_stable_now("salvar_retificacao_competencia", include_rolling=True)
+    except Exception:
+        pass
 
 
 def excluir_retificacao_competencia(setor: str, ano: int, mes: int, chapa: str, dia: int) -> bool:
@@ -3478,6 +3482,39 @@ def _save_latest_stable_snapshot_safely(include_rolling: bool = False) -> None:
     except Exception:
         pass
 
+
+def _force_persist_latest_stable_now(reason: str = "manual_save", include_rolling: bool = True) -> None:
+    """
+    Persistência reforçada do latest_stable após salvamentos críticos.
+    Mantém cópia em APP_DIR/latest_stable.db e BACKUP_DIR/latest_stable.db.
+    Observação: em Streamlit Cloud, persistência definitiva após reboot depende
+    de uma fonte externa (ex.: Supabase ou atualização do repositório), mas esta
+    rotina garante o snapshot local imediato da sessão.
+    """
+    try:
+        _ensure_runtime_storage_ready()
+    except Exception:
+        pass
+    try:
+        _save_latest_stable_snapshot_safely(include_rolling=bool(include_rolling))
+    except Exception:
+        try:
+            current = Path(DB_PATH)
+            if current.exists():
+                for target in [Path(APP_DIR) / "latest_stable.db", Path(BACKUP_DIR) / "latest_stable.db"]:
+                    try:
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(current, target)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+    try:
+        if SUPABASE_SYNC_ENABLED:
+            _supabase_request_push_async(force=True)
+    except Exception:
+        pass
+
 def _bootstrap_from_supabase_after_schema(force: bool = False) -> bool:
     global _SUPABASE_BOOTSTRAP_DONE
     if _SUPABASE_BOOTSTRAP_DONE and not force:
@@ -3886,19 +3923,19 @@ class SQLiteSyncConnection(sqlite3.Connection):
     def commit(self):
         result = super().commit()
         try:
-            _maybe_save_latest_stable_snapshot_fast("commit")
+            _force_persist_latest_stable_now("commit", include_rolling=True)
         except Exception:
             pass
         if SUPABASE_AUTO_PUSH_ON_COMMIT:
             try:
-                _supabase_request_push_async(force=False)
+                _supabase_request_push_async(force=True)
             except Exception:
                 pass
         return result
 
     def close(self):
         try:
-            _maybe_save_latest_stable_snapshot_fast("close")
+            _force_persist_latest_stable_now("close", include_rolling=False)
         except Exception:
             pass
         if SUPABASE_AUTO_PUSH_ON_CLOSE:
@@ -4255,6 +4292,10 @@ def create_backup_now(prefix="manual") -> str:
         except Exception:
             pass
     _rotate_backup_files_safely()
+    try:
+        _force_persist_latest_stable_now(f"create_backup_now::{prefix}", include_rolling=False)
+    except Exception:
+        pass
     return str(dst)
 
 
@@ -10234,6 +10275,10 @@ def save_estado_mes(setor: str, ano: int, mes: int, estado: dict):
         st.cache_data.clear()
     except Exception:
         pass
+    try:
+        _force_persist_latest_stable_now("save_estado_mes", include_rolling=False)
+    except Exception:
+        pass
 
 @st.cache_data(show_spinner=False, ttl=30)
 def load_estado_prev(setor: str, ano: int, mes: int):
@@ -10423,6 +10468,10 @@ def set_override(setor: str, ano: int, mes: int, chapa: str, dia: int, campo: st
         st.cache_data.clear()
     except Exception:
         pass
+    try:
+        _force_persist_latest_stable_now("set_override", include_rolling=False)
+    except Exception:
+        pass
 
 
 def delete_override(setor: str, ano: int, mes: int, chapa: str, dia: int, campo: str | None = None):
@@ -10444,6 +10493,10 @@ def delete_override(setor: str, ano: int, mes: int, chapa: str, dia: int, campo:
     con.close()
     try:
         st.cache_data.clear()
+    except Exception:
+        pass
+    try:
+        _force_persist_latest_stable_now("delete_override", include_rolling=False)
     except Exception:
         pass
 
@@ -11162,6 +11215,10 @@ def save_escala_mes_db(setor: str, ano: int, mes: int, historico_df_por_chapa: d
     con.close()
     try:
         st.cache_data.clear()
+    except Exception:
+        pass
+    try:
+        _force_persist_latest_stable_now("save_escala_mes_db", include_rolling=True)
     except Exception:
         pass
 
