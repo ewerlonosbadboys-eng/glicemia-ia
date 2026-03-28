@@ -991,10 +991,7 @@ def set_status_competencia(setor: str, ano: int, mes: int, status: str) -> None:
 
     if novo == 'FECHADA':
         try:
-            snap_key = f"{_norm_setor(setor)}_{int(ano)}_{int(mes)}"
-            if st.session_state.get("snapshot_ok") != snap_key:
-                rebuild_colaborador_competencia_snapshot(setor, int(ano), int(mes))
-                st.session_state["snapshot_ok"] = snap_key
+            rebuild_colaborador_competencia_snapshot(setor, int(ano), int(mes))
         except Exception:
             pass
 
@@ -1217,7 +1214,7 @@ def get_colaborador_competencia_snapshot(setor: str, chapa: str, ano: int, mes: 
 def clear_retificacao_related_caches() -> None:
     """
     Limpa somente os caches realmente afetados pela retificação.
-    Evita clear_retificacao_related_caches() global, que deixa a tela inteira pesada.
+    Evita st.cache_data.clear() global, que deixa a tela inteira pesada.
     """
     for fn_name in [
         'load_retificacoes_competencia',
@@ -6469,7 +6466,7 @@ def decidir_pendencia_ax_generica(pendencia_id: int, aprovador_nome: str, aprova
         payload = json.loads(payload_json or '{}')
         _aplicar_pendencia_ax_generica(payload)
     try:
-        clear_retificacao_related_caches()
+        st.cache_data.clear()
     except Exception:
         pass
 
@@ -6687,7 +6684,7 @@ def admin_update_funcionario(setor: str, chapa_atual: str, nome_novo: str, subgr
         pass
 
     try:
-        clear_retificacao_related_caches()
+        st.cache_data.clear()
     except Exception:
         pass
 
@@ -6754,7 +6751,7 @@ def admin_rename_setor_global(setor_atual: str, setor_novo: str) -> dict:
         con.close()
 
     try:
-        clear_retificacao_related_caches()
+        st.cache_data.clear()
     except Exception:
         pass
 
@@ -6815,7 +6812,7 @@ def admin_delete_setor_global(setor_nome: str) -> dict:
         con.close()
 
     try:
-        clear_retificacao_related_caches()
+        st.cache_data.clear()
     except Exception:
         pass
 
@@ -6876,7 +6873,7 @@ def create_colaborador(nome: str, setor: str, chapa: str, subgrupo: str = "", en
         except Exception:
             pass
     try:
-        clear_retificacao_related_caches()
+        st.cache_data.clear()
     except Exception:
         pass
 
@@ -6957,7 +6954,7 @@ def delete_colaborador_total(setor: str, chapa: str):
     except Exception:
         pass
     try:
-        clear_retificacao_related_caches()
+        st.cache_data.clear()
     except Exception:
         pass
 
@@ -7104,7 +7101,7 @@ def update_colaborador_perfil(setor: str, chapa_antiga: str, chapa_nova: str, no
     except Exception:
         pass
     try:
-        clear_retificacao_related_caches()
+        st.cache_data.clear()
     except Exception:
         pass
 
@@ -7477,7 +7474,7 @@ def set_rodizio_caixa_regra_extra(setor: str, horario_ref: str, qtd_extra: int, 
     finally:
         con.close()
     try:
-        clear_retificacao_related_caches()
+        st.cache_data.clear()
     except Exception:
         pass
 
@@ -7569,7 +7566,7 @@ def set_rodizio_caixa_cfg(setor: str, subgrupo_origem: str, subgrupo_destino: st
     con.commit()
     con.close()
     try:
-        clear_retificacao_related_caches()
+        st.cache_data.clear()
     except Exception:
         pass
 
@@ -8839,7 +8836,7 @@ def aplicar_rodizio_caixa_mes(setor: str, ano: int, mes: int, simulacao: dict):
         pass
 
     try:
-        clear_retificacao_related_caches()
+        st.cache_data.clear()
     except Exception:
         pass
 
@@ -8899,7 +8896,7 @@ def aplicar_ajuste_complementar_rodizio_caixa_mes(setor: str, ano: int, mes: int
         con.close()
 
     try:
-        clear_retificacao_related_caches()
+        st.cache_data.clear()
     except Exception:
         pass
 
@@ -8988,7 +8985,7 @@ def sincronizar_subgrupos_base_rodizio_caixa(setor: str, ano: int, mes: int, sub
         pass
 
     try:
-        clear_retificacao_related_caches()
+        st.cache_data.clear()
     except Exception:
         pass
 
@@ -9136,7 +9133,7 @@ def transferencia_suprema_caixa_02_para_01(setor: str, ano: int, mes: int, subgr
         pass
 
     try:
-        clear_retificacao_related_caches()
+        st.cache_data.clear()
     except Exception:
         pass
 
@@ -9299,7 +9296,7 @@ def resetar_rodizio_caixa_mes(setor: str, ano: int, mes: int, subgrupo_origem: s
         pass
 
     try:
-        clear_retificacao_related_caches()
+        st.cache_data.clear()
     except Exception:
         pass
 
@@ -9489,7 +9486,7 @@ def aplicar_preview_aprovacao_rodizio_caixa(setor: str, ano: int, mes: int, slot
         _upsert_subgrupo_preview_competencia(setor, ano, mes, destino_chapa, subgrupo_origem, entrada_sel_atual)
 
     try:
-        clear_retificacao_related_caches()
+        st.cache_data.clear()
     except Exception:
         pass
     return None
@@ -9519,7 +9516,7 @@ def resetar_preview_aprovacao_rodizio_caixa(setor: str, ano: int, mes: int, slot
         _restaurar_subgrupo_preview_competencia(setor, ano, mes, destino_chapa, subgrupo_destino, entrada_dest_original)
 
     try:
-        clear_retificacao_related_caches()
+        st.cache_data.clear()
     except Exception:
         pass
     return None
@@ -9871,7 +9868,7 @@ def add_subgrupo(setor: str, nome: str):
     con.commit()
     con.close()
     try:
-        clear_retificacao_related_caches()
+        st.cache_data.clear()
     except Exception:
         pass
 
@@ -9884,7 +9881,7 @@ def delete_subgrupo(setor: str, nome: str):
     con.commit()
     con.close()
     try:
-        clear_retificacao_related_caches()
+        st.cache_data.clear()
     except Exception:
         pass
 
@@ -9922,7 +9919,7 @@ def set_subgrupo_regras(setor: str, subgrupo: str, regras: dict):
     con.commit()
     con.close()
     try:
-        clear_retificacao_related_caches()
+        st.cache_data.clear()
     except Exception:
         pass
 
@@ -9937,7 +9934,7 @@ def add_ferias(setor: str, chapa: str, inicio: date, fim: date):
     con.commit()
     con.close()
     try:
-        clear_retificacao_related_caches()
+        st.cache_data.clear()
     except Exception:
         pass
 
@@ -9950,7 +9947,7 @@ def _clear_ferias_caches():
         except Exception:
             pass
     try:
-        clear_retificacao_related_caches()
+        st.cache_data.clear()
     except Exception:
         pass
     try:
@@ -10247,7 +10244,7 @@ def save_estado_mes(setor: str, ano: int, mes: int, estado: dict):
     con.commit()
     con.close()
     try:
-        clear_retificacao_related_caches()
+        st.cache_data.clear()
     except Exception:
         pass
 
@@ -10436,7 +10433,7 @@ def set_override(setor: str, ano: int, mes: int, chapa: str, dia: int, campo: st
     con.commit()
     con.close()
     try:
-        clear_retificacao_related_caches()
+        st.cache_data.clear()
     except Exception:
         pass
 
@@ -10459,7 +10456,7 @@ def delete_override(setor: str, ano: int, mes: int, chapa: str, dia: int, campo:
     con.commit()
     con.close()
     try:
-        clear_retificacao_related_caches()
+        st.cache_data.clear()
     except Exception:
         pass
 
@@ -10493,7 +10490,7 @@ def delete_overrides_mes(setor: str, ano: int, mes: int, keep_campos: set[str] |
     con.commit()
     con.close()
     try:
-        clear_retificacao_related_caches()
+        st.cache_data.clear()
     except Exception:
         pass
 
@@ -11177,7 +11174,7 @@ def save_escala_mes_db(setor: str, ano: int, mes: int, historico_df_por_chapa: d
     con.commit()
     con.close()
     try:
-        clear_retificacao_related_caches()
+        st.cache_data.clear()
     except Exception:
         pass
 
@@ -17944,8 +17941,13 @@ def page_app():
                         if auto_readequar:
                             _regenerar_mes_inteiro(setor, ano, mes, seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
 
-                        st.success(f"Salvo! Folgas travadas: {set_folga} | Trabalhos travados: {set_trab}.")
-                        st.rerun()
+                        try:
+                    clear_retificacao_related_caches()
+                except Exception:
+                    pass
+                st.success(f"Salvo! Folgas travadas: {set_folga} | Trabalhos travados: {set_trab}.")
+                st.rerun()
+                        st.session_state["_ajustes_saved_at"] = time.time()
 
                 elif sec_aj == "🧷 Folga fixa":
                     st.markdown("### 🧷 Folga fixa por colaborador")
@@ -17994,11 +17996,11 @@ def page_app():
                                 for dia in dias_mes_fixos:
                                     set_override(setor, ano, mes, chapa_ff, dia, "status", "Folga")
                             st.success("Folga fixa salva e aplicada como trava manual na competência ativa.")
-                            st.rerun()
+                            st.session_state["_ajustes_saved_at"] = time.time()
                     if col_ff2.button("🗑️ Remover folga fixa", key="folga_fixa_remover"):
                         remove_folga_fixa(setor, chapa_ff)
                         st.success("Folga fixa removida. As travas já gravadas no mês atual continuam até você alterar manualmente a grade ou regenerar.")
-                        st.rerun()
+                        st.session_state["_ajustes_saved_at"] = time.time()
                     folga_fixa_df = list_folga_fixa(setor)
                     if not folga_fixa_df.empty:
                         st.markdown("#### Folgas fixas cadastradas")
@@ -18482,7 +18484,7 @@ def page_app():
                                         _regenerar_mes_inteiro(setor, ano, mes, seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
 
                                     st.success(f"Salvo! Ação: {acao_th}. Aplicados: {applied}. Ignorados (por conflito com Folga/Férias): {skipped}.")
-                                    st.rerun()
+                                    st.session_state["_ajustes_saved_at"] = time.time()
 
         if sec_aj == "✏️ Retificar folga, horário e subgrupo":
             st.markdown("### ✏️ Retificar folga, horário e subgrupo")
@@ -19822,7 +19824,7 @@ def page_app():
                         ok = recover_system_user_from_colaborador(setor_rec, chapa_rec, senha_rec)
                         if ok:
                             try:
-                                clear_retificacao_related_caches()
+                                st.cache_data.clear()
                             except Exception:
                                 pass
                             st.success("Usuário recuperado com sucesso.")
@@ -19859,7 +19861,7 @@ def page_app():
                             create_colaborador(nome_final, setor_norm, chapa_norm, criar_login=False)
                         create_system_user(nome_final, setor_norm, chapa_norm, senha_final, is_lider=int(lider_man), is_admin=int(admin_man), is_ax_lider=0)
                         try:
-                            clear_retificacao_related_caches()
+                            st.cache_data.clear()
                         except Exception:
                             pass
                         st.success(f"Usuário salvo com sucesso. Senha ativa: {senha_final}")
@@ -20313,8 +20315,11 @@ def page_app():
 
 def _db_tem_dados_reais(path) -> bool:
     """
-    Validação ultraleve para evitar travar o boot.
-    Basta existir pelo menos 1 linha em uma tabela crítica.
+    Validação LEVE do banco atual para não travar o app em cada rerun.
+    Regras:
+    - arquivo precisa existir e ter tamanho > 0
+    - precisa abrir como SQLite
+    - precisa ter pelo menos 1 linha em uma tabela crítica OU ao menos a tabela colaboradores existente
     """
     try:
         p = Path(path)
@@ -20323,7 +20328,12 @@ def _db_tem_dados_reais(path) -> bool:
 
         conn = sqlite3.connect(str(p), check_same_thread=False)
         try:
-            tabelas = [
+            # checagem leve: confirma que é um SQLite utilizável
+            row = conn.execute("SELECT name FROM sqlite_master WHERE type='table' LIMIT 1").fetchone()
+            if not row:
+                return False
+
+            tabelas_rapidas = [
                 "colaboradores",
                 "retificacoes_competencia",
                 "subgrupo_competencia",
@@ -20332,18 +20342,31 @@ def _db_tem_dados_reais(path) -> bool:
                 "escala_mensal",
                 "escala_estado",
             ]
-            for tb in tabelas:
+
+            for tb in tabelas_rapidas:
                 try:
-                    row = conn.execute(f"SELECT 1 FROM {tb} LIMIT 1").fetchone()
-                    if row is not None:
+                    existe = conn.execute(
+                        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
+                        (tb,)
+                    ).fetchone()
+                    if not existe:
+                        continue
+                    linha = conn.execute(f"SELECT 1 FROM {tb} LIMIT 1").fetchone()
+                    if linha is not None:
                         return True
                 except Exception:
                     continue
-            return False
+
+            # fallback: se existe tabela colaboradores mesmo vazia, o banco é utilizável
+            existe_col = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='colaboradores' LIMIT 1"
+            ).fetchone()
+            return bool(existe_col)
         finally:
             conn.close()
     except Exception:
         return False
+
 
 
 def _restore_automatico_se_banco_vazio() -> bool:
