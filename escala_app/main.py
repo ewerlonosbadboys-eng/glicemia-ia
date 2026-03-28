@@ -3090,7 +3090,7 @@ SUPABASE_SCHEMA = (os.getenv("SUPABASE_SCHEMA") or "public").strip() or "public"
 SUPABASE_SYNC_ENABLED = bool(SUPABASE_URL and SUPABASE_KEY)
 SUPABASE_SYNC_DEBOUNCE_SEC = int(os.getenv("SUPABASE_SYNC_DEBOUNCE_SEC", "12") or 12)
 SUPABASE_AUTO_PULL_ON_START = (os.getenv("SUPABASE_AUTO_PULL_ON_START", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
-SUPABASE_AUTO_PUSH_ON_COMMIT = (os.getenv("SUPABASE_AUTO_PUSH_ON_COMMIT", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
+SUPABASE_AUTO_PUSH_ON_COMMIT = (os.getenv("SUPABASE_AUTO_PUSH_ON_COMMIT", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
 SUPABASE_AUTO_PUSH_ON_CLOSE = (os.getenv("SUPABASE_AUTO_PUSH_ON_CLOSE", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
 SUPABASE_ASYNC_PUSH_ENABLED = (os.getenv("SUPABASE_ASYNC_PUSH_ENABLED", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
 SUPABASE_ASYNC_PUSH_DELAY_SEC = float((os.getenv("SUPABASE_ASYNC_PUSH_DELAY_SEC", "2.0") or "2.0").strip())
@@ -20310,9 +20310,11 @@ def page_app():
 
 def _db_tem_dados_reais(path) -> bool:
     """
-    Validação forte do banco atual.
-    Só considera válido quando o SQLite está íntegro e há dados reais
-    em pelo menos uma tabela crítica do app.
+    Validação LEVE do banco atual para não travar o app em cada rerun.
+    Regras:
+    - arquivo precisa existir e ter tamanho > 0
+    - precisa abrir como SQLite
+    - precisa ter pelo menos 1 linha em uma tabela crítica OU ao menos a tabela colaboradores existente
     """
     try:
         p = Path(path)
@@ -20321,39 +20323,40 @@ def _db_tem_dados_reais(path) -> bool:
 
         conn = sqlite3.connect(str(p), check_same_thread=False)
         try:
-            row = conn.execute("PRAGMA integrity_check").fetchone()
-            if not row or str(row[0]).strip().lower() != "ok":
+            # checagem leve: confirma que é um SQLite utilizável
+            row = conn.execute("SELECT name FROM sqlite_master WHERE type='table' LIMIT 1").fetchone()
+            if not row:
                 return False
 
-            tabelas_criticas = [
+            tabelas_rapidas = [
                 "colaboradores",
-                "escala_mensal",
-                "escala_estado",
-                "ferias",
                 "retificacoes_competencia",
                 "subgrupo_competencia",
                 "competencia_status",
+                "ferias",
+                "escala_mensal",
+                "escala_estado",
             ]
 
-            total = 0
-            existentes = 0
-            for tb in tabelas_criticas:
+            for tb in tabelas_rapidas:
                 try:
-                    r = conn.execute(
-                        "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                    existe = conn.execute(
+                        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
                         (tb,)
                     ).fetchone()
-                    if r:
-                        existentes += 1
-                        c = conn.execute(f"SELECT COUNT(*) FROM {tb}").fetchone()
-                        total += int((c[0] if c else 0) or 0)
+                    if not existe:
+                        continue
+                    linha = conn.execute(f"SELECT 1 FROM {tb} LIMIT 1").fetchone()
+                    if linha is not None:
+                        return True
                 except Exception:
-                    pass
+                    continue
 
-            if existentes == 0:
-                return False
-
-            return total > 0
+            # fallback: se existe tabela colaboradores mesmo vazia, o banco é utilizável
+            existe_col = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='colaboradores' LIMIT 1"
+            ).fetchone()
+            return bool(existe_col)
         finally:
             conn.close()
     except Exception:
