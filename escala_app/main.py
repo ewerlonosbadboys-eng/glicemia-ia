@@ -17942,11 +17942,11 @@ def page_app():
                             _regenerar_mes_inteiro(setor, ano, mes, seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
 
                         try:
-                    clear_retificacao_related_caches()
-                except Exception:
-                    pass
-                st.success(f"Salvo! Folgas travadas: {set_folga} | Trabalhos travados: {set_trab}.")
-                st.rerun()
+                            clear_retificacao_related_caches()
+                        except Exception:
+                            pass
+                        st.success(f"Salvo! Folgas travadas: {set_folga} | Trabalhos travados: {set_trab}.")
+                        st.rerun()
                         st.session_state["_ajustes_saved_at"] = time.time()
 
                 elif sec_aj == "🧷 Folga fixa":
@@ -20478,7 +20478,7 @@ def _fast_restore_bundled_latest_before_start() -> None:
 
 # =========================================================
 # MAIN
-# ========================================================= 
+# =========================================================
 _restore_automatico_se_banco_vazio()
 validar_contrato_sistema()
 
