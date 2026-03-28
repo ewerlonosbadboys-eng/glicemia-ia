@@ -95,6 +95,87 @@ from reportlab.lib import colors
 st.set_page_config(page_title="Escala 5x2 Oficial", layout="wide")
 
 
+# =========================================================
+# PATCH ANTI-PERDA — CAMADA EXTRA DEFENSIVA
+# =========================================================
+def _anti_perda_db_tem_dados_reais(db_path: str | None = None) -> bool:
+    alvo = str(db_path or "")
+    if not alvo:
+        try:
+            alvo = str(DB_PATH)
+        except Exception:
+            return False
+    try:
+        db_file = Path(alvo)
+        if (not db_file.exists()) or db_file.stat().st_size <= 0:
+            return False
+        con = sqlite3.connect(str(db_file), check_same_thread=False)
+        try:
+            tabelas = [str(r[0]) for r in con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+            ).fetchall() if r and r[0]]
+            if len(tabelas) >= 6:
+                return True
+            for tb in ("colaboradores", "escala_mes", "overrides", "ferias", "usuarios_sistema", "setores"):
+                if tb not in tabelas:
+                    continue
+                try:
+                    row = con.execute(f'SELECT COUNT(*) FROM "{tb}"').fetchone()
+                    if row and int(row[0] or 0) > 0:
+                        return True
+                except Exception:
+                    pass
+        finally:
+            con.close()
+    except Exception:
+        return False
+    return False
+
+def _anti_perda_snapshot_local(reason: str = "manual") -> None:
+    try:
+        fn = globals().get("_save_latest_stable_snapshot_safely")
+        if callable(fn):
+            try:
+                fn(include_rolling=True)
+                return
+            except TypeError:
+                fn()
+                return
+    except Exception:
+        pass
+    try:
+        origem = Path(str(DB_PATH))
+        if not origem.exists() or origem.stat().st_size <= 0:
+            return
+        pasta_backup = Path(str(BACKUP_DIR))
+        pasta_backup.mkdir(parents=True, exist_ok=True)
+        destino_latest = pasta_backup / "latest_stable.db"
+        try:
+            shutil.copy2(origem, destino_latest)
+        except Exception:
+            pass
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        destino_rolling = pasta_backup / f"anti_perda_{ts}.db"
+        try:
+            shutil.copy2(origem, destino_rolling)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+def protecao_inicial_anti_perda() -> None:
+    try:
+        if _anti_perda_db_tem_dados_reais():
+            print("✅ ANTI-PERDA: banco com dados detectado — restore agressivo evitado.")
+        else:
+            print("⚠️ ANTI-PERDA: banco sem dados relevantes detectado no boot.")
+    except Exception as e:
+        try:
+            print(f"⚠️ ANTI-PERDA: falha na verificação inicial: {e}")
+        except Exception:
+            pass
+
+
 def aplicar_tema_premium_etapa1():
     st.markdown("""
     <style>
@@ -1335,6 +1416,10 @@ def salvar_retificacao_competencia(setor: str, ano: int, mes: int, chapa: str, d
                 agora_iso,
             ))
         con.commit()
+        try:
+            _anti_perda_snapshot_local("salvar_retificacao_competencia")
+        except Exception:
+            pass
     finally:
         con.close()
 
@@ -20298,9 +20383,9 @@ def page_app():
 def _fast_restore_bundled_latest_before_start() -> None:
     """
     Restore mínimo e rápido antes de qualquer inicialização pesada:
-    - se data/escala.db não existir ou vier zerado
-    - e existir latest_stable.db ao lado do main.py
-    - copia diretamente para data/escala.db
+    - só restaura se o banco local realmente estiver ausente/vazio
+    - evita sobrescrever um banco válido que já tenha dados reais
+    - copia latest_stable.db para data/escala.db somente quando necessário
     """
     try:
         app_dir = Path(__file__).resolve().parent
@@ -20312,9 +20397,22 @@ def _fast_restore_bundled_latest_before_start() -> None:
             app_dir / "data" / "latest_stable.db",
         ]
         data_dir.mkdir(parents=True, exist_ok=True)
-        db_ok = db_path.exists() and db_path.stat().st_size > 0
+
+        try:
+            if _anti_perda_db_tem_dados_reais(str(db_path)):
+                return
+        except Exception:
+            pass
+
+        db_ok = False
+        try:
+            db_ok = db_path.exists() and db_path.stat().st_size > 0 and _validate_sqlite_file(str(db_path))
+        except Exception:
+            db_ok = db_path.exists() and db_path.stat().st_size > 0
+
         if db_ok:
             return
+
         for backup in backup_candidates:
             if backup.exists() and backup.stat().st_size > 0:
                 shutil.copy2(backup, db_path)
