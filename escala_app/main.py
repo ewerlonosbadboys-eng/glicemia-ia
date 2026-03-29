@@ -96,6 +96,7 @@ from reportlab.lib import colors
 
 
 # ===== V113 BLINDAGEM (COMMIT REAL + ANTI-PERDA) =====
+
 def commit_blindado(con):
     try:
         con.commit()
@@ -113,13 +114,17 @@ def commit_blindado(con):
     except Exception:
         pass
     try:
+        load_overrides.clear()
+    except Exception:
+        pass
+    try:
+        get_hist_mes_com_overrides_cached.clear()
+    except Exception:
+        pass
+    try:
         st.cache_data.clear()
     except Exception:
         pass
-
-st.set_page_config(page_title="Escala 5x2 Oficial", layout="wide")
-
-
 
 def aplicar_tema_premium_etapa1():
     st.markdown("""
@@ -3916,39 +3921,9 @@ def _maybe_save_latest_stable_snapshot_fast(reason: str = "commit") -> None:
         pass
 
 
+
 def _persist_latest_stable_after_critical_save(reason: str = "manual") -> None:
     return
-
-class SQLiteSyncConnection(sqlite3.Connection):
-    def commit(self):
-        result = super().commit()
-        if SUPABASE_AUTO_PUSH_ON_COMMIT:
-            try:
-                _supabase_request_push_async(force=False)
-            except Exception:
-                pass
-        return result
-
-    def close(self):
-        if SUPABASE_AUTO_PUSH_ON_CLOSE:
-            try:
-                _supabase_request_push_async(force=True)
-            except Exception:
-                pass
-        return super().close()
-
-_RUNTIME_READY = False
-_RUNTIME_READY_AT = 0.0
-_RUNTIME_READY_TTL_SEC = 120.0
-_AUTO_BACKUP_DONE_SESSION = False
-
-
-# V90 — robustez de banco + bootstrap Supabase + snapshot seguro:
-# preserva o motor da escala e fortalece restore/sync.
-
-# V87 — robustez de banco:
-# procura automaticamente o banco mais completo em caminhos comuns
-# e copia para o caminho canônico do app (escala_app/data/escala.db)
 
 def _ensure_data_dir():
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -4009,6 +3984,7 @@ def _adopt_bundled_latest_stable_if_needed(force: bool = False) -> bool:
     return False
 
 
+
 def _db_candidate_paths() -> list[Path]:
     return [Path(DB_PATH)]
 
@@ -4064,6 +4040,7 @@ def _should_preserve_current_db() -> bool:
         pass
     return False
 
+
 def _pick_best_db_candidate() -> Path | None:
     return Path(DB_PATH)
 
@@ -4114,26 +4091,60 @@ def _migrate_legacy_db_if_needed():
             shutil.copy2(legacy, current)
 
 
+
 def _adopt_best_db_candidate_if_needed():
     return
+
 
 def _restore_from_latest_stable_if_needed():
     return
 
 def _ensure_local_db_bootstrap_enterprise() -> bool:
+    """
+    V97 ENTERPRISE
+    Boot em camadas:
+    1) mantém o banco atual se já for válido
+    2) tenta adotar latest_stable empacotado
+    3) tenta restore do latest_stable local/backups
+    4) tenta pull do Supabase
+    5) cria um SQLite mínimo se tudo falhar
+    Nunca bloqueia a abertura do app por base vazia.
+    """
     try:
-        current = Path(DB_PATH)
+        _ensure_backup_dir()
+    except Exception:
+        pass
+
+    current = Path(DB_PATH)
+    try:
+        if current.exists() and _validate_sqlite_file(str(current)):
+            return True
+    except Exception:
+        pass
+
+
+
+    try:
+        if SUPABASE_SYNC_ENABLED:
+            _restore_from_supabase_if_local_empty(force=True)
+            if current.exists() and _validate_sqlite_file(str(current)):
+                return True
+    except Exception as e:
+        _set_supabase_error(e)
+
+    try:
         current.parent.mkdir(parents=True, exist_ok=True)
-        con = sqlite3.connect(str(current), check_same_thread=False)
+        con = sqlite3.connect(str(current))
         try:
             con.execute("PRAGMA journal_mode=WAL")
             con.execute("PRAGMA foreign_keys=ON")
             commit_blindado(con)
         finally:
             con.close()
-        return True
+        return current.exists()
     except Exception:
         return False
+
 
 def _ensure_runtime_storage_ready(force: bool = False):
     global _RUNTIME_READY, _RUNTIME_READY_AT
@@ -10455,15 +10466,25 @@ def delete_overrides_mes(setor: str, ano: int, mes: int, keep_campos: set[str] |
         pass
 
 @st.cache_data(show_spinner=False, ttl=1)
+
+@st.cache_data(show_spinner=False, ttl=120)
 def load_overrides(setor: str, ano: int, mes: int):
-    setor_n = str(setor or '').strip().upper()
+    setor_n = str(setor or "").strip().upper()
     con = db_conn()
     try:
-        df = pd.read_sql_query("""
+        df = pd.read_sql_query(
+            """
             SELECT chapa, dia, campo, valor
             FROM overrides
-            WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=?
-        """, con, params=(setor_n, int(ano), int(mes)))
+            WHERE UPPER(TRIM(setor))=? AND ano=? AND mes=?
+            """,
+            con,
+            params=(setor_n, int(ano), int(mes)),
+        )
+        if not df.empty:
+            df["chapa"] = df["chapa"].astype(str).str.strip()
+            df["campo"] = df["campo"].astype(str).str.strip()
+            df["valor"] = df["valor"].astype(str)
         return df
     finally:
         con.close()
@@ -17907,11 +17928,7 @@ def page_app():
                             st.cache_data.clear()
                         except Exception:
                             pass
-                        for k in ("grid_editor", "grid_editor_preview", "grid_auto_regen"):
-                            try:
-                                st.session_state.pop(k, None)
-                            except Exception:
-                                pass
+                        st.session_state.pop("grid_editor", None)
                         st.session_state["_ajustes_saved_at"] = time.time()
                         st.success(f"Salvo! Folgas travadas: {set_folga} | Trabalhos travados: {set_trab}.")
                         st.rerun()
