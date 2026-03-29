@@ -19147,16 +19147,15 @@ def page_app():
                     cd1, cd2, cd3 = st.columns([1, 1, 1])
                     data_inicio_info = cd1.date_input("Data de início", value=datetime.now().date(), key=f"info_dt_ini::{setor}::{ano}::{mes}")
                     usar_data_fim = cd2.checkbox("Definir data final", value=False, key=f"info_usa_fim::{setor}::{ano}::{mes}")
-                    if usar_data_fim:
-                        data_fim_info = cd3.date_input(
-                            "Data final",
-                            value=datetime.now().date(),
-                            min_value=data_inicio_info,
-                            key=f"info_dt_fim::{setor}::{ano}::{mes}"
-                        )
-                    else:
-                        data_fim_info = None
-                        cd3.caption("Colaborador verá o aviso enquanto ele estiver ativo.")
+                    data_fim_info = cd3.date_input(
+                        "Data final (até quando ficará no ar)",
+                        value=data_inicio_info,
+                        min_value=data_inicio_info,
+                        key=f"info_dt_fim::{setor}::{ano}::{mes}",
+                        disabled=(not usar_data_fim)
+                    )
+                    if not usar_data_fim:
+                        cd3.caption("Marque a caixa para usar data final. Sem isso, o aviso fica no ar enquanto estiver ativo.")
                     ce1, ce2, ce3 = st.columns([1, 1, 1])
                     fixado_info = ce1.checkbox("Fixar no topo", value=False)
                     ativo_info = ce2.checkbox("Publicar ativo", value=True)
@@ -19172,9 +19171,7 @@ def page_app():
                         st.warning('Informe um título para publicar o comunicado.')
                     else:
                         data_fim_final = data_fim_info if usar_data_fim else None
-                        if usar_data_fim and not data_fim_final:
-                            st.warning('Informe a data final para o aviso.')
-                        elif usar_data_fim and data_fim_final < data_inicio_info:
+                        if usar_data_fim and data_fim_final < data_inicio_info:
                             st.warning('A data final não pode ser menor que a data de início.')
                         else:
                             criar_portal_informativo(
