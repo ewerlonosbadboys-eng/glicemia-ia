@@ -122,6 +122,17 @@ def commit_blindado(con):
     except Exception:
         pass
 
+def gerar_rotulos_dias_semana_pt(ano: int, mes: int) -> dict[str, str]:
+    mapa = {0: "seg", 1: "ter", 2: "qua", 3: "qui", 4: "sex", 5: "sáb", 6: "dom"}
+    qtd = calendar.monthrange(int(ano), int(mes))[1]
+    out = {}
+    for d in range(1, qtd + 1):
+        dow = date(int(ano), int(mes), int(d)).weekday()
+        out[str(d)] = f"{d}\n{mapa.get(dow, '')}"
+    return out
+
+
+
 st.set_page_config(page_title="Escala 5x2 Oficial", layout="wide")
 
 
@@ -17865,6 +17876,7 @@ def page_app():
 
                     qtd = calendar.monthrange(int(ano), int(mes))[1]
                     dias = list(range(1, qtd + 1))
+                    rotulos_dias = gerar_rotulos_dias_semana_pt(int(ano), int(mes))
 
                     # pega overrides existentes
                     ovdf = load_overrides(setor, ano, mes)
@@ -17897,7 +17909,7 @@ def page_app():
                         use_container_width=True,
                         hide_index=True,
                         num_rows="fixed",
-                        column_config={str(d): st.column_config.CheckboxColumn(str(d), width="small") for d in dias},
+                        column_config={str(d): st.column_config.CheckboxColumn(rotulos_dias.get(str(d), str(d)), width="small") for d in dias},
                         key="grid_editor"
                     )
 
