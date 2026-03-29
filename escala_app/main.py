@@ -17945,9 +17945,13 @@ def page_app():
                             clear_retificacao_related_caches()
                         except Exception:
                             pass
+                        try:
+                            _persist_latest_stable_after_critical_save("grade_manual")
+                        except Exception:
+                            pass
+                        st.session_state["_ajustes_saved_at"] = time.time()
                         st.success(f"Salvo! Folgas travadas: {set_folga} | Trabalhos travados: {set_trab}.")
                         st.rerun()
-                        st.session_state["_ajustes_saved_at"] = time.time()
 
                 elif sec_aj == "🧷 Folga fixa":
                     st.markdown("### 🧷 Folga fixa por colaborador")
@@ -17995,12 +17999,30 @@ def page_app():
                             if dias_mes_fixos:
                                 for dia in dias_mes_fixos:
                                     set_override(setor, ano, mes, chapa_ff, dia, "status", "Folga")
-                            st.success("Folga fixa salva e aplicada como trava manual na competência ativa.")
+                            try:
+                                clear_retificacao_related_caches()
+                            except Exception:
+                                pass
+                            try:
+                                _persist_latest_stable_after_critical_save("folga_fixa")
+                            except Exception:
+                                pass
                             st.session_state["_ajustes_saved_at"] = time.time()
+                            st.success("Folga fixa salva e aplicada como trava manual na competência ativa.")
+                            st.rerun()
                     if col_ff2.button("🗑️ Remover folga fixa", key="folga_fixa_remover"):
                         remove_folga_fixa(setor, chapa_ff)
-                        st.success("Folga fixa removida. As travas já gravadas no mês atual continuam até você alterar manualmente a grade ou regenerar.")
+                        try:
+                            clear_retificacao_related_caches()
+                        except Exception:
+                            pass
+                        try:
+                            _persist_latest_stable_after_critical_save("folga_fixa_remove")
+                        except Exception:
+                            pass
                         st.session_state["_ajustes_saved_at"] = time.time()
+                        st.success("Folga fixa removida. As travas já gravadas no mês atual continuam até você alterar manualmente a grade ou regenerar.")
+                        st.rerun()
                     folga_fixa_df = list_folga_fixa(setor)
                     if not folga_fixa_df.empty:
                         st.markdown("#### Folgas fixas cadastradas")
@@ -18483,8 +18505,17 @@ def page_app():
                                     if auto_readequar_th:
                                         _regenerar_mes_inteiro(setor, ano, mes, seed=int(st.session_state.get("last_seed", 0)), respeitar_ajustes=True)
 
-                                    st.success(f"Salvo! Ação: {acao_th}. Aplicados: {applied}. Ignorados (por conflito com Folga/Férias): {skipped}.")
+                                    try:
+                                        clear_retificacao_related_caches()
+                                    except Exception:
+                                        pass
+                                    try:
+                                        _persist_latest_stable_after_critical_save("troca_horarios")
+                                    except Exception:
+                                        pass
                                     st.session_state["_ajustes_saved_at"] = time.time()
+                                    st.success(f"Salvo! Ação: {acao_th}. Aplicados: {applied}. Ignorados (por conflito com Folga/Férias): {skipped}.")
+                                    st.rerun()
 
         if sec_aj == "✏️ Retificar folga, horário e subgrupo":
             st.markdown("### ✏️ Retificar folga, horário e subgrupo")
