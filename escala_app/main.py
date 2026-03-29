@@ -1,12 +1,3 @@
-_RUNTIME_READY = False
-_RUNTIME_READY_AT = 0.0
-_RUNTIME_READY_TTL_SEC = 120.0
-
-try:
-    SQLiteSyncConnection
-except NameError:
-    SQLiteSyncConnection = sqlite3.Connection
-
 # V112 INTEGRADA BLINDADA — anti-perda pós-reboot + persistência real
 # V97 ENTERPRISE — boot resiliente, restore em camadas e login sempre liberado
 # V97.3 PREMIUM UI — refinamento visual adicional sem alterar regras
@@ -80,6 +71,15 @@ import random
 import math
 import calendar
 import sqlite3
+
+_RUNTIME_READY = False
+_RUNTIME_READY_AT = 0.0
+_RUNTIME_READY_TTL_SEC = 120.0
+
+try:
+    SQLiteSyncConnection
+except NameError:
+    SQLiteSyncConnection = sqlite3.Connection
 import os
 import re
 import shutil
