@@ -3917,42 +3917,7 @@ def _maybe_save_latest_stable_snapshot_fast(reason: str = "commit") -> None:
 
 
 def _persist_latest_stable_after_critical_save(reason: str = "manual") -> None:
-    """
-    Persistência blindada após salvamentos importantes.
-    Faz checkpoint WAL e grava latest_stable imediatamente sem depender só do throttle.
-    """
-    try:
-        current = Path(DB_PATH)
-        if not current.exists() or not _validate_sqlite_file(str(current)):
-            return
-
-        try:
-            conn = _app_db_connect(DB_PATH)
-            try:
-                conn.execute("PRAGMA wal_checkpoint(FULL)")
-                conn.commit()
-            finally:
-                conn.close()
-        except Exception:
-            pass
-
-        _ensure_backup_dir()
-        latest = Path(BACKUP_DIR) / "latest_stable.db"
-        try:
-            _sqlite_backup_copy(str(current), str(latest))
-        except Exception:
-            shutil.copy2(current, latest)
-
-        if SUPABASE_AUTO_PUSH_ON_COMMIT or SUPABASE_AUTO_PUSH_ON_CLOSE:
-            try:
-                _supabase_request_push_async(force=False)
-            except Exception:
-                pass
-    except Exception:
-        try:
-            _save_latest_stable_snapshot_safely(include_rolling=False)
-        except Exception:
-            pass
+    return
 
 class SQLiteSyncConnection(sqlite3.Connection):
     def commit(self):
@@ -4045,31 +4010,7 @@ def _adopt_bundled_latest_stable_if_needed(force: bool = False) -> bool:
 
 
 def _db_candidate_paths() -> list[Path]:
-    app = APP_DIR
-    cands = [
-        Path(DB_PATH),
-        Path(ROOT_LEGACY_DB_PATH),
-        * _bundled_latest_stable_paths(),
-        app / "backups" / "latest_stable.db",
-        app / "backups" / "escala.db",
-        app / "data" / "latest_stable.db",
-        app / "escala_app" / "data" / "escala.db",
-        app / "escala_app" / "backups" / "latest_stable.db",
-        app.parent / "escala_app" / "data" / "escala.db",
-        app.parent / "escala_app" / "backups" / "latest_stable.db",
-    ]
-    out = []
-    seen = set()
-    for p in cands:
-        try:
-            rp = p.resolve()
-        except Exception:
-            rp = p
-        if str(rp) not in seen:
-            seen.add(str(rp))
-            out.append(Path(rp))
-    return out
-
+    return [Path(DB_PATH)]
 
 def _sqlite_table_count(db_path: str, table: str) -> int:
     try:
@@ -4124,15 +4065,7 @@ def _should_preserve_current_db() -> bool:
     return False
 
 def _pick_best_db_candidate() -> Path | None:
-    best = None
-    best_score = (-1, -1, -1, -1, -1, -1, -1)
-    for p in _db_candidate_paths():
-        score = _db_score(p)
-        if score > best_score:
-            best_score = score
-            best = p
-    return best if best_score[0] >= 0 else None
-
+    return Path(DB_PATH)
 
 def _sqlite_backup_copy(src_path: str, dst_path: str) -> None:
     src_path = str(src_path)
@@ -4182,106 +4115,25 @@ def _migrate_legacy_db_if_needed():
 
 
 def _adopt_best_db_candidate_if_needed():
-    _ensure_backup_dir()
-    current = Path(DB_PATH)
-
-    # Anti-perda: não substituir o banco atual se ele já tiver dados reais.
-    try:
-        if _should_preserve_current_db():
-            return
-    except Exception:
-        pass
-
-    best = _pick_best_db_candidate()
-    if best is None:
-        return
-    current_score = _db_score(current) if current.exists() else (-1, -1, -1, -1, -1, -1, -1)
-    best_score = _db_score(best)
-    if best_score > current_score and str(best) != str(current):
-        try:
-            current.parent.mkdir(parents=True, exist_ok=True)
-            _sqlite_backup_copy(str(best), str(current))
-        except Exception:
-            shutil.copy2(best, current)
-        latest = Path(BACKUP_DIR) / "latest_stable.db"
-        try:
-            _sqlite_backup_copy(str(current), str(latest))
-        except Exception:
-            shutil.copy2(current, latest)
+    return
 
 def _restore_from_latest_stable_if_needed():
-    _ensure_backup_dir()
-    current = Path(DB_PATH)
-
-    # Anti-perda: se o banco atual já tem dados reais, não restaurar snapshot antigo por cima.
-    try:
-        if _should_preserve_current_db():
-            return
-    except Exception:
-        pass
-
-    candidates = [Path(BACKUP_DIR) / "latest_stable.db"] + list(_bundled_latest_stable_paths())
-    if current.exists() and _validate_sqlite_file(str(current)):
-        return
-    for latest in candidates:
-        try:
-            if latest.exists() and _validate_sqlite_file(str(latest)):
-                try:
-                    if current.exists():
-                        current.unlink(missing_ok=True)
-                    _sqlite_backup_copy(str(latest), str(current))
-                except Exception:
-                    shutil.copy2(latest, current)
-                return
-        except Exception:
-            continue
+    return
 
 def _ensure_local_db_bootstrap_enterprise() -> bool:
-    """
-    V97 ENTERPRISE
-    Boot em camadas:
-    1) mantém o banco atual se já for válido
-    2) tenta adotar latest_stable empacotado
-    3) tenta restore do latest_stable local/backups
-    4) tenta pull do Supabase
-    5) cria um SQLite mínimo se tudo falhar
-    Nunca bloqueia a abertura do app por base vazia.
-    """
     try:
-        _ensure_backup_dir()
-    except Exception:
-        pass
-
-    current = Path(DB_PATH)
-    try:
-        if current.exists() and _validate_sqlite_file(str(current)):
-            return True
-    except Exception:
-        pass
-
-
-
-    try:
-        if SUPABASE_SYNC_ENABLED:
-            _restore_from_supabase_if_local_empty(force=True)
-            if current.exists() and _validate_sqlite_file(str(current)):
-                return True
-    except Exception as e:
-        _set_supabase_error(e)
-
-    try:
+        current = Path(DB_PATH)
         current.parent.mkdir(parents=True, exist_ok=True)
-        con = sqlite3.connect(str(current))
+        con = sqlite3.connect(str(current), check_same_thread=False)
         try:
             con.execute("PRAGMA journal_mode=WAL")
             con.execute("PRAGMA foreign_keys=ON")
             commit_blindado(con)
         finally:
             con.close()
-        return current.exists()
+        return True
     except Exception:
         return False
-
 
 def _ensure_runtime_storage_ready(force: bool = False):
     global _RUNTIME_READY, _RUNTIME_READY_AT
@@ -10604,26 +10456,17 @@ def delete_overrides_mes(setor: str, ano: int, mes: int, keep_campos: set[str] |
 
 @st.cache_data(show_spinner=False, ttl=1)
 def load_overrides(setor: str, ano: int, mes: int):
+    setor_n = str(setor or '').strip().upper()
     con = db_conn()
-    df = pd.read_sql_query("""
-        SELECT chapa, dia, campo, valor
-        FROM overrides
-        WHERE setor=? AND ano=? AND mes=?
-    """, con, params=(setor, int(ano), int(mes)))
-    con.close()
-    return df
-
-WEEKDAY_LABELS = ["seg", "ter", "qua", "qui", "sex", "sáb", "dom"]
-WEEKDAY_LABELS_LONG = {
-    0: "Segunda-feira",
-    1: "Terça-feira",
-    2: "Quarta-feira",
-    3: "Quinta-feira",
-    4: "Sexta-feira",
-    5: "Sábado",
-    6: "Domingo",
-}
-
+    try:
+        df = pd.read_sql_query("""
+            SELECT chapa, dia, campo, valor
+            FROM overrides
+            WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=?
+        """, con, params=(setor_n, int(ano), int(mes)))
+        return df
+    finally:
+        con.close()
 
 def _parse_hora_min(v: str) -> tuple[int, int]:
     s = str(v or "").strip()
@@ -18064,7 +17907,11 @@ def page_app():
                             st.cache_data.clear()
                         except Exception:
                             pass
-                        st.session_state.pop("grid_editor", None)
+                        for k in ("grid_editor", "grid_editor_preview", "grid_auto_regen"):
+                            try:
+                                st.session_state.pop(k, None)
+                            except Exception:
+                                pass
                         st.session_state["_ajustes_saved_at"] = time.time()
                         st.success(f"Salvo! Folgas travadas: {set_folga} | Trabalhos travados: {set_trab}.")
                         st.rerun()
