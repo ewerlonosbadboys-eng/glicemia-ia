@@ -3917,9 +3917,74 @@ def _maybe_save_latest_stable_snapshot_fast(reason: str = "commit") -> None:
         pass
 
 
-
 def _persist_latest_stable_after_critical_save(reason: str = "manual") -> None:
-    return
+    """
+    Persistência blindada após salvamentos importantes.
+    Faz checkpoint WAL e grava latest_stable imediatamente sem depender só do throttle.
+    """
+    try:
+        current = Path(DB_PATH)
+        if not current.exists() or not _validate_sqlite_file(str(current)):
+            return
+
+        try:
+            conn = _app_db_connect(DB_PATH)
+            try:
+                conn.execute("PRAGMA wal_checkpoint(FULL)")
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception:
+            pass
+
+        _ensure_backup_dir()
+        latest = Path(BACKUP_DIR) / "latest_stable.db"
+        try:
+            _sqlite_backup_copy(str(current), str(latest))
+        except Exception:
+            shutil.copy2(current, latest)
+
+        if SUPABASE_AUTO_PUSH_ON_COMMIT or SUPABASE_AUTO_PUSH_ON_CLOSE:
+            try:
+                _supabase_request_push_async(force=False)
+            except Exception:
+                pass
+    except Exception:
+        try:
+            _save_latest_stable_snapshot_safely(include_rolling=False)
+        except Exception:
+            pass
+
+class SQLiteSyncConnection(sqlite3.Connection):
+    def commit(self):
+        result = super().commit()
+        if SUPABASE_AUTO_PUSH_ON_COMMIT:
+            try:
+                _supabase_request_push_async(force=False)
+            except Exception:
+                pass
+        return result
+
+    def close(self):
+        if SUPABASE_AUTO_PUSH_ON_CLOSE:
+            try:
+                _supabase_request_push_async(force=True)
+            except Exception:
+                pass
+        return super().close()
+
+_RUNTIME_READY = False
+_RUNTIME_READY_AT = 0.0
+_RUNTIME_READY_TTL_SEC = 120.0
+_AUTO_BACKUP_DONE_SESSION = False
+
+
+# V90 — robustez de banco + bootstrap Supabase + snapshot seguro:
+# preserva o motor da escala e fortalece restore/sync.
+
+# V87 — robustez de banco:
+# procura automaticamente o banco mais completo em caminhos comuns
+# e copia para o caminho canônico do app (escala_app/data/escala.db)
 
 def _ensure_data_dir():
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -3980,9 +4045,32 @@ def _adopt_bundled_latest_stable_if_needed(force: bool = False) -> bool:
     return False
 
 
-
 def _db_candidate_paths() -> list[Path]:
-    return [Path(DB_PATH)]
+    app = APP_DIR
+    cands = [
+        Path(DB_PATH),
+        Path(ROOT_LEGACY_DB_PATH),
+        * _bundled_latest_stable_paths(),
+        app / "backups" / "latest_stable.db",
+        app / "backups" / "escala.db",
+        app / "data" / "latest_stable.db",
+        app / "escala_app" / "data" / "escala.db",
+        app / "escala_app" / "backups" / "latest_stable.db",
+        app.parent / "escala_app" / "data" / "escala.db",
+        app.parent / "escala_app" / "backups" / "latest_stable.db",
+    ]
+    out = []
+    seen = set()
+    for p in cands:
+        try:
+            rp = p.resolve()
+        except Exception:
+            rp = p
+        if str(rp) not in seen:
+            seen.add(str(rp))
+            out.append(Path(rp))
+    return out
+
 
 def _sqlite_table_count(db_path: str, table: str) -> int:
     try:
@@ -4036,12 +4124,16 @@ def _should_preserve_current_db() -> bool:
         pass
     return False
 
-
 def _pick_best_db_candidate() -> Path | None:
-    try:
-        return Path(DB_PATH)
-    except Exception:
-        return None
+    best = None
+    best_score = (-1, -1, -1, -1, -1, -1, -1)
+    for p in _db_candidate_paths():
+        score = _db_score(p)
+        if score > best_score:
+            best_score = score
+            best = p
+    return best if best_score[0] >= 0 else None
+
 
 def _sqlite_backup_copy(src_path: str, dst_path: str) -> None:
     src_path = str(src_path)
@@ -4090,13 +4182,60 @@ def _migrate_legacy_db_if_needed():
             shutil.copy2(legacy, current)
 
 
-
 def _adopt_best_db_candidate_if_needed():
-    return
+    _ensure_backup_dir()
+    current = Path(DB_PATH)
 
+    # Anti-perda: não substituir o banco atual se ele já tiver dados reais.
+    try:
+        if _should_preserve_current_db():
+            return
+    except Exception:
+        pass
+
+    best = _pick_best_db_candidate()
+    if best is None:
+        return
+    current_score = _db_score(current) if current.exists() else (-1, -1, -1, -1, -1, -1, -1)
+    best_score = _db_score(best)
+    if best_score > current_score and str(best) != str(current):
+        try:
+            current.parent.mkdir(parents=True, exist_ok=True)
+            _sqlite_backup_copy(str(best), str(current))
+        except Exception:
+            shutil.copy2(best, current)
+        latest = Path(BACKUP_DIR) / "latest_stable.db"
+        try:
+            _sqlite_backup_copy(str(current), str(latest))
+        except Exception:
+            shutil.copy2(current, latest)
 
 def _restore_from_latest_stable_if_needed():
-    return
+    _ensure_backup_dir()
+    current = Path(DB_PATH)
+
+    # Anti-perda: se o banco atual já tem dados reais, não restaurar snapshot antigo por cima.
+    try:
+        if _should_preserve_current_db():
+            return
+    except Exception:
+        pass
+
+    candidates = [Path(BACKUP_DIR) / "latest_stable.db"] + list(_bundled_latest_stable_paths())
+    if current.exists() and _validate_sqlite_file(str(current)):
+        return
+    for latest in candidates:
+        try:
+            if latest.exists() and _validate_sqlite_file(str(latest)):
+                try:
+                    if current.exists():
+                        current.unlink(missing_ok=True)
+                    _sqlite_backup_copy(str(latest), str(current))
+                except Exception:
+                    shutil.copy2(latest, current)
+                return
+        except Exception:
+            continue
 
 def _ensure_local_db_bootstrap_enterprise() -> bool:
     """
@@ -4145,18 +4284,26 @@ def _ensure_local_db_bootstrap_enterprise() -> bool:
         return False
 
 
-def _ensure_runtime_storage_ready(force: bool = False):
-    global _RUNTIME_READY, _RUNTIME_READY_AT
-    try:
-        now_ts = datetime.now().timestamp()
-    except Exception:
-        now_ts = 0.0
-    if (not force) and _RUNTIME_READY and (now_ts - float(_RUNTIME_READY_AT or 0.0) < float(_RUNTIME_READY_TTL_SEC)):
-        return
-    _ensure_backup_dir()
 
-    # Anti-perda: se o banco atual já está íntegro e com dados reais,
-    # não rodar adoções/restores que possam trazer estado antigo após reboot.
+def _ensure_runtime_storage_ready(force: bool = False):
+    global _RUNTIME_READY, _RUNTIME_READY_AT, _RUNTIME_READY_TTL_SEC
+
+    if "_RUNTIME_READY" not in globals():
+        _RUNTIME_READY = False
+    if "_RUNTIME_READY_AT" not in globals():
+        _RUNTIME_READY_AT = 0.0
+    if "_RUNTIME_READY_TTL_SEC" not in globals():
+        _RUNTIME_READY_TTL_SEC = 120.0
+
+    now_ts = time.time()
+    if (not force) and bool(_RUNTIME_READY) and ((now_ts - float(_RUNTIME_READY_AT or 0.0)) < float(_RUNTIME_READY_TTL_SEC or 120.0)):
+        return
+
+    try:
+        _ensure_backup_dir()
+    except Exception:
+        pass
+
     try:
         if _should_preserve_current_db():
             _RUNTIME_READY = True
@@ -4165,14 +4312,23 @@ def _ensure_runtime_storage_ready(force: bool = False):
     except Exception:
         pass
 
-    _ensure_local_db_bootstrap_enterprise()
-    _migrate_legacy_db_if_needed()
-    if SUPABASE_AUTO_PULL_ON_START:
-        try:
-            if SUPABASE_SYNC_ENABLED and not _sqlite_app_has_meaningful_data():
+    try:
+        _ensure_local_db_bootstrap_enterprise()
+    except Exception:
+        pass
+
+    try:
+        _migrate_legacy_db_if_needed()
+    except Exception:
+        pass
+
+    try:
+        if globals().get("SUPABASE_AUTO_PULL_ON_START", False):
+            if globals().get("SUPABASE_SYNC_ENABLED", False) and not _sqlite_app_has_meaningful_data():
                 _supabase_pull_all_to_sqlite(force=True)
-        except Exception:
-            pass
+    except Exception:
+        pass
+
     _RUNTIME_READY = True
     _RUNTIME_READY_AT = now_ts
 
@@ -20488,7 +20644,7 @@ def _fast_restore_bundled_latest_before_start() -> None:
 
 # =========================================================
 # MAIN
-# ========================================================= 
+# =========================================================
 _restore_automatico_se_banco_vazio()
 validar_contrato_sistema()
 
