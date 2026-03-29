@@ -122,6 +122,8 @@ def commit_blindado(con):
     except Exception:
         pass
 
+st.set_page_config(page_title="Escala 5x2 Oficial", layout="wide")
+
 def gerar_rotulos_dias_semana_pt(ano: int, mes: int) -> dict[str, str]:
     mapa = {0: "seg", 1: "ter", 2: "qua", 3: "qui", 4: "sex", 5: "sáb", 6: "dom"}
     qtd = calendar.monthrange(int(ano), int(mes))[1]
@@ -131,9 +133,14 @@ def gerar_rotulos_dias_semana_pt(ano: int, mes: int) -> dict[str, str]:
         out[str(d)] = f"{d}\n{mapa.get(dow, '')}"
     return out
 
+def aplicar_rotulos_dias_semana_df(df: pd.DataFrame, ano: int, mes: int) -> pd.DataFrame:
+    try:
+        rot = gerar_rotulos_dias_semana_pt(int(ano), int(mes))
+        ren = {c: rot[str(c)] for c in df.columns if str(c) in rot}
+        return df.rename(columns=ren)
+    except Exception:
+        return df
 
-
-st.set_page_config(page_title="Escala 5x2 Oficial", layout="wide")
 
 
 
@@ -17775,7 +17782,7 @@ def page_app():
                     st.markdown("---")
                     st.markdown("### 👤 Visualizar colaborador (detalhado)")
                     ch_view = st.selectbox("Chapa:", list(hist_db.keys()), key="view_ch")
-                    st.dataframe(hist_db[ch_view], use_container_width=True, height=420)
+                    st.dataframe(aplicar_rotulos_dias_semana_df(hist_db[ch_view], ano, mes), use_container_width=True, height=420)
                 else:
                     st.info("Sem escala no mês. Clique em **Gerar agora**.")
             else:
@@ -18229,7 +18236,7 @@ def page_app():
                         st.info("Gere a escala primeiro para visualizar o histórico.")
                     else:
                         df_hist_dia = build_historico_folgas_diario(setor, ano, mes, hist_view)
-                        st.dataframe(df_hist_dia, use_container_width=True, hide_index=True)
+                        st.dataframe(aplicar_rotulos_dias_semana_df(df_hist_dia, ano, mes), use_container_width=True, hide_index=True)
                         dias_hist = df_hist_dia["Dia"].tolist()
                         dia_sel_hist = st.selectbox("Ver detalhes do dia:", options=dias_hist, key="hist_dia_sel")
                         row_hist = df_hist_dia[df_hist_dia["Dia"] == int(dia_sel_hist)].iloc[0]
@@ -18343,7 +18350,7 @@ def page_app():
                                     use_container_width=True,
                                     hide_index=True,
                                     num_rows="fixed",
-                                    column_config={str(d): st.column_config.CheckboxColumn(str(d), width="small") for d in dias2},
+                                    column_config={str(d): st.column_config.CheckboxColumn(rotulos_dias2.get(str(d), str(d)), width="small") for d in dias2},
                                     key="th_grid_editor"
                                 )
 
@@ -20523,7 +20530,7 @@ def _fast_restore_bundled_latest_before_start() -> None:
 
 # =========================================================
 # MAIN
-# ========================================================= 
+# =========================================================
 _restore_automatico_se_banco_vazio()
 validar_contrato_sistema()
 
