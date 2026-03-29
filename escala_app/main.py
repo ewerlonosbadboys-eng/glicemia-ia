@@ -95,7 +95,7 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib import colors
 
 # ===== V113 BLINDAGEM (COMMIT REAL + ANTI-PERDA) =====
-def commit_blindado(con)
+def commit_blindado(con):
     try:
         import streamlit as st
         st.cache_data.clear()
