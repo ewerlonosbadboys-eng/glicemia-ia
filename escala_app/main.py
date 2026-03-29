@@ -18255,6 +18255,7 @@ def page_app():
 
                                 qtd2 = calendar.monthrange(int(ano), int(mes))[1]
                                 dias2 = list(range(1, qtd2 + 1))
+                                rotulos_dias2 = gerar_rotulos_dias_semana_pt(int(ano), int(mes))
 
                                 # --- filtro/seleção de colaboradores (mesmo layout da grade de folgas)
                                 show_all_th = st.checkbox("👥 Mostrar todos os colaboradores", value=False, key="th_show_all")
