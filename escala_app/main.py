@@ -113,14 +113,13 @@ def commit_blindado(con):
             _os.fsync(fd.fileno())
     except Exception:
         pass
-    try:
-        load_overrides.clear()
-    except Exception:
-        pass
-    try:
-        get_hist_mes_com_overrides_cached.clear()
-    except Exception:
-        pass
+    for fn_name in ("load_overrides", "get_hist_mes_com_overrides_cached"):
+        try:
+            fn = globals().get(fn_name)
+            if fn is not None and hasattr(fn, "clear"):
+                fn.clear()
+        except Exception:
+            pass
     try:
         st.cache_data.clear()
     except Exception:
@@ -4146,18 +4145,40 @@ def _ensure_local_db_bootstrap_enterprise() -> bool:
         return False
 
 
+_RUNTIME_READY = False
+_RUNTIME_READY_AT = 0.0
+_RUNTIME_READY_TTL_SEC = 120.0
+_AUTO_BACKUP_DONE_SESSION = False
+
+
 def _ensure_runtime_storage_ready(force: bool = False):
     global _RUNTIME_READY, _RUNTIME_READY_AT
+    try:
+        _RUNTIME_READY
+    except NameError:
+        _RUNTIME_READY = False
+    try:
+        _RUNTIME_READY_AT
+    except NameError:
+        _RUNTIME_READY_AT = 0.0
+    try:
+        _RUNTIME_READY_TTL_SEC
+    except NameError:
+        globals()["_RUNTIME_READY_TTL_SEC"] = 120.0
+
     try:
         now_ts = datetime.now().timestamp()
     except Exception:
         now_ts = 0.0
-    if (not force) and _RUNTIME_READY and (now_ts - float(_RUNTIME_READY_AT or 0.0) < float(_RUNTIME_READY_TTL_SEC)):
-        return
-    _ensure_backup_dir()
 
-    # Anti-perda: se o banco atual já está íntegro e com dados reais,
-    # não rodar adoções/restores que possam trazer estado antigo após reboot.
+    if (not force) and bool(_RUNTIME_READY) and (now_ts - float(_RUNTIME_READY_AT or 0.0) < float(globals().get("_RUNTIME_READY_TTL_SEC", 120.0))):
+        return
+
+    try:
+        _ensure_backup_dir()
+    except Exception:
+        pass
+
     try:
         if _should_preserve_current_db():
             _RUNTIME_READY = True
@@ -4166,14 +4187,23 @@ def _ensure_runtime_storage_ready(force: bool = False):
     except Exception:
         pass
 
-    _ensure_local_db_bootstrap_enterprise()
-    _migrate_legacy_db_if_needed()
-    if SUPABASE_AUTO_PULL_ON_START:
+    try:
+        _ensure_local_db_bootstrap_enterprise()
+    except Exception:
+        pass
+
+    try:
+        _migrate_legacy_db_if_needed()
+    except Exception:
+        pass
+
+    if globals().get("SUPABASE_AUTO_PULL_ON_START", False):
         try:
-            if SUPABASE_SYNC_ENABLED and not _sqlite_app_has_meaningful_data():
+            if globals().get("SUPABASE_SYNC_ENABLED", False) and not _sqlite_app_has_meaningful_data():
                 _supabase_pull_all_to_sqlite(force=True)
         except Exception:
             pass
+
     _RUNTIME_READY = True
     _RUNTIME_READY_AT = now_ts
 
