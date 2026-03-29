@@ -19147,7 +19147,16 @@ def page_app():
                     cd1, cd2, cd3 = st.columns([1, 1, 1])
                     data_inicio_info = cd1.date_input("Data de início", value=datetime.now().date(), key=f"info_dt_ini::{setor}::{ano}::{mes}")
                     usar_data_fim = cd2.checkbox("Definir data final", value=False, key=f"info_usa_fim::{setor}::{ano}::{mes}")
-                    data_fim_info = cd3.date_input("Data final", value=datetime.now().date(), key=f"info_dt_fim::{setor}::{ano}::{mes}", disabled=(not usar_data_fim))
+                    if usar_data_fim:
+                        data_fim_info = cd3.date_input(
+                            "Data final",
+                            value=datetime.now().date(),
+                            min_value=data_inicio_info,
+                            key=f"info_dt_fim::{setor}::{ano}::{mes}"
+                        )
+                    else:
+                        data_fim_info = None
+                        cd3.caption("Colaborador verá o aviso enquanto ele estiver ativo.")
                     ce1, ce2, ce3 = st.columns([1, 1, 1])
                     fixado_info = ce1.checkbox("Fixar no topo", value=False)
                     ativo_info = ce2.checkbox("Publicar ativo", value=True)
@@ -19163,22 +19172,54 @@ def page_app():
                         st.warning('Informe um título para publicar o comunicado.')
                     else:
                         data_fim_final = data_fim_info if usar_data_fim else None
-                        criar_portal_informativo(
-                            setor=setor,
-                            titulo=titulo_limpo,
-                            mensagem=mensagem_limpa,
-                            tipo=tipo_info,
-                            prioridade=prioridade_info,
-                            fixado=fixado_info,
-                            ativo=ativo_info,
-                            data_inicio=data_inicio_info,
-                            data_fim=data_fim_final,
-                            imagem_file=imagem_info,
-                            pdf_file=pdf_info,
-                            criado_por=str(st.session_state.get('auth_nome') or st.session_state.get('auth_chapa') or ''),
-                        )
-                        st.success('Informativo publicado com sucesso no portal do colaborador.')
-                        st.rerun()
+                        if usar_data_fim and not data_fim_final:
+                            st.warning('Informe a data final para o aviso.')
+                        elif usar_data_fim and data_fim_final < data_inicio_info:
+                            st.warning('A data final não pode ser menor que a data de início.')
+                        else:
+                            criar_portal_informativo(
+                                setor=setor,
+                                titulo=titulo_limpo,
+                                mensagem=mensagem_limpa,
+                                tipo=tipo_info,
+                                prioridade=prioridade_info,
+                                fixado=fixado_info,
+                                ativo=ativo_info,
+                                data_inicio=data_inicio_info,
+                                data_fim=data_fim_final,
+                                imagem_file=imagem_info,
+                                pdf_file=pdf_info,
+                                criado_por=str(st.session_state.get('auth_nome') or st.session_state.get('auth_chapa') or ''),
+                            )
+                            try:
+                                registrar_log_admin(
+                                    acao="PUBLICAR_INFORMATIVO_PORTAL",
+                                    modulo="GESTAO/PORTAL",
+                                    alvo_setor=setor,
+                                    competencia_ano=ano,
+                                    competencia_mes=mes,
+                                    valor_depois=json.dumps({
+                                        "titulo": titulo_limpo,
+                                        "tipo": str(tipo_info or ""),
+                                        "prioridade": str(prioridade_info or ""),
+                                        "data_inicio": (data_inicio_info.isoformat() if data_inicio_info else ""),
+                                        "data_fim": (data_fim_final.isoformat() if data_fim_final else ""),
+                                        "ativo": bool(ativo_info),
+                                        "fixado": bool(fixado_info),
+                                    }, ensure_ascii=False),
+                                    detalhes="Informativo do portal publicado",
+                                    status="SUCESSO",
+                                )
+                            except Exception:
+                                pass
+                            try:
+                                fn = globals().get("listar_auditoria_admin_df")
+                                if fn is not None and hasattr(fn, "clear"):
+                                    fn.clear()
+                            except Exception:
+                                pass
+                            st.success('Informativo publicado com sucesso no portal do colaborador.')
+                            st.rerun()
 
                 df_infos_admin = list_portal_informativos(setor, somente_ativos=False)
                 if df_infos_admin.empty:
