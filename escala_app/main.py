@@ -1,3 +1,12 @@
+_RUNTIME_READY = False
+_RUNTIME_READY_AT = 0.0
+_RUNTIME_READY_TTL_SEC = 120.0
+
+try:
+    SQLiteSyncConnection
+except NameError:
+    SQLiteSyncConnection = sqlite3.Connection
+
 # V112 INTEGRADA BLINDADA — anti-perda pós-reboot + persistência real
 # V97 ENTERPRISE — boot resiliente, restore em camadas e login sempre liberado
 # V97.3 PREMIUM UI — refinamento visual adicional sem alterar regras
@@ -3280,15 +3289,34 @@ def _supabase_resolve_remote_table(local_table: str, refresh: bool = False) -> s
     _SUPABASE_TABLE_CACHE[local_table] = resolved
     return resolved
 
-def _app_db_connect(db_path: str | None = None):
-    target = str(db_path or DB_PATH)
-    factory = SQLiteSyncConnection if str(Path(target).resolve()) == str(Path(DB_PATH).resolve()) else sqlite3.Connection
-    conn = sqlite3.connect(target, check_same_thread=False, factory=factory)
+
+def _app_db_connect(target):
     try:
-        conn.execute("PRAGMA foreign_keys=ON")
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA busy_timeout=10000")
-        conn.execute("PRAGMA synchronous=NORMAL")
+        factory = SQLiteSyncConnection if "SQLiteSyncConnection" in globals() and SQLiteSyncConnection is not None else sqlite3.Connection
+    except Exception:
+        factory = sqlite3.Connection
+
+    conn = sqlite3.connect(
+        str(target),
+        timeout=60,
+        isolation_level=None,
+        check_same_thread=False,
+        factory=factory,
+    )
+    try:
+        conn.execute("PRAGMA journal_mode=WAL;")
+    except Exception:
+        pass
+    try:
+        conn.execute("PRAGMA synchronous=NORMAL;")
+    except Exception:
+        pass
+    try:
+        conn.execute("PRAGMA busy_timeout=60000;")
+    except Exception:
+        pass
+    try:
+        conn.execute("PRAGMA foreign_keys=ON;")
     except Exception:
         pass
     return conn
@@ -4144,11 +4172,6 @@ def _ensure_local_db_bootstrap_enterprise() -> bool:
     except Exception:
         return False
 
-
-_RUNTIME_READY = False
-_RUNTIME_READY_AT = 0.0
-_RUNTIME_READY_TTL_SEC = 120.0
-_AUTO_BACKUP_DONE_SESSION = False
 
 
 def _ensure_runtime_storage_ready(force: bool = False):
