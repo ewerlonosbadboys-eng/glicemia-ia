@@ -94,6 +94,7 @@ from reportlab.lib.pagesizes import landscape, A4
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib import colors
 
+
 # ===== V113 BLINDAGEM (COMMIT REAL + ANTI-PERDA) =====
 def commit_blindado(con):
     try:
@@ -112,19 +113,12 @@ def commit_blindado(con):
     except Exception:
         pass
     try:
-        import streamlit as st
         st.cache_data.clear()
     except Exception:
         pass
 
-# ===== V113 BLOQUEIO DE RESTORE AUTOMÁTICO =====
-def _restore_from_latest_stable_if_needed(*a, **k):
-    return
-
-def _adopt_best_db_candidate_if_needed(*a, **k):
-    return
-
 st.set_page_config(page_title="Escala 5x2 Oficial", layout="wide")
+
 
 
 def aplicar_tema_premium_etapa1():
@@ -1370,12 +1364,6 @@ def salvar_retificacao_competencia(setor: str, ano: int, mes: int, chapa: str, d
     finally:
         con.close()
 
-    try:
-        # _persist_latest_stable_after_critical_save("disabled")
-        pass
-    except Exception:
-        pass
-
     clear_retificacao_related_caches()
 
 
@@ -2145,7 +2133,7 @@ def _apply_pdf_import_to_db(
     if limpar_mes_antes:
         con = db_conn()
         cur = con.cursor()
-        cur.execute("DELETE FROM overrides WHERE setor=? AND ano=? AND mes=?", (setor_destino, int(ano), int(mes)))
+        cur.execute("DELETE FROM overrides WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=?", (setor_destino, int(ano), int(mes)))
         commit_blindado(con)
         con.close()
 
@@ -4271,19 +4259,7 @@ def _ensure_local_db_bootstrap_enterprise() -> bool:
     except Exception:
         pass
 
-    try:
-        _adopt_bundled_latest_stable_if_needed(force=True)
-        if current.exists() and _validate_sqlite_file(str(current)):
-            return True
-    except Exception:
-        pass
 
-    try:
-        _restore_from_latest_stable_if_needed()
-        if current.exists() and _validate_sqlite_file(str(current)):
-            return True
-    except Exception:
-        pass
 
     try:
         if SUPABASE_SYNC_ENABLED:
@@ -4328,17 +4304,8 @@ def _ensure_runtime_storage_ready(force: bool = False):
         pass
 
     _ensure_local_db_bootstrap_enterprise()
-    _adopt_bundled_latest_stable_if_needed(force=False)
     _migrate_legacy_db_if_needed()
-    _adopt_best_db_candidate_if_needed()
-    _restore_from_latest_stable_if_needed()
-    _adopt_best_db_candidate_if_needed()
-    if SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY:
-        try:
-            _restore_from_supabase_if_local_empty(force=False)
-        except Exception:
-            pass
-    elif SUPABASE_AUTO_PULL_ON_START:
+    if SUPABASE_AUTO_PULL_ON_START:
         try:
             if SUPABASE_SYNC_ENABLED and not _sqlite_app_has_meaningful_data():
                 _supabase_pull_all_to_sqlite(force=True)
@@ -6029,11 +5996,7 @@ def db_init():
         """, ("Administrador", "ADMIN", "admin", senha_hash, salt, 1, 1, datetime.now().isoformat()))
         commit_blindado(con)
 
-    if SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY:
-        try:
-            _restore_from_supabase_if_local_empty(force=False)
-        except Exception:
-            pass
+    # restore automático desativado para não sobrescrever ajustes manuais
 
     if SUPABASE_AUTO_BOOTSTRAP_AFTER_SCHEMA:
         try:
@@ -7066,11 +7029,6 @@ def delete_colaborador_total(setor: str, chapa: str):
     commit_blindado(con)
     con.close()
     try:
-        # _persist_latest_stable_after_critical_save("disabled")
-        pass
-    except Exception:
-        pass
-    try:
         st.cache_data.clear()
     except Exception:
         pass
@@ -7213,11 +7171,6 @@ def update_colaborador_perfil(setor: str, chapa_antiga: str, chapa_nova: str, no
 
     commit_blindado(con)
     con.close()
-    try:
-        # _persist_latest_stable_after_critical_save("disabled")
-        pass
-    except Exception:
-        pass
     try:
         st.cache_data.clear()
     except Exception:
@@ -10533,6 +10486,7 @@ def _norm_override_campo(campo: str) -> str:
     return mapa.get(c, c)
 
 
+
 def set_override(setor: str, ano: int, mes: int, chapa: str, dia: int, campo: str, valor: str):
     """
     Cria/atualiza um override (UPSERT) na tabela overrides.
@@ -10541,15 +10495,27 @@ def set_override(setor: str, ano: int, mes: int, chapa: str, dia: int, campo: st
     """
     campo = _norm_override_campo(campo)
     con = db_conn()
-    cur = con.cursor()
-    cur.execute("""
-        INSERT INTO overrides(setor, ano, mes, chapa, dia, campo, valor)
-        VALUES(?,?,?,?,?,?,?)
-        ON CONFLICT(setor, ano, mes, chapa, dia, campo)
-        DO UPDATE SET valor=excluded.valor
-    """, (str(setor).strip().upper(), int(ano), int(mes), str(chapa).strip(), int(dia), campo, str(valor).strip()))
-    commit_blindado(con)
-    con.close()
+    try:
+        cur = con.cursor()
+        cur.execute("""
+            INSERT INTO overrides(setor, ano, mes, chapa, dia, campo, valor)
+            VALUES(?,?,?,?,?,?,?)
+            ON CONFLICT(setor, ano, mes, chapa, dia, campo)
+            DO UPDATE SET valor=excluded.valor
+        """, (str(setor).strip().upper(), int(ano), int(mes), str(chapa).strip(), int(dia), campo, str(valor).strip()))
+        commit_blindado(con)
+    finally:
+        try:
+            con.close()
+        except Exception:
+            pass
+    for fn_name in ("load_overrides", "get_hist_mes_com_overrides_cached"):
+        try:
+            fn = globals().get(fn_name)
+            if fn is not None and hasattr(fn, "clear"):
+                fn.clear()
+        except Exception:
+            pass
     try:
         st.cache_data.clear()
     except Exception:
@@ -10558,21 +10524,33 @@ def set_override(setor: str, ano: int, mes: int, chapa: str, dia: int, campo: st
 
 def delete_override(setor: str, ano: int, mes: int, chapa: str, dia: int, campo: str | None = None):
     con = db_conn()
-    cur = con.cursor()
-    if campo:
-        campos = sorted({str(campo).strip(), _norm_override_campo(campo)})
-        placeholders = ",".join(["?"] * len(campos))
-        cur.execute(f"""
-            DELETE FROM overrides
-            WHERE setor=? AND ano=? AND mes=? AND chapa=? AND dia=? AND campo IN ({placeholders})
-        """, (setor, int(ano), int(mes), chapa, int(dia), *campos))
-    else:
-        cur.execute("""
-            DELETE FROM overrides
-            WHERE setor=? AND ano=? AND mes=? AND chapa=? AND dia=?
-        """, (setor, int(ano), int(mes), chapa, int(dia)))
-    commit_blindado(con)
-    con.close()
+    try:
+        cur = con.cursor()
+        if campo:
+            campos = sorted({str(campo).strip(), _norm_override_campo(campo)})
+            placeholders = ",".join(["?"] * len(campos))
+            cur.execute(f"""
+                DELETE FROM overrides
+                WHERE setor=? AND ano=? AND mes=? AND chapa=? AND dia=? AND campo IN ({placeholders})
+            """, (str(setor).strip().upper(), int(ano), int(mes), str(chapa).strip(), int(dia), *campos))
+        else:
+            cur.execute("""
+                DELETE FROM overrides
+                WHERE setor=? AND ano=? AND mes=? AND chapa=? AND dia=?
+            """, (str(setor).strip().upper(), int(ano), int(mes), str(chapa).strip(), int(dia)))
+        commit_blindado(con)
+    finally:
+        try:
+            con.close()
+        except Exception:
+            pass
+    for fn_name in ("load_overrides", "get_hist_mes_com_overrides_cached"):
+        try:
+            fn = globals().get(fn_name)
+            if fn is not None and hasattr(fn, "clear"):
+                fn.clear()
+        except Exception:
+            pass
     try:
         st.cache_data.clear()
     except Exception:
@@ -10586,33 +10564,45 @@ def delete_overrides_mes(setor: str, ano: int, mes: int, keep_campos: set[str] |
     preserva overrides cujo campo esteja em keep_campos.
     """
     con = db_conn()
-    cur = con.cursor()
-    if keep_campos and len(keep_campos) > 0:
-        # mantém alguns campos (ex.: se quiser preservar algo específico)
-        placeholders = ",".join(["?"] * len(keep_campos))
-        cur.execute(
-            f"""
-            DELETE FROM overrides
-            WHERE setor=? AND ano=? AND mes=? AND campo NOT IN ({placeholders})
-            """,
-            (setor, int(ano), int(mes), *list(keep_campos)),
-        )
-    else:
-        cur.execute(
-            """
-            DELETE FROM overrides
-            WHERE setor=? AND ano=? AND mes=?
-            """,
-            (setor, int(ano), int(mes)),
-        )
-    commit_blindado(con)
-    con.close()
+    try:
+        cur = con.cursor()
+        setor_n = str(setor).strip().upper()
+        if keep_campos and len(keep_campos) > 0:
+            placeholders = ",".join(["?"] * len(keep_campos))
+            cur.execute(
+                f"""
+                DELETE FROM overrides
+                WHERE setor=? AND ano=? AND mes=? AND campo NOT IN ({placeholders})
+                """,
+                (setor_n, int(ano), int(mes), *list(keep_campos)),
+            )
+        else:
+            cur.execute(
+                """
+                DELETE FROM overrides
+                WHERE setor=? AND ano=? AND mes=?
+                """,
+                (setor_n, int(ano), int(mes)),
+            )
+        commit_blindado(con)
+    finally:
+        try:
+            con.close()
+        except Exception:
+            pass
+    for fn_name in ("load_overrides", "get_hist_mes_com_overrides_cached"):
+        try:
+            fn = globals().get(fn_name)
+            if fn is not None and hasattr(fn, "clear"):
+                fn.clear()
+        except Exception:
+            pass
     try:
         st.cache_data.clear()
     except Exception:
         pass
 
-@st.cache_data(show_spinner=False, ttl=120)
+@st.cache_data(show_spinner=False, ttl=1)
 def load_overrides(setor: str, ano: int, mes: int):
     con = db_conn()
     df = pd.read_sql_query("""
@@ -11321,7 +11311,7 @@ def load_escala_mes_db(setor: str, ano: int, mes: int):
     return {_norm_chapa(ch): pd.DataFrame(items) for ch, items in hist.items()}
 
 
-@st.cache_data(show_spinner=False, ttl=120)
+@st.cache_data(show_spinner=False, ttl=1)
 def get_hist_mes_com_overrides_cached(setor: str, ano: int, mes: int):
     hist_db = load_escala_mes_db(setor, ano, mes)
     return apply_overrides_to_hist(setor, ano, mes, hist_db)
@@ -18063,11 +18053,18 @@ def page_app():
                             clear_retificacao_related_caches()
                         except Exception:
                             pass
+                        for fn_name in ("load_overrides", "get_hist_mes_com_overrides_cached"):
+                            try:
+                                fn = globals().get(fn_name)
+                                if fn is not None and hasattr(fn, "clear"):
+                                    fn.clear()
+                            except Exception:
+                                pass
                         try:
-                            # _persist_latest_stable_after_critical_save("disabled")
-                            pass
+                            st.cache_data.clear()
                         except Exception:
                             pass
+                        st.session_state.pop("grid_editor", None)
                         st.session_state["_ajustes_saved_at"] = time.time()
                         st.success(f"Salvo! Folgas travadas: {set_folga} | Trabalhos travados: {set_trab}.")
                         st.rerun()
@@ -18122,11 +18119,6 @@ def page_app():
                                 clear_retificacao_related_caches()
                             except Exception:
                                 pass
-                            try:
-                                # _persist_latest_stable_after_critical_save("disabled")
-                                pass
-                            except Exception:
-                                pass
                             st.session_state["_ajustes_saved_at"] = time.time()
                             st.success("Folga fixa salva e aplicada como trava manual na competência ativa.")
                             st.rerun()
@@ -18134,11 +18126,6 @@ def page_app():
                         remove_folga_fixa(setor, chapa_ff)
                         try:
                             clear_retificacao_related_caches()
-                        except Exception:
-                            pass
-                        try:
-                            # _persist_latest_stable_after_critical_save("disabled")
-                            pass
                         except Exception:
                             pass
                         st.session_state["_ajustes_saved_at"] = time.time()
@@ -18630,11 +18617,18 @@ def page_app():
                                         clear_retificacao_related_caches()
                                     except Exception:
                                         pass
+                                    for fn_name in ("load_overrides", "get_hist_mes_com_overrides_cached"):
+                                        try:
+                                            fn = globals().get(fn_name)
+                                            if fn is not None and hasattr(fn, "clear"):
+                                                fn.clear()
+                                        except Exception:
+                                            pass
                                     try:
-                                        # _persist_latest_stable_after_critical_save("disabled")
-                                        pass
+                                        st.cache_data.clear()
                                     except Exception:
                                         pass
+                                    st.session_state.pop("th_grid_editor", None)
                                     st.session_state["_ajustes_saved_at"] = time.time()
                                     st.success(f"Salvo! Ação: {acao_th}. Aplicados: {applied}. Ignorados (por conflito com Folga/Férias): {skipped}.")
                                     st.rerun()
