@@ -97,11 +97,6 @@ from reportlab.lib import colors
 # ===== V113 BLINDAGEM (COMMIT REAL + ANTI-PERDA) =====
 def commit_blindado(con):
     try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
-    try:
         con.commit()
     except:
         pass
@@ -112,6 +107,10 @@ def commit_blindado(con):
     try:
         import os as _os
         fd = con.cursor().connection
+        if hasattr(fd, "fileno"):
+            _os.fsync(fd.fileno())
+    except:
+        pass
 
 # ===== V113 BLOQUEIO DE RESTORE AUTOMÁTICO =====
 def _restore_from_latest_stable_if_needed(*a, **k):
@@ -119,11 +118,6 @@ def _restore_from_latest_stable_if_needed(*a, **k):
 
 def _adopt_best_db_candidate_if_needed(*a, **k):
     return
-
-        if hasattr(fd, "fileno"):
-            _os.fsync(fd.fileno())
-    except:
-        pass
 
 st.set_page_config(page_title="Escala 5x2 Oficial", layout="wide")
 
@@ -982,11 +976,6 @@ def ensure_competencia_runtime_tables() -> None:
             )
         """)
         commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     finally:
         con.close()
 
@@ -1024,11 +1013,6 @@ def set_status_competencia(setor: str, ano: int, mes: int, status: str) -> None:
                 atualizado_em=excluded.atualizado_em
         """, (setor, int(ano), int(mes), novo, datetime.now().isoformat()))
         commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     finally:
         con.close()
 
@@ -1213,11 +1197,6 @@ def rebuild_colaborador_competencia_snapshot(setor: str, ano: int, mes: int) -> 
                 str(info.get('atualizado_em', agora) or agora),
             ))
         commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     finally:
         con.close()
 
@@ -1383,18 +1362,9 @@ def salvar_retificacao_competencia(setor: str, ano: int, mes: int, chapa: str, d
                 agora_iso,
             ))
         commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     finally:
         con.close()
 
-    try:
-        # _persist_latest_stable_after_critical_save("retificacao")
-    except Exception:
-        pass
 
     clear_retificacao_related_caches()
 
@@ -1456,11 +1426,6 @@ def excluir_retificacao_competencia(setor: str, ano: int, mes: int, chapa: str, 
         )
 
         commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     finally:
         con.close()
 
@@ -2172,11 +2137,6 @@ def _apply_pdf_import_to_db(
         cur = con.cursor()
         cur.execute("DELETE FROM overrides WHERE setor=? AND ano=? AND mes=?", (setor_destino, int(ano), int(mes)))
         commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
         con.close()
 
     resolvidos_por_nome = 0
@@ -4330,11 +4290,6 @@ def _ensure_local_db_bootstrap_enterprise() -> bool:
             con.execute("PRAGMA journal_mode=WAL")
             con.execute("PRAGMA foreign_keys=ON")
             commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
         finally:
             con.close()
         return current.exists()
@@ -5662,11 +5617,6 @@ def db_init_fast_login():
         """, ("Administrador", "ADMIN", "admin", senha_hash, salt, 1, 1, datetime.now().isoformat()))
 
     commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     con.close()
 
 
@@ -5793,11 +5743,6 @@ def db_init():
                 cur.execute(f"ALTER TABLE escala_mes ADD COLUMN {c} TEXT")
 
         commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     except Exception:
         # Não interrompe a inicialização caso o DB já esteja OK ou a migração falhe
         pass
@@ -6041,11 +5986,6 @@ def db_init():
     # sobe “vazio” após reboot antes de puxar o conteúdo real do remoto.
     commit_blindado(con)
     try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
-    try:
         con.close()
     except Exception:
         pass
@@ -6061,11 +6001,6 @@ def db_init():
     cur = con.cursor()
 
     commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
 
     # v97 force: nunca bloquear nem exibir guarda de restore no login
     _set_restore_guard(False, "")
@@ -6073,11 +6008,6 @@ def db_init():
     _safe_exec(cur, "INSERT OR IGNORE INTO setores(nome) VALUES (?)", ("ADMIN",))
     _safe_exec(cur, "INSERT OR IGNORE INTO setores(nome) VALUES (?)", ("GESTAO",))
     commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
 
     cur.execute("SELECT 1 FROM usuarios_sistema WHERE setor=? AND chapa=? LIMIT 1", ("ADMIN", "admin"))
     if cur.fetchone() is None:
@@ -6088,11 +6018,6 @@ def db_init():
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, ("Administrador", "ADMIN", "admin", senha_hash, salt, 1, 1, datetime.now().isoformat()))
         commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
 
     if SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY:
         try:
@@ -6106,11 +6031,6 @@ def db_init():
         except Exception:
             pass
     commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
 
     con.close()
 
@@ -6206,11 +6126,6 @@ def create_system_user(nome: str, setor: str, chapa: str, senha: str, is_lider: 
             (nome, setor, chapa, senha_hash, salt, int(is_admin), int(is_lider), int(is_ax_lider), datetime.now().isoformat()),
         )
     commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     con.close()
 
 def recover_system_user_from_colaborador(setor: str, chapa: str, senha: str, is_lider: int = 0, is_admin: int = 0, is_ax_lider: int = 0):
@@ -6241,11 +6156,6 @@ def verify_login(setor: str, chapa: str, senha: str):
             _ensure_usuarios_sistema_security_columns(cur)
             try:
                 commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
             except Exception:
                 pass
             cur.execute(
@@ -6301,11 +6211,6 @@ def update_password(setor: str, chapa: str, nova_senha: str):
         (senha_hash, salt, setor, chapa),
     )
     commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     con.close()
 
 def set_force_change_password(setor: str, chapa: str, ativo: bool = True):
@@ -6319,11 +6224,6 @@ def set_force_change_password(setor: str, chapa: str, ativo: bool = True):
             (1 if ativo else 0, setor, chapa),
         )
         commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     finally:
         con.close()
 
@@ -6353,11 +6253,6 @@ def upsert_usuario_sistema(nome: str, setor: str, chapa: str, senha: str, is_adm
             (nome, setor, chapa, senha_hash, salt, 1 if is_admin else 0, 1 if is_lider else 0, 1 if is_ax_lider else 0, datetime.now().isoformat(), 1 if forcar_troca_senha else 0),
         )
         commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     finally:
         con.close()
 
@@ -6382,11 +6277,6 @@ def get_usuario_sistema_por_setor_chapa(setor: str, chapa: str):
             _ensure_usuarios_sistema_security_columns(cur)
             try:
                 commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
             except Exception:
                 pass
             cur.execute(
@@ -6439,11 +6329,6 @@ def registrar_solicitacao_ax_lider(setor_solicitante: str, setor_alvo: str, chap
             str(observacao or '').strip(), datetime.now().isoformat()
         ))
         commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
         return int(cur.lastrowid)
     finally:
         con.close()
@@ -6497,11 +6382,6 @@ def decidir_solicitacao_ax_lider(solicitacao_id: int, aprovador_nome: str, aprov
         """, (novo_status, str(aprovador_nome or '').strip(), datetime.now().isoformat(),
                 str(observacao_aprovador or '').strip(), str(observacao_aprovador or '').strip(), int(solicitacao_id)))
         commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     finally:
         con.close()
 
@@ -6542,11 +6422,6 @@ def registrar_pendencia_ax_generica(setor: str, modulo: str, acao: str, payload:
             datetime.now().isoformat(),
         ))
         commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
         return int(cur.lastrowid)
     finally:
         con.close()
@@ -6691,11 +6566,6 @@ def decidir_pendencia_ax_generica(pendencia_id: int, aprovador_nome: str, aprova
             WHERE id=?
         """, (novo_status, str(aprovador_nome or '').strip(), datetime.now().isoformat(), str(observacao_aprovador or '').strip(), str(observacao_aprovador or '').strip(), int(pendencia_id)))
         commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     finally:
         con.close()
     if aprovar:
@@ -6909,11 +6779,6 @@ def admin_update_funcionario(setor: str, chapa_atual: str, nome_novo: str, subgr
             (nome_final, int(is_admin), int(is_lider), int(is_ax_lider), setor, chapa_atual),
         )
         commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
         con.close()
     elif criar_usuario_se_nao_existir:
         senha_padrao = default_password_for_chapa(chapa_atual)
@@ -6988,11 +6853,6 @@ def admin_rename_setor_global(setor_atual: str, setor_novo: str) -> dict:
             pass
 
         commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     finally:
         con.close()
 
@@ -7054,11 +6914,6 @@ def admin_delete_setor_global(setor_nome: str) -> dict:
                     removidos.append((f'{tabela}.setor_alvo', int(cur.rowcount or 0)))
 
         commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     finally:
         con.close()
 
@@ -7117,11 +6972,6 @@ def create_colaborador(nome: str, setor: str, chapa: str, subgrupo: str = "", en
         (nome, subgrupo, entrada, 1 if folga_sab else 0, setor, chapa),
     )
     commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     con.close()
     if criar_login:
         try:
@@ -7154,11 +7004,6 @@ def upsert_colaborador_nome(setor: str, chapa: str, nome: str):
         if nome:
             cur.execute("UPDATE colaboradores SET nome=? WHERE setor=? AND chapa=?", (nome, setor, chapa))
     commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     con.close()
     try:
         ensure_system_user_from_colaborador(nome or chapa, setor, chapa)
@@ -7175,11 +7020,6 @@ def apply_manual_base_folgas(setor: str, ano: int, mes: int, base_rows: list[dic
     if limpar_overrides_mes:
         cur.execute("DELETE FROM overrides WHERE setor=? AND ano=? AND mes=?", (setor, int(ano), int(mes)))
         commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     con.close()
 
     # garante colaboradores e aplica folgas como override
@@ -7214,16 +7054,7 @@ def delete_colaborador_total(setor: str, chapa: str):
     cur.execute("DELETE FROM estado_mes_anterior WHERE setor=? AND chapa=?", (setor, chapa))
     cur.execute("DELETE FROM colaboradores WHERE setor=? AND chapa=?", (setor, chapa))
     commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     con.close()
-    try:
-        # _persist_latest_stable_after_critical_save("estado_mes")
-    except Exception:
-        pass
     try:
         st.cache_data.clear()
     except Exception:
@@ -7366,16 +7197,7 @@ def update_colaborador_perfil(setor: str, chapa_antiga: str, chapa_nova: str, no
             pass
 
     commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     con.close()
-    try:
-        # _persist_latest_stable_after_critical_save("escala_mes")
-    except Exception:
-        pass
     try:
         st.cache_data.clear()
     except Exception:
@@ -7602,11 +7424,6 @@ def caixa_upsert_operacao_dia(
                 )
             )
         commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     finally:
         con.close()
 
@@ -7620,11 +7437,6 @@ def caixa_limpar_posto_dia(setor: str, ano: int, mes: int, dia: int, posto: str)
             (str(setor or '').strip(), int(ano), int(mes), int(dia), str(posto or '').strip()),
         )
         commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     finally:
         con.close()
 
@@ -7757,11 +7569,6 @@ def set_rodizio_caixa_regra_extra(setor: str, horario_ref: str, qtd_extra: int, 
                     atualizado_em=excluded.atualizado_em
             """, (setor, subgrupo_destino, horario_ref, qtd_extra, ts, ts))
         commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     finally:
         con.close()
     try:
@@ -7834,11 +7641,6 @@ def get_rodizio_caixa_cfg(setor: str, subgrupo_origem: str = 'OPERADOR DE CAIXA 
             VALUES (?, ?, ?, 14, 20, 1)
         """, (setor, subgrupo_origem, subgrupo_destino))
         commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
         row = (subgrupo_origem, subgrupo_destino, 14, 20, 1)
     con.close()
     return {
@@ -7860,11 +7662,6 @@ def set_rodizio_caixa_cfg(setor: str, subgrupo_origem: str, subgrupo_destino: st
         DO UPDATE SET qtd_destino=excluded.qtd_destino, tolerancia_min=excluded.tolerancia_min, ativo=excluded.ativo
     """, (setor, subgrupo_origem, subgrupo_destino, int(qtd_destino), int(tolerancia_min), 1 if ativo else 0))
     commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     con.close()
     try:
         st.cache_data.clear()
@@ -9125,11 +8922,6 @@ def aplicar_rodizio_caixa_mes(setor: str, ano: int, mes: int, simulacao: dict):
             )
 
         commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     except Exception:
         con.rollback()
         raise
@@ -9195,11 +8987,6 @@ def aplicar_ajuste_complementar_rodizio_caixa_mes(setor: str, ano: int, mes: int
                 (setor, int(ano), int(mes), ciclo, ch, str(s.get('origem_nome') or ''), subgrupo_origem, subgrupo_destino, ent_ant, ent_nova, str(s.get('compatibilidade') or 'QUASE IGUAL'), str(s.get('observacao') or ''), ts)
             )
         commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     except Exception:
         con.rollback()
         raise
@@ -9284,11 +9071,6 @@ def sincronizar_subgrupos_base_rodizio_caixa(setor: str, ano: int, mes: int, sub
             params_base
         )
         commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     except Exception:
         con.rollback()
         raise
@@ -9437,11 +9219,6 @@ def transferencia_suprema_caixa_02_para_01(setor: str, ano: int, mes: int, subgr
             pass
 
         commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     except Exception:
         con.rollback()
         raise
@@ -9605,11 +9382,6 @@ def resetar_rodizio_caixa_mes(setor: str, ano: int, mes: int, subgrupo_origem: s
         )
 
         commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     except Exception:
         con.rollback()
         raise
@@ -9709,11 +9481,6 @@ def _upsert_subgrupo_preview_competencia(setor: str, ano: int, mes: int, chapa: 
             (setor, int(ano), int(mes), chapa)
         )
         commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     finally:
         con.close()
 
@@ -9781,11 +9548,6 @@ def _restaurar_subgrupo_preview_competencia(setor: str, ano: int, mes: int, chap
             (setor, int(ano), int(mes), chapa)
         )
         commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     finally:
         con.close()
 
@@ -10202,11 +9964,6 @@ def add_subgrupo(setor: str, nome: str):
         VALUES (?, ?, 0,0,0,0,0,0)
     """, (setor, nome))
     commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     con.close()
     try:
         st.cache_data.clear()
@@ -10220,11 +9977,6 @@ def delete_subgrupo(setor: str, nome: str):
     cur.execute("DELETE FROM subgrupo_regras WHERE setor=? AND subgrupo=?", (setor, nome))
     cur.execute("UPDATE colaboradores SET subgrupo='' WHERE setor=? AND subgrupo=?", (setor, nome))
     commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     con.close()
     try:
         st.cache_data.clear()
@@ -10263,11 +10015,6 @@ def set_subgrupo_regras(setor: str, subgrupo: str, regras: dict):
         int(regras.get("sáb", 0)),
     ))
     commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     con.close()
     try:
         st.cache_data.clear()
@@ -10283,11 +10030,6 @@ def add_ferias(setor: str, chapa: str, inicio: date, fim: date):
     cur.execute("INSERT INTO ferias(setor, chapa, inicio, fim) VALUES (?, ?, ?, ?)",
                 (setor, chapa, inicio.strftime("%Y-%m-%d"), fim.strftime("%Y-%m-%d")))
     commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     con.close()
     try:
         st.cache_data.clear()
@@ -10344,11 +10086,6 @@ def delete_ferias_row(setor: str, chapa: str, inicio: str, fim: str):
     """, (setor, chapa, inicio, fim))
     removidas = int(cur.rowcount or 0)
     commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     con.close()
     _persist_ferias_delete_snapshot()
     _clear_ferias_caches()
@@ -10365,11 +10102,6 @@ def delete_ferias_rowid(setor: str, rowid_val: int):
     """, (int(rowid_val), setor))
     removidas = int(cur.rowcount or 0)
     commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     con.close()
     _persist_ferias_delete_snapshot()
     _clear_ferias_caches()
@@ -10390,11 +10122,6 @@ def delete_ferias_global(setor: str, chapa: str, inicio: str, fim: str) -> int:
     """, (setor, chapa, inicio, fim))
     removidas = int(cur.rowcount or 0)
     commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     con.close()
     _persist_ferias_delete_snapshot()
     _clear_ferias_caches()
@@ -10613,11 +10340,6 @@ def save_estado_mes(setor: str, ano: int, mes: int, estado: dict):
             int(ano), int(mes)
         ))
     commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     con.close()
     try:
         st.cache_data.clear()
@@ -10807,11 +10529,6 @@ def set_override(setor: str, ano: int, mes: int, chapa: str, dia: int, campo: st
         DO UPDATE SET valor=excluded.valor
     """, (str(setor).strip().upper(), int(ano), int(mes), str(chapa).strip(), int(dia), campo, str(valor).strip()))
     commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     con.close()
     try:
         st.cache_data.clear()
@@ -10835,11 +10552,6 @@ def delete_override(setor: str, ano: int, mes: int, chapa: str, dia: int, campo:
             WHERE setor=? AND ano=? AND mes=? AND chapa=? AND dia=?
         """, (setor, int(ano), int(mes), chapa, int(dia)))
     commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     con.close()
     try:
         st.cache_data.clear()
@@ -10874,11 +10586,6 @@ def delete_overrides_mes(setor: str, ano: int, mes: int, keep_campos: set[str] |
             (setor, int(ano), int(mes)),
         )
     commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     con.close()
     try:
         st.cache_data.clear()
@@ -10957,11 +10664,6 @@ def _ensure_folga_fixa_schema():
             _safe_exec(cur, "ALTER TABLE folga_fixa ADD COLUMN criado_em TEXT")
             _safe_exec(cur, "UPDATE folga_fixa SET criado_em = COALESCE(criado_em, ?) WHERE criado_em IS NULL OR TRIM(COALESCE(criado_em,'')) = ''", (datetime.now().isoformat(),))
         commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     finally:
         con.close()
 
@@ -11003,11 +10705,6 @@ def _ensure_inventario_diario_schema():
         _safe_exec(cur, "UPDATE inventario_diario SET criado_em = COALESCE(criado_em, ?) WHERE criado_em IS NULL OR TRIM(COALESCE(criado_em,'')) = ''", (agora,))
         _safe_exec(cur, "UPDATE inventario_diario SET atualizado_em = COALESCE(atualizado_em, ?) WHERE atualizado_em IS NULL OR TRIM(COALESCE(atualizado_em,'')) = ''", (agora,))
         commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     finally:
         con.close()
 
@@ -11065,11 +10762,6 @@ def save_folga_fixa(setor: str, chapa: str, weekdays: list[int]):
             (setor, chapa, int(wd), 1, agora),
         )
     commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     con.close()
 
 
@@ -11081,11 +10773,6 @@ def remove_folga_fixa(setor: str, chapa: str):
     cur = con.cursor()
     cur.execute("DELETE FROM folga_fixa WHERE setor=? AND chapa=?", (setor, chapa))
     commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     con.close()
 
 
@@ -11240,11 +10927,6 @@ def upsert_inventario_dia(setor: str, ano: int, mes: int, dia: int, abertura: in
         (setor, int(ano), int(mes), int(dia), int(abertura), int(intermediario), int(fechamento), agora, agora),
     )
     commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     con.close()
 
 
@@ -11532,11 +11214,6 @@ def save_escala_mes_db(setor: str, ano: int, mes: int, historico_df_por_chapa: d
     try:
         cur.execute("DELETE FROM escala_mes WHERE setor=? AND ano=? AND mes=?", (setor, int(ano), int(mes)))
         commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     except Exception:
         pass
 
@@ -11593,11 +11270,6 @@ def save_escala_mes_db(setor: str, ano: int, mes: int, historico_df_por_chapa: d
                 continue
 
     commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     con.close()
     try:
         st.cache_data.clear()
@@ -14136,11 +13808,6 @@ def ensure_gestao_setores_permitidos_table() -> None:
         )
         """)
         commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     finally:
         con.close()
 
@@ -14264,11 +13931,6 @@ def salvar_setores_permitidos_gestao(gestor_setor: str, gestor_chapa: str, setor
                 (gestor_setor, gestor_chapa, setor_perm, agora),
             )
         commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     finally:
         con.close()
     return len(setores_norm)
@@ -14287,11 +13949,6 @@ def limpar_setores_permitidos_gestao(gestor_setor: str, gestor_chapa: str) -> in
         )
         removidos = int(cur.rowcount or 0)
         commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     finally:
         con.close()
     return removidos
@@ -15292,11 +14949,6 @@ def salvar_assinatura_portal(setor: str, chapa: str, ano: int, mes: int, tipo: s
         (setor, chapa, int(ano), int(mes), tipo, int(versao_ref), agora),
     )
     commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     con.close()
 
 
@@ -15336,11 +14988,6 @@ def criar_solicitacao_folga(setor: str, chapa: str, data_solicitada: str, tipo: 
         (setor, chapa, str(data_solicitada), str(tipo), str(motivo or '').strip(), str(observacao or '').strip(), 'Em análise', agora, agora),
     )
     commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     con.close()
 
 
@@ -15500,11 +15147,6 @@ def ensure_portal_informativos_schema() -> None:
                 cur.execute(f"ALTER TABLE portal_informativos ADD COLUMN {col} {ddl}")
 
         commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     finally:
         con.close()
 
@@ -15573,11 +15215,6 @@ def criar_portal_informativo(setor: str, titulo: str, mensagem: str, tipo: str =
     )
     novo_id = int(cur.lastrowid or 0)
     commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     con.close()
     return novo_id
 
@@ -15589,11 +15226,6 @@ def atualizar_status_informativo(informativo_id: int, ativo: bool):
     cur = con.cursor()
     cur.execute('UPDATE portal_informativos SET ativo=?, atualizado_em=? WHERE id=?', (1 if bool(ativo) else 0, agora, int(informativo_id)))
     commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     con.close()
 
 
@@ -15724,11 +15356,6 @@ def atualizar_status_solicitacao(solicitacao_id: int, novo_status: str):
         (str(novo_status), agora, int(solicitacao_id)),
     )
     commit_blindado(con)
-    try:
-        import streamlit as st
-        st.cache_data.clear()
-    except:
-        pass
     con.close()
 
 def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
@@ -18416,10 +18043,6 @@ def page_app():
                             clear_retificacao_related_caches()
                         except Exception:
                             pass
-                        try:
-                            # _persist_latest_stable_after_critical_save("grade_manual")
-                        except Exception:
-                            pass
                         st.session_state["_ajustes_saved_at"] = time.time()
                         st.success(f"Salvo! Folgas travadas: {set_folga} | Trabalhos travados: {set_trab}.")
                         st.rerun()
@@ -18474,10 +18097,6 @@ def page_app():
                                 clear_retificacao_related_caches()
                             except Exception:
                                 pass
-                            try:
-                                # _persist_latest_stable_after_critical_save("folga_fixa")
-                            except Exception:
-                                pass
                             st.session_state["_ajustes_saved_at"] = time.time()
                             st.success("Folga fixa salva e aplicada como trava manual na competência ativa.")
                             st.rerun()
@@ -18485,10 +18104,6 @@ def page_app():
                         remove_folga_fixa(setor, chapa_ff)
                         try:
                             clear_retificacao_related_caches()
-                        except Exception:
-                            pass
-                        try:
-                            # _persist_latest_stable_after_critical_save("folga_fixa_remove")
                         except Exception:
                             pass
                         st.session_state["_ajustes_saved_at"] = time.time()
@@ -18978,10 +18593,6 @@ def page_app():
 
                                     try:
                                         clear_retificacao_related_caches()
-                                    except Exception:
-                                        pass
-                                    try:
-                                        # _persist_latest_stable_after_critical_save("troca_horarios")
                                     except Exception:
                                         pass
                                     st.session_state["_ajustes_saved_at"] = time.time()
