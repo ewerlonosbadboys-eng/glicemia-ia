@@ -98,18 +98,23 @@ from reportlab.lib import colors
 def commit_blindado(con):
     try:
         con.commit()
-    except:
+    except Exception:
         pass
     try:
         con.execute("PRAGMA wal_checkpoint(FULL);")
-    except:
+    except Exception:
         pass
     try:
         import os as _os
         fd = con.cursor().connection
         if hasattr(fd, "fileno"):
             _os.fsync(fd.fileno())
-    except:
+    except Exception:
+        pass
+    try:
+        import streamlit as st
+        st.cache_data.clear()
+    except Exception:
         pass
 
 # ===== V113 BLOQUEIO DE RESTORE AUTOMÁTICO =====
@@ -1365,6 +1370,11 @@ def salvar_retificacao_competencia(setor: str, ano: int, mes: int, chapa: str, d
     finally:
         con.close()
 
+    try:
+        # _persist_latest_stable_after_critical_save("disabled")
+        pass
+    except Exception:
+        pass
 
     clear_retificacao_related_caches()
 
@@ -7056,6 +7066,11 @@ def delete_colaborador_total(setor: str, chapa: str):
     commit_blindado(con)
     con.close()
     try:
+        # _persist_latest_stable_after_critical_save("disabled")
+        pass
+    except Exception:
+        pass
+    try:
         st.cache_data.clear()
     except Exception:
         pass
@@ -7198,6 +7213,11 @@ def update_colaborador_perfil(setor: str, chapa_antiga: str, chapa_nova: str, no
 
     commit_blindado(con)
     con.close()
+    try:
+        # _persist_latest_stable_after_critical_save("disabled")
+        pass
+    except Exception:
+        pass
     try:
         st.cache_data.clear()
     except Exception:
@@ -18043,6 +18063,11 @@ def page_app():
                             clear_retificacao_related_caches()
                         except Exception:
                             pass
+                        try:
+                            # _persist_latest_stable_after_critical_save("disabled")
+                            pass
+                        except Exception:
+                            pass
                         st.session_state["_ajustes_saved_at"] = time.time()
                         st.success(f"Salvo! Folgas travadas: {set_folga} | Trabalhos travados: {set_trab}.")
                         st.rerun()
@@ -18097,6 +18122,11 @@ def page_app():
                                 clear_retificacao_related_caches()
                             except Exception:
                                 pass
+                            try:
+                                # _persist_latest_stable_after_critical_save("disabled")
+                                pass
+                            except Exception:
+                                pass
                             st.session_state["_ajustes_saved_at"] = time.time()
                             st.success("Folga fixa salva e aplicada como trava manual na competência ativa.")
                             st.rerun()
@@ -18104,6 +18134,11 @@ def page_app():
                         remove_folga_fixa(setor, chapa_ff)
                         try:
                             clear_retificacao_related_caches()
+                        except Exception:
+                            pass
+                        try:
+                            # _persist_latest_stable_after_critical_save("disabled")
+                            pass
                         except Exception:
                             pass
                         st.session_state["_ajustes_saved_at"] = time.time()
@@ -18593,6 +18628,11 @@ def page_app():
 
                                     try:
                                         clear_retificacao_related_caches()
+                                    except Exception:
+                                        pass
+                                    try:
+                                        # _persist_latest_stable_after_critical_save("disabled")
+                                        pass
                                     except Exception:
                                         pass
                                     st.session_state["_ajustes_saved_at"] = time.time()
