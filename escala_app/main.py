@@ -71,15 +71,6 @@ import random
 import math
 import calendar
 import sqlite3
-
-_RUNTIME_READY = False
-_RUNTIME_READY_AT = 0.0
-_RUNTIME_READY_TTL_SEC = 120.0
-
-try:
-    SQLiteSyncConnection
-except NameError:
-    SQLiteSyncConnection = sqlite3.Connection
 import os
 import re
 import shutil
@@ -105,7 +96,6 @@ from reportlab.lib import colors
 
 
 # ===== V113 BLINDAGEM (COMMIT REAL + ANTI-PERDA) =====
-
 def commit_blindado(con):
     try:
         con.commit()
@@ -122,17 +112,14 @@ def commit_blindado(con):
             _os.fsync(fd.fileno())
     except Exception:
         pass
-    for fn_name in ("load_overrides", "get_hist_mes_com_overrides_cached"):
-        try:
-            fn = globals().get(fn_name)
-            if fn is not None and hasattr(fn, "clear"):
-                fn.clear()
-        except Exception:
-            pass
     try:
         st.cache_data.clear()
     except Exception:
         pass
+
+st.set_page_config(page_title="Escala 5x2 Oficial", layout="wide")
+
+
 
 def aplicar_tema_premium_etapa1():
     st.markdown("""
@@ -1260,6 +1247,7 @@ def clear_retificacao_related_caches() -> None:
         'get_hist_mes_com_overrides_cached',
         'get_colaborador_competencia_snapshot',
         'get_status_competencia',
+        'load_overrides',
     ]:
         try:
             fn = globals().get(fn_name)
@@ -3289,34 +3277,15 @@ def _supabase_resolve_remote_table(local_table: str, refresh: bool = False) -> s
     _SUPABASE_TABLE_CACHE[local_table] = resolved
     return resolved
 
-
-def _app_db_connect(target):
+def _app_db_connect(db_path: str | None = None):
+    target = str(db_path or DB_PATH)
+    factory = SQLiteSyncConnection if str(Path(target).resolve()) == str(Path(DB_PATH).resolve()) else sqlite3.Connection
+    conn = sqlite3.connect(target, check_same_thread=False, factory=factory)
     try:
-        factory = SQLiteSyncConnection if "SQLiteSyncConnection" in globals() and SQLiteSyncConnection is not None else sqlite3.Connection
-    except Exception:
-        factory = sqlite3.Connection
-
-    conn = sqlite3.connect(
-        str(target),
-        timeout=60,
-        isolation_level=None,
-        check_same_thread=False,
-        factory=factory,
-    )
-    try:
-        conn.execute("PRAGMA journal_mode=WAL;")
-    except Exception:
-        pass
-    try:
-        conn.execute("PRAGMA synchronous=NORMAL;")
-    except Exception:
-        pass
-    try:
-        conn.execute("PRAGMA busy_timeout=60000;")
-    except Exception:
-        pass
-    try:
-        conn.execute("PRAGMA foreign_keys=ON;")
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=10000")
+        conn.execute("PRAGMA synchronous=NORMAL")
     except Exception:
         pass
     return conn
@@ -4069,7 +4038,10 @@ def _should_preserve_current_db() -> bool:
 
 
 def _pick_best_db_candidate() -> Path | None:
-    return Path(DB_PATH)
+    try:
+        return Path(DB_PATH)
+    except Exception:
+        return None
 
 def _sqlite_backup_copy(src_path: str, dst_path: str) -> None:
     src_path = str(src_path)
@@ -4173,35 +4145,18 @@ def _ensure_local_db_bootstrap_enterprise() -> bool:
         return False
 
 
-
 def _ensure_runtime_storage_ready(force: bool = False):
     global _RUNTIME_READY, _RUNTIME_READY_AT
-    try:
-        _RUNTIME_READY
-    except NameError:
-        _RUNTIME_READY = False
-    try:
-        _RUNTIME_READY_AT
-    except NameError:
-        _RUNTIME_READY_AT = 0.0
-    try:
-        _RUNTIME_READY_TTL_SEC
-    except NameError:
-        globals()["_RUNTIME_READY_TTL_SEC"] = 120.0
-
     try:
         now_ts = datetime.now().timestamp()
     except Exception:
         now_ts = 0.0
-
-    if (not force) and bool(_RUNTIME_READY) and (now_ts - float(_RUNTIME_READY_AT or 0.0) < float(globals().get("_RUNTIME_READY_TTL_SEC", 120.0))):
+    if (not force) and _RUNTIME_READY and (now_ts - float(_RUNTIME_READY_AT or 0.0) < float(_RUNTIME_READY_TTL_SEC)):
         return
+    _ensure_backup_dir()
 
-    try:
-        _ensure_backup_dir()
-    except Exception:
-        pass
-
+    # Anti-perda: se o banco atual já está íntegro e com dados reais,
+    # não rodar adoções/restores que possam trazer estado antigo após reboot.
     try:
         if _should_preserve_current_db():
             _RUNTIME_READY = True
@@ -4210,23 +4165,14 @@ def _ensure_runtime_storage_ready(force: bool = False):
     except Exception:
         pass
 
-    try:
-        _ensure_local_db_bootstrap_enterprise()
-    except Exception:
-        pass
-
-    try:
-        _migrate_legacy_db_if_needed()
-    except Exception:
-        pass
-
-    if globals().get("SUPABASE_AUTO_PULL_ON_START", False):
+    _ensure_local_db_bootstrap_enterprise()
+    _migrate_legacy_db_if_needed()
+    if SUPABASE_AUTO_PULL_ON_START:
         try:
-            if globals().get("SUPABASE_SYNC_ENABLED", False) and not _sqlite_app_has_meaningful_data():
+            if SUPABASE_SYNC_ENABLED and not _sqlite_app_has_meaningful_data():
                 _supabase_pull_all_to_sqlite(force=True)
         except Exception:
             pass
-
     _RUNTIME_READY = True
     _RUNTIME_READY_AT = now_ts
 
