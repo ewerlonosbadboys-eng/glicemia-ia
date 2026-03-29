@@ -100,7 +100,7 @@ def commit_blindado(con):
         import streamlit as st
         st.cache_data.clear()
     except:
-        pass:
+        pass
     try:
         con.commit()
     except:
