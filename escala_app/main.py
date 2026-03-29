@@ -18407,6 +18407,10 @@ def page_app():
                                     preview_rows.append(linha_prev)
                                 if preview_rows:
                                     df_preview = pd.DataFrame(preview_rows)
+        try:
+            df_preview = aplicar_rotulos_dias_semana_df(df_preview, int(ano), int(mes))
+        except Exception:
+            pass
 
                                     domingos_preview = {
                                         str(d) for d in dias2
