@@ -122,6 +122,175 @@ def commit_blindado(con):
     except Exception:
         pass
 
+
+# ===== V121 AUDITORIA ADMIN DETALHADA =====
+def ensure_auditoria_admin_table() -> None:
+    con = db_conn()
+    cur = con.cursor()
+    try:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS auditoria_admin (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                acao TEXT NOT NULL,
+                modulo TEXT,
+                usuario_nome TEXT,
+                usuario_chapa TEXT,
+                usuario_setor TEXT,
+                usuario_perfil TEXT,
+                alvo_nome TEXT,
+                alvo_chapa TEXT,
+                alvo_setor TEXT,
+                competencia_ano INTEGER,
+                competencia_mes INTEGER,
+                valor_antes TEXT,
+                valor_depois TEXT,
+                detalhes TEXT,
+                status TEXT,
+                criado_em TEXT NOT NULL
+            )
+        """)
+        commit_blindado(con)
+    finally:
+        con.close()
+
+def _perfil_auth_para_texto(auth: dict | None) -> str:
+    auth = auth or {}
+    if bool(auth.get("is_admin", False)):
+        return "ADMIN"
+    if bool(auth.get("is_lider", False)):
+        return "LIDER"
+    if bool(auth.get("is_ax_lider", False)):
+        return "AX_LIDER"
+    return "COLABORADOR"
+
+def _get_auth_actor() -> dict:
+    try:
+        auth = dict(st.session_state.get("auth") or {})
+    except Exception:
+        auth = {}
+    return {
+        "nome": str(auth.get("nome") or "").strip(),
+        "chapa": str(auth.get("chapa") or "").strip(),
+        "setor": str(auth.get("setor") or "").strip(),
+        "perfil": _perfil_auth_para_texto(auth),
+    }
+
+def registrar_log_admin(
+    acao: str,
+    modulo: str = "",
+    alvo_nome: str = "",
+    alvo_chapa: str = "",
+    alvo_setor: str = "",
+    competencia_ano = None,
+    competencia_mes = None,
+    valor_antes: str = "",
+    valor_depois: str = "",
+    detalhes: str = "",
+    status: str = "SUCESSO",
+    usuario_nome: str = "",
+    usuario_chapa: str = "",
+    usuario_setor: str = "",
+    usuario_perfil: str = "",
+) -> None:
+    try:
+        ensure_auditoria_admin_table()
+        actor = _get_auth_actor()
+        usuario_nome = str(usuario_nome or actor.get("nome") or "").strip()
+        usuario_chapa = str(usuario_chapa or actor.get("chapa") or "").strip()
+        usuario_setor = str(usuario_setor or actor.get("setor") or "").strip()
+        usuario_perfil = str(usuario_perfil or actor.get("perfil") or "").strip()
+        con = db_conn()
+        cur = con.cursor()
+        try:
+            cur.execute(
+                """
+                INSERT INTO auditoria_admin(
+                    acao, modulo, usuario_nome, usuario_chapa, usuario_setor, usuario_perfil,
+                    alvo_nome, alvo_chapa, alvo_setor, competencia_ano, competencia_mes,
+                    valor_antes, valor_depois, detalhes, status, criado_em
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(acao or "").strip() or "ACAO",
+                    str(modulo or "").strip(),
+                    usuario_nome,
+                    usuario_chapa,
+                    usuario_setor,
+                    usuario_perfil,
+                    str(alvo_nome or "").strip(),
+                    str(alvo_chapa or "").strip(),
+                    str(alvo_setor or "").strip(),
+                    int(competencia_ano) if competencia_ano not in (None, "", False) else None,
+                    int(competencia_mes) if competencia_mes not in (None, "", False) else None,
+                    str(valor_antes or ""),
+                    str(valor_depois or ""),
+                    str(detalhes or ""),
+                    str(status or "SUCESSO").strip() or "SUCESSO",
+                    datetime.now().isoformat(),
+                ),
+            )
+            commit_blindado(con)
+        finally:
+            con.close()
+    except Exception:
+        pass
+
+@st.cache_data(show_spinner=False, ttl=60)
+def listar_auditoria_admin_df(
+    usuario_setor: str = "",
+    acao: str = "",
+    alvo_setor: str = "",
+    data_ini: str = "",
+    data_fim: str = "",
+    texto: str = "",
+    limite: int = 1000,
+) -> pd.DataFrame:
+    ensure_auditoria_admin_table()
+    con = db_conn()
+    try:
+        sql = """
+            SELECT id, criado_em, acao, modulo, usuario_nome, usuario_chapa, usuario_setor, usuario_perfil,
+                   alvo_nome, alvo_chapa, alvo_setor, competencia_ano, competencia_mes,
+                   valor_antes, valor_depois, detalhes, status
+            FROM auditoria_admin
+            WHERE 1=1
+        """
+        params = []
+        if str(usuario_setor or "").strip():
+            sql += " AND UPPER(TRIM(usuario_setor)) = UPPER(TRIM(?))"
+            params.append(str(usuario_setor).strip())
+        if str(acao or "").strip():
+            sql += " AND UPPER(TRIM(acao)) = UPPER(TRIM(?))"
+            params.append(str(acao).strip())
+        if str(alvo_setor or "").strip():
+            sql += " AND UPPER(TRIM(alvo_setor)) = UPPER(TRIM(?))"
+            params.append(str(alvo_setor).strip())
+        if str(data_ini or "").strip():
+            sql += " AND substr(criado_em, 1, 10) >= ?"
+            params.append(str(data_ini).strip())
+        if str(data_fim or "").strip():
+            sql += " AND substr(criado_em, 1, 10) <= ?"
+            params.append(str(data_fim).strip())
+        if str(texto or "").strip():
+            sql += """
+                AND (
+                    LOWER(COALESCE(usuario_nome,'')) LIKE ?
+                    OR LOWER(COALESCE(usuario_chapa,'')) LIKE ?
+                    OR LOWER(COALESCE(alvo_nome,'')) LIKE ?
+                    OR LOWER(COALESCE(alvo_chapa,'')) LIKE ?
+                    OR LOWER(COALESCE(detalhes,'')) LIKE ?
+                    OR LOWER(COALESCE(valor_antes,'')) LIKE ?
+                    OR LOWER(COALESCE(valor_depois,'')) LIKE ?
+                )
+            """
+            like = f"%{str(texto).strip().lower()}%"
+            params.extend([like, like, like, like, like, like, like])
+        sql += " ORDER BY id DESC LIMIT ?"
+        params.append(int(limite or 1000))
+        return pd.read_sql_query(sql, con, params=params)
+    finally:
+        con.close()
+
 st.set_page_config(page_title="Escala 5x2 Oficial", layout="wide")
 
 def gerar_rotulos_dias_semana_pt(ano: int, mes: int) -> dict[str, str]:
@@ -1044,6 +1213,20 @@ def set_status_competencia(setor: str, ano: int, mes: int, status: str) -> None:
         except Exception:
             pass
 
+    try:
+        registrar_log_admin(
+            acao="ALTERAR_STATUS_COMPETENCIA",
+            modulo="ADMIN/COMPETENCIA",
+            alvo_setor=setor,
+            competencia_ano=int(ano),
+            competencia_mes=int(mes),
+            valor_depois=novo,
+            detalhes=f"Status da competência alterado para {novo}",
+            status="SUCESSO",
+        )
+    except Exception:
+        pass
+
 
 def competencia_fechada(setor: str, ano: int, mes: int) -> bool:
     return get_status_competencia(setor, int(ano), int(mes)) == 'FECHADA'
@@ -1389,6 +1572,28 @@ def salvar_retificacao_competencia(setor: str, ano: int, mes: int, chapa: str, d
         con.close()
 
     clear_retificacao_related_caches()
+    try:
+        registrar_log_admin(
+            acao="SALVAR_RETIFICACAO",
+            modulo="GESTAO/RETIFICACAO",
+            alvo_nome=nome,
+            alvo_chapa=chapa,
+            alvo_setor=setor,
+            competencia_ano=ano,
+            competencia_mes=mes,
+            valor_depois=json.dumps({
+                "dia": dia,
+                "novo_status": novo_status,
+                "nova_entrada": novo_entrada,
+                "nova_saida": novo_saida,
+                "novo_subgrupo": novo_subgrupo,
+                "motivo": motivo,
+            }, ensure_ascii=False),
+            detalhes="Retificação salva/atualizada",
+            status="SUCESSO",
+        )
+    except Exception:
+        pass
 
 
 def excluir_retificacao_competencia(setor: str, ano: int, mes: int, chapa: str, dia: int) -> bool:
@@ -1457,6 +1662,20 @@ def excluir_retificacao_competencia(setor: str, ano: int, mes: int, chapa: str, 
         pass
 
     clear_retificacao_related_caches()
+    try:
+        registrar_log_admin(
+            acao="EXCLUIR_RETIFICACAO",
+            modulo="GESTAO/RETIFICACAO",
+            alvo_chapa=chapa,
+            alvo_setor=setor,
+            competencia_ano=ano,
+            competencia_mes=mes,
+            valor_depois=f"dia={dia}",
+            detalhes="Retificação excluída",
+            status="SUCESSO",
+        )
+    except Exception:
+        pass
     return True
 
 
@@ -5498,6 +5717,23 @@ def db_init_fast_login():
 
     commit_blindado(con)
     con.close()
+    try:
+        registrar_log_admin(
+            acao="UPSERT_USUARIO_SISTEMA",
+            modulo="ADMIN/USUARIOS",
+            alvo_nome=nome,
+            alvo_chapa=chapa,
+            alvo_setor=setor,
+            valor_depois=json.dumps({
+                "is_admin": int(is_admin),
+                "is_lider": int(is_lider),
+                "is_ax_lider": int(is_ax_lider)
+            }, ensure_ascii=False),
+            detalhes="Usuário do sistema criado/atualizado",
+            status="SUCESSO",
+        )
+    except Exception:
+        pass
 
 
 def db_init():
@@ -6088,6 +6324,16 @@ def update_password(setor: str, chapa: str, nova_senha: str):
     )
     commit_blindado(con)
     con.close()
+    registrar_log_admin(
+        acao="RESETAR_SENHA",
+        modulo="ADMIN/USUARIOS",
+        alvo_chapa=chapa,
+        alvo_setor=setor,
+        valor_antes="senha anterior",
+        valor_depois="senha redefinida",
+        detalhes="Reset de senha executado",
+        status="SUCESSO",
+    )
 
 def set_force_change_password(setor: str, chapa: str, ativo: bool = True):
     setor = _norm_setor(setor)
@@ -6670,6 +6916,35 @@ def admin_update_funcionario(setor: str, chapa_atual: str, nome_novo: str, subgr
     except Exception:
         pass
 
+    try:
+        registrar_log_admin(
+            acao="ATUALIZAR_FUNCIONARIO",
+            modulo="ADMIN/FUNCIONARIOS",
+            alvo_nome=nome_final,
+            alvo_chapa=chapa_atual,
+            alvo_setor=setor,
+            valor_antes=json.dumps({
+                "nome": str(rec.get("Nome") or ""),
+                "subgrupo": str(rec.get("Subgrupo") or ""),
+                "entrada": str(rec.get("Entrada") or ""),
+                "folga_sab": bool(rec.get("Folga_Sab", False)),
+            }, ensure_ascii=False),
+            valor_depois=json.dumps({
+                "nome": nome_final,
+                "subgrupo": subgrupo_final,
+                "entrada": entrada_final,
+                "folga_sab": bool(folga_sab),
+                "perfil": perfil_novo,
+                "is_admin": bool(is_admin),
+                "is_lider": bool(is_lider),
+                "is_ax_lider": bool(is_ax_lider),
+            }, ensure_ascii=False),
+            detalhes="Atualização administrativa do colaborador",
+            status="SUCESSO",
+        )
+    except Exception:
+        pass
+
     return {
         'nome': nome_final,
         'setor': setor,
@@ -6737,6 +7012,19 @@ def admin_rename_setor_global(setor_atual: str, setor_novo: str) -> dict:
     except Exception:
         pass
 
+    try:
+        registrar_log_admin(
+            acao="RENOMEAR_SETOR",
+            modulo="ADMIN/SETORES",
+            alvo_setor=setor_novo_norm,
+            valor_antes=setor_atual_norm,
+            valor_depois=setor_novo_norm,
+            detalhes=json.dumps(atualizados, ensure_ascii=False),
+            status="SUCESSO",
+        )
+    except Exception:
+        pass
+
     return {
         'setor_antigo': setor_atual_norm,
         'setor_novo': setor_novo_norm,
@@ -6795,6 +7083,19 @@ def admin_delete_setor_global(setor_nome: str) -> dict:
 
     try:
         st.cache_data.clear()
+    except Exception:
+        pass
+
+    try:
+        registrar_log_admin(
+            acao="EXCLUIR_SETOR",
+            modulo="ADMIN/SETORES",
+            alvo_setor=setor_norm,
+            valor_antes=setor_norm,
+            valor_depois="EXCLUIDO",
+            detalhes=json.dumps(removidos, ensure_ascii=False),
+            status="SUCESSO",
+        )
     except Exception:
         pass
 
@@ -20117,6 +20418,90 @@ def page_app():
                 bk_path = os.path.join(BACKUP_DIR, bk_sel)
                 with open(bk_path, "rb") as f:
                     st.download_button("⬇️ Baixar backup selecionado", data=f, file_name=bk_sel, mime="application/octet-stream", key="adm_bk_dl")
+
+            st.markdown("---")
+            st.subheader("📜 Logs detalhados do sistema")
+            st.caption("Auditoria para o ADMIN ver quem mexeu, o que mudou, quando mudou e em qual setor.")
+            lg1, lg2, lg3, lg4 = st.columns([1, 1, 1, 1.2])
+            with lg1:
+                try:
+                    _df_aud_base = listar_auditoria_admin_df(limite=2000)
+                except Exception:
+                    _df_aud_base = pd.DataFrame()
+                _setores_user = [""] + sorted({str(x).strip() for x in (_df_aud_base["usuario_setor"].tolist() if (not _df_aud_base.empty and "usuario_setor" in _df_aud_base.columns) else []) if str(x).strip()})
+                filtro_log_usuario_setor = st.selectbox("Setor do usuário", _setores_user, key="adm_log_usuario_setor")
+            with lg2:
+                _acoes = [""] + sorted({str(x).strip() for x in (_df_aud_base["acao"].tolist() if (not _df_aud_base.empty and "acao" in _df_aud_base.columns) else []) if str(x).strip()})
+                filtro_log_acao = st.selectbox("Ação", _acoes, key="adm_log_acao")
+            with lg3:
+                _setores_alvo = [""] + sorted({str(x).strip() for x in (_df_aud_base["alvo_setor"].tolist() if (not _df_aud_base.empty and "alvo_setor" in _df_aud_base.columns) else []) if str(x).strip()})
+                filtro_log_alvo_setor = st.selectbox("Setor alvo", _setores_alvo, key="adm_log_alvo_setor")
+            with lg4:
+                filtro_log_texto = st.text_input("Buscar nome/chapa/detalhes", key="adm_log_texto")
+
+            lgd1, lgd2, lgd3 = st.columns([1, 1, 1])
+            with lgd1:
+                filtro_log_data_ini = st.date_input("Data inicial", value=None, key="adm_log_data_ini")
+            with lgd2:
+                filtro_log_data_fim = st.date_input("Data final", value=None, key="adm_log_data_fim")
+            with lgd3:
+                limite_logs = st.number_input("Limite de linhas", min_value=50, max_value=5000, value=1000, step=50, key="adm_log_limite")
+
+            try:
+                df_logs = listar_auditoria_admin_df(
+                    usuario_setor=str(filtro_log_usuario_setor or ""),
+                    acao=str(filtro_log_acao or ""),
+                    alvo_setor=str(filtro_log_alvo_setor or ""),
+                    data_ini=(filtro_log_data_ini.isoformat() if filtro_log_data_ini else ""),
+                    data_fim=(filtro_log_data_fim.isoformat() if filtro_log_data_fim else ""),
+                    texto=str(filtro_log_texto or ""),
+                    limite=int(limite_logs or 1000),
+                )
+            except Exception as e:
+                df_logs = pd.DataFrame()
+                st.error(f"Falha ao carregar logs: {e}")
+
+            if df_logs is not None and not df_logs.empty:
+                df_logs_view = df_logs.copy()
+                try:
+                    df_logs_view["criado_em"] = pd.to_datetime(df_logs_view["criado_em"], errors="coerce").dt.strftime("%d/%m/%Y %H:%M:%S")
+                except Exception:
+                    pass
+                df_logs_view = df_logs_view.rename(columns={
+                    "id": "ID",
+                    "criado_em": "Data/Hora",
+                    "acao": "Ação",
+                    "modulo": "Módulo",
+                    "usuario_nome": "Usuário",
+                    "usuario_chapa": "Chapa usuário",
+                    "usuario_setor": "Setor usuário",
+                    "usuario_perfil": "Perfil",
+                    "alvo_nome": "Alvo",
+                    "alvo_chapa": "Chapa alvo",
+                    "alvo_setor": "Setor alvo",
+                    "competencia_ano": "Ano",
+                    "competencia_mes": "Mês",
+                    "valor_antes": "Antes",
+                    "valor_depois": "Depois",
+                    "detalhes": "Detalhes",
+                    "status": "Status",
+                })
+                st.dataframe(df_logs_view, use_container_width=True, height=420, hide_index=True)
+                try:
+                    xls_logs = io.BytesIO()
+                    with pd.ExcelWriter(xls_logs, engine="openpyxl") as writer:
+                        df_logs_view.to_excel(writer, index=False, sheet_name="logs_admin")
+                    st.download_button(
+                        "⬇️ Exportar logs em Excel",
+                        data=xls_logs.getvalue(),
+                        file_name="logs_admin_detalhados.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="adm_logs_exportar_excel",
+                    )
+                except Exception as e:
+                    st.warning(f"Não consegui gerar o Excel dos logs: {e}")
+            else:
+                st.info("Nenhum log encontrado com os filtros atuais.")
 
             st.markdown("### Restaurar um backup")
             up = st.file_uploader("Envie um arquivo .db (backup do escala.db)", type=["db"], key="adm_bk_up")
