@@ -18407,10 +18407,10 @@ def page_app():
                                     preview_rows.append(linha_prev)
                                 if preview_rows:
                                     df_preview = pd.DataFrame(preview_rows)
-        try:
-            df_preview = aplicar_rotulos_dias_semana_df(df_preview, int(ano), int(mes))
-        except Exception:
-            pass
+                                    try:
+                                        df_preview = aplicar_rotulos_dias_semana_df(df_preview, int(ano), int(mes))
+                                    except Exception:
+                                        pass
 
                                     domingos_preview = {
                                         str(d) for d in dias2
@@ -18429,11 +18429,12 @@ def page_app():
 
                                     def _style_domingo_columns(col):
                                         nome_col = str(col.name)
-                                        if nome_col in domingos_preview:
+                                        num_col = nome_col.strip().split("\n")[0]
+                                        if num_col in domingos_preview:
                                             return ["background-color: rgba(255, 77, 77, 0.20); color: #ffffff; font-weight: 700;" for _ in col]
                                         return ["" for _ in col]
 
-                                    cols_preview_dias = [c for c in df_preview.columns if str(c).isdigit()]
+                                    cols_preview_dias = [c for c in df_preview.columns if str(c).strip().split("\n")[0].isdigit()]
                                     styler_preview = df_preview.style
                                     if cols_preview_dias:
                                         styler_preview = styler_preview.apply(_style_domingo_columns, subset=cols_preview_dias, axis=0)
