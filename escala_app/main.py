@@ -71,6 +71,11 @@ import random
 import math
 import calendar
 import sqlite3
+
+try:
+    SQLiteSyncConnection
+except NameError:
+    SQLiteSyncConnection = sqlite3.Connection
 import os
 import re
 import shutil
@@ -3277,15 +3282,39 @@ def _supabase_resolve_remote_table(local_table: str, refresh: bool = False) -> s
     _SUPABASE_TABLE_CACHE[local_table] = resolved
     return resolved
 
-def _app_db_connect(db_path: str | None = None):
-    target = str(db_path or DB_PATH)
-    factory = SQLiteSyncConnection if str(Path(target).resolve()) == str(Path(DB_PATH).resolve()) else sqlite3.Connection
-    conn = sqlite3.connect(target, check_same_thread=False, factory=factory)
+
+def _app_db_connect(target):
     try:
-        conn.execute("PRAGMA foreign_keys=ON")
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA busy_timeout=10000")
-        conn.execute("PRAGMA synchronous=NORMAL")
+        same_main_db = str(Path(target).resolve()) == str(Path(DB_PATH).resolve())
+    except Exception:
+        same_main_db = False
+
+    try:
+        factory = SQLiteSyncConnection if same_main_db else sqlite3.Connection
+    except Exception:
+        factory = sqlite3.Connection
+
+    conn = sqlite3.connect(
+        str(target),
+        timeout=60,
+        isolation_level=None,
+        check_same_thread=False,
+        factory=factory,
+    )
+    try:
+        conn.execute("PRAGMA journal_mode=WAL;")
+    except Exception:
+        pass
+    try:
+        conn.execute("PRAGMA synchronous=NORMAL;")
+    except Exception:
+        pass
+    try:
+        conn.execute("PRAGMA busy_timeout=60000;")
+    except Exception:
+        pass
+    try:
+        conn.execute("PRAGMA foreign_keys=ON;")
     except Exception:
         pass
     return conn
