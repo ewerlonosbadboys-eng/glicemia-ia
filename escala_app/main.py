@@ -10698,22 +10698,38 @@ def set_override(setor: str, ano: int, mes: int, chapa: str, dia: int, campo: st
     status / h_entrada / h_saida.
     """
     campo = _norm_override_campo(campo)
+    setor_n = str(setor).strip().upper()
+    chapa_n = str(chapa).strip()
+
+    valor_antigo = ""
     con = db_conn()
     try:
         cur = con.cursor()
+        try:
+            cur.execute("""
+                SELECT valor
+                FROM overrides
+                WHERE setor=? AND ano=? AND mes=? AND chapa=? AND dia=? AND campo=?
+                LIMIT 1
+            """, (setor_n, int(ano), int(mes), chapa_n, int(dia), campo))
+            row_old = cur.fetchone()
+            valor_antigo = str((row_old[0] if row_old else "") or "")
+        except Exception:
+            valor_antigo = ""
+
         cur.execute("""
             INSERT INTO overrides(setor, ano, mes, chapa, dia, campo, valor)
             VALUES(?,?,?,?,?,?,?)
             ON CONFLICT(setor, ano, mes, chapa, dia, campo)
             DO UPDATE SET valor=excluded.valor
-        """, (str(setor).strip().upper(), int(ano), int(mes), str(chapa).strip(), int(dia), campo, str(valor).strip()))
+        """, (setor_n, int(ano), int(mes), chapa_n, int(dia), campo, str(valor).strip()))
         commit_blindado(con)
     finally:
         try:
             con.close()
         except Exception:
             pass
-    for fn_name in ("load_overrides", "get_hist_mes_com_overrides_cached"):
+    for fn_name in ("load_overrides", "get_hist_mes_com_overrides_cached", "listar_auditoria_admin_df"):
         try:
             fn = globals().get(fn_name)
             if fn is not None and hasattr(fn, "clear"):
@@ -10725,30 +10741,71 @@ def set_override(setor: str, ano: int, mes: int, chapa: str, dia: int, campo: st
     except Exception:
         pass
 
+    try:
+        alvo = get_colaborador_record(setor_n, chapa_n) or {}
+        registrar_log_admin(
+            acao="SET_OVERRIDE",
+            modulo="GESTAO/OVERRIDES",
+            alvo_nome=str(alvo.get("Nome") or "").strip(),
+            alvo_chapa=chapa_n,
+            alvo_setor=setor_n,
+            competencia_ano=int(ano),
+            competencia_mes=int(mes),
+            valor_antes=valor_antigo,
+            valor_depois=str(valor).strip(),
+            detalhes=f"dia={int(dia)}; campo={campo}",
+            status="SUCESSO",
+        )
+    except Exception:
+        pass
+
 
 def delete_override(setor: str, ano: int, mes: int, chapa: str, dia: int, campo: str | None = None):
+    setor_n = str(setor).strip().upper()
+    chapa_n = str(chapa).strip()
+    campos_log = []
+    valores_antes = []
     con = db_conn()
     try:
         cur = con.cursor()
-        if campo:
-            campos = sorted({str(campo).strip(), _norm_override_campo(campo)})
-            placeholders = ",".join(["?"] * len(campos))
-            cur.execute(f"""
-                DELETE FROM overrides
-                WHERE setor=? AND ano=? AND mes=? AND chapa=? AND dia=? AND campo IN ({placeholders})
-            """, (str(setor).strip().upper(), int(ano), int(mes), str(chapa).strip(), int(dia), *campos))
-        else:
-            cur.execute("""
-                DELETE FROM overrides
-                WHERE setor=? AND ano=? AND mes=? AND chapa=? AND dia=?
-            """, (str(setor).strip().upper(), int(ano), int(mes), str(chapa).strip(), int(dia)))
+        try:
+            if campo:
+                campos = sorted({str(campo).strip(), _norm_override_campo(campo)})
+                placeholders = ",".join(["?"] * len(campos))
+                cur.execute(f"""
+                    SELECT campo, valor
+                    FROM overrides
+                    WHERE setor=? AND ano=? AND mes=? AND chapa=? AND dia=? AND campo IN ({placeholders})
+                """, (setor_n, int(ano), int(mes), chapa_n, int(dia), *campos))
+                rows_old = cur.fetchall() or []
+                campos_log = [str(r[0] or "") for r in rows_old]
+                valores_antes = [f"{str(r[0] or '')}={str(r[1] or '')}" for r in rows_old]
+                cur.execute(f"""
+                    DELETE FROM overrides
+                    WHERE setor=? AND ano=? AND mes=? AND chapa=? AND dia=? AND campo IN ({placeholders})
+                """, (setor_n, int(ano), int(mes), chapa_n, int(dia), *campos))
+            else:
+                cur.execute("""
+                    SELECT campo, valor
+                    FROM overrides
+                    WHERE setor=? AND ano=? AND mes=? AND chapa=? AND dia=?
+                """, (setor_n, int(ano), int(mes), chapa_n, int(dia)))
+                rows_old = cur.fetchall() or []
+                campos_log = [str(r[0] or "") for r in rows_old]
+                valores_antes = [f"{str(r[0] or '')}={str(r[1] or '')}" for r in rows_old]
+                cur.execute("""
+                    DELETE FROM overrides
+                    WHERE setor=? AND ano=? AND mes=? AND chapa=? AND dia=?
+                """, (setor_n, int(ano), int(mes), chapa_n, int(dia)))
+        except Exception:
+            pass
         commit_blindado(con)
     finally:
         try:
             con.close()
         except Exception:
             pass
-    for fn_name in ("load_overrides", "get_hist_mes_com_overrides_cached"):
+    for fn_name in ("load_overrides", "get_hist_mes_com_overrides_cached", "listar_auditoria_admin_df"):
         try:
             fn = globals().get(fn_name)
             if fn is not None and hasattr(fn, "clear"):
@@ -10757,6 +10814,25 @@ def delete_override(setor: str, ano: int, mes: int, chapa: str, dia: int, campo:
             pass
     try:
         st.cache_data.clear()
+    except Exception:
+        pass
+
+    try:
+        if valores_antes:
+            alvo = get_colaborador_record(setor_n, chapa_n) or {}
+            registrar_log_admin(
+                acao="DELETE_OVERRIDE",
+                modulo="GESTAO/OVERRIDES",
+                alvo_nome=str(alvo.get("Nome") or "").strip(),
+                alvo_chapa=chapa_n,
+                alvo_setor=setor_n,
+                competencia_ano=int(ano),
+                competencia_mes=int(mes),
+                valor_antes=" | ".join(valores_antes),
+                valor_depois="REMOVIDO",
+                detalhes=f"dia={int(dia)}; campos={','.join(campos_log)}",
+                status="SUCESSO",
+            )
     except Exception:
         pass
 
@@ -10767,12 +10843,27 @@ def delete_overrides_mes(setor: str, ano: int, mes: int, keep_campos: set[str] |
     Por padrão remove TUDO para o mês. Se keep_campos for informado,
     preserva overrides cujo campo esteja em keep_campos.
     """
+    setor_n = str(setor).strip().upper()
+    qtd_afetada = 0
+    detalhes_keep = ""
     con = db_conn()
     try:
         cur = con.cursor()
-        setor_n = str(setor).strip().upper()
         if keep_campos and len(keep_campos) > 0:
             placeholders = ",".join(["?"] * len(keep_campos))
+            try:
+                cur.execute(
+                    f"""
+                    SELECT COUNT(*)
+                    FROM overrides
+                    WHERE setor=? AND ano=? AND mes=? AND campo NOT IN ({placeholders})
+                    """,
+                    (setor_n, int(ano), int(mes), *list(keep_campos)),
+                )
+                row_cnt = cur.fetchone()
+                qtd_afetada = int((row_cnt[0] if row_cnt else 0) or 0)
+            except Exception:
+                qtd_afetada = 0
             cur.execute(
                 f"""
                 DELETE FROM overrides
@@ -10780,7 +10871,21 @@ def delete_overrides_mes(setor: str, ano: int, mes: int, keep_campos: set[str] |
                 """,
                 (setor_n, int(ano), int(mes), *list(keep_campos)),
             )
+            detalhes_keep = f"keep_campos={sorted(list(keep_campos))}"
         else:
+            try:
+                cur.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM overrides
+                    WHERE setor=? AND ano=? AND mes=?
+                    """,
+                    (setor_n, int(ano), int(mes)),
+                )
+                row_cnt = cur.fetchone()
+                qtd_afetada = int((row_cnt[0] if row_cnt else 0) or 0)
+            except Exception:
+                qtd_afetada = 0
             cur.execute(
                 """
                 DELETE FROM overrides
@@ -10794,7 +10899,7 @@ def delete_overrides_mes(setor: str, ano: int, mes: int, keep_campos: set[str] |
             con.close()
         except Exception:
             pass
-    for fn_name in ("load_overrides", "get_hist_mes_com_overrides_cached"):
+    for fn_name in ("load_overrides", "get_hist_mes_com_overrides_cached", "listar_auditoria_admin_df"):
         try:
             fn = globals().get(fn_name)
             if fn is not None and hasattr(fn, "clear"):
@@ -10803,6 +10908,22 @@ def delete_overrides_mes(setor: str, ano: int, mes: int, keep_campos: set[str] |
             pass
     try:
         st.cache_data.clear()
+    except Exception:
+        pass
+
+    try:
+        if qtd_afetada > 0:
+            registrar_log_admin(
+                acao="DELETE_OVERRIDES_MES",
+                modulo="GESTAO/OVERRIDES",
+                alvo_setor=setor_n,
+                competencia_ano=int(ano),
+                competencia_mes=int(mes),
+                valor_antes=f"{qtd_afetada} override(s)",
+                valor_depois="REMOVIDOS",
+                detalhes=detalhes_keep or "Limpeza total do mês",
+                status="SUCESSO",
+            )
     except Exception:
         pass
 
