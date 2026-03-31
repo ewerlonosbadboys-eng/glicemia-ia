@@ -7621,6 +7621,12 @@ def caixa_limpar_posto_dia(setor: str, ano: int, mes: int, dia: int, posto: str)
 def caixa_montar_base_operadores(setor: str, ano: int, mes: int, dia: int) -> pd.DataFrame:
     registros = []
     colaboradores = load_colaboradores_setor(setor) or []
+
+    try:
+        hist_mes = get_hist_mes_com_overrides_cached(setor, int(ano), int(mes)) or {}
+    except Exception:
+        hist_mes = {}
+
     for colab in colaboradores:
         nome = str(colab.get('Nome') or '').strip()
         chapa = _norm_chapa(colab.get('Chapa') or '')
@@ -7628,17 +7634,24 @@ def caixa_montar_base_operadores(setor: str, ano: int, mes: int, dia: int) -> pd
         entrada_prev = str(colab.get('Entrada') or '06:00').strip() or '06:00'
         saida_prev = _caixa_saida_prevista(entrada_prev)
         status_dia = 'Trabalho'
+
         try:
-            esc = get_escala_colaborador_mes(setor, chapa, int(ano), int(mes))
+            esc = hist_mes.get(chapa)
             if esc is not None and not esc.empty:
-                row = esc[esc['Dia'].astype(int) == int(dia)]
-                if not row.empty:
-                    row = row.iloc[0]
+                esc_dia = esc.copy()
+                if 'Dia' in esc_dia.columns:
+                    esc_dia = esc_dia[esc_dia['Dia'].astype(int) == int(dia)]
+                elif 'Data' in esc_dia.columns:
+                    esc_dia = esc_dia[pd.to_datetime(esc_dia['Data'], errors='coerce').dt.day == int(dia)]
+                if not esc_dia.empty:
+                    row = esc_dia.iloc[0]
                     status_dia = str(row.get('Status') or 'Trabalho').strip() or 'Trabalho'
-                    entrada_prev = str(row.get('Entrada') or entrada_prev).strip() or entrada_prev
-                    saida_prev = str(row.get('Saída') or '').strip() or _caixa_saida_prevista(entrada_prev)
+                    entrada_prev = str(row.get('Entrada') or row.get('H_Entrada') or entrada_prev).strip() or entrada_prev
+                    saida_prev = str(row.get('Saída') or row.get('Saida') or row.get('H_Saida') or '').strip() or _caixa_saida_prevista(entrada_prev)
+                    subgrupo = str(row.get('Subgrupo') or subgrupo).strip() or subgrupo
         except Exception:
             pass
+
         st_norm = str(status_dia or '').strip().upper()
         trabalha_hoje = ('TRAB' in st_norm) or (st_norm in {'', 'TRABALHO'})
         if not trabalha_hoje:
@@ -21080,7 +21093,7 @@ def _fast_restore_bundled_latest_before_start() -> None:
 
 # =========================================================
 # MAIN
-# ========================================================= 
+# =========================================================
 _restore_automatico_se_banco_vazio()
 validar_contrato_sistema()
 
