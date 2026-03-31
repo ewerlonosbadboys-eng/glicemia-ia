@@ -7489,7 +7489,7 @@ def caixa_lista_postos(qtd_caixas: int = 30, qtd_self: int = 6) -> list[str]:
     return postos
 
 
-@st.cache_data(show_spinner=False, ttl=20)
+@st.cache_data(show_spinner=False, ttl=120)
 def caixa_load_operacao_dia(setor: str, ano: int, mes: int, dia: int) -> pd.DataFrame:
     con = db_conn()
     try:
@@ -7619,7 +7619,7 @@ def caixa_limpar_posto_dia(setor: str, ano: int, mes: int, dia: int, posto: str)
         con.close()
 
 
-@st.cache_data(show_spinner=False, ttl=20)
+@st.cache_data(show_spinner=False, ttl=120)
 def caixa_montar_base_operadores(setor: str, ano: int, mes: int, dia: int) -> pd.DataFrame:
     registros = []
     colaboradores = load_colaboradores_setor(setor) or []
@@ -7629,6 +7629,26 @@ def caixa_montar_base_operadores(setor: str, ano: int, mes: int, dia: int) -> pd
         hist_mes = {}
 
     colunas_saida = ['nome','chapa','subgrupo','entrada_prevista','saida_prevista','janela_inicio','janela_fim','janela_tolerancia','status_dia','setor']
+    dia_ref = int(dia)
+    snapshot_dia = {}
+
+    for chapa_hist, esc in (hist_mes or {}).items():
+        try:
+            if esc is None or esc.empty:
+                continue
+            if 'Dia' in esc.columns:
+                row = esc.loc[esc['Dia'].astype(int) == dia_ref]
+                if row.empty:
+                    continue
+                row = row.iloc[0]
+            else:
+                idx = dia_ref - 1
+                if idx < 0 or idx >= len(esc):
+                    continue
+                row = esc.iloc[idx]
+            snapshot_dia[_norm_chapa(chapa_hist)] = row.to_dict()
+        except Exception:
+            continue
 
     for colab in colaboradores:
         nome = str(colab.get('Nome') or '').strip()
@@ -7640,19 +7660,13 @@ def caixa_montar_base_operadores(setor: str, ano: int, mes: int, dia: int) -> pd
         saida_prev = _caixa_saida_prevista(entrada_prev)
         status_dia = 'Trabalho'
 
-        try:
-            esc = hist_mes.get(chapa)
-            if esc is not None and not esc.empty:
-                row = esc[esc['Dia'].astype(int) == int(dia)]
-                if not row.empty:
-                    row = row.iloc[0]
-                    status_dia = str(row.get('Status') or 'Trabalho').strip() or 'Trabalho'
-                    entrada_prev = str(row.get('H_Entrada') or row.get('Entrada') or entrada_prev).strip() or entrada_prev
-                    saida_prev = str(row.get('H_Saida') or row.get('Saída') or saida_prev).strip() or _caixa_saida_prevista(entrada_prev)
-                    if 'Subgrupo' in row.index and str(row.get('Subgrupo') or '').strip():
-                        subgrupo = str(row.get('Subgrupo') or '').strip()
-        except Exception:
-            pass
+        row = snapshot_dia.get(chapa) or {}
+        if row:
+            status_dia = str(row.get('Status') or 'Trabalho').strip() or 'Trabalho'
+            entrada_prev = str(row.get('H_Entrada') or row.get('Entrada') or entrada_prev).strip() or entrada_prev
+            saida_prev = str(row.get('H_Saida') or row.get('Saída') or saida_prev).strip() or _caixa_saida_prevista(entrada_prev)
+            if str(row.get('Subgrupo') or '').strip():
+                subgrupo = str(row.get('Subgrupo') or '').strip()
 
         st_norm = str(status_dia or '').strip().upper()
         trabalha_hoje = ('TRAB' in st_norm) or (st_norm in {'', 'TRABALHO'})
@@ -11654,6 +11668,7 @@ def load_escala_mes_db(setor: str, ano: int, mes: int):
 
 
 @st.cache_data(show_spinner=False, ttl=1)
+@st.cache_data(show_spinner=False, ttl=180)
 def get_hist_mes_com_overrides_cached(setor: str, ano: int, mes: int):
     hist_db = load_escala_mes_db(setor, ano, mes)
     return apply_overrides_to_hist(setor, ano, mes, hist_db)
