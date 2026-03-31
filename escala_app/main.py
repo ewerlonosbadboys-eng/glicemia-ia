@@ -17904,6 +17904,9 @@ def page_app():
             st.session_state[_cx_dia_key] = 1
 
         cxa, cxb, cxc, cxd = st.columns([1.3, 1.2, 1.3, 2.2])
+        _cx_load_key = f"cx_carregado::{setor}::{ano_cx}::{mes_cx}"
+        _cx_load_stamp_key = f"cx_carregado_stamp::{setor}::{ano_cx}::{mes_cx}"
+
         with cxa:
             dia_cx = st.selectbox("Dia operacional", list(range(1, ultimo_dia_cx + 1)), key=_cx_dia_key)
         with cxb:
@@ -17914,37 +17917,35 @@ def page_app():
         with cxd:
             st.caption("Use esta aba para planejar quem abriu cada caixa, almoço, trocas e cobertura ao longo do dia.")
 
-        _cx_loaded_key = f"cx_loaded::{setor}::{ano_cx}::{mes_cx}"
-        _cx_loaded_day_key = f"cx_loaded_day::{setor}::{ano_cx}::{mes_cx}"
-        if _cx_loaded_key not in st.session_state:
-            st.session_state[_cx_loaded_key] = False
-        if _cx_loaded_day_key not in st.session_state:
-            st.session_state[_cx_loaded_day_key] = None
+        _cx_current_ref = f"{str(setor or '').strip()}|{int(ano_cx)}|{int(mes_cx)}|{int(dia_cx)}"
+        if st.session_state.get(_cx_load_stamp_key) != _cx_current_ref:
+            st.session_state[_cx_load_key] = False
+            st.session_state[_cx_load_stamp_key] = _cx_current_ref
 
-        _dia_cx_atual = int(dia_cx)
-        if st.session_state.get(_cx_loaded_day_key) not in (None, _dia_cx_atual):
-            st.session_state[_cx_loaded_key] = False
+        btn_cx1, btn_cx2, btn_cx3 = st.columns([1.1, 1.0, 2.2])
+        with btn_cx1:
+            if st.button("⚡ Carregar operação da Caixa", key=f"cx_carregar_btn::{setor}::{ano_cx}::{mes_cx}", use_container_width=True):
+                st.session_state[_cx_load_key] = True
+                st.session_state[_cx_load_stamp_key] = _cx_current_ref
+                st.rerun()
+        with btn_cx2:
+            if st.button("🧹 Ocultar operação", key=f"cx_ocultar_btn::{setor}::{ano_cx}::{mes_cx}", use_container_width=True):
+                st.session_state[_cx_load_key] = False
+                st.session_state[_cx_load_stamp_key] = _cx_current_ref
+                st.rerun()
+        with btn_cx3:
+            st.caption("Abertura ultra rápida: a Caixa só carrega a operação pesada quando você clicar no botão.")
 
-        cl1, cl2, cl3 = st.columns([1.15, 1.05, 3.0])
-        if cl1.button("⚡ Carregar operação da Caixa", key=f"cx_load_btn::{setor}::{ano_cx}::{mes_cx}", use_container_width=True):
-            st.session_state[_cx_loaded_key] = True
-            st.session_state[_cx_loaded_day_key] = _dia_cx_atual
-            st.rerun()
-        if cl2.button("🧹 Ocultar operação", key=f"cx_hide_btn::{setor}::{ano_cx}::{mes_cx}", use_container_width=True):
-            st.session_state[_cx_loaded_key] = False
-            st.session_state[_cx_loaded_day_key] = None
-            st.rerun()
-        cl3.caption("Abertura ultra rápida: a Caixa só carrega a operação pesada quando você clicar no botão.")
+        st.caption(f"Operação exibida somente para {int(dia_cx):02d}/{int(mes_cx):02d}/{int(ano_cx)} no setor {str(setor or '-').strip() or '-'}.")
 
-        if not st.session_state.get(_cx_loaded_key, False):
+        if not bool(st.session_state.get(_cx_load_key, False)):
             st.info("A aba Caixa está em modo leve. Clique em ⚡ Carregar operação da Caixa para abrir mapa, almoço, trocas e cobertura sem travar a entrada da tela.")
-            return
+            st.stop()
 
         with st.spinner("Carregando operação da Caixa..."):
-            base_operadores_cx = caixa_montar_base_operadores(setor, ano_cx, mes_cx, _dia_cx_atual)
-            df_mapa_cx = caixa_load_operacao_dia(setor, ano_cx, mes_cx, _dia_cx_atual)
             postos_cx = caixa_lista_postos()
-        st.caption(f"Operação exibida somente para {int(_dia_cx_atual):02d}/{int(mes_cx):02d}/{int(ano_cx)} no setor {str(setor or '-').strip() or '-'}.")
+            base_operadores_cx = caixa_montar_base_operadores(setor, ano_cx, mes_cx, int(dia_cx))
+            df_mapa_cx = caixa_load_operacao_dia(setor, ano_cx, mes_cx, int(dia_cx))
 
         ocupados_cx = int(len(df_mapa_cx))
         almoco_cx = int((df_mapa_cx['status_operacao'].astype(str) == 'Em almoço').sum()) if not df_mapa_cx.empty else 0
