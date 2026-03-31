@@ -17075,6 +17075,28 @@ def page_app():
                 if neg_log_key not in st.session_state:
                     st.session_state[neg_log_key] = []
 
+                load_transfer_key = f"rod_caixa_load_heavy::{setor}::{ano_r}::{mes_r}::{subgrupo_origem}::{subgrupo_destino}"
+                if load_transfer_key not in st.session_state:
+                    st.session_state[load_transfer_key] = False
+
+                act1, act2 = st.columns([1.2, 1])
+                if act1.button('⚡ Carregar análise completa da Transferência', key=load_transfer_key + '::btn', use_container_width=True):
+                    st.session_state[load_transfer_key] = True
+                    st.rerun()
+                if act2.button('🧹 Ocultar análise pesada', key=load_transfer_key + '::hide', use_container_width=True):
+                    st.session_state[load_transfer_key] = False
+                    st.rerun()
+
+                st.caption(f"Competência ativa: {mes_r:02d}/{ano_r}. Regra fixa do rodízio: 14 trocas por mês, respeitando as cotas por horário do Caixa 01.")
+                st.info(f"Transferência em modo leve. Clique em 'Carregar análise completa da Transferência' para abrir conferência, simulação, domingos, fila e sugestões detalhadas sem travar a entrada da subaba.")
+
+                if not bool(st.session_state.get(load_transfer_key, False)):
+                    if rodizio_ja_aplicado_mes:
+                        st.success(f"Há rodízio já aplicado em {mes_r:02d}/{ano_r}. A análise detalhada pode ser carregada sob demanda.")
+                    else:
+                        st.warning(f"A análise completa desta subaba é pesada. Ela foi colocada em carregamento manual para abrir mais rápido.")
+                    st.stop()
+
                 sim = simular_rodizio_caixa_mes(
                     setor,
                     ano_r,
