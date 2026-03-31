@@ -7489,6 +7489,7 @@ def caixa_lista_postos(qtd_caixas: int = 30, qtd_self: int = 6) -> list[str]:
     return postos
 
 
+@st.cache_data(show_spinner=False, ttl=30)
 def caixa_load_operacao_dia(setor: str, ano: int, mes: int, dia: int) -> pd.DataFrame:
     con = db_conn()
     try:
@@ -7601,6 +7602,10 @@ def caixa_upsert_operacao_dia(
                 )
             )
         commit_blindado(con)
+        try:
+            caixa_load_operacao_dia.clear()
+        except Exception:
+            pass
     finally:
         con.close()
 
@@ -7618,31 +7623,40 @@ def caixa_limpar_posto_dia(setor: str, ano: int, mes: int, dia: int, posto: str)
         con.close()
 
 
+@st.cache_data(show_spinner=False, ttl=30)
 def caixa_montar_base_operadores(setor: str, ano: int, mes: int, dia: int) -> pd.DataFrame:
     registros = []
     colaboradores = load_colaboradores_setor(setor) or []
+    try:
+        hist_mes = get_hist_mes_com_overrides_cached(setor, int(ano), int(mes)) or {}
+    except Exception:
+        hist_mes = {}
+
     for colab in colaboradores:
         nome = str(colab.get('Nome') or '').strip()
         chapa = _norm_chapa(colab.get('Chapa') or '')
+        if not chapa:
+            continue
         subgrupo = str(colab.get('Subgrupo') or '').strip() or 'SEM SUBGRUPO'
         entrada_prev = str(colab.get('Entrada') or '06:00').strip() or '06:00'
         saida_prev = _caixa_saida_prevista(entrada_prev)
         status_dia = 'Trabalho'
+
         try:
-            esc = get_escala_colaborador_mes(setor, chapa, int(ano), int(mes))
-            if esc is not None and not esc.empty:
-                row = esc[esc['Dia'].astype(int) == int(dia)]
-                if not row.empty:
-                    row = row.iloc[0]
-                    status_dia = str(row.get('Status') or 'Trabalho').strip() or 'Trabalho'
-                    entrada_prev = str(row.get('Entrada') or entrada_prev).strip() or entrada_prev
-                    saida_prev = str(row.get('Saída') or '').strip() or _caixa_saida_prevista(entrada_prev)
+            esc = hist_mes.get(chapa)
+            if esc is not None and not esc.empty and (int(dia) - 1) < len(esc):
+                row = esc.iloc[int(dia) - 1]
+                status_dia = str(row.get('Status') or 'Trabalho').strip() or 'Trabalho'
+                entrada_prev = str(row.get('H_Entrada') or entrada_prev).strip() or entrada_prev
+                saida_prev = str(row.get('H_Saida') or '').strip() or _caixa_saida_prevista(entrada_prev)
         except Exception:
             pass
+
         st_norm = str(status_dia or '').strip().upper()
         trabalha_hoje = ('TRAB' in st_norm) or (st_norm in {'', 'TRABALHO'})
         if not trabalha_hoje:
             continue
+
         janela_ini, janela_fim = _caixa_janela_tolerancia(entrada_prev, tolerancia_min=120)
         registros.append({
             'nome': nome,
@@ -7656,6 +7670,7 @@ def caixa_montar_base_operadores(setor: str, ano: int, mes: int, dia: int) -> pd
             'status_dia': 'Trabalho',
             'setor': str(colab.get('Setor') or setor).strip(),
         })
+
     df = pd.DataFrame(registros)
     if df.empty:
         return pd.DataFrame(columns=['nome','chapa','subgrupo','entrada_prevista','saida_prevista','janela_inicio','janela_fim','janela_tolerancia','status_dia','setor'])
