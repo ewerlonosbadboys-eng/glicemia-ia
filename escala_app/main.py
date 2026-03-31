@@ -21080,7 +21080,7 @@ def _fast_restore_bundled_latest_before_start() -> None:
 
 # =========================================================
 # MAIN
-# =========================================================
+# ========================================================= 
 _restore_automatico_se_banco_vazio()
 validar_contrato_sistema()
 
