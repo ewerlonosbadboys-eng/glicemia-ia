@@ -7621,12 +7621,6 @@ def caixa_limpar_posto_dia(setor: str, ano: int, mes: int, dia: int, posto: str)
 def caixa_montar_base_operadores(setor: str, ano: int, mes: int, dia: int) -> pd.DataFrame:
     registros = []
     colaboradores = load_colaboradores_setor(setor) or []
-
-    try:
-        hist_mes = get_hist_mes_com_overrides_cached(setor, int(ano), int(mes)) or {}
-    except Exception:
-        hist_mes = {}
-
     for colab in colaboradores:
         nome = str(colab.get('Nome') or '').strip()
         chapa = _norm_chapa(colab.get('Chapa') or '')
@@ -7634,24 +7628,17 @@ def caixa_montar_base_operadores(setor: str, ano: int, mes: int, dia: int) -> pd
         entrada_prev = str(colab.get('Entrada') or '06:00').strip() or '06:00'
         saida_prev = _caixa_saida_prevista(entrada_prev)
         status_dia = 'Trabalho'
-
         try:
-            esc = hist_mes.get(chapa)
+            esc = get_escala_colaborador_mes(setor, chapa, int(ano), int(mes))
             if esc is not None and not esc.empty:
-                esc_dia = esc.copy()
-                if 'Dia' in esc_dia.columns:
-                    esc_dia = esc_dia[esc_dia['Dia'].astype(int) == int(dia)]
-                elif 'Data' in esc_dia.columns:
-                    esc_dia = esc_dia[pd.to_datetime(esc_dia['Data'], errors='coerce').dt.day == int(dia)]
-                if not esc_dia.empty:
-                    row = esc_dia.iloc[0]
+                row = esc[esc['Dia'].astype(int) == int(dia)]
+                if not row.empty:
+                    row = row.iloc[0]
                     status_dia = str(row.get('Status') or 'Trabalho').strip() or 'Trabalho'
-                    entrada_prev = str(row.get('Entrada') or row.get('H_Entrada') or entrada_prev).strip() or entrada_prev
-                    saida_prev = str(row.get('Saída') or row.get('Saida') or row.get('H_Saida') or '').strip() or _caixa_saida_prevista(entrada_prev)
-                    subgrupo = str(row.get('Subgrupo') or subgrupo).strip() or subgrupo
+                    entrada_prev = str(row.get('Entrada') or entrada_prev).strip() or entrada_prev
+                    saida_prev = str(row.get('Saída') or '').strip() or _caixa_saida_prevista(entrada_prev)
         except Exception:
             pass
-
         st_norm = str(status_dia or '').strip().upper()
         trabalha_hoje = ('TRAB' in st_norm) or (st_norm in {'', 'TRABALHO'})
         if not trabalha_hoje:
@@ -17927,10 +17914,37 @@ def page_app():
         with cxd:
             st.caption("Use esta aba para planejar quem abriu cada caixa, almoço, trocas e cobertura ao longo do dia.")
 
-        base_operadores_cx = caixa_montar_base_operadores(setor, ano_cx, mes_cx, int(dia_cx))
-        df_mapa_cx = caixa_load_operacao_dia(setor, ano_cx, mes_cx, int(dia_cx))
-        postos_cx = caixa_lista_postos()
-        st.caption(f"Operação exibida somente para {int(dia_cx):02d}/{int(mes_cx):02d}/{int(ano_cx)} no setor {str(setor or '-').strip() or '-'}.")
+        _cx_loaded_key = f"cx_loaded::{setor}::{ano_cx}::{mes_cx}"
+        _cx_loaded_day_key = f"cx_loaded_day::{setor}::{ano_cx}::{mes_cx}"
+        if _cx_loaded_key not in st.session_state:
+            st.session_state[_cx_loaded_key] = False
+        if _cx_loaded_day_key not in st.session_state:
+            st.session_state[_cx_loaded_day_key] = None
+
+        _dia_cx_atual = int(dia_cx)
+        if st.session_state.get(_cx_loaded_day_key) not in (None, _dia_cx_atual):
+            st.session_state[_cx_loaded_key] = False
+
+        cl1, cl2, cl3 = st.columns([1.15, 1.05, 3.0])
+        if cl1.button("⚡ Carregar operação da Caixa", key=f"cx_load_btn::{setor}::{ano_cx}::{mes_cx}", use_container_width=True):
+            st.session_state[_cx_loaded_key] = True
+            st.session_state[_cx_loaded_day_key] = _dia_cx_atual
+            st.rerun()
+        if cl2.button("🧹 Ocultar operação", key=f"cx_hide_btn::{setor}::{ano_cx}::{mes_cx}", use_container_width=True):
+            st.session_state[_cx_loaded_key] = False
+            st.session_state[_cx_loaded_day_key] = None
+            st.rerun()
+        cl3.caption("Abertura ultra rápida: a Caixa só carrega a operação pesada quando você clicar no botão.")
+
+        if not st.session_state.get(_cx_loaded_key, False):
+            st.info("A aba Caixa está em modo leve. Clique em ⚡ Carregar operação da Caixa para abrir mapa, almoço, trocas e cobertura sem travar a entrada da tela.")
+            return
+
+        with st.spinner("Carregando operação da Caixa..."):
+            base_operadores_cx = caixa_montar_base_operadores(setor, ano_cx, mes_cx, _dia_cx_atual)
+            df_mapa_cx = caixa_load_operacao_dia(setor, ano_cx, mes_cx, _dia_cx_atual)
+            postos_cx = caixa_lista_postos()
+        st.caption(f"Operação exibida somente para {int(_dia_cx_atual):02d}/{int(mes_cx):02d}/{int(ano_cx)} no setor {str(setor or '-').strip() or '-'}.")
 
         ocupados_cx = int(len(df_mapa_cx))
         almoco_cx = int((df_mapa_cx['status_operacao'].astype(str) == 'Em almoço').sum()) if not df_mapa_cx.empty else 0
