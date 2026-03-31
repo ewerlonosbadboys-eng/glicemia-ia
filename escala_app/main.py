@@ -16997,70 +16997,68 @@ def page_app():
 
                 ano_r = int(st.session_state.get('cfg_ano', datetime.now().year))
                 mes_r = int(st.session_state.get('cfg_mes', datetime.now().month))
-                _status_comp_rod = get_status_competencia(setor, ano_r, mes_r)
-
-                hist_mes = get_rodizio_caixa_hist_mes(setor, ano_r, mes_r, subgrupo_origem, subgrupo_destino)
                 force_review_key = f"rod_caixa_force_review::{setor}::{ano_r}::{mes_r}::{subgrupo_origem}::{subgrupo_destino}"
                 if force_review_key not in st.session_state:
                     st.session_state[force_review_key] = False
-                rodizio_ja_aplicado_mes = bool(hist_mes) and (not bool(st.session_state.get(force_review_key, False)))
 
                 _bcfg_hidden, bcfg2, bcfg3, _bcfg4 = st.columns([1, 1, 1.35, 3.65])
-                if bcfg2.button("🚨 Transferir TODOS do Caixa 02 para Caixa 01", key='rod_caixa_move_all_back', use_container_width=True, disabled=(_status_comp_rod == 'FECHADA')):
+                if bcfg2.button("🚨 Transferir TODOS do Caixa 02 para Caixa 01", key='rod_caixa_move_all_back', use_container_width=True):
                     try:
-                        st.warning('Modo supremo: esta ação manual ignora a regra de manter 14 pessoas no Caixa 02 e esvazia o subgrupo destino nesta competência.')
-                        res_mass = transferencia_suprema_caixa_02_para_01(setor, ano_r, mes_r, 'OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02')
-                        base_reset = f"rod_caixa_aprov::{setor}::{ano_r}::{mes_r}::{subgrupo_origem}::{subgrupo_destino}"
-                        for suf in ["::aprovados", "::negados", "::negados_log", "::aplicado", "::complementar_aprovados"]:
-                            st.session_state.pop(base_reset + suf, None)
-                        st.session_state[_rod_reset_defaults_key] = True
-                        st.session_state[force_review_key] = True
-                        set_rodizio_caixa_cfg(setor, 'OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02', 14, 20, True)
-                        st.success(res_mass.get('msg', 'Transferência manual concluída. O Caixa 02 foi esvaziado nesta competência.'))
-                        st.rerun()
+                        _status_click = get_status_competencia(setor, ano_r, mes_r)
+                        if _status_click == 'FECHADA':
+                            st.error(f'🔒 Competência {mes_r:02d}/{ano_r} fechada: o rodízio deste mês fica somente para consulta.')
+                        else:
+                            st.warning('Modo supremo: esta ação manual ignora a regra de manter 14 pessoas no Caixa 02 e esvazia o subgrupo destino nesta competência.')
+                            res_mass = transferencia_suprema_caixa_02_para_01(setor, ano_r, mes_r, 'OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02')
+                            base_reset = f"rod_caixa_aprov::{setor}::{ano_r}::{mes_r}::{subgrupo_origem}::{subgrupo_destino}"
+                            for suf in ["::aprovados", "::negados", "::negados_log", "::aplicado", "::complementar_aprovados"]:
+                                st.session_state.pop(base_reset + suf, None)
+                            st.session_state[_rod_reset_defaults_key] = True
+                            st.session_state[force_review_key] = True
+                            set_rodizio_caixa_cfg(setor, 'OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02', 14, 20, True)
+                            st.success(res_mass.get('msg', 'Transferência manual concluída. O Caixa 02 foi esvaziado nesta competência.'))
+                            st.rerun()
                     except Exception as e:
                         st.error(f'Falha ao transferir todos do Caixa 02 para o Caixa 01: {e}')
                 label_reset = "Recriar fila e sugestões do zero"
-                if bcfg3.button(label_reset, key='rod_caixa_reset_cfg', use_container_width=True, disabled=(_status_comp_rod == 'FECHADA')):
-                    if rodizio_ja_aplicado_mes:
-                        try:
-                            res_reset = resetar_rodizio_caixa_mes(setor, ano_r, mes_r, subgrupo_origem, subgrupo_destino)
-                            if res_reset.get('ok'):
-                                # limpa aprovações/negações da rodada para permitir nova escolha
-                                base_reset = f"rod_caixa_aprov::{setor}::{ano_r}::{mes_r}::{subgrupo_origem}::{subgrupo_destino}"
-                                for suf in ["::aprovados", "::negados", "::negados_log", "::aplicado", "::complementar_aprovados"]:
-                                    st.session_state.pop(base_reset + suf, None)
-                                st.session_state[force_review_key] = True
-                                st.success(res_reset.get('msg', 'Rodízio zerado com sucesso. A fila foi reaberta para nova aprovação manual.'))
-                                st.rerun()
+                if bcfg3.button(label_reset, key='rod_caixa_reset_cfg', use_container_width=True):
+                    try:
+                        _status_click = get_status_competencia(setor, ano_r, mes_r)
+                        if _status_click == 'FECHADA':
+                            st.error(f'🔒 Competência {mes_r:02d}/{ano_r} fechada: o rodízio deste mês fica somente para consulta.')
+                        else:
+                            hist_mes_click = get_rodizio_caixa_hist_mes(setor, ano_r, mes_r, subgrupo_origem, subgrupo_destino)
+                            rodizio_ja_aplicado_mes = bool(hist_mes_click) and (not bool(st.session_state.get(force_review_key, False)))
+                            if rodizio_ja_aplicado_mes:
+                                res_reset = resetar_rodizio_caixa_mes(setor, ano_r, mes_r, subgrupo_origem, subgrupo_destino)
+                                if res_reset.get('ok'):
+                                    base_reset = f"rod_caixa_aprov::{setor}::{ano_r}::{mes_r}::{subgrupo_origem}::{subgrupo_destino}"
+                                    for suf in ["::aprovados", "::negados", "::negados_log", "::aplicado", "::complementar_aprovados"]:
+                                        st.session_state.pop(base_reset + suf, None)
+                                    st.session_state[force_review_key] = True
+                                    st.success(res_reset.get('msg', 'Rodízio zerado com sucesso. A fila foi reaberta para nova aprovação manual.'))
+                                    st.rerun()
+                                else:
+                                    st.warning(res_reset.get('msg', 'Não foi possível zerar o rodízio desta competência.'))
                             else:
-                                st.warning(res_reset.get('msg', 'Não foi possível zerar o rodízio desta competência.'))
-                        except Exception as e:
-                            st.error(f'Falha ao zerar rodízio da competência: {e}')
-                    else:
-                        try:
-                            res_reset = resetar_rodizio_caixa_mes(setor, ano_r, mes_r, 'OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02')
-                            if res_reset.get('ok'):
-                                base_reset = f"rod_caixa_aprov::{setor}::{ano_r}::{mes_r}::{subgrupo_origem}::{subgrupo_destino}"
-                                for suf in ["::aprovados", "::negados", "::negados_log", "::aplicado", "::complementar_aprovados"]:
-                                    st.session_state.pop(base_reset + suf, None)
-                                set_rodizio_caixa_cfg(setor, 'OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02', 14, 20, True)
-                                st.session_state[_rod_reset_defaults_key] = True
-                                st.session_state[force_review_key] = True
-                                st.success(res_reset.get('msg', 'Volta do zero concluída.'))
-                                st.rerun()
-                            else:
-                                # Mesmo se não achar histórico, ainda reseta a configuração visual
-                                # para o padrão e reabre a fila.
-                                set_rodizio_caixa_cfg(setor, 'OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02', 14, 20, True)
-                                st.session_state[_rod_reset_defaults_key] = True
-                                st.session_state[force_review_key] = True
-                                st.warning(res_reset.get('msg', 'Nenhum colaborador foi resetado, mas a configuração voltou ao padrão.'))
-                                st.rerun()
-                        except Exception as e:
-                            st.error(f'Falha ao executar volta do zero: {e}')
-                if _status_comp_rod == 'FECHADA':
-                    st.error(f'🔒 Competência {mes_r:02d}/{ano_r} fechada: o rodízio deste mês fica somente para consulta.')
+                                res_reset = resetar_rodizio_caixa_mes(setor, ano_r, mes_r, 'OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02')
+                                if res_reset.get('ok'):
+                                    base_reset = f"rod_caixa_aprov::{setor}::{ano_r}::{mes_r}::{subgrupo_origem}::{subgrupo_destino}"
+                                    for suf in ["::aprovados", "::negados", "::negados_log", "::aplicado", "::complementar_aprovados"]:
+                                        st.session_state.pop(base_reset + suf, None)
+                                    set_rodizio_caixa_cfg(setor, 'OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02', 14, 20, True)
+                                    st.session_state[_rod_reset_defaults_key] = True
+                                    st.session_state[force_review_key] = True
+                                    st.success(res_reset.get('msg', 'Volta do zero concluída.'))
+                                    st.rerun()
+                                else:
+                                    set_rodizio_caixa_cfg(setor, 'OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02', 14, 20, True)
+                                    st.session_state[_rod_reset_defaults_key] = True
+                                    st.session_state[force_review_key] = True
+                                    st.warning(res_reset.get('msg', 'Nenhum colaborador foi resetado, mas a configuração voltou ao padrão.'))
+                                    st.rerun()
+                    except Exception as e:
+                        st.error(f'Falha ao executar volta do zero: {e}')
                 state_base = f"rod_caixa_aprov::{setor}::{ano_r}::{mes_r}::{subgrupo_origem}::{subgrupo_destino}"
                 aprov_key = state_base + "::aprovados"
                 neg_key = state_base + "::negados"
@@ -17091,11 +17089,16 @@ def page_app():
                 st.info(f"Transferência em modo leve. Clique em 'Carregar análise completa da Transferência' para abrir conferência, simulação, domingos, fila e sugestões detalhadas sem travar a entrada da subaba.")
 
                 if not bool(st.session_state.get(load_transfer_key, False)):
-                    if rodizio_ja_aplicado_mes:
-                        st.success(f"Há rodízio já aplicado em {mes_r:02d}/{ano_r}. A análise detalhada pode ser carregada sob demanda.")
-                    else:
-                        st.warning(f"A análise completa desta subaba é pesada. Ela foi colocada em carregamento manual para abrir mais rápido.")
+                    st.warning(f"A análise completa desta subaba é pesada. Ela foi colocada em carregamento manual para abrir mais rápido.")
                     st.stop()
+
+                _status_comp_rod = get_status_competencia(setor, ano_r, mes_r)
+                hist_mes = get_rodizio_caixa_hist_mes(setor, ano_r, mes_r, subgrupo_origem, subgrupo_destino)
+                rodizio_ja_aplicado_mes = bool(hist_mes) and (not bool(st.session_state.get(force_review_key, False)))
+                if _status_comp_rod == 'FECHADA':
+                    st.error(f'🔒 Competência {mes_r:02d}/{ano_r} fechada: o rodízio deste mês fica somente para consulta.')
+                elif rodizio_ja_aplicado_mes:
+                    st.success(f"Há rodízio já aplicado em {mes_r:02d}/{ano_r}. A análise detalhada foi carregada sob demanda.")
 
                 sim = simular_rodizio_caixa_mes(
                     setor,
