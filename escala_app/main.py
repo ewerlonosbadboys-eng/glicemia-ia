@@ -14988,6 +14988,7 @@ def _ensure_preview_cache(setor: str, ano: int, mes: int, colaboradores: list):
     st.session_state[keys["loaded"]] = True
     return hist_db, cal
 
+@st.cache_data(show_spinner=False, ttl=120)
 def get_colaborador_record(setor: str, chapa: str):
     setor = _norm_setor(setor)
     chapa = _norm_chapa(chapa)
@@ -16147,11 +16148,34 @@ def page_app():
 
         _ano_sb = int(st.session_state.get('cfg_ano') or datetime.now().year)
         _mes_sb = int(st.session_state.get('cfg_mes') or datetime.now().month)
-        _colab_sb = get_colaborador_competencia_snapshot(auth_setor, auth_chapa, _ano_sb, _mes_sb) or get_colaborador_record(auth_setor, auth_chapa)
-        _subgrupo_auth = get_subgrupo_competencia_ou_base(auth_setor, auth_chapa, _ano_sb, _mes_sb, (_colab_sb or {}).get('Subgrupo', 'SEM SUBGRUPO'))
-        _lideranca_ok = bool(auth.get('is_lider', False)) or bool(auth.get('is_ax_lider', False)) or colaborador_eh_lideranca(auth_setor, auth_chapa)
-        _perfil_gestao = bool(auth.get('is_admin', False)) or _lideranca_ok
-        perfil_label = 'ADMIN' if auth.get('is_admin', False) else ('AX LÍDER' if auth.get('is_ax_lider', False) else ('LÍDER' if _lideranca_ok else 'COLABORADOR'))
+        _sb_cache_key = f"sidebar_user_ctx::{auth_setor}::{auth_chapa}::{_ano_sb}::{_mes_sb}"
+        _sb_ctx = st.session_state.get(_sb_cache_key)
+        if not isinstance(_sb_ctx, dict):
+            _colab_sb = get_colaborador_competencia_snapshot(auth_setor, auth_chapa, _ano_sb, _mes_sb) or get_colaborador_record(auth_setor, auth_chapa)
+            _lideranca_ok_calc = bool(auth.get('is_lider', False)) or bool(auth.get('is_ax_lider', False)) or colaborador_eh_lideranca(auth_setor, auth_chapa)
+            _subgrupo_auth_calc = get_subgrupo_competencia_ou_base(
+                auth_setor,
+                auth_chapa,
+                _ano_sb,
+                _mes_sb,
+                (_colab_sb or {}).get('Subgrupo', 'SEM SUBGRUPO'),
+            )
+            _perfil_gestao_calc = bool(auth.get('is_admin', False)) or _lideranca_ok_calc
+            _perfil_label_calc = 'ADMIN' if auth.get('is_admin', False) else ('AX LÍDER' if auth.get('is_ax_lider', False) else ('LÍDER' if _lideranca_ok_calc else 'COLABORADOR'))
+            _sb_ctx = {
+                'colab': _colab_sb or {},
+                'subgrupo_auth': _subgrupo_auth_calc,
+                'lideranca_ok': bool(_lideranca_ok_calc),
+                'perfil_gestao': bool(_perfil_gestao_calc),
+                'perfil_label': _perfil_label_calc,
+            }
+            st.session_state[_sb_cache_key] = _sb_ctx
+
+        _colab_sb = dict(_sb_ctx.get('colab') or {})
+        _subgrupo_auth = str(_sb_ctx.get('subgrupo_auth') or 'SEM SUBGRUPO')
+        _lideranca_ok = bool(_sb_ctx.get('lideranca_ok', False))
+        _perfil_gestao = bool(_sb_ctx.get('perfil_gestao', False))
+        perfil_label = str(_sb_ctx.get('perfil_label') or 'COLABORADOR')
 
         if bool(auth.get('is_lider', False)) and not _lideranca_ok and not bool(auth.get('is_admin', False)):
             st.warning('Perfil líder liberado somente para colaborador do subgrupo LIDERANÇA neste setor.')
