@@ -7685,36 +7685,136 @@ def caixa_limpar_posto_dia(setor: str, ano: int, mes: int, dia: int, posto: str)
         con.close()
 
 
-@st.cache_data(show_spinner=False, ttl=120)
+@st.cache_data(show_spinner=False, ttl=300)
+def caixa_snapshot_dia_rapido(setor: str, ano: int, mes: int, dia: int) -> dict[str, dict]:
+    """Monta um snapshot só do dia, lendo direto do banco em vez de recalcular o mês inteiro."""
+    setor_n = str(setor or '').strip()
+    ano_i = int(ano)
+    mes_i = int(mes)
+    dia_i = int(dia)
+    snap: dict[str, dict] = {}
+
+    con = db_conn()
+    try:
+        try:
+            df_dia = pd.read_sql_query(
+                """
+                SELECT chapa, status, h_entrada, h_saida
+                FROM escala_mes
+                WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND dia=?
+                """,
+                con,
+                params=(setor_n, ano_i, mes_i, dia_i),
+            )
+        except Exception:
+            df_dia = pd.DataFrame(columns=['chapa', 'status', 'h_entrada', 'h_saida'])
+
+        if df_dia is not None and not df_dia.empty:
+            for _, r in df_dia.iterrows():
+                ch = _norm_chapa(r.get('chapa') or '')
+                if not ch:
+                    continue
+                snap[ch] = {
+                    'Status': str(r.get('status') or '').strip() or 'Trabalho',
+                    'H_Entrada': str(r.get('h_entrada') or '').strip(),
+                    'H_Saida': str(r.get('h_saida') or '').strip(),
+                }
+
+        try:
+            df_ov = pd.read_sql_query(
+                """
+                SELECT chapa, campo, valor
+                FROM overrides
+                WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND dia=?
+                """,
+                con,
+                params=(setor_n, ano_i, mes_i, dia_i),
+            )
+        except Exception:
+            df_ov = pd.DataFrame(columns=['chapa', 'campo', 'valor'])
+
+        if df_ov is not None and not df_ov.empty:
+            for _, r in df_ov.iterrows():
+                ch = _norm_chapa(r.get('chapa') or '')
+                campo = str(r.get('campo') or '').strip().lower()
+                valor = str(r.get('valor') or '')
+                if not ch:
+                    continue
+                row = dict(snap.get(ch) or {})
+                row.setdefault('Status', 'Trabalho')
+                row.setdefault('H_Entrada', '')
+                row.setdefault('H_Saida', '')
+                if campo == 'status':
+                    row['Status'] = str(valor or '').strip() or row.get('Status', 'Trabalho')
+                    if row['Status'] not in WORK_STATUSES:
+                        row['H_Entrada'] = ''
+                        row['H_Saida'] = ''
+                elif campo == 'h_entrada':
+                    row['H_Entrada'] = str(valor or '').strip()
+                    if row.get('Status') in WORK_STATUSES and not str(row.get('H_Saida') or '').strip():
+                        row['H_Saida'] = _saida_from_entrada(row['H_Entrada'])
+                elif campo == 'h_saida':
+                    row['H_Saida'] = str(valor or '').strip()
+                snap[ch] = row
+
+        try:
+            df_ret = pd.read_sql_query(
+                """
+                SELECT chapa, novo_status, nova_entrada, nova_saida, novo_subgrupo
+                FROM retificacoes_competencia
+                WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND dia=?
+                ORDER BY criado_em DESC
+                """,
+                con,
+                params=(setor_n, ano_i, mes_i, dia_i),
+            )
+        except Exception:
+            df_ret = pd.DataFrame(columns=['chapa', 'novo_status', 'nova_entrada', 'nova_saida', 'novo_subgrupo'])
+
+        if df_ret is not None and not df_ret.empty:
+            # Mantém a última retificação do dia por chapa
+            for _, r in df_ret.iterrows():
+                ch = _norm_chapa(r.get('chapa') or '')
+                if not ch:
+                    continue
+                row = dict(snap.get(ch) or {})
+                row.setdefault('Status', 'Trabalho')
+                row.setdefault('H_Entrada', '')
+                row.setdefault('H_Saida', '')
+                novo_status = str(r.get('novo_status') or '').strip()
+                nova_entrada = str(r.get('nova_entrada') or '').strip()
+                nova_saida = str(r.get('nova_saida') or '').strip()
+                novo_subgrupo = str(r.get('novo_subgrupo') or '').strip()
+                if novo_status:
+                    row['Status'] = novo_status
+                    if novo_status not in WORK_STATUSES:
+                        row['H_Entrada'] = ''
+                        row['H_Saida'] = ''
+                if nova_entrada:
+                    row['H_Entrada'] = nova_entrada
+                    if row.get('Status') in WORK_STATUSES and not nova_saida:
+                        row['H_Saida'] = _saida_from_entrada(nova_entrada)
+                if nova_saida:
+                    row['H_Saida'] = nova_saida
+                if novo_subgrupo:
+                    row['Subgrupo'] = novo_subgrupo
+                snap[ch] = row
+    finally:
+        con.close()
+
+    return snap
+
+
+@st.cache_data(show_spinner=False, ttl=300)
 def caixa_montar_base_operadores(setor: str, ano: int, mes: int, dia: int) -> pd.DataFrame:
     registros = []
     colaboradores = load_colaboradores_setor(setor) or []
-    try:
-        hist_mes = get_hist_mes_com_overrides_cached(setor, int(ano), int(mes)) or {}
-    except Exception:
-        hist_mes = {}
-
     colunas_saida = ['nome','chapa','subgrupo','entrada_prevista','saida_prevista','janela_inicio','janela_fim','janela_tolerancia','status_dia','setor']
-    dia_ref = int(dia)
-    snapshot_dia = {}
 
-    for chapa_hist, esc in (hist_mes or {}).items():
-        try:
-            if esc is None or esc.empty:
-                continue
-            if 'Dia' in esc.columns:
-                row = esc.loc[esc['Dia'].astype(int) == dia_ref]
-                if row.empty:
-                    continue
-                row = row.iloc[0]
-            else:
-                idx = dia_ref - 1
-                if idx < 0 or idx >= len(esc):
-                    continue
-                row = esc.iloc[idx]
-            snapshot_dia[_norm_chapa(chapa_hist)] = row.to_dict()
-        except Exception:
-            continue
+    try:
+        snapshot_dia = caixa_snapshot_dia_rapido(setor, int(ano), int(mes), int(dia)) or {}
+    except Exception:
+        snapshot_dia = {}
 
     for colab in colaboradores:
         nome = str(colab.get('Nome') or '').strip()
