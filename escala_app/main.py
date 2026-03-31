@@ -17911,8 +17911,6 @@ def page_app():
         _cx_dia_stamp_key = f"cx_dia_auto_stamp::{setor}::{ano_cx}::{mes_cx}"
         _cx_loaded_key = f"cx_loaded::{setor}::{ano_cx}::{mes_cx}"
         _cx_loaded_day_key = f"cx_loaded_day::{setor}::{ano_cx}::{mes_cx}"
-        _cx_ops_loaded_key = f"cx_ops_loaded::{setor}::{ano_cx}::{mes_cx}"
-        _cx_ops_loaded_day_key = f"cx_ops_loaded_day::{setor}::{ano_cx}::{mes_cx}"
         _hoje_real = datetime.now().date()
         _mes_atual_real = (int(ano_cx) == _hoje_real.year and int(mes_cx) == _hoje_real.month)
         if _mes_atual_real:
@@ -17938,9 +17936,6 @@ def page_app():
         if int(st.session_state.get(_cx_loaded_day_key, -1)) != dia_cx:
             st.session_state[_cx_loaded_key] = False
             st.session_state[_cx_loaded_day_key] = dia_cx
-        if int(st.session_state.get(_cx_ops_loaded_day_key, -1)) != dia_cx:
-            st.session_state[_cx_ops_loaded_key] = False
-            st.session_state[_cx_ops_loaded_day_key] = dia_cx
 
         bx1, bx2, bx3 = st.columns([1.2, 1.2, 2.4])
         with bx1:
@@ -17959,10 +17954,14 @@ def page_app():
         st.caption(f"Operação exibida somente para {int(dia_cx):02d}/{int(mes_cx):02d}/{int(ano_cx)} no setor {str(setor or '-').strip() or '-'}.")
 
         if not bool(st.session_state.get(_cx_loaded_key, False)):
-            st.info("A aba Caixa está em modo leve. Clique em ⚡ Carregar operação da Caixa para abrir o mapa salvo do dia. A lista de colaboradores disponíveis é carregada separadamente para evitar travamento.")
+            st.info("A aba Caixa está em modo leve. Clique em ⚡ Carregar operação da Caixa para abrir mapa, almoço, trocas e cobertura.")
             st.stop()
 
-        base_operadores_cx = pd.DataFrame(columns=['nome','chapa','subgrupo','entrada_prevista','saida_prevista','janela_inicio','janela_fim','janela_tolerancia','status_dia','setor'])
+        try:
+            base_operadores_cx = caixa_montar_base_operadores(setor, ano_cx, mes_cx, int(dia_cx))
+        except Exception:
+            base_operadores_cx = pd.DataFrame(columns=['nome','chapa','subgrupo','entrada_prevista','saida_prevista','janela_inicio','janela_fim','janela_tolerancia','status_dia','setor'])
+
         try:
             df_mapa_cx = caixa_load_operacao_dia(setor, ano_cx, mes_cx, int(dia_cx))
         except Exception:
@@ -17982,22 +17981,10 @@ def page_app():
 
         with tab_mapa_cx:
             fm1, fm2 = st.columns([1.2, 1.8])
-            candidatos_cx = ["Clique em carregar colaboradores disponíveis"]
-            if st.button("👥 Carregar colaboradores disponíveis", key=f"cx_ops_load_btn::{setor}::{ano_cx}::{mes_cx}::{dia_cx}", use_container_width=True):
-                st.session_state[_cx_ops_loaded_key] = True
-                st.session_state[_cx_ops_loaded_day_key] = int(dia_cx)
-                st.rerun()
-
-            if bool(st.session_state.get(_cx_ops_loaded_key, False)):
-                try:
-                    base_operadores_cx = caixa_montar_base_operadores(setor, ano_cx, mes_cx, int(dia_cx))
-                except Exception:
-                    base_operadores_cx = pd.DataFrame(columns=['nome','chapa','subgrupo','entrada_prevista','saida_prevista','janela_inicio','janela_fim','janela_tolerancia','status_dia','setor'])
-
+            candidatos_cx = []
             if base_operadores_cx.empty:
-                candidatos_cx = ["Nenhum colaborador disponível"] if bool(st.session_state.get(_cx_ops_loaded_key, False)) else ["Clique em carregar colaboradores disponíveis"]
+                candidatos_cx = ["Nenhum colaborador disponível"]
             else:
-                candidatos_cx = []
                 for _, row_cx in base_operadores_cx.iterrows():
                     candidatos_cx.append(
                         f"{row_cx['nome']} — {row_cx['chapa']} — {row_cx['subgrupo']} — escala {row_cx['entrada_prevista']} / {row_cx['saida_prevista']} — janela {row_cx.get('janela_tolerancia', '')} — Trabalho"
@@ -18018,9 +18005,7 @@ def page_app():
                 obs_sel_cx = st.text_input("Observação", key=f"cx_obs::{setor}", placeholder="Ex.: cobrir almoço do Caixa 03")
                 csave1, csave2 = st.columns(2)
                 if csave1.button("💾 Salvar posto", key=f"cx_salvar::{setor}", use_container_width=True):
-                    if not bool(st.session_state.get(_cx_ops_loaded_key, False)):
-                        st.warning("Primeiro clique em 👥 Carregar colaboradores disponíveis.")
-                    elif not base_operadores_cx.empty and candidato_sel_cx not in ["Nenhum colaborador disponível", "Clique em carregar colaboradores disponíveis"]:
+                    if not base_operadores_cx.empty and candidato_sel_cx != "Nenhum colaborador disponível":
                         parte = [p.strip() for p in candidato_sel_cx.split("—")]
                         chapa_sel = parte[1] if len(parte) > 1 else ""
                         reg = base_operadores_cx[base_operadores_cx['chapa'].astype(str) == str(chapa_sel).strip()]
@@ -18050,7 +18035,7 @@ def page_app():
                     caixa_limpar_posto_dia(setor, ano_cx, mes_cx, int(dia_cx), posto_sel_cx)
                     st.success(f"{posto_sel_cx} liberado.")
                     st.rerun()
-                st.caption("Dica: a lista de colaboradores disponíveis é carregada separadamente para a Caixa abrir rápido. Depois de carregar, aparecem somente pessoas escaladas para TRABALHO no dia selecionado.")
+                st.caption("Dica: aqui aparecem somente pessoas escaladas para TRABALHO no dia selecionado. A janela operacional mostra tolerância de 2h para menos e 2h para mais sobre a entrada da escala.")
 
             with fm2:
                 st.markdown("#### Mapa operacional do dia")
@@ -18121,8 +18106,6 @@ def page_app():
             base_trabalho_cx = base_operadores_cx[base_operadores_cx['status_dia'].astype(str).str.upper().str.contains('TRAB')].copy() if not base_operadores_cx.empty else pd.DataFrame()
             nomes_alocados_cx = set(df_mapa_cx['chapa'].astype(str).tolist()) if not df_mapa_cx.empty else set()
             disponiveis_cx = base_trabalho_cx[~base_trabalho_cx['chapa'].astype(str).isin(nomes_alocados_cx)].copy() if not base_trabalho_cx.empty else pd.DataFrame()
-            if not bool(st.session_state.get(_cx_ops_loaded_key, False)):
-                st.info("Para ver cobertura completa e colaboradores disponíveis sem travar a tela, clique em 👥 Carregar colaboradores disponíveis na aba Mapa dos caixas.")
             prox_saida_cx = pd.DataFrame()
             if not df_mapa_cx.empty:
                 agora_min = _hora_to_min(datetime.now().strftime('%H:%M')) or 0
