@@ -19223,24 +19223,37 @@ def page_app():
                 st.markdown("## 📢 Informações do portal")
                 st.caption("Publique comunicados do RH, avisos, resultados, imagens e PDFs para aparecer no portal do colaborador do setor.")
 
+                _info_dt_ini_key = f"info_dt_ini::{setor}::{ano}::{mes}"
+                _info_usa_fim_key = f"info_usa_fim::{setor}::{ano}::{mes}"
+                _info_dt_fim_key = f"info_dt_fim::{setor}::{ano}::{mes}"
+                _hoje_info = datetime.now().date()
+                if _info_dt_ini_key not in st.session_state:
+                    st.session_state[_info_dt_ini_key] = _hoje_info
+                if _info_usa_fim_key not in st.session_state:
+                    st.session_state[_info_usa_fim_key] = False
+                if _info_dt_fim_key not in st.session_state:
+                    st.session_state[_info_dt_fim_key] = st.session_state[_info_dt_ini_key]
+
+                cd1, cd2, cd3 = st.columns([1, 1, 1])
+                data_inicio_info = cd1.date_input("Data de início", key=_info_dt_ini_key)
+                usar_data_fim = cd2.checkbox("Definir data final", key=_info_usa_fim_key)
+                if st.session_state.get(_info_dt_fim_key) is None or st.session_state.get(_info_dt_fim_key) < data_inicio_info:
+                    st.session_state[_info_dt_fim_key] = data_inicio_info
+                data_fim_info = cd3.date_input(
+                    "Data final (até quando ficará no ar)",
+                    key=_info_dt_fim_key,
+                    min_value=data_inicio_info,
+                    disabled=(not usar_data_fim)
+                )
+                if not usar_data_fim:
+                    cd3.caption("Marque a caixa para usar data final. Sem isso, o aviso fica no ar enquanto estiver ativo.")
+
                 with st.form(f"form_info_portal::{setor}::{ano}::{mes}", clear_on_submit=False):
                     ci1, ci2, ci3 = st.columns([2, 1, 1])
                     titulo_info = ci1.text_input("Título do informativo")
                     tipo_info = ci2.selectbox("Tipo", ['Informativo', 'RH', 'Aviso', 'Resultado', 'Treinamento', 'Escala', 'Outro'])
                     prioridade_info = ci3.selectbox("Prioridade", ['Normal', 'Importante', 'Urgente'])
                     mensagem_info = st.text_area("Mensagem", height=160)
-                    cd1, cd2, cd3 = st.columns([1, 1, 1])
-                    data_inicio_info = cd1.date_input("Data de início", value=datetime.now().date(), key=f"info_dt_ini::{setor}::{ano}::{mes}")
-                    usar_data_fim = cd2.checkbox("Definir data final", value=False, key=f"info_usa_fim::{setor}::{ano}::{mes}")
-                    data_fim_info = cd3.date_input(
-                        "Data final (até quando ficará no ar)",
-                        value=data_inicio_info,
-                        min_value=data_inicio_info,
-                        key=f"info_dt_fim::{setor}::{ano}::{mes}",
-                        disabled=(not usar_data_fim)
-                    )
-                    if not usar_data_fim:
-                        cd3.caption("Marque a caixa para usar data final. Sem isso, o aviso fica no ar enquanto estiver ativo.")
                     ce1, ce2, ce3 = st.columns([1, 1, 1])
                     fixado_info = ce1.checkbox("Fixar no topo", value=False)
                     ativo_info = ce2.checkbox("Publicar ativo", value=True)
