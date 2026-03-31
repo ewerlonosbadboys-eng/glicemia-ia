@@ -15596,7 +15596,7 @@ def atualizar_status_informativo(informativo_id: int, ativo: bool):
     con.close()
 
 
-def list_portal_informativos(setor: str, somente_ativos: bool = False, ref_date=None) -> pd.DataFrame:
+def list_portal_informativos(setor: str, somente_ativos: bool = False, ref_date=None, respeitar_janela_datas: bool = True) -> pd.DataFrame:
     ensure_portal_informativos_schema()
     con = db_conn()
     try:
@@ -15626,32 +15626,32 @@ def list_portal_informativos(setor: str, somente_ativos: bool = False, ref_date=
         return q
 
     if somente_ativos:
-        if ref_date is None:
-            ref_date = datetime.now().date()
-        else:
-            try:
-                ref_date = pd.to_datetime(ref_date).date()
-            except Exception:
+        q = q[pd.to_numeric(q.get('ativo', 1), errors='coerce').fillna(0).astype(int) == 1].copy()
+        if respeitar_janela_datas:
+            if ref_date is None:
                 ref_date = datetime.now().date()
+            else:
+                try:
+                    ref_date = pd.to_datetime(ref_date).date()
+                except Exception:
+                    ref_date = datetime.now().date()
 
-        def _ativo_row(r):
-            if int(r.get('ativo', 1) or 0) != 1:
-                return False
-            ini = str(r.get('data_inicio') or '').strip()
-            fim = str(r.get('data_fim') or '').strip()
-            try:
-                if ini and pd.to_datetime(ini).date() > ref_date:
-                    return False
-            except Exception:
-                pass
-            try:
-                if fim and pd.to_datetime(fim).date() < ref_date:
-                    return False
-            except Exception:
-                pass
-            return True
+            def _janela_ok(r):
+                ini = str(r.get('data_inicio') or '').strip()
+                fim = str(r.get('data_fim') or '').strip()
+                try:
+                    if ini and pd.to_datetime(ini).date() > ref_date:
+                        return False
+                except Exception:
+                    pass
+                try:
+                    if fim and pd.to_datetime(fim).date() < ref_date:
+                        return False
+                except Exception:
+                    pass
+                return True
 
-        q = q[q.apply(_ativo_row, axis=1)].copy()
+            q = q[q.apply(_janela_ok, axis=1)].copy()
     return q
 
 
@@ -15771,7 +15771,7 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
     hist = get_overrides_colaborador_mes(setor, chapa, ano_ref, mes_ref)
     ass_escala = get_assinatura_status(setor, chapa, ano_ref, mes_ref, 'oficial')
     ass_mud = get_assinatura_status(setor, chapa, ano_ref, mes_ref, 'historico')
-    df_infos_ativas = list_portal_informativos(setor, somente_ativos=True)
+    df_infos_ativas = list_portal_informativos(setor, somente_ativos=True, respeitar_janela_datas=False)
 
     cinfo1, cinfo2 = st.columns([1, 3])
     cinfo1.metric('Informativos ativos', len(df_infos_ativas))
