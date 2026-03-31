@@ -7468,6 +7468,72 @@ def _caixa_saida_prevista(entrada: str, jornada_min: int = 500) -> str:
     return _min_to_hora(base + int(jornada_min))
 
 
+def _caixa_row_get(row, *keys):
+    try:
+        data = dict(row or {})
+    except Exception:
+        try:
+            data = dict(getattr(row, 'to_dict', lambda: {})() or {})
+        except Exception:
+            data = {}
+    if not data:
+        return ""
+
+    norm_map = {}
+    for k, v in data.items():
+        ks = str(k or '').strip()
+        if not ks:
+            continue
+        norm_map.setdefault(ks, v)
+        try:
+            kn = unicodedata.normalize('NFKD', ks).encode('ascii', 'ignore').decode('ascii')
+        except Exception:
+            kn = ks
+        kn = re.sub(r'[^a-zA-Z0-9]+', '', kn).lower()
+        if kn:
+            norm_map.setdefault(kn, v)
+
+    for key in keys:
+        ks = str(key or '').strip()
+        if not ks:
+            continue
+        val = norm_map.get(ks, None)
+        if str(val or '').strip():
+            return val
+        try:
+            kn = unicodedata.normalize('NFKD', ks).encode('ascii', 'ignore').decode('ascii')
+        except Exception:
+            kn = ks
+        kn = re.sub(r'[^a-zA-Z0-9]+', '', kn).lower()
+        val = norm_map.get(kn, None)
+        if str(val or '').strip():
+            return val
+    return ""
+
+
+def _caixa_resolver_previstos_row(row, entrada_padrao: str = '06:00', saida_padrao: str = '', subgrupo_padrao: str = 'SEM SUBGRUPO'):
+    entrada_ref = str(entrada_padrao or '06:00').strip() or '06:00'
+    saida_ref = str(saida_padrao or '').strip() or _caixa_saida_prevista(entrada_ref)
+    subgrupo_ref = str(subgrupo_padrao or '').strip() or 'SEM SUBGRUPO'
+    status_ref = 'Trabalho'
+
+    if row:
+        status_ref = str(_caixa_row_get(row, 'Status', 'status') or 'Trabalho').strip() or 'Trabalho'
+        entrada_lida = str(_caixa_row_get(row, 'H_Entrada', 'H Entrada', 'Entrada', 'entrada', 'h_entrada') or '').strip()
+        if entrada_lida:
+            entrada_ref = entrada_lida
+        saida_lida = str(_caixa_row_get(row, 'H_Saida', 'H_Saída', 'H Saida', 'H Saída', 'Saída', 'Saida', 'saida', 'h_saida') or '').strip()
+        if saida_lida:
+            saida_ref = saida_lida
+        else:
+            saida_ref = _caixa_saida_prevista(entrada_ref)
+        subgrupo_lido = str(_caixa_row_get(row, 'Subgrupo', 'subgrupo') or '').strip()
+        if subgrupo_lido:
+            subgrupo_ref = subgrupo_lido
+
+    return entrada_ref, saida_ref, subgrupo_ref, status_ref
+
+
 def _caixa_janela_tolerancia(entrada: str, tolerancia_min: int = 120) -> tuple[str, str]:
     base = _hora_to_min(entrada)
     if base is None:
@@ -7661,12 +7727,12 @@ def caixa_montar_base_operadores(setor: str, ano: int, mes: int, dia: int) -> pd
         status_dia = 'Trabalho'
 
         row = snapshot_dia.get(chapa) or {}
-        if row:
-            status_dia = str(row.get('Status') or 'Trabalho').strip() or 'Trabalho'
-            entrada_prev = str(row.get('H_Entrada') or row.get('Entrada') or entrada_prev).strip() or entrada_prev
-            saida_prev = str(row.get('H_Saida') or row.get('Saída') or saida_prev).strip() or _caixa_saida_prevista(entrada_prev)
-            if str(row.get('Subgrupo') or '').strip():
-                subgrupo = str(row.get('Subgrupo') or '').strip()
+        entrada_prev, saida_prev, subgrupo, status_dia = _caixa_resolver_previstos_row(
+            row,
+            entrada_padrao=entrada_prev,
+            saida_padrao=saida_prev,
+            subgrupo_padrao=subgrupo,
+        )
 
         st_norm = str(status_dia or '').strip().upper()
         trabalha_hoje = ('TRAB' in st_norm) or (st_norm in {'', 'TRABALHO'})
@@ -14988,7 +15054,6 @@ def _ensure_preview_cache(setor: str, ano: int, mes: int, colaboradores: list):
     st.session_state[keys["loaded"]] = True
     return hist_db, cal
 
-@st.cache_data(show_spinner=False, ttl=120)
 def get_colaborador_record(setor: str, chapa: str):
     setor = _norm_setor(setor)
     chapa = _norm_chapa(chapa)
@@ -16148,34 +16213,11 @@ def page_app():
 
         _ano_sb = int(st.session_state.get('cfg_ano') or datetime.now().year)
         _mes_sb = int(st.session_state.get('cfg_mes') or datetime.now().month)
-        _sb_cache_key = f"sidebar_user_ctx::{auth_setor}::{auth_chapa}::{_ano_sb}::{_mes_sb}"
-        _sb_ctx = st.session_state.get(_sb_cache_key)
-        if not isinstance(_sb_ctx, dict):
-            _colab_sb = get_colaborador_competencia_snapshot(auth_setor, auth_chapa, _ano_sb, _mes_sb) or get_colaborador_record(auth_setor, auth_chapa)
-            _lideranca_ok_calc = bool(auth.get('is_lider', False)) or bool(auth.get('is_ax_lider', False)) or colaborador_eh_lideranca(auth_setor, auth_chapa)
-            _subgrupo_auth_calc = get_subgrupo_competencia_ou_base(
-                auth_setor,
-                auth_chapa,
-                _ano_sb,
-                _mes_sb,
-                (_colab_sb or {}).get('Subgrupo', 'SEM SUBGRUPO'),
-            )
-            _perfil_gestao_calc = bool(auth.get('is_admin', False)) or _lideranca_ok_calc
-            _perfil_label_calc = 'ADMIN' if auth.get('is_admin', False) else ('AX LÍDER' if auth.get('is_ax_lider', False) else ('LÍDER' if _lideranca_ok_calc else 'COLABORADOR'))
-            _sb_ctx = {
-                'colab': _colab_sb or {},
-                'subgrupo_auth': _subgrupo_auth_calc,
-                'lideranca_ok': bool(_lideranca_ok_calc),
-                'perfil_gestao': bool(_perfil_gestao_calc),
-                'perfil_label': _perfil_label_calc,
-            }
-            st.session_state[_sb_cache_key] = _sb_ctx
-
-        _colab_sb = dict(_sb_ctx.get('colab') or {})
-        _subgrupo_auth = str(_sb_ctx.get('subgrupo_auth') or 'SEM SUBGRUPO')
-        _lideranca_ok = bool(_sb_ctx.get('lideranca_ok', False))
-        _perfil_gestao = bool(_sb_ctx.get('perfil_gestao', False))
-        perfil_label = str(_sb_ctx.get('perfil_label') or 'COLABORADOR')
+        _colab_sb = get_colaborador_competencia_snapshot(auth_setor, auth_chapa, _ano_sb, _mes_sb) or get_colaborador_record(auth_setor, auth_chapa)
+        _subgrupo_auth = get_subgrupo_competencia_ou_base(auth_setor, auth_chapa, _ano_sb, _mes_sb, (_colab_sb or {}).get('Subgrupo', 'SEM SUBGRUPO'))
+        _lideranca_ok = bool(auth.get('is_lider', False)) or bool(auth.get('is_ax_lider', False)) or colaborador_eh_lideranca(auth_setor, auth_chapa)
+        _perfil_gestao = bool(auth.get('is_admin', False)) or _lideranca_ok
+        perfil_label = 'ADMIN' if auth.get('is_admin', False) else ('AX LÍDER' if auth.get('is_ax_lider', False) else ('LÍDER' if _lideranca_ok else 'COLABORADOR'))
 
         if bool(auth.get('is_lider', False)) and not _lideranca_ok and not bool(auth.get('is_admin', False)):
             st.warning('Perfil líder liberado somente para colaborador do subgrupo LIDERANÇA neste setor.')
@@ -18037,6 +18079,29 @@ def page_app():
         except Exception:
             df_mapa_cx = pd.DataFrame(columns=['posto','chapa','nome','subgrupo','entrada_prevista','saida_prevista','almoco_inicio','almoco_fim','status_operacao','observacao','atualizado_em','atualizado_por'])
 
+        try:
+            if not df_mapa_cx.empty and 'chapa' in df_mapa_cx.columns:
+                if base_operadores_cx.empty:
+                    base_refresh_cx = caixa_montar_base_operadores(setor, ano_cx, mes_cx, int(dia_cx))
+                else:
+                    base_refresh_cx = base_operadores_cx.copy()
+                if not base_refresh_cx.empty:
+                    base_refresh_cx = base_refresh_cx[['chapa','entrada_prevista','saida_prevista','subgrupo']].copy()
+                    base_refresh_cx['chapa'] = base_refresh_cx['chapa'].astype(str).str.strip()
+                    df_mapa_cx['chapa'] = df_mapa_cx['chapa'].astype(str).str.strip()
+                    df_mapa_cx = df_mapa_cx.merge(base_refresh_cx, on='chapa', how='left', suffixes=('', '_escala'))
+                    if 'entrada_prevista_escala' in df_mapa_cx.columns:
+                        df_mapa_cx['entrada_prevista'] = df_mapa_cx['entrada_prevista_escala'].where(df_mapa_cx['entrada_prevista_escala'].astype(str).str.strip() != '', df_mapa_cx['entrada_prevista'])
+                    if 'saida_prevista_escala' in df_mapa_cx.columns:
+                        df_mapa_cx['saida_prevista'] = df_mapa_cx['saida_prevista_escala'].where(df_mapa_cx['saida_prevista_escala'].astype(str).str.strip() != '', df_mapa_cx['saida_prevista'])
+                    if 'subgrupo_escala' in df_mapa_cx.columns:
+                        df_mapa_cx['subgrupo'] = df_mapa_cx['subgrupo_escala'].where(df_mapa_cx['subgrupo_escala'].astype(str).str.strip() != '', df_mapa_cx['subgrupo'])
+                    drop_cols = [c for c in ['entrada_prevista_escala','saida_prevista_escala','subgrupo_escala'] if c in df_mapa_cx.columns]
+                    if drop_cols:
+                        df_mapa_cx = df_mapa_cx.drop(columns=drop_cols)
+        except Exception:
+            pass
+
         ocupados_cx = int(len(df_mapa_cx))
         almoco_cx = int((df_mapa_cx['status_operacao'].astype(str) == 'Em almoço').sum()) if not df_mapa_cx.empty else 0
         troca_cx = int((df_mapa_cx['status_operacao'].astype(str) == 'Em troca').sum()) if not df_mapa_cx.empty else 0
@@ -18163,17 +18228,34 @@ def page_app():
                     novo_almoco_inicio_cx = ""
                     novo_almoco_fim_cx = ""
                 if st.button("✅ Atualizar status do posto", key=f"cx_update_btn::{setor}"):
+                    chapa_update_cx = str(registro_update_cx.get('chapa') or '').strip()
+                    nome_update_cx = str(registro_update_cx.get('nome') or '').strip()
+                    subgrupo_update_cx = str(registro_update_cx.get('subgrupo') or '').strip()
+                    entrada_update_cx = str(registro_update_cx.get('entrada_prevista') or '').strip()
+                    saida_update_cx = str(registro_update_cx.get('saida_prevista') or '').strip()
+                    try:
+                        base_refresh_cx = base_operadores_cx if not base_operadores_cx.empty else caixa_montar_base_operadores(setor, ano_cx, mes_cx, int(dia_cx))
+                        if not base_refresh_cx.empty and chapa_update_cx:
+                            reg_refresh_cx = base_refresh_cx[base_refresh_cx['chapa'].astype(str).str.strip() == chapa_update_cx]
+                            if not reg_refresh_cx.empty:
+                                reg_refresh_cx = reg_refresh_cx.iloc[0]
+                                nome_update_cx = str(reg_refresh_cx.get('nome') or nome_update_cx).strip()
+                                subgrupo_update_cx = str(reg_refresh_cx.get('subgrupo') or subgrupo_update_cx).strip()
+                                entrada_update_cx = str(reg_refresh_cx.get('entrada_prevista') or entrada_update_cx).strip()
+                                saida_update_cx = str(reg_refresh_cx.get('saida_prevista') or saida_update_cx).strip()
+                    except Exception:
+                        pass
                     caixa_upsert_operacao_dia(
                         setor=setor,
                         ano=ano_cx,
                         mes=mes_cx,
                         dia=int(dia_cx),
                         posto=str(registro_update_cx.get('posto') or ''),
-                        chapa=str(registro_update_cx.get('chapa') or ''),
-                        nome=str(registro_update_cx.get('nome') or ''),
-                        subgrupo=str(registro_update_cx.get('subgrupo') or ''),
-                        entrada_prevista=str(registro_update_cx.get('entrada_prevista') or ''),
-                        saida_prevista=str(registro_update_cx.get('saida_prevista') or ''),
+                        chapa=chapa_update_cx,
+                        nome=nome_update_cx,
+                        subgrupo=subgrupo_update_cx,
+                        entrada_prevista=entrada_update_cx,
+                        saida_prevista=saida_update_cx,
                         almoco_inicio=novo_almoco_inicio_cx,
                         almoco_fim=novo_almoco_fim_cx,
                         status_operacao=novo_status_cx,
