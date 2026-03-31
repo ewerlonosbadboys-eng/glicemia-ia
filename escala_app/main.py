@@ -7697,9 +7697,32 @@ def caixa_snapshot_dia_rapido(setor: str, ano: int, mes: int, dia: int) -> dict[
     con = db_conn()
     try:
         try:
+            cols_esc = {str(r[1]).strip().lower() for r in con.execute("PRAGMA table_info(escala_mes)").fetchall()}
+        except Exception:
+            cols_esc = set()
+
+        col_status = 'status' if 'status' in cols_esc else None
+        col_ent = 'h_entrada' if 'h_entrada' in cols_esc else ('entrada' if 'entrada' in cols_esc else None)
+        col_sai = 'h_saida' if 'h_saida' in cols_esc else ('saida' if 'saida' in cols_esc else None)
+
+        select_cols = ['chapa']
+        if col_status:
+            select_cols.append(f"{col_status} AS status")
+        else:
+            select_cols.append("'' AS status")
+        if col_ent:
+            select_cols.append(f"{col_ent} AS h_entrada")
+        else:
+            select_cols.append("'' AS h_entrada")
+        if col_sai:
+            select_cols.append(f"{col_sai} AS h_saida")
+        else:
+            select_cols.append("'' AS h_saida")
+
+        try:
             df_dia = pd.read_sql_query(
-                """
-                SELECT chapa, status, h_entrada, h_saida
+                f"""
+                SELECT {', '.join(select_cols)}
                 FROM escala_mes
                 WHERE UPPER(TRIM(setor))=UPPER(TRIM(?)) AND ano=? AND mes=? AND dia=?
                 """,
@@ -7714,10 +7737,17 @@ def caixa_snapshot_dia_rapido(setor: str, ano: int, mes: int, dia: int) -> dict[
                 ch = _norm_chapa(r.get('chapa') or '')
                 if not ch:
                     continue
+                entrada_lida = str(r.get('h_entrada') or '').strip()
+                saida_lida = str(r.get('h_saida') or '').strip()
+                if entrada_lida and not saida_lida:
+                    try:
+                        saida_lida = str(_saida_from_entrada(entrada_lida) or '').strip()
+                    except Exception:
+                        saida_lida = ''
                 snap[ch] = {
                     'Status': str(r.get('status') or '').strip() or 'Trabalho',
-                    'H_Entrada': str(r.get('h_entrada') or '').strip(),
-                    'H_Saida': str(r.get('h_saida') or '').strip(),
+                    'H_Entrada': entrada_lida,
+                    'H_Saida': saida_lida,
                 }
 
         try:
