@@ -17905,7 +17905,7 @@ def page_app():
 
         cxa, cxb, cxc, cxd = st.columns([1.3, 1.2, 1.3, 2.2])
         with cxa:
-            dia_cx = st.selectbox("Dia operacional", list(range(1, ultimo_dia_cx + 1)), index=max(0, int(st.session_state.get(_cx_dia_key, dia_padrao_cx)) - 1), key=_cx_dia_key)
+            dia_cx = st.selectbox("Dia operacional", list(range(1, ultimo_dia_cx + 1)), key=_cx_dia_key)
         with cxb:
             postos_total = len(caixa_lista_postos())
             st.metric("Postos disponíveis", postos_total)
