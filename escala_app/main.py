@@ -21438,7 +21438,12 @@ def _fast_restore_bundled_latest_before_start() -> None:
 
 
 # =========================================================
-# V124 — CONGELAMENTO AUTOMÁTICO DA COMPETÊNCIA ANTERIOR
+# V125 — VIRADA AUTOMÁTICA TOTAL DE COMPETÊNCIA
+# Regra homologada do usuário:
+# - mês anterior = FECHADA
+# - mês atual    = FECHADA
+# - próximo mês  = ABERTA
+# Ou seja: somente o mês seguinte fica aberto para trabalho.
 # =========================================================
 def _competencia_anterior_referencia(base_dt: datetime | None = None) -> tuple[int, int]:
     ref = base_dt or datetime.now()
@@ -21447,6 +21452,20 @@ def _competencia_anterior_referencia(base_dt: datetime | None = None) -> tuple[i
     if mes == 1:
         return ano - 1, 12
     return ano, mes - 1
+
+
+def _competencia_atual_referencia(base_dt: datetime | None = None) -> tuple[int, int]:
+    ref = base_dt or datetime.now()
+    return int(ref.year), int(ref.month)
+
+
+def _competencia_proxima_referencia(base_dt: datetime | None = None) -> tuple[int, int]:
+    ref = base_dt or datetime.now()
+    ano = int(ref.year)
+    mes = int(ref.month)
+    if mes == 12:
+        return ano + 1, 1
+    return ano, mes + 1
 
 
 def _setor_tem_movimento_competencia(setor: str, ano: int, mes: int) -> bool:
@@ -21500,73 +21519,112 @@ def _listar_setores_auto_congelamento() -> list[str]:
 
 
 def auto_congelar_competencia_anterior() -> dict:
-    """Fecha automaticamente a competência anterior quando o app inicia.
-    Regra: ao entrar em um novo mês, o mês imediatamente anterior vira FECHADA
-    para todos os setores com movimento, sem rebalancear nada.
+    """V125.
+    Executa a virada mensal total na inicialização, sem rebalancear nada:
+    - fecha a competência anterior
+    - fecha a competência atual
+    - deixa a próxima competência aberta
+    Regra operacional: somente o mês seguinte fica aberto.
     """
     try:
         ensure_competencia_runtime_tables()
     except Exception:
         pass
 
-    ano_ref, mes_ref = _competencia_anterior_referencia()
-    ref_key = f"{ano_ref:04d}-{mes_ref:02d}"
+    ano_ant, mes_ant = _competencia_anterior_referencia()
+    ano_atual, mes_atual = _competencia_atual_referencia()
+    ano_prox, mes_prox = _competencia_proxima_referencia()
+    ref_key = f"{ano_ant:04d}-{mes_ant:02d}|{ano_atual:04d}-{mes_atual:02d}|{ano_prox:04d}-{mes_prox:02d}"
 
     try:
         if st.session_state.get("_auto_congelamento_ref_exec") == ref_key:
             return {
                 "referencia": ref_key,
-                "fechados_agora": int(st.session_state.get("_auto_congelamento_fechados_agora", 0) or 0),
-                "ja_fechados": int(st.session_state.get("_auto_congelamento_ja_fechados", 0) or 0),
+                "fechados_anterior_agora": int(st.session_state.get("_auto_congelamento_fechados_anterior_agora", 0) or 0),
+                "fechados_atual_agora": int(st.session_state.get("_auto_congelamento_fechados_atual_agora", 0) or 0),
+                "abertos_proximo_agora": int(st.session_state.get("_auto_congelamento_abertos_proximo_agora", 0) or 0),
+                "ja_fechados_anterior": int(st.session_state.get("_auto_congelamento_ja_fechados_anterior", 0) or 0),
+                "ja_fechados_atual": int(st.session_state.get("_auto_congelamento_ja_fechados_atual", 0) or 0),
+                "ja_abertos_proximo": int(st.session_state.get("_auto_congelamento_ja_abertos_proximo", 0) or 0),
                 "ignorados_sem_movimento": int(st.session_state.get("_auto_congelamento_ignorados", 0) or 0),
                 "erros": int(st.session_state.get("_auto_congelamento_erros", 0) or 0),
             }
     except Exception:
         pass
 
-    fechados_agora = 0
-    ja_fechados = 0
+    fechados_anterior_agora = 0
+    fechados_atual_agora = 0
+    abertos_proximo_agora = 0
+    ja_fechados_anterior = 0
+    ja_fechados_atual = 0
+    ja_abertos_proximo = 0
     ignorados_sem_movimento = 0
     erros = 0
 
     for setor in _listar_setores_auto_congelamento():
         try:
-            if not _setor_tem_movimento_competencia(setor, ano_ref, mes_ref):
+            tem_movimento = (
+                _setor_tem_movimento_competencia(setor, ano_ant, mes_ant)
+                or _setor_tem_movimento_competencia(setor, ano_atual, mes_atual)
+                or _setor_tem_movimento_competencia(setor, ano_prox, mes_prox)
+            )
+            if not tem_movimento:
                 ignorados_sem_movimento += 1
                 continue
 
-            if competencia_fechada(setor, ano_ref, mes_ref):
-                ja_fechados += 1
-                continue
+            if competencia_fechada(setor, ano_ant, mes_ant):
+                ja_fechados_anterior += 1
+            else:
+                set_status_competencia(setor, ano_ant, mes_ant, 'FECHADA')
+                fechados_anterior_agora += 1
 
-            set_status_competencia(setor, ano_ref, mes_ref, 'FECHADA')
-            fechados_agora += 1
+            if competencia_fechada(setor, ano_atual, mes_atual):
+                ja_fechados_atual += 1
+            else:
+                set_status_competencia(setor, ano_atual, mes_atual, 'FECHADA')
+                fechados_atual_agora += 1
+
+            status_prox = get_status_competencia(setor, ano_prox, mes_prox)
+            if str(status_prox or '').strip().upper() == 'ABERTA':
+                ja_abertos_proximo += 1
+            else:
+                set_status_competencia(setor, ano_prox, mes_prox, 'ABERTA')
+                abertos_proximo_agora += 1
         except Exception as e:
             erros += 1
             try:
                 registrar_log_admin(
-                    acao="AUTO_CONGELAMENTO_COMPETENCIA",
+                    acao="AUTO_VIRADA_COMPETENCIA_TOTAL",
                     modulo="SISTEMA/AUTO_CONGELAMENTO",
                     alvo_setor=setor,
-                    competencia_ano=ano_ref,
-                    competencia_mes=mes_ref,
+                    competencia_ano=ano_atual,
+                    competencia_mes=mes_atual,
                     valor_depois="ERRO",
-                    detalhes=f"Falha no auto congelamento: {e}",
+                    detalhes=f"Falha na virada automática total: {e}",
                     status="ERRO",
                 )
             except Exception:
                 pass
 
     try:
-        if fechados_agora > 0:
+        if (fechados_anterior_agora + fechados_atual_agora + abertos_proximo_agora) > 0:
             registrar_log_admin(
-                acao="AUTO_CONGELAMENTO_COMPETENCIA",
+                acao="AUTO_VIRADA_COMPETENCIA_TOTAL",
                 modulo="SISTEMA/AUTO_CONGELAMENTO",
                 alvo_setor="TODOS",
-                competencia_ano=ano_ref,
-                competencia_mes=mes_ref,
-                valor_depois=f"FECHADA_EM_{fechados_agora}_SETORES",
-                detalhes=f"Auto congelamento executado na inicialização. Referência: {ref_key}",
+                competencia_ano=ano_atual,
+                competencia_mes=mes_atual,
+                valor_depois=(
+                    f"ANTERIOR_FECHADA={fechados_anterior_agora};"
+                    f"ATUAL_FECHADA={fechados_atual_agora};"
+                    f"PROXIMA_ABERTA={abertos_proximo_agora}"
+                ),
+                detalhes=(
+                    "Virada automática total executada na inicialização. "
+                    f"Anterior={ano_ant:04d}-{mes_ant:02d}; "
+                    f"Atual={ano_atual:04d}-{mes_atual:02d}; "
+                    f"Próxima={ano_prox:04d}-{mes_prox:02d}"
+                ),
                 status="SUCESSO",
             )
     except Exception:
@@ -21574,8 +21632,12 @@ def auto_congelar_competencia_anterior() -> dict:
 
     try:
         st.session_state["_auto_congelamento_ref_exec"] = ref_key
-        st.session_state["_auto_congelamento_fechados_agora"] = fechados_agora
-        st.session_state["_auto_congelamento_ja_fechados"] = ja_fechados
+        st.session_state["_auto_congelamento_fechados_anterior_agora"] = fechados_anterior_agora
+        st.session_state["_auto_congelamento_fechados_atual_agora"] = fechados_atual_agora
+        st.session_state["_auto_congelamento_abertos_proximo_agora"] = abertos_proximo_agora
+        st.session_state["_auto_congelamento_ja_fechados_anterior"] = ja_fechados_anterior
+        st.session_state["_auto_congelamento_ja_fechados_atual"] = ja_fechados_atual
+        st.session_state["_auto_congelamento_ja_abertos_proximo"] = ja_abertos_proximo
         st.session_state["_auto_congelamento_ignorados"] = ignorados_sem_movimento
         st.session_state["_auto_congelamento_erros"] = erros
     except Exception:
@@ -21583,8 +21645,12 @@ def auto_congelar_competencia_anterior() -> dict:
 
     return {
         "referencia": ref_key,
-        "fechados_agora": fechados_agora,
-        "ja_fechados": ja_fechados,
+        "fechados_anterior_agora": fechados_anterior_agora,
+        "fechados_atual_agora": fechados_atual_agora,
+        "abertos_proximo_agora": abertos_proximo_agora,
+        "ja_fechados_anterior": ja_fechados_anterior,
+        "ja_fechados_atual": ja_fechados_atual,
+        "ja_abertos_proximo": ja_abertos_proximo,
         "ignorados_sem_movimento": ignorados_sem_movimento,
         "erros": erros,
     }
@@ -21592,7 +21658,7 @@ def auto_congelar_competencia_anterior() -> dict:
 
 # =========================================================
 # MAIN
-# ========================================================= 
+# =========================================================
 _restore_automatico_se_banco_vazio()
 validar_contrato_sistema()
 
