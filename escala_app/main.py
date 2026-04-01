@@ -21438,6 +21438,159 @@ def _fast_restore_bundled_latest_before_start() -> None:
 
 
 # =========================================================
+# V124 — CONGELAMENTO AUTOMÁTICO DA COMPETÊNCIA ANTERIOR
+# =========================================================
+def _competencia_anterior_referencia(base_dt: datetime | None = None) -> tuple[int, int]:
+    ref = base_dt or datetime.now()
+    ano = int(ref.year)
+    mes = int(ref.month)
+    if mes == 1:
+        return ano - 1, 12
+    return ano, mes - 1
+
+
+def _setor_tem_movimento_competencia(setor: str, ano: int, mes: int) -> bool:
+    setor = _norm_setor(setor)
+    ano = int(ano)
+    mes = int(mes)
+    if not setor or setor in ("ADMIN", "GERAL"):
+        return False
+
+    con = db_conn()
+    cur = con.cursor()
+    try:
+        consultas = [
+            ("SELECT 1 FROM colaboradores WHERE UPPER(TRIM(setor))=? LIMIT 1", (setor,)),
+            ("SELECT 1 FROM escala_mes WHERE UPPER(TRIM(setor))=? AND ano=? AND mes=? LIMIT 1", (setor, ano, mes)),
+            ("SELECT 1 FROM retificacoes_competencia WHERE UPPER(TRIM(setor))=? AND ano=? AND mes=? LIMIT 1", (setor, ano, mes)),
+            ("SELECT 1 FROM subgrupo_competencia WHERE UPPER(TRIM(setor))=? AND ano=? AND mes=? LIMIT 1", (setor, ano, mes)),
+            ("SELECT 1 FROM colaborador_competencia_snapshot WHERE UPPER(TRIM(setor))=? AND ano=? AND mes=? LIMIT 1", (setor, ano, mes)),
+        ]
+        for sql, params in consultas:
+            try:
+                cur.execute(sql, params)
+                if cur.fetchone():
+                    return True
+            except Exception:
+                pass
+        return False
+    finally:
+        con.close()
+
+
+def _listar_setores_auto_congelamento() -> list[str]:
+    setores = []
+    for fn_name in ("listar_setores_com_competencia", "listar_setores_db", "list_setores"):
+        try:
+            fn = globals().get(fn_name)
+            if callable(fn):
+                setores.extend(fn() or [])
+        except Exception:
+            pass
+
+    vistos = set()
+    finais = []
+    for s in setores:
+        s_norm = _norm_setor(s)
+        if not s_norm or s_norm in vistos or s_norm in ("ADMIN", "GERAL"):
+            continue
+        vistos.add(s_norm)
+        finais.append(s_norm)
+    return finais
+
+
+def auto_congelar_competencia_anterior() -> dict:
+    """Fecha automaticamente a competência anterior quando o app inicia.
+    Regra: ao entrar em um novo mês, o mês imediatamente anterior vira FECHADA
+    para todos os setores com movimento, sem rebalancear nada.
+    """
+    try:
+        ensure_competencia_runtime_tables()
+    except Exception:
+        pass
+
+    ano_ref, mes_ref = _competencia_anterior_referencia()
+    ref_key = f"{ano_ref:04d}-{mes_ref:02d}"
+
+    try:
+        if st.session_state.get("_auto_congelamento_ref_exec") == ref_key:
+            return {
+                "referencia": ref_key,
+                "fechados_agora": int(st.session_state.get("_auto_congelamento_fechados_agora", 0) or 0),
+                "ja_fechados": int(st.session_state.get("_auto_congelamento_ja_fechados", 0) or 0),
+                "ignorados_sem_movimento": int(st.session_state.get("_auto_congelamento_ignorados", 0) or 0),
+                "erros": int(st.session_state.get("_auto_congelamento_erros", 0) or 0),
+            }
+    except Exception:
+        pass
+
+    fechados_agora = 0
+    ja_fechados = 0
+    ignorados_sem_movimento = 0
+    erros = 0
+
+    for setor in _listar_setores_auto_congelamento():
+        try:
+            if not _setor_tem_movimento_competencia(setor, ano_ref, mes_ref):
+                ignorados_sem_movimento += 1
+                continue
+
+            if competencia_fechada(setor, ano_ref, mes_ref):
+                ja_fechados += 1
+                continue
+
+            set_status_competencia(setor, ano_ref, mes_ref, 'FECHADA')
+            fechados_agora += 1
+        except Exception as e:
+            erros += 1
+            try:
+                registrar_log_admin(
+                    acao="AUTO_CONGELAMENTO_COMPETENCIA",
+                    modulo="SISTEMA/AUTO_CONGELAMENTO",
+                    alvo_setor=setor,
+                    competencia_ano=ano_ref,
+                    competencia_mes=mes_ref,
+                    valor_depois="ERRO",
+                    detalhes=f"Falha no auto congelamento: {e}",
+                    status="ERRO",
+                )
+            except Exception:
+                pass
+
+    try:
+        if fechados_agora > 0:
+            registrar_log_admin(
+                acao="AUTO_CONGELAMENTO_COMPETENCIA",
+                modulo="SISTEMA/AUTO_CONGELAMENTO",
+                alvo_setor="TODOS",
+                competencia_ano=ano_ref,
+                competencia_mes=mes_ref,
+                valor_depois=f"FECHADA_EM_{fechados_agora}_SETORES",
+                detalhes=f"Auto congelamento executado na inicialização. Referência: {ref_key}",
+                status="SUCESSO",
+            )
+    except Exception:
+        pass
+
+    try:
+        st.session_state["_auto_congelamento_ref_exec"] = ref_key
+        st.session_state["_auto_congelamento_fechados_agora"] = fechados_agora
+        st.session_state["_auto_congelamento_ja_fechados"] = ja_fechados
+        st.session_state["_auto_congelamento_ignorados"] = ignorados_sem_movimento
+        st.session_state["_auto_congelamento_erros"] = erros
+    except Exception:
+        pass
+
+    return {
+        "referencia": ref_key,
+        "fechados_agora": fechados_agora,
+        "ja_fechados": ja_fechados,
+        "ignorados_sem_movimento": ignorados_sem_movimento,
+        "erros": erros,
+    }
+
+
+# =========================================================
 # MAIN
 # =========================================================
 _restore_automatico_se_banco_vazio()
@@ -21445,13 +21598,17 @@ validar_contrato_sistema()
 
 if st.session_state["auth"] is None and QUICK_LOGIN_BOOT:
     db_init_fast_login()
+    auto_congelar_competencia_anterior()
     page_login()
 else:
     if not st.session_state.get("_full_boot_done", False):
         db_init()
+        auto_congelar_competencia_anterior()
         if not FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP:
             auto_backup_if_due()
         st.session_state["_full_boot_done"] = True
+    else:
+        auto_congelar_competencia_anterior()
     if st.session_state["auth"] is None:
         page_login()
     else:
