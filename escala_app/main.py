@@ -16166,15 +16166,53 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
                     datas_uteis_folga = [primeiro_dia]
 
                 if tipo_sol == 'Folga':
-                    st.caption('Sábados e domingos não podem ser enviados como sugestão de folga, porque já são tratados pelas regras fixas do sistema.')
-                    data_sol = c1.selectbox(
-                        'Data desejada',
-                        options=datas_uteis_folga,
-                        index=0,
-                        key=f'data_folga_util_{setor}_{chapa}',
-                        format_func=lambda d: f"{d.strftime('%d/%m/%Y')} ({['seg','ter','qua','qui','sex','sáb','dom'][d.weekday()]})",
+                    st.caption('Mini calendário visual: dias verdes podem ser selecionados; sábados e domingos em vermelho ficam bloqueados.')
+
+                    sel_key = f'folga_cal_sel_{setor}_{chapa}_{prox_ano_sol}_{prox_mes_sol}'
+                    if st.session_state.get(sel_key) not in [d.isoformat() for d in datas_uteis_folga]:
+                        st.session_state[sel_key] = datas_uteis_folga[0].isoformat()
+
+                    nomes_semana = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom']
+                    head_cols = c1.columns(7)
+                    for _i, _nome in enumerate(nomes_semana):
+                        head_cols[_i].markdown(
+                            f"<div style='text-align:center;font-weight:700;padding:6px 0;border-radius:8px;background:rgba(255,255,255,0.06);'>{_nome}</div>",
+                            unsafe_allow_html=True
+                        )
+
+                    semanas_cal = calendar.monthcalendar(prox_ano_sol, prox_mes_sol)
+                    for semana_idx, semana in enumerate(semanas_cal):
+                        cols_sem = c1.columns(7)
+                        for dia_idx, dia_num in enumerate(semana):
+                            if dia_num == 0:
+                                cols_sem[dia_idx].markdown("<div style='height:38px;'></div>", unsafe_allow_html=True)
+                                continue
+
+                            dia_data = date(prox_ano_sol, prox_mes_sol, dia_num)
+                            bloqueado = dia_data.weekday() in (5, 6)
+                            selecionado = st.session_state.get(sel_key) == dia_data.isoformat()
+
+                            if bloqueado:
+                                cols_sem[dia_idx].markdown(
+                                    f"<div style='height:38px;display:flex;align-items:center;justify-content:center;border-radius:10px;background:#5a1f1f;border:1px solid #a94444;color:#ffd7d7;font-weight:700;'>❌ {dia_num:02d}</div>",
+                                    unsafe_allow_html=True
+                                )
+                            else:
+                                rotulo_btn = f"✅ {dia_num:02d}" if selecionado else f"🟩 {dia_num:02d}"
+                                if cols_sem[dia_idx].button(rotulo_btn, key=f'folga_cal_btn_{setor}_{chapa}_{prox_ano_sol}_{prox_mes_sol}_{dia_num}', use_container_width=True):
+                                    st.session_state[sel_key] = dia_data.isoformat()
+                                    st.rerun()
+
+                    data_sol = pd.to_datetime(st.session_state.get(sel_key)).date()
+                    c1.caption(f"Data selecionada: {data_sol.strftime('%d/%m/%Y')} ({['seg','ter','qua','qui','sex','sáb','dom'][data_sol.weekday()]})")
+                    c1.markdown(
+                        "<div style='display:flex;gap:12px;flex-wrap:wrap;margin-top:6px;'>"
+                        "<div style='padding:6px 10px;border-radius:999px;background:#1d4d2b;color:#d7ffe3;font-weight:700;'>🟩 Pode selecionar</div>"
+                        "<div style='padding:6px 10px;border-radius:999px;background:#5a1f1f;color:#ffd7d7;font-weight:700;'>❌ Bloqueado</div>"
+                        "<div style='padding:6px 10px;border-radius:999px;background:#0f3b68;color:#d8ecff;font-weight:700;'>✅ Selecionado</div>"
+                        "</div>",
+                        unsafe_allow_html=True
                     )
-                    st.caption('Seleção visual bloqueada para folga: somente dias úteis ficam disponíveis.')
                 else:
                     data_sol = c1.date_input(
                         'Data desejada',
