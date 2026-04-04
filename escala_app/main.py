@@ -3601,20 +3601,31 @@ def _sqlite_table_columns(conn, table: str) -> list[str]:
 
 def _sqlite_conflict_cols(conn, table: str) -> list[str]:
     try:
-        rows = conn.execute(f'PRAGMA table_info("{table}")').fetchall()
-        pk_cols = [str(r[1]) for r in rows if len(r) > 5 and int(r[5] or 0) > 0]
-        if pk_cols:
-            return pk_cols
         idx_rows = conn.execute(f'PRAGMA index_list("{table}")').fetchall()
+        unique_candidates = []
         for idx in idx_rows:
             is_unique = int(idx[2]) == 1 if len(idx) > 2 else False
             idx_name = str(idx[1]) if len(idx) > 1 else ''
             if not is_unique or not idx_name:
                 continue
             info = conn.execute(f'PRAGMA index_info("{idx_name}")').fetchall()
-            cols = [str(r[2]) for r in info if len(r) > 2]
+            cols = [str(r[2]) for r in info if len(r) > 2 and str(r[2] or '').strip()]
             if cols:
+                unique_candidates.append(cols)
+
+        # Prefere chave natural/composta (ex.: setor+chapa, setor+ano+mes+...)
+        # em vez do id autoincrement, para o UPSERT casar com a constraint correta do Supabase.
+        for cols in unique_candidates:
+            if not (len(cols) == 1 and str(cols[0]).strip().lower() == 'id'):
                 return cols
+
+        rows = conn.execute(f'PRAGMA table_info("{table}")').fetchall()
+        pk_cols = [str(r[1]) for r in rows if len(r) > 5 and int(r[5] or 0) > 0]
+        if pk_cols:
+            return pk_cols
+
+        if unique_candidates:
+            return unique_candidates[0]
     except Exception:
         pass
     return []
@@ -3663,6 +3674,20 @@ def _jsonable(v):
         except Exception:
             return None
     return v
+
+def _supabase_deduplicate_rows(rows: list[dict], conflict_cols: list[str]) -> list[dict]:
+    rows = [dict(r or {}) for r in (rows or []) if isinstance(r, dict) and r]
+    keys = [str(c or '').strip() for c in (conflict_cols or []) if str(c or '').strip()]
+    if not rows or not keys:
+        return rows
+    out = []
+    seen = {}
+    for row in rows:
+        key = tuple(str(row.get(c, '')) for c in keys)
+        seen[key] = row
+    out.extend(seen.values())
+    return out
+
 
 def _set_supabase_error(msg: str = "") -> None:
     global _SUPABASE_LAST_ERROR
@@ -4066,6 +4091,7 @@ def _supabase_fetch_table_rows(table: str, page_size: int = 1000) -> list[dict]:
 def _supabase_upsert_rows(table: str, rows: list[dict], conflict_cols: list[str]) -> None:
     if not SUPABASE_SYNC_ENABLED or not rows:
         return
+    rows = _supabase_deduplicate_rows(rows, conflict_cols)
     batch_size = 500
     for i in range(0, len(rows), batch_size):
         base_batch = rows[i:i+batch_size]
@@ -4215,7 +4241,23 @@ def _supabase_push_all_from_sqlite(force: bool = False) -> bool:
                     item = {}
                     for c, v in zip(cols, row):
                         item[c] = _jsonable(v)
-                    if str(table).strip().lower() == 'overrides':
+
+                    table_l = str(table).strip().lower()
+
+                    if table_l == 'colaboradores':
+                        item['setor'] = str(item.get('setor') or '').strip().upper()
+                        item['chapa'] = str(item.get('chapa') or '').strip()
+                        item['nome'] = str(item.get('nome') or '').strip()
+                        item['subgrupo'] = str(item.get('subgrupo') or '').strip()
+                        item['entrada'] = str(item.get('entrada') or '06:00').strip() or '06:00'
+                        try:
+                            item['folga_sab'] = int(item.get('folga_sab', 0) or 0)
+                        except Exception:
+                            item['folga_sab'] = 0
+                        if not item['setor'] or not item['chapa'] or not item['nome']:
+                            continue
+
+                    if table_l == 'overrides':
                         campo_n = _norm_override_campo(item.get('campo', ''))
                         valor_n = str(item.get('valor') or '').strip()
                         if not campo_n or not valor_n:
@@ -4224,8 +4266,20 @@ def _supabase_push_all_from_sqlite(force: bool = False) -> bool:
                         item['valor'] = valor_n
                         item['setor'] = str(item.get('setor') or '').strip().upper()
                         item['chapa'] = str(item.get('chapa') or '').strip()
+                        if not item['setor'] or not item['chapa']:
+                            continue
+
                     payload.append(item)
+
                 conflict = _sqlite_conflict_cols(conn, table)
+
+                # Blindagem extra para tabelas com chave natural conhecida no Supabase.
+                if str(table).strip().lower() == 'colaboradores':
+                    conflict = ['setor', 'chapa']
+                elif str(table).strip().lower() == 'overrides':
+                    conflict = ['setor', 'ano', 'mes', 'chapa', 'dia', 'campo']
+
+                payload = _supabase_deduplicate_rows(payload, conflict)
                 # tabela vazia local: não apaga remoto automaticamente
                 if payload:
                     _supabase_upsert_rows(table, payload, conflict)
