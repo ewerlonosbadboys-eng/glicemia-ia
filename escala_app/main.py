@@ -3443,6 +3443,22 @@ def _supabase_extract_table_hint(message: str) -> str:
     return str(m.group(1) or "").strip() if m else ""
 
 
+def _supabase_hint_matches_local(local_table: str, hinted_table: str) -> bool:
+    local_n = str(local_table or "").strip().lower()
+    hinted_n = str(hinted_table or "").strip().lower()
+    if not local_n or not hinted_n:
+        return False
+    if local_n == hinted_n:
+        return True
+    if hinted_n.endswith("_" + local_n):
+        return True
+    if local_n.endswith("_" + hinted_n):
+        return True
+    base_local = local_n.replace("escala_", "").replace("app_", "").replace("tb_", "").replace("tbl_", "")
+    base_hint = hinted_n.replace("escala_", "").replace("app_", "").replace("tb_", "").replace("tbl_", "")
+    return bool(base_local and base_hint and base_local == base_hint)
+
+
 def _supabase_extract_missing_column(message: str) -> str:
     s = str(message or "")
     m = re.search(r"Could not find the '([A-Za-z0-9_]+)' column", s)
@@ -3524,7 +3540,7 @@ def _supabase_resolve_remote_table(local_table: str, refresh: bool = False) -> s
                 resolved = candidate
                 break
             hint = _supabase_extract_table_hint(r.text)
-            if hint:
+            if hint and _supabase_hint_matches_local(local_table, hint):
                 resolved = hint
                 break
         except Exception:
@@ -4199,6 +4215,15 @@ def _supabase_push_all_from_sqlite(force: bool = False) -> bool:
                     item = {}
                     for c, v in zip(cols, row):
                         item[c] = _jsonable(v)
+                    if str(table).strip().lower() == 'overrides':
+                        campo_n = _norm_override_campo(item.get('campo', ''))
+                        valor_n = str(item.get('valor') or '').strip()
+                        if not campo_n or not valor_n:
+                            continue
+                        item['campo'] = campo_n
+                        item['valor'] = valor_n
+                        item['setor'] = str(item.get('setor') or '').strip().upper()
+                        item['chapa'] = str(item.get('chapa') or '').strip()
                     payload.append(item)
                 conflict = _sqlite_conflict_cols(conn, table)
                 # tabela vazia local: não apaga remoto automaticamente
