@@ -121,6 +121,19 @@ def commit_blindado(con):
         st.cache_data.clear()
     except Exception:
         pass
+    try:
+        fn = globals().get('_maybe_save_latest_stable_snapshot_fast')
+        if callable(fn):
+            fn("commit")
+    except Exception:
+        pass
+    try:
+        if bool(globals().get('SUPABASE_SYNC_ENABLED', False)) and bool(globals().get('SUPABASE_AUTO_PUSH_ON_COMMIT', False)):
+            fn = globals().get('_supabase_request_push_async') or globals().get('_supabase_push_all_from_sqlite')
+            if callable(fn):
+                fn(force=False)
+    except Exception:
+        pass
 
 
 # ===== V121 AUDITORIA ADMIN DETALHADA =====
@@ -3722,6 +3735,181 @@ def _supabase_remote_has_meaningful_data() -> bool:
     if users_cnt is not None and users_cnt > 1:
         return True
     return False
+
+def _coerce_iso_ts(raw) -> float:
+    txt = str(raw or '').strip()
+    if not txt:
+        return 0.0
+    txt = txt.replace('Z', '+00:00')
+    try:
+        return datetime.fromisoformat(txt).timestamp()
+    except Exception:
+        pass
+    for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%d'):
+        try:
+            return datetime.strptime(txt[:len(fmt)], fmt).timestamp()
+        except Exception:
+            pass
+    return 0.0
+
+
+def _sqlite_latest_change_marker() -> float:
+    candidates = [
+        ('retificacoes_competencia', 'criado_em'),
+        ('subgrupo_competencia', 'atualizado_em'),
+        ('colaborador_competencia_snapshot', 'atualizado_em'),
+        ('competencia_status', 'atualizado_em'),
+        ('auditoria_admin', 'criado_em'),
+        ('portal_informativos', 'atualizado_em'),
+        ('portal_informativos', 'criado_em'),
+        ('ferias', 'criado_em'),
+        ('ferias', 'atualizado_em'),
+        ('usuarios_sistema', 'atualizado_em'),
+        ('usuarios_sistema', 'criado_em'),
+    ]
+    best = 0.0
+    try:
+        conn = _app_db_connect(DB_PATH)
+        try:
+            existing = set(_sqlite_user_tables(conn))
+            for table, col in candidates:
+                if table not in existing:
+                    continue
+                cols = set(_sqlite_table_columns(conn, table))
+                if col not in cols:
+                    continue
+                try:
+                    row = conn.execute(f'SELECT MAX("{col}") FROM "{table}"').fetchone()
+                    best = max(best, _coerce_iso_ts(row[0] if row else ''))
+                except Exception:
+                    continue
+        finally:
+            conn.close()
+    except Exception:
+        return 0.0
+    return best
+
+
+def _supabase_latest_change_marker() -> float:
+    if not SUPABASE_SYNC_ENABLED:
+        return 0.0
+    candidates = [
+        ('retificacoes_competencia', 'criado_em'),
+        ('subgrupo_competencia', 'atualizado_em'),
+        ('colaborador_competencia_snapshot', 'atualizado_em'),
+        ('competencia_status', 'atualizado_em'),
+        ('auditoria_admin', 'criado_em'),
+        ('portal_informativos', 'atualizado_em'),
+        ('portal_informativos', 'criado_em'),
+        ('ferias', 'criado_em'),
+        ('ferias', 'atualizado_em'),
+        ('usuarios_sistema', 'atualizado_em'),
+        ('usuarios_sistema', 'criado_em'),
+    ]
+    best = 0.0
+    try:
+        conn = _app_db_connect(DB_PATH)
+        try:
+            local_tables = set(_sqlite_user_tables(conn))
+            for table, col in candidates:
+                if table not in local_tables:
+                    continue
+                cols = set(_sqlite_table_columns(conn, table))
+                if col not in cols or not _table_exists_in_supabase(table):
+                    continue
+                try:
+                    r = requests.get(
+                        _supabase_table_url(_supabase_resolve_remote_table(table)),
+                        params={'select': col, 'order': f'{col}.desc', 'limit': 1},
+                        headers=_supabase_headers(),
+                        timeout=20,
+                    )
+                    if r.status_code >= 400:
+                        continue
+                    data = r.json() or []
+                    if data:
+                        best = max(best, _coerce_iso_ts((data[0] or {}).get(col)))
+                except Exception:
+                    continue
+        finally:
+            conn.close()
+    except Exception:
+        return 0.0
+    return best
+
+
+def _sync_supabase_primary_on_start(force: bool = False) -> dict:
+    """
+    Estratégia de boot:
+    - se local estiver vazio e remoto tiver dados, puxa do Supabase;
+    - se remoto estiver vazio e local tiver dados, envia para o Supabase;
+    - se ambos tiverem dados, compara marcador de alteração e mantém o mais novo.
+    """
+    result = {
+        'executado': False,
+        'acao': 'nenhuma',
+        'local_has': False,
+        'remote_has': False,
+        'local_marker': 0.0,
+        'remote_marker': 0.0,
+        'ok': False,
+    }
+    try:
+        if not SUPABASE_SYNC_ENABLED:
+            return result
+        if (not force) and st.session_state.get('_supabase_primary_boot_sync_done'):
+            return result
+        result['executado'] = True
+        local_has = bool(_sqlite_app_has_meaningful_data())
+        remote_has = bool(_supabase_remote_has_meaningful_data())
+        result['local_has'] = local_has
+        result['remote_has'] = remote_has
+
+        if remote_has and not local_has:
+            ok = _supabase_pull_all_to_sqlite(force=True)
+            result['acao'] = 'pull_remoto_para_local'
+            result['ok'] = bool(ok)
+        elif local_has and not remote_has:
+            ok = _supabase_push_all_from_sqlite(force=True)
+            result['acao'] = 'push_local_para_remoto'
+            result['ok'] = bool(ok)
+        elif local_has and remote_has:
+            local_marker = _sqlite_latest_change_marker()
+            remote_marker = _supabase_latest_change_marker()
+            result['local_marker'] = float(local_marker or 0.0)
+            result['remote_marker'] = float(remote_marker or 0.0)
+            drift = float(remote_marker or 0.0) - float(local_marker or 0.0)
+            if remote_marker > 0 and drift > 5.0:
+                ok = _supabase_pull_all_to_sqlite(force=True)
+                result['acao'] = 'pull_remoto_mais_novo'
+                result['ok'] = bool(ok)
+            elif local_marker > 0 and drift < -5.0:
+                ok = _supabase_push_all_from_sqlite(force=True)
+                result['acao'] = 'push_local_mais_novo'
+                result['ok'] = bool(ok)
+            else:
+                result['acao'] = 'sincronizado_sem_acao'
+                result['ok'] = True
+                try:
+                    _save_latest_stable_snapshot_safely()
+                except Exception:
+                    pass
+        else:
+            result['acao'] = 'sem_dados'
+            result['ok'] = True
+
+        st.session_state['_supabase_primary_boot_sync_done'] = True
+        return result
+    except Exception as e:
+        _set_supabase_error(e)
+        result['acao'] = 'erro'
+        result['ok'] = False
+        try:
+            result['erro'] = str(e)
+        except Exception:
+            pass
+        return result
+
 
 def _rotate_backup_files_safely() -> None:
     try:
@@ -21399,8 +21587,9 @@ def _restore_automatico_se_banco_vazio() -> bool:
     """
     Boot blindado:
     1) se o banco atual já tem dados reais, mantém exatamente ele;
-    2) se estiver vazio/inválido, tenta restaurar automaticamente do melhor latest_stable disponível;
-    3) espelha o banco restaurado para BACKUP_DIR/latest_stable.db.
+    2) se estiver vazio/inválido, tenta restaurar primeiro do Supabase quando habilitado;
+    3) se não conseguir, usa latest_stable local/empacotado;
+    4) espelha o banco restaurado para BACKUP_DIR/latest_stable.db.
     """
     try:
         _ensure_backup_dir()
@@ -21411,6 +21600,19 @@ def _restore_automatico_se_banco_vazio() -> bool:
             return False
 
         print("⚠️ Banco vazio, ausente ou sem dados reais. Tentando restore automático...")
+
+        try:
+            if SUPABASE_SYNC_ENABLED and SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY and _supabase_remote_has_meaningful_data():
+                ok_sb = _supabase_pull_all_to_sqlite(force=True)
+                if ok_sb and _db_tem_dados_reais(current):
+                    print("✅ Restore automático concluído a partir do Supabase.")
+                    try:
+                        _save_latest_stable_snapshot_safely()
+                    except Exception:
+                        pass
+                    return True
+        except Exception as e:
+            print(f"Erro ao tentar restore automático do Supabase: {e}")
 
         candidatos = []
 
@@ -21659,6 +21861,11 @@ def auto_congelar_competencia_anterior() -> dict:
 # MAIN
 # =========================================================
 _restore_automatico_se_banco_vazio()
+try:
+    if SUPABASE_SYNC_ENABLED and SUPABASE_AUTO_PULL_ON_START:
+        _sync_supabase_primary_on_start(force=False)
+except Exception:
+    pass
 validar_contrato_sistema()
 
 if st.session_state["auth"] is None and QUICK_LOGIN_BOOT:
