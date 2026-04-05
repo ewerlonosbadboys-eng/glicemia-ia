@@ -22094,3 +22094,95 @@ v97_boot_sync()
 v97_monitor_sync()
 
 # ======================================================
+
+
+
+
+# ================= V98 SYNC TOTAL AUTOMÁTICO =================
+
+TABELAS_SYNC_COMPLETO = [
+    "colaboradores",
+    "escala_colaboradores",
+    "retificacoes_competencia",
+    "subgrupo_competencia",
+    "assinaturas_retificacao",
+    "auditoria_admin",
+    "colaborador_competencia_snapshot",
+    "competencia_status"
+]
+
+def v98_sync_full_push():
+    try:
+        if not globals().get("SUPABASE_SYNC_ENABLED", False):
+            return
+
+        fn = globals().get("_supabase_push_table_safe")
+        if not callable(fn):
+            return
+
+        for tabela in TABELAS_SYNC_COMPLETO:
+            try:
+                fn(tabela)
+            except Exception:
+                pass
+
+        from datetime import datetime
+        st.session_state["ultimo_push"] = datetime.now().isoformat()
+
+    except Exception:
+        pass
+
+
+def v98_sync_full_pull():
+    try:
+        if not globals().get("SUPABASE_SYNC_ENABLED", False):
+            return
+
+        fn = globals().get("_supabase_pull_table_safe")
+        if not callable(fn):
+            return
+
+        for tabela in TABELAS_SYNC_COMPLETO:
+            try:
+                fn(tabela)
+            except Exception:
+                pass
+
+        from datetime import datetime
+        st.session_state["ultimo_pull"] = datetime.now().isoformat()
+
+    except Exception:
+        pass
+
+
+def v98_auto_sync_boot():
+    try:
+        v98_sync_full_pull()
+    except:
+        pass
+
+
+# Hook automático no commit
+def v98_hook_commit():
+    try:
+        v98_sync_full_push()
+    except:
+        pass
+
+# Integra no commit existente
+_old_commit = globals().get("commit_blindado")
+
+def commit_blindado_v98(con):
+    try:
+        if callable(_old_commit):
+            _old_commit(con)
+    except:
+        pass
+    v98_hook_commit()
+
+globals()["commit_blindado"] = commit_blindado_v98
+
+# Executa no boot
+v98_auto_sync_boot()
+
+# ============================================================
