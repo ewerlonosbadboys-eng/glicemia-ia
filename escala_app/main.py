@@ -22186,3 +22186,157 @@ globals()["commit_blindado"] = commit_blindado_v98
 v98_auto_sync_boot()
 
 # ============================================================
+
+
+
+# ================= V98.1 CORRIGINDO DATA =================
+def _v98_1_norm_int(v, default=1):
+    try:
+        return int(v)
+    except Exception:
+        return int(default)
+
+def garantir_coluna_data_df(df, ano=None, mes=None, col_dia='dia', col_data='data'):
+    try:
+        import pandas as _pd
+        from datetime import date as _date
+        if df is None:
+            return df
+        if not isinstance(df, _pd.DataFrame):
+            try:
+                df = _pd.DataFrame(df)
+            except Exception:
+                return df
+        if df.empty:
+            if col_data not in df.columns:
+                df[col_data] = []
+            return df
+
+        cols_lower = {str(c).strip().lower(): c for c in df.columns}
+        real_dia = cols_lower.get(str(col_dia).lower(), col_dia)
+        real_data = cols_lower.get(str(col_data).lower(), col_data)
+
+        if real_data not in df.columns:
+            df[real_data] = None
+
+        ano_base = _v98_1_norm_int(ano, datetime.now().year)
+        mes_base = _v98_1_norm_int(mes, datetime.now().month)
+
+        def _monta_data(row):
+            atual = row.get(real_data, None)
+            if atual is not None and str(atual).strip() not in ("", "None", "nan", "NaT"):
+                return str(atual)
+
+            dia_val = row.get(real_dia, None)
+            try:
+                dia_int = int(dia_val)
+                return _date(ano_base, mes_base, dia_int).isoformat()
+            except Exception:
+                return None
+
+        df[real_data] = df.apply(_monta_data, axis=1)
+
+        if real_data in df.columns and real_dia in df.columns:
+            faltantes = df[real_data].isna() | (df[real_data].astype(str).str.strip() == "")
+            if bool(faltantes.any()):
+                try:
+                    dias = df.loc[faltantes, real_dia].astype(int)
+                    df.loc[faltantes, real_data] = [
+                        _date(ano_base, mes_base, int(d)).isoformat() for d in dias.tolist()
+                    ]
+                except Exception:
+                    pass
+        return df
+    except Exception:
+        return df
+
+def _v98_1_infer_ano_mes_do_df(df):
+    try:
+        ano = None
+        mes = None
+        if hasattr(df, "columns"):
+            cols_lower = {str(c).strip().lower(): c for c in df.columns}
+            for nome in ("ano", "competencia_ano"):
+                c = cols_lower.get(nome)
+                if c is not None and len(df):
+                    vals = [v for v in df[c].tolist() if str(v).strip() not in ("", "None", "nan")]
+                    if vals:
+                        ano = int(vals[0])
+                        break
+            for nome in ("mes", "competencia_mes"):
+                c = cols_lower.get(nome)
+                if c is not None and len(df):
+                    vals = [v for v in df[c].tolist() if str(v).strip() not in ("", "None", "nan")]
+                    if vals:
+                        mes = int(vals[0])
+                        break
+        if ano is None:
+            ano = datetime.now().year
+        if mes is None:
+            mes = datetime.now().month
+        return int(ano), int(mes)
+    except Exception:
+        return datetime.now().year, datetime.now().month
+
+def _v98_1_preparar_payload_tabela(nome_tabela, payload):
+    try:
+        if str(nome_tabela).strip().lower() != "escala_mes":
+            return payload
+
+        import pandas as _pd
+
+        if isinstance(payload, _pd.DataFrame):
+            ano, mes = _v98_1_infer_ano_mes_do_df(payload)
+            return garantir_coluna_data_df(payload.copy(), ano=ano, mes=mes, col_dia='dia', col_data='data')
+
+        if isinstance(payload, list) and payload and isinstance(payload[0], dict):
+            df = _pd.DataFrame(payload)
+            ano, mes = _v98_1_infer_ano_mes_do_df(df)
+            df = garantir_coluna_data_df(df, ano=ano, mes=mes, col_dia='dia', col_data='data')
+            return df.to_dict(orient="records")
+
+        if isinstance(payload, dict):
+            ano = _v98_1_norm_int(payload.get("ano") or payload.get("competencia_ano"), datetime.now().year)
+            mes = _v98_1_norm_int(payload.get("mes") or payload.get("competencia_mes"), datetime.now().month)
+            dia = payload.get("dia")
+            data_atual = payload.get("data")
+            if (data_atual is None or str(data_atual).strip() == "") and dia not in (None, ""):
+                try:
+                    from datetime import date as _date
+                    payload = dict(payload)
+                    payload["data"] = _date(int(ano), int(mes), int(dia)).isoformat()
+                except Exception:
+                    pass
+            return payload
+
+        return payload
+    except Exception:
+        return payload
+
+_old_v98_push_table_safe = globals().get("_supabase_push_table_safe")
+def _supabase_push_table_safe_v98_1(nome_tabela, payload=None, *args, **kwargs):
+    try:
+        payload = _v98_1_preparar_payload_tabela(nome_tabela, payload)
+    except Exception:
+        pass
+    if callable(_old_v98_push_table_safe):
+        return _old_v98_push_table_safe(nome_tabela, payload, *args, **kwargs)
+    return None
+
+globals()["_supabase_push_table_safe"] = _supabase_push_table_safe_v98_1
+
+_old_v98_sync_full_push = globals().get("v98_sync_full_push")
+def v98_sync_full_push():
+    try:
+        if callable(_old_v98_sync_full_push):
+            return _old_v98_sync_full_push()
+    except Exception:
+        pass
+    try:
+        st.session_state["ultimo_push"] = datetime.now().isoformat()
+    except Exception:
+        pass
+
+globals()["v98_sync_full_push"] = v98_sync_full_push
+
+# =========================================================
