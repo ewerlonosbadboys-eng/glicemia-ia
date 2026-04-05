@@ -22037,3 +22037,60 @@ def garantir_restauracao_escala(setor, ano, mes):
 # >>> IMPORTANTE: CHAMAR ISSO ANTES DE RENDERIZAR QUALQUER TELA DE ESCALA
 # garantir_restauracao_escala(auth_setor, ano, mes)
 # ================================================================
+
+
+
+
+# ================= V97 ULTRA BLINDADA =================
+
+def v97_boot_sync():
+    try:
+        auth = st.session_state.get("auth", {})
+        setor = auth.get("setor")
+        if not setor:
+            return
+
+        from datetime import datetime
+        ano = datetime.now().year
+        mes = datetime.now().month
+
+        try:
+            dados = get_hist_mes_com_overrides_cached(setor, ano, mes)
+        except:
+            dados = None
+
+        if dados and any(not df.empty for df in dados.values()):
+            return
+
+        if globals().get("SUPABASE_SYNC_ENABLED", False):
+            try:
+                fn = globals().get("_supabase_pull_all_to_sqlite")
+                if callable(fn):
+                    fn()
+                    st.session_state["ultimo_pull"] = datetime.now().isoformat()
+            except Exception:
+                pass
+
+        try:
+            get_hist_mes_com_overrides_cached.clear()
+        except:
+            pass
+
+    except Exception:
+        pass
+
+
+def v97_monitor_sync():
+    try:
+        st.sidebar.markdown("### 🔒 Status Sync V97")
+        st.sidebar.write("Último push:", st.session_state.get("ultimo_push", "—"))
+        st.sidebar.write("Último pull:", st.session_state.get("ultimo_pull", "—"))
+    except:
+        pass
+
+
+# Executa automaticamente no boot
+v97_boot_sync()
+v97_monitor_sync()
+
+# ======================================================
