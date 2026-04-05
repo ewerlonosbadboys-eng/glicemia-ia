@@ -12105,6 +12105,36 @@ def save_escala_mes_db(setor: str, ano: int, mes: int, historico_df_por_chapa: d
     except Exception:
         pass
 
+def _try_refresh_escala_mes_from_remote_once(setor: str, ano: int, mes: int) -> bool:
+    """Tenta repovoar escala_mes local quando o app reinicia/sleep e a tabela local veio vazia.
+    Não força regeneração; só tenta sincronizar/restaurar o que já existia.
+    """
+    try:
+        if not bool(globals().get("SUPABASE_SYNC_ENABLED", False)):
+            return False
+
+        fn_pull = globals().get('_supabase_pull_all_to_sqlite') or globals().get('_supabase_request_pull_async')
+        if callable(fn_pull):
+            try:
+                fn_pull(force=True)
+            except TypeError:
+                fn_pull()
+
+        con = db_conn()
+        try:
+            cur = con.cursor()
+            cur.execute(
+                "SELECT 1 FROM escala_mes WHERE setor=? AND ano=? AND mes=? LIMIT 1",
+                (setor, int(ano), int(mes)),
+            )
+            row = cur.fetchone()
+            return bool(row)
+        finally:
+            con.close()
+    except Exception:
+        return False
+
+
 @st.cache_data(show_spinner=False, ttl=120)
 def load_escala_mes_db(setor: str, ano: int, mes: int):
     con = db_conn()
@@ -12117,6 +12147,22 @@ def load_escala_mes_db(setor: str, ano: int, mes: int):
     """, (setor, int(ano), int(mes)))
     rows = cur.fetchall()
     con.close()
+    if not rows:
+        try:
+            refreshed = _try_refresh_escala_mes_from_remote_once(setor, int(ano), int(mes))
+        except Exception:
+            refreshed = False
+        if refreshed:
+            con = db_conn()
+            cur = con.cursor()
+            cur.execute("""
+                SELECT chapa, data, dia_sem, status, h_entrada, h_saida
+                FROM escala_mes
+                WHERE setor=? AND ano=? AND mes=?
+                ORDER BY chapa, date(data) ASC
+            """, (setor, int(ano), int(mes)))
+            rows = cur.fetchall()
+            con.close()
     if not rows:
         return {}
     hist = {}
@@ -18818,7 +18864,7 @@ def page_app():
                 st.session_state["last_seed"] = int(seed)
                 ok = _regenerar_mes_inteiro(setor, int(ano), int(mes), seed=int(seed), respeitar_ajustes=True)
                 if ok:
-                    st.success("Escala gerada (ajustes/travas preservados)!")
+                    st.success("Escala gerada, salva no banco e pronta para voltar após reboot/sleep (ajustes/travas preservados)!")
                 else:
                     st.warning("Sem colaboradores.")
                 st.rerun()
@@ -18844,7 +18890,7 @@ def page_app():
                     st.session_state["last_seed"] = int(seed)
                     ok = _regenerar_mes_inteiro(setor, int(ano), int(mes), seed=int(seed), respeitar_ajustes=False)
                     if ok:
-                        st.success("Escala gerada do zero (ajustes ignorados)!")
+                        st.success("Escala gerada do zero, salva no banco e pronta para voltar após reboot/sleep (ajustes ignorados)!")
                     else:
                         st.warning("Sem colaboradores.")
                     st.rerun()
@@ -18949,7 +18995,7 @@ def page_app():
                     colab_by = {c["Chapa"]: c for c in colaboradores}
 
                 if not hist_db:
-                    st.info("Gere a escala primeiro na aba 🚀 Gerar Escala.")
+                    st.warning("Não encontrei a escala salva localmente nesta competência. O app tentou restaurar do banco remoto automaticamente; se mesmo assim continuar vazio, use 🔄 Recarregar do banco ou gere novamente apenas se esta competência realmente nunca foi gerada.")
                     return
 
                 if sec_aj == "🧩 Folgas manuais em grade":
