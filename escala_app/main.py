@@ -22010,3 +22010,30 @@ else:
         page_login()
     else:
         page_app()
+
+
+
+
+# ================== V96 BLINDADA AUTO RESTORE ==================
+def garantir_restauracao_escala(setor, ano, mes):
+    try:
+        dados = get_hist_mes_com_overrides_cached(setor, ano, mes)
+        if dados and any(not df.empty for df in dados.values()):
+            return
+
+        if SUPABASE_SYNC_ENABLED:
+            try:
+                _supabase_pull_all_to_sqlite()
+            except Exception:
+                pass
+
+        try:
+            get_hist_mes_com_overrides_cached.clear()
+        except:
+            pass
+    except Exception:
+        pass
+
+# >>> IMPORTANTE: CHAMAR ISSO ANTES DE RENDERIZAR QUALQUER TELA DE ESCALA
+# garantir_restauracao_escala(auth_setor, ano, mes)
+# ================================================================
