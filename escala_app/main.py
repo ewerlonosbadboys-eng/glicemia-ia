@@ -14526,126 +14526,114 @@ def page_login():
                     except Exception as e:
                         st.error(f"Falha ao redefinir senha: {e}")
 
+def _montar_colaboradores_base_geracao(setor: str, ano: int, mes: int) -> list[dict]:
+    """
+    Base oficial da geração da competência.
+
+    Regra preservada:
+    1) parte do cadastro atual do setor
+    2) se a competência anterior estiver FECHADA, usa o snapshot congelado dela
+       como base de Subgrupo/Entrada/Folga_Sab
+    3) se já existir ajuste do mês alvo (subgrupo_competencia do próprio mês),
+       ele sobrepõe a base anterior
+
+    Isso evita que o mês novo "nasça do zero" ignorando a escala congelada do mês anterior.
+    """
+    base_atual = [_clone_colaborador_base(c) for c in (load_colaboradores_setor(setor) or [])]
+    if not base_atual:
+        return []
+
+    mapa = {str(c.get('Chapa') or '').strip(): c for c in base_atual if str(c.get('Chapa') or '').strip()}
+    ano_ant, mes_ant = _competencia_anterior(int(ano), int(mes))
+
+    if competencia_fechada(setor, int(ano_ant), int(mes_ant)):
+        for ch, item in list(mapa.items()):
+            try:
+                snap_ant = get_colaborador_competencia_snapshot(setor, ch, int(ano_ant), int(mes_ant))
+            except Exception:
+                snap_ant = None
+            if not snap_ant:
+                continue
+            item['Nome'] = str(snap_ant.get('Nome') or item.get('Nome') or '').strip()
+            item['Subgrupo'] = str(snap_ant.get('Subgrupo') or item.get('Subgrupo') or '').strip() or 'SEM SUBGRUPO'
+            item['Entrada'] = str(snap_ant.get('Entrada') or item.get('Entrada') or '').strip() or '06:00'
+            item['Folga_Sab'] = bool(snap_ant.get('Folga_Sab', item.get('Folga_Sab', False)))
+
+    for ch, item in list(mapa.items()):
+        try:
+            item['Subgrupo'] = get_subgrupo_competencia_ou_base(
+                setor,
+                ch,
+                int(ano),
+                int(mes),
+                item.get('Subgrupo', '')
+            )
+        except Exception:
+            pass
+
+    return list(mapa.values())
+
+
+def _build_df_ref_prev_competencia(setor: str, ano: int, mes: int):
+    """
+    Monta referência do mês anterior usando a leitura oficial do histórico,
+    já com overrides, retificações e subgrupo da competência aplicados.
+    """
+    try:
+        ano_prev = int(ano)
+        mes_prev = int(mes) - 1
+        if mes_prev <= 0:
+            mes_prev = 12
+            ano_prev -= 1
+
+        prev_obj = get_hist_mes_com_overrides_cached(setor, int(ano_prev), int(mes_prev))
+        if not isinstance(prev_obj, dict) or not prev_obj:
+            return None
+
+        parts = []
+        for ch_prev, dfp in prev_obj.items():
+            if dfp is None or getattr(dfp, 'empty', True):
+                continue
+            dfx = dfp.copy()
+            if 'Data' not in dfx.columns:
+                for c in ('data', 'dia', 'DataDia'):
+                    if c in dfx.columns:
+                        dfx['Data'] = dfx[c]
+                        break
+            if 'Status' not in dfx.columns:
+                for c in ('status', 'STATUS'):
+                    if c in dfx.columns:
+                        dfx['Status'] = dfx[c]
+                        break
+            dfx['Chapa'] = str(ch_prev)
+            if {'Data', 'Chapa', 'Status'}.issubset(set(dfx.columns)):
+                parts.append(dfx[['Data', 'Chapa', 'Status']].copy())
+
+        if parts:
+            return pd.concat(parts, ignore_index=True)
+    except Exception:
+        return None
+    return None
+
+
 def _regenerar_mes_inteiro(setor: str, ano: int, mes: int, seed: int = 0, respeitar_ajustes: bool = True):
     """
     Regera a escala do mês inteiro para TODO o setor.
 
     ✅ Garantias:
     - Se respeitar_ajustes=True, TODAS as folgas/alterações manuais (overrides) são reaplicadas
-      no final e gravadas novamente no banco (escala_mes). Isso evita “sumir” folga manual ao gerar.
+      no final e gravadas novamente no banco (escala_mes).
+    - A base do mês novo passa a usar a competência anterior congelada quando existir,
+      preservando o desenho oficial e as retificações já consolidadas.
     """
-    colaboradores = load_colaboradores_setor(setor)
+    colaboradores = _montar_colaboradores_base_geracao(setor, int(ano), int(mes))
     if not colaboradores:
         return False
 
     random.seed(int(seed))
-    # ===== CONTEXTO SEMANA CONTÍNUA (mês anterior) =====
-    df_ref = None
-    try:
-        ano_prev = int(ano)
-        mes_prev = int(mes) - 1
-        if mes_prev <= 0:
-            mes_prev = 12
-            ano_prev -= 1
 
-        prev_obj = load_escala_mes_db(setor, ano_prev, mes_prev) if "load_escala_mes_db" in globals() else None
-
-        # load_escala_mes_db retorna dict[chapa] -> DataFrame
-        if isinstance(prev_obj, dict) and prev_obj:
-            parts = []
-            for ch, dfp in prev_obj.items():
-                if dfp is None or getattr(dfp, "empty", True):
-                    continue
-                dfx = dfp.copy()
-                dfx["Chapa"] = str(ch)
-                # garante colunas
-                if "Data" not in dfx.columns and "data" in dfx.columns:
-                    dfx["Data"] = dfx["data"]
-                if "Status" not in dfx.columns and "status" in dfx.columns:
-                    dfx["Status"] = dfx["status"]
-                parts.append(dfx[["Data", "Chapa", "Status"]].copy())
-            if parts:
-                df_ref = pd.concat(parts, ignore_index=True)
-
-        # Caso antigo: se algum dia retornar DataFrame único
-        elif isinstance(prev_obj, pd.DataFrame) and (not prev_obj.empty):
-            prev = prev_obj.copy()
-            if "Data" not in prev.columns:
-                for c in ("data", "dia", "DataDia"):
-                    if c in prev.columns:
-                        prev["Data"] = prev[c]
-                        break
-            if "Chapa" not in prev.columns:
-                for c in ("chapa", "CHAPA"):
-                    if c in prev.columns:
-                        prev["Chapa"] = prev[c]
-                        break
-            if "Status" not in prev.columns:
-                for c in ("status", "STATUS"):
-                    if c in prev.columns:
-                        prev["Status"] = prev[c]
-                        break
-            df_ref = prev[["Data", "Chapa", "Status"]].copy()
-
-    except Exception:
-        df_ref = None
-    # ===== df_ref_prev (mês anterior) para semana contínua SEG->DOM =====
-    df_ref_prev = None
-    try:
-        ano_prev = int(ano)
-        mes_prev = int(mes) - 1
-        if mes_prev <= 0:
-            mes_prev = 12
-            ano_prev -= 1
-
-        prev_obj = load_escala_mes_db(setor, ano_prev, mes_prev) if "load_escala_mes_db" in globals() else None
-
-        # load_escala_mes_db normalmente retorna dict[chapa] -> DataFrame
-        if isinstance(prev_obj, dict) and prev_obj:
-            parts = []
-            for ch_prev, dfp in prev_obj.items():
-                if dfp is None or getattr(dfp, "empty", True):
-                    continue
-                dfx = dfp.copy()
-                # garante colunas Data/Status
-                if "Data" not in dfx.columns:
-                    for c in ("data","dia","DataDia"):
-                        if c in dfx.columns:
-                            dfx["Data"] = dfx[c]
-                            break
-                if "Status" not in dfx.columns:
-                    for c in ("status","STATUS"):
-                        if c in dfx.columns:
-                            dfx["Status"] = dfx[c]
-                            break
-                dfx["Chapa"] = str(ch_prev)
-                if "Data" in dfx.columns and "Status" in dfx.columns:
-                    parts.append(dfx[["Data","Chapa","Status"]].copy())
-            if parts:
-                df_ref_prev = pd.concat(parts, ignore_index=True)
-
-        elif isinstance(prev_obj, pd.DataFrame) and (not prev_obj.empty):
-            dfx = prev_obj.copy()
-            if "Data" not in dfx.columns:
-                for c in ("data","dia","DataDia"):
-                    if c in dfx.columns:
-                        dfx["Data"] = dfx[c]
-                        break
-            if "Chapa" not in dfx.columns:
-                for c in ("chapa","CHAPA"):
-                    if c in dfx.columns:
-                        dfx["Chapa"] = dfx[c]
-                        break
-            if "Status" not in dfx.columns:
-                for c in ("status","STATUS"):
-                    if c in dfx.columns:
-                        dfx["Status"] = dfx[c]
-                        break
-            if {"Data","Chapa","Status"}.issubset(set(dfx.columns)):
-                df_ref_prev = dfx[["Data","Chapa","Status"]].copy()
-    except Exception:
-        df_ref_prev = None
-
+    # Referência oficial do mês anterior para continuidade semanal/visual.
+    df_ref_prev = _build_df_ref_prev_competencia(setor, int(ano), int(mes))
 
     hist, estado_out = gerar_escala_setor_por_subgrupo(
         setor, colaboradores, int(ano), int(mes),
@@ -14653,11 +14641,9 @@ def _regenerar_mes_inteiro(setor: str, ano: int, mes: int, seed: int = 0, respei
         df_ref_prev=df_ref_prev
     )
 
-    # 1) grava a geração
     save_escala_mes_db(setor, int(ano), int(mes), hist)
     save_estado_mes(setor, int(ano), int(mes), estado_out)
 
-    # 2) “pós-fix”: reaplica overrides do banco e grava de novo
     if bool(respeitar_ajustes):
         hist_db = load_escala_mes_db(setor, int(ano), int(mes))
         hist_db = apply_overrides_to_hist(setor, int(ano), int(mes), hist_db)
