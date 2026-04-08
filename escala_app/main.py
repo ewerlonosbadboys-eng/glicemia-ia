@@ -121,6 +121,19 @@ def commit_blindado(con):
         st.cache_data.clear()
     except Exception:
         pass
+    try:
+        fn = globals().get('_maybe_save_latest_stable_snapshot_fast')
+        if callable(fn):
+            fn("commit")
+    except Exception:
+        pass
+    try:
+        if bool(globals().get('SUPABASE_SYNC_ENABLED', False)) and bool(globals().get('SUPABASE_AUTO_PUSH_ON_COMMIT', False)):
+            fn = globals().get('_supabase_request_push_async') or globals().get('_supabase_push_all_from_sqlite')
+            if callable(fn):
+                fn(force=False)
+    except Exception:
+        pass
 
 
 # ===== V121 AUDITORIA ADMIN DETALHADA =====
@@ -3430,6 +3443,22 @@ def _supabase_extract_table_hint(message: str) -> str:
     return str(m.group(1) or "").strip() if m else ""
 
 
+def _supabase_hint_matches_local(local_table: str, hinted_table: str) -> bool:
+    local_n = str(local_table or "").strip().lower()
+    hinted_n = str(hinted_table or "").strip().lower()
+    if not local_n or not hinted_n:
+        return False
+    if local_n == hinted_n:
+        return True
+    if hinted_n.endswith("_" + local_n):
+        return True
+    if local_n.endswith("_" + hinted_n):
+        return True
+    base_local = local_n.replace("escala_", "").replace("app_", "").replace("tb_", "").replace("tbl_", "")
+    base_hint = hinted_n.replace("escala_", "").replace("app_", "").replace("tb_", "").replace("tbl_", "")
+    return bool(base_local and base_hint and base_local == base_hint)
+
+
 def _supabase_extract_missing_column(message: str) -> str:
     s = str(message or "")
     m = re.search(r"Could not find the '([A-Za-z0-9_]+)' column", s)
@@ -3511,7 +3540,7 @@ def _supabase_resolve_remote_table(local_table: str, refresh: bool = False) -> s
                 resolved = candidate
                 break
             hint = _supabase_extract_table_hint(r.text)
-            if hint:
+            if hint and _supabase_hint_matches_local(local_table, hint):
                 resolved = hint
                 break
         except Exception:
@@ -3572,20 +3601,31 @@ def _sqlite_table_columns(conn, table: str) -> list[str]:
 
 def _sqlite_conflict_cols(conn, table: str) -> list[str]:
     try:
-        rows = conn.execute(f'PRAGMA table_info("{table}")').fetchall()
-        pk_cols = [str(r[1]) for r in rows if len(r) > 5 and int(r[5] or 0) > 0]
-        if pk_cols:
-            return pk_cols
         idx_rows = conn.execute(f'PRAGMA index_list("{table}")').fetchall()
+        unique_candidates = []
         for idx in idx_rows:
             is_unique = int(idx[2]) == 1 if len(idx) > 2 else False
             idx_name = str(idx[1]) if len(idx) > 1 else ''
             if not is_unique or not idx_name:
                 continue
             info = conn.execute(f'PRAGMA index_info("{idx_name}")').fetchall()
-            cols = [str(r[2]) for r in info if len(r) > 2]
+            cols = [str(r[2]) for r in info if len(r) > 2 and str(r[2] or '').strip()]
             if cols:
+                unique_candidates.append(cols)
+
+        # Prefere chave natural/composta (ex.: setor+chapa, setor+ano+mes+...)
+        # em vez do id autoincrement, para o UPSERT casar com a constraint correta do Supabase.
+        for cols in unique_candidates:
+            if not (len(cols) == 1 and str(cols[0]).strip().lower() == 'id'):
                 return cols
+
+        rows = conn.execute(f'PRAGMA table_info("{table}")').fetchall()
+        pk_cols = [str(r[1]) for r in rows if len(r) > 5 and int(r[5] or 0) > 0]
+        if pk_cols:
+            return pk_cols
+
+        if unique_candidates:
+            return unique_candidates[0]
     except Exception:
         pass
     return []
@@ -3634,6 +3674,20 @@ def _jsonable(v):
         except Exception:
             return None
     return v
+
+def _supabase_deduplicate_rows(rows: list[dict], conflict_cols: list[str]) -> list[dict]:
+    rows = [dict(r or {}) for r in (rows or []) if isinstance(r, dict) and r]
+    keys = [str(c or '').strip() for c in (conflict_cols or []) if str(c or '').strip()]
+    if not rows or not keys:
+        return rows
+    out = []
+    seen = {}
+    for row in rows:
+        key = tuple(str(row.get(c, '')) for c in keys)
+        seen[key] = row
+    out.extend(seen.values())
+    return out
+
 
 def _set_supabase_error(msg: str = "") -> None:
     global _SUPABASE_LAST_ERROR
@@ -3722,6 +3776,181 @@ def _supabase_remote_has_meaningful_data() -> bool:
     if users_cnt is not None and users_cnt > 1:
         return True
     return False
+
+def _coerce_iso_ts(raw) -> float:
+    txt = str(raw or '').strip()
+    if not txt:
+        return 0.0
+    txt = txt.replace('Z', '+00:00')
+    try:
+        return datetime.fromisoformat(txt).timestamp()
+    except Exception:
+        pass
+    for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%d'):
+        try:
+            return datetime.strptime(txt[:len(fmt)], fmt).timestamp()
+        except Exception:
+            pass
+    return 0.0
+
+
+def _sqlite_latest_change_marker() -> float:
+    candidates = [
+        ('retificacoes_competencia', 'criado_em'),
+        ('subgrupo_competencia', 'atualizado_em'),
+        ('colaborador_competencia_snapshot', 'atualizado_em'),
+        ('competencia_status', 'atualizado_em'),
+        ('auditoria_admin', 'criado_em'),
+        ('portal_informativos', 'atualizado_em'),
+        ('portal_informativos', 'criado_em'),
+        ('ferias', 'criado_em'),
+        ('ferias', 'atualizado_em'),
+        ('usuarios_sistema', 'atualizado_em'),
+        ('usuarios_sistema', 'criado_em'),
+    ]
+    best = 0.0
+    try:
+        conn = _app_db_connect(DB_PATH)
+        try:
+            existing = set(_sqlite_user_tables(conn))
+            for table, col in candidates:
+                if table not in existing:
+                    continue
+                cols = set(_sqlite_table_columns(conn, table))
+                if col not in cols:
+                    continue
+                try:
+                    row = conn.execute(f'SELECT MAX("{col}") FROM "{table}"').fetchone()
+                    best = max(best, _coerce_iso_ts(row[0] if row else ''))
+                except Exception:
+                    continue
+        finally:
+            conn.close()
+    except Exception:
+        return 0.0
+    return best
+
+
+def _supabase_latest_change_marker() -> float:
+    if not SUPABASE_SYNC_ENABLED:
+        return 0.0
+    candidates = [
+        ('retificacoes_competencia', 'criado_em'),
+        ('subgrupo_competencia', 'atualizado_em'),
+        ('colaborador_competencia_snapshot', 'atualizado_em'),
+        ('competencia_status', 'atualizado_em'),
+        ('auditoria_admin', 'criado_em'),
+        ('portal_informativos', 'atualizado_em'),
+        ('portal_informativos', 'criado_em'),
+        ('ferias', 'criado_em'),
+        ('ferias', 'atualizado_em'),
+        ('usuarios_sistema', 'atualizado_em'),
+        ('usuarios_sistema', 'criado_em'),
+    ]
+    best = 0.0
+    try:
+        conn = _app_db_connect(DB_PATH)
+        try:
+            local_tables = set(_sqlite_user_tables(conn))
+            for table, col in candidates:
+                if table not in local_tables:
+                    continue
+                cols = set(_sqlite_table_columns(conn, table))
+                if col not in cols or not _table_exists_in_supabase(table):
+                    continue
+                try:
+                    r = requests.get(
+                        _supabase_table_url(_supabase_resolve_remote_table(table)),
+                        params={'select': col, 'order': f'{col}.desc', 'limit': 1},
+                        headers=_supabase_headers(),
+                        timeout=20,
+                    )
+                    if r.status_code >= 400:
+                        continue
+                    data = r.json() or []
+                    if data:
+                        best = max(best, _coerce_iso_ts((data[0] or {}).get(col)))
+                except Exception:
+                    continue
+        finally:
+            conn.close()
+    except Exception:
+        return 0.0
+    return best
+
+
+def _sync_supabase_primary_on_start(force: bool = False) -> dict:
+    """
+    Estratégia de boot:
+    - se local estiver vazio e remoto tiver dados, puxa do Supabase;
+    - se remoto estiver vazio e local tiver dados, envia para o Supabase;
+    - se ambos tiverem dados, compara marcador de alteração e mantém o mais novo.
+    """
+    result = {
+        'executado': False,
+        'acao': 'nenhuma',
+        'local_has': False,
+        'remote_has': False,
+        'local_marker': 0.0,
+        'remote_marker': 0.0,
+        'ok': False,
+    }
+    try:
+        if not SUPABASE_SYNC_ENABLED:
+            return result
+        if (not force) and st.session_state.get('_supabase_primary_boot_sync_done'):
+            return result
+        result['executado'] = True
+        local_has = bool(_sqlite_app_has_meaningful_data())
+        remote_has = bool(_supabase_remote_has_meaningful_data())
+        result['local_has'] = local_has
+        result['remote_has'] = remote_has
+
+        if remote_has and not local_has:
+            ok = _supabase_pull_all_to_sqlite(force=True)
+            result['acao'] = 'pull_remoto_para_local'
+            result['ok'] = bool(ok)
+        elif local_has and not remote_has:
+            ok = _supabase_push_all_from_sqlite(force=True)
+            result['acao'] = 'push_local_para_remoto'
+            result['ok'] = bool(ok)
+        elif local_has and remote_has:
+            local_marker = _sqlite_latest_change_marker()
+            remote_marker = _supabase_latest_change_marker()
+            result['local_marker'] = float(local_marker or 0.0)
+            result['remote_marker'] = float(remote_marker or 0.0)
+            drift = float(remote_marker or 0.0) - float(local_marker or 0.0)
+            if remote_marker > 0 and drift > 5.0:
+                ok = _supabase_pull_all_to_sqlite(force=True)
+                result['acao'] = 'pull_remoto_mais_novo'
+                result['ok'] = bool(ok)
+            elif local_marker > 0 and drift < -5.0:
+                ok = _supabase_push_all_from_sqlite(force=True)
+                result['acao'] = 'push_local_mais_novo'
+                result['ok'] = bool(ok)
+            else:
+                result['acao'] = 'sincronizado_sem_acao'
+                result['ok'] = True
+                try:
+                    _save_latest_stable_snapshot_safely()
+                except Exception:
+                    pass
+        else:
+            result['acao'] = 'sem_dados'
+            result['ok'] = True
+
+        st.session_state['_supabase_primary_boot_sync_done'] = True
+        return result
+    except Exception as e:
+        _set_supabase_error(e)
+        result['acao'] = 'erro'
+        result['ok'] = False
+        try:
+            result['erro'] = str(e)
+        except Exception:
+            pass
+        return result
+
 
 def _rotate_backup_files_safely() -> None:
     try:
@@ -3862,6 +4091,7 @@ def _supabase_fetch_table_rows(table: str, page_size: int = 1000) -> list[dict]:
 def _supabase_upsert_rows(table: str, rows: list[dict], conflict_cols: list[str]) -> None:
     if not SUPABASE_SYNC_ENABLED or not rows:
         return
+    rows = _supabase_deduplicate_rows(rows, conflict_cols)
     batch_size = 500
     for i in range(0, len(rows), batch_size):
         base_batch = rows[i:i+batch_size]
@@ -4011,8 +4241,45 @@ def _supabase_push_all_from_sqlite(force: bool = False) -> bool:
                     item = {}
                     for c, v in zip(cols, row):
                         item[c] = _jsonable(v)
+
+                    table_l = str(table).strip().lower()
+
+                    if table_l == 'colaboradores':
+                        item['setor'] = str(item.get('setor') or '').strip().upper()
+                        item['chapa'] = str(item.get('chapa') or '').strip()
+                        item['nome'] = str(item.get('nome') or '').strip()
+                        item['subgrupo'] = str(item.get('subgrupo') or '').strip()
+                        item['entrada'] = str(item.get('entrada') or '06:00').strip() or '06:00'
+                        try:
+                            item['folga_sab'] = int(item.get('folga_sab', 0) or 0)
+                        except Exception:
+                            item['folga_sab'] = 0
+                        if not item['setor'] or not item['chapa'] or not item['nome']:
+                            continue
+
+                    if table_l == 'overrides':
+                        campo_n = _norm_override_campo(item.get('campo', ''))
+                        valor_n = str(item.get('valor') or '').strip()
+                        if not campo_n or not valor_n:
+                            continue
+                        item['campo'] = campo_n
+                        item['valor'] = valor_n
+                        item['setor'] = str(item.get('setor') or '').strip().upper()
+                        item['chapa'] = str(item.get('chapa') or '').strip()
+                        if not item['setor'] or not item['chapa']:
+                            continue
+
                     payload.append(item)
+
                 conflict = _sqlite_conflict_cols(conn, table)
+
+                # Blindagem extra para tabelas com chave natural conhecida no Supabase.
+                if str(table).strip().lower() == 'colaboradores':
+                    conflict = ['setor', 'chapa']
+                elif str(table).strip().lower() == 'overrides':
+                    conflict = ['setor', 'ano', 'mes', 'chapa', 'dia', 'campo']
+
+                payload = _supabase_deduplicate_rows(payload, conflict)
                 # tabela vazia local: não apaga remoto automaticamente
                 if payload:
                     _supabase_upsert_rows(table, payload, conflict)
@@ -4751,7 +5018,7 @@ HORARIOS_ENTRADA_PRESET = sorted({
     "09:00","09:10","09:20","09:30","09:40","09:50",
     "10:00","10:10","10:20","10:30","10:40","10:50",
     "11:00","11:10","11:20","11:30","11:40","11:50",
-    "12:00","12:10","12:20","12:30","12:20","12:45","12:50",
+    "12:00","12:10","12:20","12:30","12:20","12:40","12:50",
     # Tarde
     "13:00","13:10","13:20","13:30","13:40","13:50",
     "14:00","14:10","14:20","14:30","14:40","14:50",
@@ -11838,6 +12105,36 @@ def save_escala_mes_db(setor: str, ano: int, mes: int, historico_df_por_chapa: d
     except Exception:
         pass
 
+def _try_refresh_escala_mes_from_remote_once(setor: str, ano: int, mes: int) -> bool:
+    """Tenta repovoar escala_mes local quando o app reinicia/sleep e a tabela local veio vazia.
+    Não força regeneração; só tenta sincronizar/restaurar o que já existia.
+    """
+    try:
+        if not bool(globals().get("SUPABASE_SYNC_ENABLED", False)):
+            return False
+
+        fn_pull = globals().get('_supabase_pull_all_to_sqlite') or globals().get('_supabase_request_pull_async')
+        if callable(fn_pull):
+            try:
+                fn_pull(force=True)
+            except TypeError:
+                fn_pull()
+
+        con = db_conn()
+        try:
+            cur = con.cursor()
+            cur.execute(
+                "SELECT 1 FROM escala_mes WHERE setor=? AND ano=? AND mes=? LIMIT 1",
+                (setor, int(ano), int(mes)),
+            )
+            row = cur.fetchone()
+            return bool(row)
+        finally:
+            con.close()
+    except Exception:
+        return False
+
+
 @st.cache_data(show_spinner=False, ttl=120)
 def load_escala_mes_db(setor: str, ano: int, mes: int):
     con = db_conn()
@@ -11850,6 +12147,22 @@ def load_escala_mes_db(setor: str, ano: int, mes: int):
     """, (setor, int(ano), int(mes)))
     rows = cur.fetchall()
     con.close()
+    if not rows:
+        try:
+            refreshed = _try_refresh_escala_mes_from_remote_once(setor, int(ano), int(mes))
+        except Exception:
+            refreshed = False
+        if refreshed:
+            con = db_conn()
+            cur = con.cursor()
+            cur.execute("""
+                SELECT chapa, data, dia_sem, status, h_entrada, h_saida
+                FROM escala_mes
+                WHERE setor=? AND ano=? AND mes=?
+                ORDER BY chapa, date(data) ASC
+            """, (setor, int(ano), int(mes)))
+            rows = cur.fetchall()
+            con.close()
     if not rows:
         return {}
     hist = {}
@@ -16153,18 +16466,83 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
                     primeiro_dia = primeiro_dia + timedelta(days=1)
 
                 c1, c2 = st.columns(2)
-                data_sol = c1.date_input('Data desejada', value=primeiro_dia, min_value=date(prox_ano_sol, prox_mes_sol, 1), max_value=ultimo_dia, key=f'data_folga_{setor}_{chapa}')
                 tipo_sol = c2.selectbox('Tipo da sugestão', ['Folga', 'Troca de plantão', 'Ajuste de horário'], key=f'tipo_folga_{setor}_{chapa}')
+
+                datas_uteis_folga = []
+                data_cursor = date(prox_ano_sol, prox_mes_sol, 1)
+                while data_cursor <= ultimo_dia:
+                    if data_cursor.weekday() not in (5, 6):
+                        datas_uteis_folga.append(data_cursor)
+                    data_cursor = data_cursor + timedelta(days=1)
+
+                if not datas_uteis_folga:
+                    datas_uteis_folga = [primeiro_dia]
+
                 if tipo_sol == 'Folga':
-                    st.caption('Domingos não podem ser enviados como sugestão de folga, porque já são tratados pela regra fixa do sistema.')
+                    st.caption('Mini calendário visual: dias verdes podem ser selecionados; sábados e domingos em vermelho ficam bloqueados.')
+
+                    sel_key = f'folga_cal_sel_{setor}_{chapa}_{prox_ano_sol}_{prox_mes_sol}'
+                    if st.session_state.get(sel_key) not in [d.isoformat() for d in datas_uteis_folga]:
+                        st.session_state[sel_key] = datas_uteis_folga[0].isoformat()
+
+                    nomes_semana = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom']
+                    head_cols = c1.columns(7)
+                    for _i, _nome in enumerate(nomes_semana):
+                        head_cols[_i].markdown(
+                            f"<div style='text-align:center;font-weight:700;padding:6px 0;border-radius:8px;background:rgba(255,255,255,0.06);'>{_nome}</div>",
+                            unsafe_allow_html=True
+                        )
+
+                    semanas_cal = calendar.monthcalendar(prox_ano_sol, prox_mes_sol)
+                    for semana_idx, semana in enumerate(semanas_cal):
+                        cols_sem = c1.columns(7)
+                        for dia_idx, dia_num in enumerate(semana):
+                            if dia_num == 0:
+                                cols_sem[dia_idx].markdown("<div style='height:38px;'></div>", unsafe_allow_html=True)
+                                continue
+
+                            dia_data = date(prox_ano_sol, prox_mes_sol, dia_num)
+                            bloqueado = dia_data.weekday() in (5, 6)
+                            selecionado = st.session_state.get(sel_key) == dia_data.isoformat()
+
+                            if bloqueado:
+                                cols_sem[dia_idx].markdown(
+                                    f"<div style='height:38px;display:flex;align-items:center;justify-content:center;border-radius:10px;background:#5a1f1f;border:1px solid #a94444;color:#ffd7d7;font-weight:700;'>❌ {dia_num:02d}</div>",
+                                    unsafe_allow_html=True
+                                )
+                            else:
+                                rotulo_btn = f"✅ {dia_num:02d}" if selecionado else f"🟩 {dia_num:02d}"
+                                if cols_sem[dia_idx].button(rotulo_btn, key=f'folga_cal_btn_{setor}_{chapa}_{prox_ano_sol}_{prox_mes_sol}_{dia_num}', use_container_width=True):
+                                    st.session_state[sel_key] = dia_data.isoformat()
+                                    st.rerun()
+
+                    data_sol = pd.to_datetime(st.session_state.get(sel_key)).date()
+                    c1.caption(f"Data selecionada: {data_sol.strftime('%d/%m/%Y')} ({['seg','ter','qua','qui','sex','sáb','dom'][data_sol.weekday()]})")
+                    c1.markdown(
+                        "<div style='display:flex;gap:12px;flex-wrap:wrap;margin-top:6px;'>"
+                        "<div style='padding:6px 10px;border-radius:999px;background:#1d4d2b;color:#d7ffe3;font-weight:700;'>🟩 Pode selecionar</div>"
+                        "<div style='padding:6px 10px;border-radius:999px;background:#5a1f1f;color:#ffd7d7;font-weight:700;'>❌ Bloqueado</div>"
+                        "<div style='padding:6px 10px;border-radius:999px;background:#0f3b68;color:#d8ecff;font-weight:700;'>✅ Selecionado</div>"
+                        "</div>",
+                        unsafe_allow_html=True
+                    )
+                else:
+                    data_sol = c1.date_input(
+                        'Data desejada',
+                        value=primeiro_dia,
+                        min_value=date(prox_ano_sol, prox_mes_sol, 1),
+                        max_value=ultimo_dia,
+                        key=f'data_folga_{setor}_{chapa}'
+                    )
+
                 motivo = st.text_input('Motivo', key=f'motivo_folga_{setor}_{chapa}')
                 observacao = st.text_area('Observação', key=f'obs_folga_{setor}_{chapa}')
 
-                domingo_bloqueado = (tipo_sol == 'Folga' and pd.to_datetime(data_sol).weekday() == 6)
-                if domingo_bloqueado:
-                    st.warning('Domingos não podem ser selecionados para sugestão de folga. Escolha outro dia da próxima competência.')
+                fim_de_semana_bloqueado = (tipo_sol == 'Folga' and pd.to_datetime(data_sol).weekday() in (5, 6))
+                if fim_de_semana_bloqueado:
+                    st.warning('Sábados e domingos não podem ser selecionados para sugestão de folga. Escolha outro dia da próxima competência.')
 
-                if st.button('📨 Enviar sugestão', key=f'env_folga_{setor}_{chapa}', disabled=domingo_bloqueado):
+                if st.button('📨 Enviar sugestão', key=f'env_folga_{setor}_{chapa}', disabled=fim_de_semana_bloqueado):
                     criar_solicitacao_folga(setor, chapa, str(data_sol), tipo_sol, motivo, observacao)
                     st.success('Sugestão enviada para análise.')
                     st.rerun()
@@ -18486,7 +18864,7 @@ def page_app():
                 st.session_state["last_seed"] = int(seed)
                 ok = _regenerar_mes_inteiro(setor, int(ano), int(mes), seed=int(seed), respeitar_ajustes=True)
                 if ok:
-                    st.success("Escala gerada (ajustes/travas preservados)!")
+                    st.success("Escala gerada, salva no banco e pronta para voltar após reboot/sleep (ajustes/travas preservados)!")
                 else:
                     st.warning("Sem colaboradores.")
                 st.rerun()
@@ -18512,7 +18890,7 @@ def page_app():
                     st.session_state["last_seed"] = int(seed)
                     ok = _regenerar_mes_inteiro(setor, int(ano), int(mes), seed=int(seed), respeitar_ajustes=False)
                     if ok:
-                        st.success("Escala gerada do zero (ajustes ignorados)!")
+                        st.success("Escala gerada do zero, salva no banco e pronta para voltar após reboot/sleep (ajustes ignorados)!")
                     else:
                         st.warning("Sem colaboradores.")
                     st.rerun()
@@ -18617,7 +18995,7 @@ def page_app():
                     colab_by = {c["Chapa"]: c for c in colaboradores}
 
                 if not hist_db:
-                    st.info("Gere a escala primeiro na aba 🚀 Gerar Escala.")
+                    st.warning("Não encontrei a escala salva localmente nesta competência. O app tentou restaurar do banco remoto automaticamente; se mesmo assim continuar vazio, use 🔄 Recarregar do banco ou gere novamente apenas se esta competência realmente nunca foi gerada.")
                     return
 
                 if sec_aj == "🧩 Folgas manuais em grade":
@@ -21334,8 +21712,9 @@ def _restore_automatico_se_banco_vazio() -> bool:
     """
     Boot blindado:
     1) se o banco atual já tem dados reais, mantém exatamente ele;
-    2) se estiver vazio/inválido, tenta restaurar automaticamente do melhor latest_stable disponível;
-    3) espelha o banco restaurado para BACKUP_DIR/latest_stable.db.
+    2) se estiver vazio/inválido, tenta restaurar primeiro do Supabase quando habilitado;
+    3) se não conseguir, usa latest_stable local/empacotado;
+    4) espelha o banco restaurado para BACKUP_DIR/latest_stable.db.
     """
     try:
         _ensure_backup_dir()
@@ -21346,6 +21725,19 @@ def _restore_automatico_se_banco_vazio() -> bool:
             return False
 
         print("⚠️ Banco vazio, ausente ou sem dados reais. Tentando restore automático...")
+
+        try:
+            if SUPABASE_SYNC_ENABLED and SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY and _supabase_remote_has_meaningful_data():
+                ok_sb = _supabase_pull_all_to_sqlite(force=True)
+                if ok_sb and _db_tem_dados_reais(current):
+                    print("✅ Restore automático concluído a partir do Supabase.")
+                    try:
+                        _save_latest_stable_snapshot_safely()
+                    except Exception:
+                        pass
+                    return True
+        except Exception as e:
+            print(f"Erro ao tentar restore automático do Supabase: {e}")
 
         candidatos = []
 
@@ -21438,20 +21830,182 @@ def _fast_restore_bundled_latest_before_start() -> None:
 
 
 # =========================================================
+# V124 — CONGELAMENTO AUTOMÁTICO DA COMPETÊNCIA ANTERIOR
+# =========================================================
+def _competencia_anterior_referencia(base_dt: datetime | None = None) -> tuple[int, int]:
+    ref = base_dt or datetime.now()
+    ano = int(ref.year)
+    mes = int(ref.month)
+    if mes == 1:
+        return ano - 1, 12
+    return ano, mes - 1
+
+
+def _setor_tem_movimento_competencia(setor: str, ano: int, mes: int) -> bool:
+    setor = _norm_setor(setor)
+    ano = int(ano)
+    mes = int(mes)
+    if not setor or setor in ("ADMIN", "GERAL"):
+        return False
+
+    con = db_conn()
+    cur = con.cursor()
+    try:
+        consultas = [
+            ("SELECT 1 FROM colaboradores WHERE UPPER(TRIM(setor))=? LIMIT 1", (setor,)),
+            ("SELECT 1 FROM escala_mes WHERE UPPER(TRIM(setor))=? AND ano=? AND mes=? LIMIT 1", (setor, ano, mes)),
+            ("SELECT 1 FROM retificacoes_competencia WHERE UPPER(TRIM(setor))=? AND ano=? AND mes=? LIMIT 1", (setor, ano, mes)),
+            ("SELECT 1 FROM subgrupo_competencia WHERE UPPER(TRIM(setor))=? AND ano=? AND mes=? LIMIT 1", (setor, ano, mes)),
+            ("SELECT 1 FROM colaborador_competencia_snapshot WHERE UPPER(TRIM(setor))=? AND ano=? AND mes=? LIMIT 1", (setor, ano, mes)),
+        ]
+        for sql, params in consultas:
+            try:
+                cur.execute(sql, params)
+                if cur.fetchone():
+                    return True
+            except Exception:
+                pass
+        return False
+    finally:
+        con.close()
+
+
+def _listar_setores_auto_congelamento() -> list[str]:
+    setores = []
+    for fn_name in ("listar_setores_com_competencia", "listar_setores_db", "list_setores"):
+        try:
+            fn = globals().get(fn_name)
+            if callable(fn):
+                setores.extend(fn() or [])
+        except Exception:
+            pass
+
+    vistos = set()
+    finais = []
+    for s in setores:
+        s_norm = _norm_setor(s)
+        if not s_norm or s_norm in vistos or s_norm in ("ADMIN", "GERAL"):
+            continue
+        vistos.add(s_norm)
+        finais.append(s_norm)
+    return finais
+
+
+def auto_congelar_competencia_anterior() -> dict:
+    """Fecha automaticamente a competência anterior quando o app inicia.
+    Regra: ao entrar em um novo mês, o mês imediatamente anterior vira FECHADA
+    para todos os setores com movimento, sem rebalancear nada.
+    """
+    try:
+        ensure_competencia_runtime_tables()
+    except Exception:
+        pass
+
+    ano_ref, mes_ref = _competencia_anterior_referencia()
+    ref_key = f"{ano_ref:04d}-{mes_ref:02d}"
+
+    try:
+        if st.session_state.get("_auto_congelamento_ref_exec") == ref_key:
+            return {
+                "referencia": ref_key,
+                "fechados_agora": int(st.session_state.get("_auto_congelamento_fechados_agora", 0) or 0),
+                "ja_fechados": int(st.session_state.get("_auto_congelamento_ja_fechados", 0) or 0),
+                "ignorados_sem_movimento": int(st.session_state.get("_auto_congelamento_ignorados", 0) or 0),
+                "erros": int(st.session_state.get("_auto_congelamento_erros", 0) or 0),
+            }
+    except Exception:
+        pass
+
+    fechados_agora = 0
+    ja_fechados = 0
+    ignorados_sem_movimento = 0
+    erros = 0
+
+    for setor in _listar_setores_auto_congelamento():
+        try:
+            if not _setor_tem_movimento_competencia(setor, ano_ref, mes_ref):
+                ignorados_sem_movimento += 1
+                continue
+
+            if competencia_fechada(setor, ano_ref, mes_ref):
+                ja_fechados += 1
+                continue
+
+            set_status_competencia(setor, ano_ref, mes_ref, 'FECHADA')
+            fechados_agora += 1
+        except Exception as e:
+            erros += 1
+            try:
+                registrar_log_admin(
+                    acao="AUTO_CONGELAMENTO_COMPETENCIA",
+                    modulo="SISTEMA/AUTO_CONGELAMENTO",
+                    alvo_setor=setor,
+                    competencia_ano=ano_ref,
+                    competencia_mes=mes_ref,
+                    valor_depois="ERRO",
+                    detalhes=f"Falha no auto congelamento: {e}",
+                    status="ERRO",
+                )
+            except Exception:
+                pass
+
+    try:
+        if fechados_agora > 0:
+            registrar_log_admin(
+                acao="AUTO_CONGELAMENTO_COMPETENCIA",
+                modulo="SISTEMA/AUTO_CONGELAMENTO",
+                alvo_setor="TODOS",
+                competencia_ano=ano_ref,
+                competencia_mes=mes_ref,
+                valor_depois=f"FECHADA_EM_{fechados_agora}_SETORES",
+                detalhes=f"Auto congelamento executado na inicialização. Referência: {ref_key}",
+                status="SUCESSO",
+            )
+    except Exception:
+        pass
+
+    try:
+        st.session_state["_auto_congelamento_ref_exec"] = ref_key
+        st.session_state["_auto_congelamento_fechados_agora"] = fechados_agora
+        st.session_state["_auto_congelamento_ja_fechados"] = ja_fechados
+        st.session_state["_auto_congelamento_ignorados"] = ignorados_sem_movimento
+        st.session_state["_auto_congelamento_erros"] = erros
+    except Exception:
+        pass
+
+    return {
+        "referencia": ref_key,
+        "fechados_agora": fechados_agora,
+        "ja_fechados": ja_fechados,
+        "ignorados_sem_movimento": ignorados_sem_movimento,
+        "erros": erros,
+    }
+
+
+# =========================================================
 # MAIN
 # =========================================================
 _restore_automatico_se_banco_vazio()
+try:
+    if SUPABASE_SYNC_ENABLED and SUPABASE_AUTO_PULL_ON_START:
+        _sync_supabase_primary_on_start(force=False)
+except Exception:
+    pass
 validar_contrato_sistema()
 
 if st.session_state["auth"] is None and QUICK_LOGIN_BOOT:
     db_init_fast_login()
+    auto_congelar_competencia_anterior()
     page_login()
 else:
     if not st.session_state.get("_full_boot_done", False):
         db_init()
+        auto_congelar_competencia_anterior()
         if not FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP:
             auto_backup_if_due()
         st.session_state["_full_boot_done"] = True
+    else:
+        auto_congelar_competencia_anterior()
     if st.session_state["auth"] is None:
         page_login()
     else:
