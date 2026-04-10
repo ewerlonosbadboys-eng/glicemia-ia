@@ -2994,16 +2994,35 @@ def gerar_pdf_bytes(df_g: pd.DataFrame, df_n: pd.DataFrame, mes_ref: str = "Todo
             if df_extras.empty:
                 story.append(Paragraph("Sem medidas extras registradas.", styles["Normal"]))
             else:
-                pivot_extras = montar_pivot_data_momento(df_extras, "Valor")
-                pivot_extras = pivot_extras.reindex(columns=extras_cols)
+                df_extras["Momento"] = df_extras["Momento"].astype(str).apply(normalizar_momento_gl)
+                pivot_extras = df_extras.pivot_table(
+                    index=["_data_ord", "_hora_ord"],
+                    columns="Momento",
+                    values="Valor",
+                    aggfunc="last"
+                )
 
-                if len(pivot_extras) > 31:
-                    pivot_extras = pivot_extras.tail(31).copy()
+                if not pivot_extras.empty:
+                    pivot_extras = pivot_extras.sort_index()
+                    pivot_extras = pivot_extras.reindex(columns=extras_cols)
+                    if len(pivot_extras) > 31:
+                        pivot_extras = pivot_extras.tail(31).copy()
 
-                cols_e = ["Data"] + list(pivot_extras.columns)
+                cols_e = ["Data", "Hora"] + list(pivot_extras.columns)
                 data_e = [cols_e]
                 for idx, row in pivot_extras.iterrows():
-                    line = [str(idx)]
+                    data_ord, hora_ord = idx
+                    try:
+                        data_fmt = pd.to_datetime(data_ord, errors="coerce").strftime("%d/%m/%Y")
+                    except Exception:
+                        data_fmt = str(data_ord)
+                    hora_fmt = ""
+                    try:
+                        hora_fmt = str(hora_ord)[:5] if str(hora_ord) and str(hora_ord) != 'NaT' else ""
+                    except Exception:
+                        hora_fmt = ""
+
+                    line = [data_fmt, hora_fmt]
                     for c in pivot_extras.columns:
                         v = row.get(c, "")
                         if pd.isna(v):
@@ -3017,24 +3036,25 @@ def gerar_pdf_bytes(df_g: pd.DataFrame, df_n: pd.DataFrame, mes_ref: str = "Todo
 
                 ncols_e = len(cols_e)
                 total_w_e = 18.0 * cm
-                w_data_e = 3.0 * cm
-                w_rest_e = (total_w_e - w_data_e) / max(1, ncols_e - 1)
-                col_widths_e = [w_data_e] + [w_rest_e] * (ncols_e - 1)
+                w_data_e = 2.6 * cm
+                w_hora_e = 1.7 * cm
+                w_rest_e = (total_w_e - w_data_e - w_hora_e) / max(1, ncols_e - 2)
+                col_widths_e = [w_data_e, w_hora_e] + [w_rest_e] * (ncols_e - 2)
 
                 tE = Table(data_e, repeatRows=1, colWidths=col_widths_e)
                 style_cmds_e = [
                     ("BACKGROUND", (0,0), (-1,0), colors.lightgrey),
                     ("GRID", (0,0), (-1,-1), 0.25, colors.grey),
-                    ("FONTSIZE", (0,0), (-1,-1), 7),
+                    ("FONTSIZE", (0,0), (-1,-1), 6),
                     ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
                     ("ALIGN", (0,0), (-1,0), "CENTER"),
-                    ("ALIGN", (0,1), (0,-1), "LEFT"),
-                    ("ALIGN", (1,1), (-1,-1), "CENTER"),
-                    ("PADDING", (0,0), (-1,-1), 3),
+                    ("ALIGN", (0,1), (1,-1), "LEFT"),
+                    ("ALIGN", (2,1), (-1,-1), "CENTER"),
+                    ("PADDING", (0,0), (-1,-1), 2),
                 ]
 
                 for r in range(1, len(data_e)):
-                    for c in range(1, len(cols_e)):
+                    for c in range(2, len(cols_e)):
                         txt = data_e[r][c]
                         if not txt:
                             continue
