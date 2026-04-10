@@ -2984,28 +2984,72 @@ def gerar_pdf_bytes(df_g: pd.DataFrame, df_n: pd.DataFrame, mes_ref: str = "Todo
         # ===== Medidas extras (abaixo) =====
         if extras_cols:
             story.append(Paragraph("Medidas extras", styles["Heading3"]))
-            # pega últimos 30 registros extras (independente do pivot)
+
             df_extras = df_g.copy()
             df_extras = df_extras[~df_extras["Momento"].isin(desired_order)].copy()
-
-            # Ordenar por datetime e pegar últimas 30
-            df_extras["DT"] = pd.to_datetime(df_extras["Data"].astype(str) + " " + df_extras["Hora"].astype(str),
-                                             dayfirst=True, errors="coerce")
-            df_extras = df_extras.dropna(subset=["DT"]).sort_values("DT").tail(30)
+            df_extras = enriquecer_datas_df(df_extras, "Data", "Hora")
+            df_extras = df_extras.dropna(subset=["_data_ord"]).copy()
+            df_extras = df_extras.sort_values(["_data_ord", "_hora_ord", "_dt_ord"], ascending=[True, True, True], na_position="last")
 
             if df_extras.empty:
                 story.append(Paragraph("Sem medidas extras registradas.", styles["Normal"]))
             else:
-                cols_e = ["Data", "Hora", "Momento", "Valor"]
-                data_e = [cols_e] + df_extras[cols_e].astype(str).values.tolist()
-                tE = Table(data_e, repeatRows=1, colWidths=[3*cm, 2*cm, 9*cm, 2*cm])
-                tE.setStyle(TableStyle([
+                pivot_extras = montar_pivot_data_momento(df_extras, "Valor")
+                pivot_extras = pivot_extras.reindex(columns=extras_cols)
+
+                if len(pivot_extras) > 31:
+                    pivot_extras = pivot_extras.tail(31).copy()
+
+                cols_e = ["Data"] + list(pivot_extras.columns)
+                data_e = [cols_e]
+                for idx, row in pivot_extras.iterrows():
+                    line = [str(idx)]
+                    for c in pivot_extras.columns:
+                        v = row.get(c, "")
+                        if pd.isna(v):
+                            line.append("")
+                        else:
+                            try:
+                                line.append(str(int(float(v))))
+                            except Exception:
+                                line.append(str(v))
+                    data_e.append(line)
+
+                ncols_e = len(cols_e)
+                total_w_e = 18.0 * cm
+                w_data_e = 3.0 * cm
+                w_rest_e = (total_w_e - w_data_e) / max(1, ncols_e - 1)
+                col_widths_e = [w_data_e] + [w_rest_e] * (ncols_e - 1)
+
+                tE = Table(data_e, repeatRows=1, colWidths=col_widths_e)
+                style_cmds_e = [
                     ("BACKGROUND", (0,0), (-1,0), colors.lightgrey),
                     ("GRID", (0,0), (-1,-1), 0.25, colors.grey),
                     ("FONTSIZE", (0,0), (-1,-1), 7),
-                    ("VALIGN", (0,0), (-1,-1), "TOP"),
+                    ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+                    ("ALIGN", (0,0), (-1,0), "CENTER"),
+                    ("ALIGN", (0,1), (0,-1), "LEFT"),
+                    ("ALIGN", (1,1), (-1,-1), "CENTER"),
                     ("PADDING", (0,0), (-1,-1), 3),
-                ]))
+                ]
+
+                for r in range(1, len(data_e)):
+                    for c in range(1, len(cols_e)):
+                        txt = data_e[r][c]
+                        if not txt:
+                            continue
+                        try:
+                            val = int(float(txt))
+                        except Exception:
+                            continue
+                        if val < 70:
+                            style_cmds_e.append(("BACKGROUND", (c, r), (c, r), colors.HexColor("#FFFFE0")))
+                        elif val > 180:
+                            style_cmds_e.append(("BACKGROUND", (c, r), (c, r), colors.HexColor("#FFB6C1")))
+                        else:
+                            style_cmds_e.append(("BACKGROUND", (c, r), (c, r), colors.HexColor("#C8E6C9")))
+
+                tE.setStyle(TableStyle(style_cmds_e))
                 story.append(tE)
 
         # ===== Doses separadas (Longa e Rápida) no formato da Glicemia (Data x Momento) =====
