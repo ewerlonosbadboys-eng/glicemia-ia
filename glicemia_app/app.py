@@ -3018,7 +3018,14 @@ def gerar_pdf_bytes(df_g: pd.DataFrame, df_n: pd.DataFrame, mes_ref: str = "Todo
                         data_fmt = str(data_ord)
                     hora_fmt = ""
                     try:
-                        hora_fmt = str(hora_ord)[:5] if str(hora_ord) and str(hora_ord) != 'NaT' else ""
+                        if pd.notna(hora_ord):
+                            try:
+                                hora_fmt = pd.to_datetime(hora_ord, errors="coerce").strftime("%H:%M")
+                            except Exception:
+                                m = re.search(r"(\d{2}:\d{2})", str(hora_ord))
+                                hora_fmt = m.group(1) if m else ""
+                        else:
+                            hora_fmt = ""
                     except Exception:
                         hora_fmt = ""
 
