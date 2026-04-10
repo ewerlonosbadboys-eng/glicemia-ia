@@ -304,6 +304,69 @@ def formatar_data_br_padrao_serie(serie: pd.Series) -> pd.Series:
         out.loc[mask] = dt.loc[mask].dt.strftime('%d/%m/%Y')
     return out
 
+
+def enriquecer_datas_df(df: pd.DataFrame, data_col: str = "Data", hora_col: str = "Hora") -> pd.DataFrame:
+    df = df.copy()
+    if data_col not in df.columns:
+        df[data_col] = ""
+    df["_data_ord"] = parse_data_flex_serie(df[data_col])
+    if hora_col in df.columns:
+        df["_hora_ord"] = pd.to_datetime(df[hora_col].astype(str).str.strip(), format="%H:%M", errors="coerce")
+        df["_dt_ord"] = pd.to_datetime(
+            df[data_col].astype(str).str.strip() + " " + df[hora_col].astype(str).str.strip(),
+            dayfirst=True,
+            errors="coerce"
+        )
+    else:
+        df["_hora_ord"] = pd.NaT
+        df["_dt_ord"] = pd.to_datetime(df[data_col].astype(str).str.strip(), dayfirst=True, errors="coerce")
+    df[data_col] = formatar_data_br_padrao_serie(df[data_col])
+    return df
+
+
+def listar_meses_disponiveis_df(df: pd.DataFrame, data_col: str = "Data") -> list[str]:
+    if df is None or df.empty or data_col not in df.columns:
+        return []
+    dt = parse_data_flex_serie(df[data_col])
+    dt = dt.dropna()
+    if dt.empty:
+        return []
+    meses = dt.dt.to_period("M").astype(str).drop_duplicates().tolist()
+    meses = sorted(meses, reverse=True)
+    return [datetime.strptime(m, "%Y-%m").strftime("%m/%Y") for m in meses]
+
+
+def filtrar_df_por_mes(df: pd.DataFrame, mes_ref: str = "Todos", data_col: str = "Data") -> pd.DataFrame:
+    if df is None:
+        return pd.DataFrame()
+    if df.empty or not mes_ref or mes_ref == "Todos" or data_col not in df.columns:
+        return df.copy()
+    df2 = df.copy()
+    dt = parse_data_flex_serie(df2[data_col])
+    try:
+        mes_dt = datetime.strptime(str(mes_ref), "%m/%Y")
+    except Exception:
+        return df2
+    mask = dt.notna() & (dt.dt.month == mes_dt.month) & (dt.dt.year == mes_dt.year)
+    return df2.loc[mask].copy()
+
+
+def montar_pivot_data_momento(df_src: pd.DataFrame, value_col: str):
+    if df_src is None or df_src.empty or value_col not in df_src.columns:
+        return pd.DataFrame()
+    dfp = enriquecer_datas_df(df_src, "Data", "Hora")
+    if "Momento" not in dfp.columns:
+        dfp["Momento"] = ""
+    dfp["Momento"] = dfp["Momento"].astype(str).apply(normalizar_momento_gl)
+    dfp = dfp.sort_values(["_data_ord", "_hora_ord", "_dt_ord"], ascending=[True, True, True], na_position="last")
+    pivot = dfp.pivot_table(index="_data_ord", columns="Momento", values=value_col, aggfunc="last")
+    if pivot.empty:
+        return pivot
+    pivot = pivot.sort_index()
+    pivot.index = pd.to_datetime(pivot.index, errors="coerce").strftime("%d/%m/%Y")
+    pivot = pivot.reindex(columns=ordenar_colunas_momentos(list(pivot.columns)))
+    return pivot
+
 # ================= BACKUP / RESTORE =================
 BACKUP_STATE_FILE = BACKUP_DIR / "last_auto_backup.txt"
 
@@ -2781,7 +2844,7 @@ def separar_momentos_extras(cols):
 
 
 
-def gerar_pdf_bytes(df_g: pd.DataFrame, df_n: pd.DataFrame) -> bytes:
+def gerar_pdf_bytes(df_g: pd.DataFrame, df_n: pd.DataFrame, mes_ref: str = "Todos") -> bytes:
     """
     Gera um PDF com:
       - Resumo
@@ -2809,7 +2872,12 @@ def gerar_pdf_bytes(df_g: pd.DataFrame, df_n: pd.DataFrame) -> bytes:
     story.append(Paragraph(titulo, styles["Title"]))
     story.append(Spacer(1, 6))
     story.append(Paragraph(f"Gerado em: {agora_br().strftime('%d/%m/%Y %H:%M')}", styles["Normal"]))
+    if mes_ref and mes_ref != "Todos":
+        story.append(Paragraph(f"Mês filtrado: {mes_ref}", styles["Normal"]))
     story.append(Spacer(1, 10))
+
+    df_g = filtrar_df_por_mes(df_g, mes_ref, "Data") if df_g is not None else df_g
+    df_n = filtrar_df_por_mes(df_n, mes_ref, "Data") if df_n is not None else df_n
 
     # ===== Resumo Glicemia =====
     story.append(Paragraph("Glicemia - Resumo", styles["Heading2"]))
@@ -2842,13 +2910,10 @@ def gerar_pdf_bytes(df_g: pd.DataFrame, df_n: pd.DataFrame) -> bytes:
         story.append(Paragraph("Sem dados para tabela.", styles["Normal"]))
         story.append(Spacer(1, 10))
     else:
-        df_g = df_g.copy()
-        df_g["Data"] = formatar_data_br_padrao_serie(df_g["Data"])
+        df_g = enriquecer_datas_df(df_g.copy(), "Data", "Hora")
         df_g["Momento"] = df_g["Momento"].astype(str).apply(normalizar_momento_gl)
-        # Pivot igual ao Excel
-        pivot = df_g.pivot_table(index="Data", columns="Momento", values="Valor", aggfunc="last")
-        pivot = pivot.reindex(columns=ordenar_colunas_momentos(list(pivot.columns)))
-        pivot = pivot.sort_index()
+        # Pivot igual ao Excel, ordenado pela data real
+        pivot = montar_pivot_data_momento(df_g, "Valor")
 
         # Limitar para caber no PDF (últimas 20 datas)
         if len(pivot) > 31:
@@ -2959,12 +3024,9 @@ def gerar_pdf_bytes(df_g: pd.DataFrame, df_n: pd.DataFrame) -> bytes:
             if df_src is None or df_src.empty:
                 return None
 
-            df_src = df_src.copy()
-            df_src["Data"] = formatar_data_br_padrao_serie(df_src["Data"])
+            df_src = enriquecer_datas_df(df_src.copy(), "Data", "Hora")
             df_src["Momento"] = df_src["Momento"].astype(str).apply(normalizar_momento_gl)
-            pivot = df_src.pivot_table(index="Data", columns="Momento", values=col_val, aggfunc="last")
-            pivot = pivot.reindex(columns=ordenar_colunas_momentos(list(pivot.columns)))
-            pivot = pivot.sort_index()
+            pivot = montar_pivot_data_momento(df_src, col_val)
 
             # Limitar (últimas 31 datas)
             if len(pivot) > 31:
@@ -3210,11 +3272,23 @@ def gerar_pdf_bytes(df_g: pd.DataFrame, df_n: pd.DataFrame) -> bytes:
     return pdf
 
 
+# ================= FILTRO DE MÊS (SIDEBAR) =================
+df_sidebar_g = carregar_glicemia_com_id()
+df_sidebar_n = carregar_dados_seguro(ARQ_N)
+meses_sidebar = list(dict.fromkeys(listar_meses_disponiveis_df(df_sidebar_g) + listar_meses_disponiveis_df(df_sidebar_n)))
+st.sidebar.markdown("---")
+mes_relat = st.sidebar.selectbox(
+    "📅 Pesquisar por mês",
+    ["Todos"] + meses_sidebar,
+    index=0,
+    key="filtro_mes_relatorios"
+)
+
 # ================= EXCEL (SIDEBAR) =================
 st.sidebar.markdown("---")
 if st.sidebar.button("📥 Gerar Excel Completo"):
-    df_e_g = carregar_glicemia_com_id()
-    df_e_n = carregar_dados_seguro(ARQ_N)
+    df_e_g = filtrar_df_por_mes(carregar_glicemia_com_id(), mes_relat, "Data")
+    df_e_n = filtrar_df_por_mes(carregar_dados_seguro(ARQ_N), mes_relat, "Data")
 
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
@@ -3227,11 +3301,9 @@ if st.sidebar.button("📥 Gerar Excel Completo"):
                 cell.alignment = Alignment(horizontal="center")
 
             # 2) Aba Glicemia (Resumo pivot por Data x Momento)
-            df_e_g = df_e_g.copy()
-            df_e_g["Data"] = formatar_data_br_padrao_serie(df_e_g["Data"])
+            df_e_g = enriquecer_datas_df(df_e_g.copy(), "Data", "Hora")
             df_e_g["Momento"] = df_e_g["Momento"].astype(str).apply(normalizar_momento_gl)
-            pivot = df_e_g.pivot_table(index="Data", columns="Momento", values="Valor", aggfunc="last")
-            pivot = pivot.reindex(columns=ordenar_colunas_momentos(list(pivot.columns)))
+            pivot = montar_pivot_data_momento(df_e_g, "Valor")
             pivot.to_excel(writer, sheet_name="Glicemia_Resumo")
             ws1 = writer.sheets["Glicemia_Resumo"]
 
@@ -3262,12 +3334,13 @@ if st.sidebar.button("📥 Gerar Excel Completo"):
             for cell in ws2[1]:
                 cell.alignment = Alignment(horizontal="center")
 
-    st.sidebar.download_button("⬇️ Baixar Agora", output.getvalue(), file_name="Relatorio_Saude_Kids.xlsx", use_container_width=True)
+    st.sidebar.download_button("⬇️ Baixar Agora", output.getvalue(), file_name=(f"Relatorio_Saude_Kids_{mes_relat.replace("/", "-")}.xlsx" if mes_relat != "Todos" else "Relatorio_Saude_Kids.xlsx"), use_container_width=True)
 
 
 # ================= PDF (SIDEBAR) =================
 st.sidebar.markdown("---")
 st.sidebar.subheader("🧾 Relatório em PDF")
+st.sidebar.caption("Use o filtro de mês acima para organizar e exportar só o período desejado.")
 
 if "pdf_bytes" not in st.session_state:
     st.session_state.pdf_bytes = None
@@ -3282,7 +3355,7 @@ else:
         try:
             df_pdf_g = carregar_glicemia_com_id()
             df_pdf_n = carregar_dados_seguro(ARQ_N)
-            pdf_bytes = gerar_pdf_bytes(df_pdf_g, df_pdf_n)
+            pdf_bytes = gerar_pdf_bytes(df_pdf_g, df_pdf_n, mes_ref=mes_relat)
 
             if not pdf_bytes:
                 st.sidebar.error("Não foi possível gerar o PDF.")
