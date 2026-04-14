@@ -91,6 +91,9 @@ import secrets
 import pandas as pd
 
 def sanitize_for_streamlit(df: pd.DataFrame) -> pd.DataFrame:
+    if not isinstance(df, pd.DataFrame):
+        return df
+
     df = df.copy()
 
     for col in df.columns:
@@ -99,37 +102,24 @@ def sanitize_for_streamlit(df: pd.DataFrame) -> pd.DataFrame:
         )
 
     if "Supabase" in df.columns:
+        df["Supabase"] = df["Supabase"].apply(
+            lambda x: x.decode("utf-8", errors="ignore") if isinstance(x, (bytes, bytearray)) else x
+        )
         df["Supabase"] = df["Supabase"].astype("string").fillna("")
 
     return df
 
 
 def render_dataframe_safe(data, *args, **kwargs):
-    try:
-        from pandas.io.formats.style import Styler
-    except Exception:
-        Styler = None
-
     if isinstance(data, pd.DataFrame):
         data = sanitize_for_streamlit(data)
-    elif Styler is not None and isinstance(data, Styler):
-        pass
-
-    return render_dataframe_safe(data, *args, **kwargs)
+    return st.dataframe(data, *args, **kwargs)
 
 
 def render_table_safe(data, *args, **kwargs):
-    try:
-        from pandas.io.formats.style import Styler
-    except Exception:
-        Styler = None
-
     if isinstance(data, pd.DataFrame):
         data = sanitize_for_streamlit(data)
-    elif Styler is not None and isinstance(data, Styler):
-        pass
-
-    return render_table_safe(data, *args, **kwargs)
+    return st.table(data, *args, **kwargs)
     
 from openpyxl.styles import PatternFill, Alignment, Border, Side, Font
 from openpyxl.utils import get_column_letter
