@@ -90,11 +90,27 @@ import hashlib
 import secrets
 from openpyxl.styles import PatternFill, Alignment, Border, Side, Font
 from openpyxl.utils import get_column_letter
+
+# ===== PATCH SEGURANÇA DB + LOG =====
 from logger_setup import get_logger
-from db_guard import ensure_db_exists, check_db_health, create_backup, restore_latest_backup
+from db_guard import (
+    ensure_db_exists,
+    check_db_health,
+    restore_latest_backup,
+    create_backup,
+)
 from rules_5x2 import validate_5x2
 
 logger = get_logger("main")
+
+# Boot seguro do banco
+ensure_db_exists()
+
+if not check_db_health():
+    logger.warning("Banco com falha. Tentando restore...")
+    if not restore_latest_backup():
+        logger.error("Falha no restore. Verifique backups.")
+# ===== FIM PATCH =====
 
 # =========================================================
 # PDF (Modelo Oficial) — ReportLab
