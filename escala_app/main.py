@@ -90,6 +90,11 @@ import hashlib
 import secrets
 from openpyxl.styles import PatternFill, Alignment, Border, Side, Font
 from openpyxl.utils import get_column_letter
+from logger_setup import get_logger
+from db_guard import ensure_db_exists, check_db_health, create_backup, restore_latest_backup
+from rules_5x2 import validate_5x2
+
+logger = get_logger("main")
 
 # =========================================================
 # PDF (Modelo Oficial) — ReportLab
