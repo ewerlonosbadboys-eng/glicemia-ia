@@ -88,6 +88,21 @@ import threading
 
 import hashlib
 import secrets
+import pandas as pd
+
+def sanitize_for_streamlit(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+
+    for col in df.columns:
+        df[col] = df[col].apply(
+            lambda x: x.decode("utf-8", errors="ignore") if isinstance(x, (bytes, bytearray)) else x
+        )
+
+    if "Supabase" in df.columns:
+        df["Supabase"] = df["Supabase"].astype("string").fillna("")
+
+    return df
+    
 from openpyxl.styles import PatternFill, Alignment, Border, Side, Font
 from openpyxl.utils import get_column_letter
 
