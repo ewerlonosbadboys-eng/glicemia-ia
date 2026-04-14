@@ -22027,7 +22027,7 @@ def auto_congelar_competencia_anterior() -> dict:
 # =========================================================
 _restore_automatico_se_banco_vazio()
 try:
-    if SUPABASE_SYNC_ENABLED and SUPABASE_AUTO_PULL_ON_START:  
+    if SUPABASE_SYNC_ENABLED and SUPABASE_AUTO_PULL_ON_START: 
         _sync_supabase_primary_on_start(force=False)
 except Exception:
     pass
