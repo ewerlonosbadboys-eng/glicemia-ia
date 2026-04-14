@@ -102,6 +102,34 @@ def sanitize_for_streamlit(df: pd.DataFrame) -> pd.DataFrame:
         df["Supabase"] = df["Supabase"].astype("string").fillna("")
 
     return df
+
+
+def render_dataframe_safe(data, *args, **kwargs):
+    try:
+        from pandas.io.formats.style import Styler
+    except Exception:
+        Styler = None
+
+    if isinstance(data, pd.DataFrame):
+        data = sanitize_for_streamlit(data)
+    elif Styler is not None and isinstance(data, Styler):
+        pass
+
+    return render_dataframe_safe(data, *args, **kwargs)
+
+
+def render_table_safe(data, *args, **kwargs):
+    try:
+        from pandas.io.formats.style import Styler
+    except Exception:
+        Styler = None
+
+    if isinstance(data, pd.DataFrame):
+        data = sanitize_for_streamlit(data)
+    elif Styler is not None and isinstance(data, Styler):
+        pass
+
+    return render_table_safe(data, *args, **kwargs)
     
 from openpyxl.styles import PatternFill, Alignment, Border, Side, Font
 from openpyxl.utils import get_column_letter
@@ -985,7 +1013,7 @@ def render_escala_espelho_colaborador(df_mes: pd.DataFrame, titulo: str = "") ->
                 pass
 
         if not all([col_dia, col_status]):
-            st.dataframe(sanitize_for_streamlit(df), width="stretch", hide_index=True)
+            render_dataframe_safe(sanitize_for_streamlit(df), width="stretch", hide_index=True)
             return
 
         dias = []
@@ -1053,9 +1081,9 @@ def render_escala_espelho_colaborador(df_mes: pd.DataFrame, titulo: str = "") ->
             df_show.style
             .applymap(_cor_espelho)
         )
-        st.dataframe(styler, width="stretch", hide_index=True)
+        render_dataframe_safe(styler, width="stretch", hide_index=True)
     except Exception:
-        st.dataframe(sanitize_for_streamlit(df_mes), width="stretch", hide_index=True)
+        render_dataframe_safe(sanitize_for_streamlit(df_mes), width="stretch", hide_index=True)
 
 VERSAO_ACESSO_LIDER = "ACESSO_LIDER_FIX_2026_03_14_v2"
 
@@ -1748,7 +1776,7 @@ def render_excluir_retificacao_ui(setor: str, ano: int, mes: int, df_ret_list: p
         alvo = st.selectbox('Escolha a retificação para excluir', options=opcoes, key=f'excluir_ret_sel::{setor}::{ano}::{mes}::{key_sfx}')
         info = mapa.get(alvo or '') or {}
         cols_exc = st.columns([1, 2])
-        if cols_exc[0].button('🗑️ Excluir retificação selecionada', key=f'excluir_ret_btn::{setor}::{ano}::{mes}::{key_sfx}', use_container_width=True):
+        if cols_exc[0].button('🗑️ Excluir retificação selecionada', key=f'excluir_ret_btn::{setor}::{ano}::{mes}::{key_sfx}', width="stretch"):
             if not info.get('chapa') or not int(info.get('dia') or 0):
                 st.warning('Selecione uma retificação válida para excluir.')
             else:
@@ -3299,7 +3327,7 @@ def render_app_like_sidebar_nav(is_admin_area: bool, setor: str = "", modo_gesta
     st.markdown("<div class='app-nav-label'>App</div>", unsafe_allow_html=True)
     for key in main_keys:
         label = cfg[key]["label"]
-        clicked = st.button(label, key=f"app_like_main_btn::{key}", use_container_width=True, type="primary" if current_main == key else "secondary")
+        clicked = st.button(label, key=f"app_like_main_btn::{key}", width="stretch", type="primary" if current_main == key else "secondary")
         if clicked:
             st.session_state["app_like_main"] = key
             st.session_state["app_like_sub"] = cfg[key]["default_sub"]
@@ -3336,7 +3364,7 @@ def render_app_like_top_nav(is_admin_area: bool, setor: str = "", modo_gestao_so
             clicked = st.button(
                 label,
                 key=f"app_like_top_btn::{key}",
-                use_container_width=True,
+                width="stretch",
                 type="primary" if current_main == key else "secondary",
             )
             if clicked:
@@ -3344,7 +3372,7 @@ def render_app_like_top_nav(is_admin_area: bool, setor: str = "", modo_gestao_so
                 st.session_state["app_like_sub"] = cfg[key]["default_sub"]
                 st.rerun()
     with cols[-1]:
-        if st.button("🚪 Sair", key="app_like_top_logout", use_container_width=True, type="secondary"):
+        if st.button("🚪 Sair", key="app_like_top_logout", width="stretch", type="secondary"):
             st.session_state["auth"] = None
             st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
@@ -10601,7 +10629,7 @@ def render_gestao_dashboard_executivo(auth_setor: str, auth_chapa: str, ano: int
     with r1:
         st.markdown('#### Resumo operacional por setor')
         if isinstance(df_setores, pd.DataFrame) and not df_setores.empty:
-            st.dataframe(df_setores, use_container_width=True, hide_index=True)
+            render_dataframe_safe(df_setores, width="stretch", hide_index=True)
         else:
             st.info('Nenhum resumo operacional disponível para os setores liberados.')
     with r2:
@@ -10645,7 +10673,7 @@ def render_gestao_dashboard_executivo(auth_setor: str, auth_chapa: str, ano: int
             'inicio': 'Início',
             'fim': 'Fim',
         })[['Setor', 'Nome', 'Chapa', 'Início', 'Fim']]
-        st.dataframe(df_ferias_show, use_container_width=True, hide_index=True)
+        render_dataframe_safe(df_ferias_show, width="stretch", hide_index=True)
     else:
         st.info('Nenhuma férias programada encontrada para os setores liberados nesta competência.')
 
@@ -15150,7 +15178,7 @@ def page_gestao_dashboard(ano: int, mes: int):
                     fig_status = px.pie(status_counts, names="Status", values="Qtd", hole=0.62)
                     fig_status.update_traces(textposition='outside', textinfo='percent+label')
                     fig_status.update_layout(margin=dict(l=10, r=10, t=10, b=10), height=300, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', legend_title_text='')
-                    st.plotly_chart(fig_status, use_container_width=True)
+                    st.plotly_chart(fig_status, width="stretch")
                 except Exception:
                     st.bar_chart(status_counts.set_index("Status"))
                 st.markdown("</div>", unsafe_allow_html=True)
@@ -15164,7 +15192,7 @@ def page_gestao_dashboard(ano: int, mes: int):
                     for nome, cor in [("TRABALHO", "#5B8CFF"), ("FOLGA", "#6FD3A3"), ("FÉRIAS", "#F9C74F"), ("AFASTAMENTO", "#F76E6E")]:
                         fig.add_trace(go.Bar(x=prox["dia"], y=prox[nome], name=nome.title(), opacity=0.9))
                     fig.update_layout(barmode='stack', margin=dict(l=10, r=10, t=10, b=10), height=300, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', xaxis_title='Dia', yaxis_title='Registros')
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width="stretch")
                 except Exception:
                     st.bar_chart(prox.set_index("dia")[["TRABALHO", "FOLGA", "FÉRIAS", "AFASTAMENTO"]])
                 st.markdown("</div>", unsafe_allow_html=True)
@@ -15208,7 +15236,7 @@ def page_gestao_dashboard(ano: int, mes: int):
                             fig_cx = px.pie(status_cx, names="Status", values="Qtd", hole=0.62)
                             fig_cx.update_traces(textposition='outside', textinfo='percent+label')
                             fig_cx.update_layout(margin=dict(l=10, r=10, t=10, b=10), height=290, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', legend_title_text='')
-                            st.plotly_chart(fig_cx, use_container_width=True)
+                            st.plotly_chart(fig_cx, width="stretch")
                         except Exception:
                             st.bar_chart(status_cx.set_index("Status"))
 
@@ -15217,7 +15245,7 @@ def page_gestao_dashboard(ano: int, mes: int):
                         exibir_cols = [c for c in ["posto", "nome", "subgrupo", "entrada_prevista", "saida_prevista", "almoco_inicio", "almoco_fim", "status_operacao"] if c in df_cx_exec.columns]
                         df_show = df_cx_exec[exibir_cols].copy()
                         ren = {"posto":"Posto","nome":"Operador","subgrupo":"Subgrupo","entrada_prevista":"Entrada","saida_prevista":"Saída","almoco_inicio":"Sai almoço","almoco_fim":"Volta almoço","status_operacao":"Status"}
-                        st.dataframe(df_show.rename(columns=ren), use_container_width=True, hide_index=True, height=295)
+                        render_dataframe_safe(df_show.rename(columns=ren), width="stretch", hide_index=True, height=295)
 
                     ca1, ca2 = st.columns(2)
                     with ca1:
@@ -15227,14 +15255,14 @@ def page_gestao_dashboard(ano: int, mes: int):
                             st.info("Nenhum posto em almoço neste momento.")
                         else:
                             cols_alm = [c for c in ["posto", "nome", "almoco_inicio", "almoco_fim"] if c in em_almoco.columns]
-                            st.dataframe(em_almoco[cols_alm].rename(columns={"posto":"Posto","nome":"Operador","almoco_inicio":"Saiu","almoco_fim":"Volta"}), use_container_width=True, hide_index=True, height=210)
+                            render_dataframe_safe(em_almoco[cols_alm].rename(columns={"posto":"Posto","nome":"Operador","almoco_inicio":"Saiu","almoco_fim":"Volta"}), width="stretch", hide_index=True, height=210)
                     with ca2:
                         sem_operador = [p for p in postos_exec if p not in set(df_cx_exec["posto"].astype(str))]
                         st.markdown("<div class='gestao-panel-title' style='margin-top:6px;'>Postos sem operador</div>", unsafe_allow_html=True)
                         if not sem_operador:
                             st.success("Todos os postos registrados hoje já têm movimentação.")
                         else:
-                            st.dataframe(pd.DataFrame({"Posto": sem_operador[:36]}), use_container_width=True, hide_index=True, height=210)
+                            render_dataframe_safe(pd.DataFrame({"Posto": sem_operador[:36]}), width="stretch", hide_index=True, height=210)
             st.markdown("</div>", unsafe_allow_html=True)
 
         with tab_horarios:
@@ -15297,7 +15325,7 @@ def page_gestao_dashboard(ano: int, mes: int):
                         import plotly.express as px
                         fig_fx = px.bar(df_faixa, x="Faixa", y="Pessoas", text_auto=True)
                         fig_fx.update_layout(margin=dict(l=10, r=10, t=10, b=10), height=300, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', xaxis_title='', yaxis_title='Pessoas')
-                        st.plotly_chart(fig_fx, use_container_width=True)
+                        st.plotly_chart(fig_fx, width="stretch")
                     except Exception:
                         st.bar_chart(df_faixa.set_index("Faixa"))
 
@@ -15310,7 +15338,7 @@ def page_gestao_dashboard(ano: int, mes: int):
                             import plotly.express as px
                             fig_ent = px.bar(por_entrada, x="entrada", y="Pessoas", text_auto=True)
                             fig_ent.update_layout(margin=dict(l=10, r=10, t=10, b=10), height=300, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', xaxis_title='Entrada', yaxis_title='Pessoas')
-                            st.plotly_chart(fig_ent, use_container_width=True)
+                            st.plotly_chart(fig_ent, width="stretch")
                         except Exception:
                             st.bar_chart(por_entrada.set_index("entrada"))
 
@@ -15320,7 +15348,7 @@ def page_gestao_dashboard(ano: int, mes: int):
                     top_hor = df_hor[[c for c in ["setor", "subgrupo", "nome", "entrada", "saida_prevista_calc"] if c in df_hor.columns]].copy()
                     top_hor = top_hor.sort_values(["entrada", "saida_prevista_calc", "setor", "subgrupo", "nome"], key=lambda s: s.map(lambda x: _hora_to_min(str(x)) if re.match(r"^\d{2}:\d{2}$", str(x or "")) else 9999) if s.name in ["entrada", "saida_prevista_calc"] else s.astype(str))
                     top_hor = top_hor.rename(columns={"setor":"Setor","subgrupo":"Subgrupo","nome":"Nome","entrada":"Entrada","saida_prevista_calc":"Saída prevista"})
-                    st.dataframe(top_hor, use_container_width=True, hide_index=True, height=320)
+                    render_dataframe_safe(top_hor, width="stretch", hide_index=True, height=320)
 
                 with hdet2:
                     st.markdown("<div class='gestao-panel-title' style='margin-top:8px;'>Saídas previstas</div>", unsafe_allow_html=True)
@@ -15331,7 +15359,7 @@ def page_gestao_dashboard(ano: int, mes: int):
                             import plotly.express as px
                             fig_sai = px.line(por_saida.rename(columns={"saida_prevista_calc":"Saída"}), x="Saída", y="Pessoas", markers=True)
                             fig_sai.update_layout(margin=dict(l=10, r=10, t=10, b=10), height=320, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', xaxis_title='Saída prevista', yaxis_title='Pessoas')
-                            st.plotly_chart(fig_sai, use_container_width=True)
+                            st.plotly_chart(fig_sai, width="stretch")
                         except Exception:
                             st.bar_chart(por_saida.set_index("saida_prevista_calc"))
             st.markdown("</div>", unsafe_allow_html=True)
@@ -15341,7 +15369,7 @@ def page_gestao_dashboard(ano: int, mes: int):
             with r1:
                 st.markdown("<div class='gestao-panel'><div class='gestao-panel-title'>Resumo operacional por setor</div><div class='gestao-panel-sub'>Comparativo consolidado dos setores liberados para decisão rápida.</div>", unsafe_allow_html=True)
                 resumo_exib = resumo_setor.rename(columns={"TRABALHO": "TRABALHO", "FOLGA": "FOLGA", "FÉRIAS": "FÉRIAS", "AFASTAMENTO": "AFASTAMENTO", "TOTAL_REGISTROS": "TOTAL"})
-                st.dataframe(resumo_exib, use_container_width=True, hide_index=True, height=320)
+                render_dataframe_safe(resumo_exib, width="stretch", hide_index=True, height=320)
                 st.markdown("</div>", unsafe_allow_html=True)
 
             with r2:
@@ -15351,7 +15379,7 @@ def page_gestao_dashboard(ano: int, mes: int):
                     import plotly.express as px
                     fig_bar = px.bar(part, x="setor", y="TOTAL_REGISTROS", text_auto=True)
                     fig_bar.update_layout(margin=dict(l=10, r=10, t=10, b=10), height=320, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', xaxis_title='', yaxis_title='Registros')
-                    st.plotly_chart(fig_bar, use_container_width=True)
+                    st.plotly_chart(fig_bar, width="stretch")
                 except Exception:
                     st.bar_chart(part.set_index("setor"))
                 st.markdown("</div>", unsafe_allow_html=True)
@@ -15370,7 +15398,7 @@ def page_gestao_dashboard(ano: int, mes: int):
                         fig_sub = px.bar(sub_chart.head(14), x="rotulo", y="TOTAL", text_auto=True)
                         fig_sub.update_layout(margin=dict(l=10, r=10, t=10, b=10), height=320, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', xaxis_title='', yaxis_title='Pessoas')
                         fig_sub.update_xaxes(tickangle=-25)
-                        st.plotly_chart(fig_sub, use_container_width=True)
+                        st.plotly_chart(fig_sub, width="stretch")
                     except Exception:
                         st.bar_chart(sub_chart.set_index("rotulo")["TOTAL"])
                 st.markdown("</div>", unsafe_allow_html=True)
@@ -15381,7 +15409,7 @@ def page_gestao_dashboard(ano: int, mes: int):
                     st.info("Sem subgrupos para exibir no recorte atual.")
                 else:
                     resumo_sub_exib = resumo_subgrupo.rename(columns={"setor": "SETOR", "subgrupo": "SUBGRUPO", "TRABALHO": "TRABALHO", "FOLGA": "FOLGA", "FÉRIAS": "FÉRIAS", "AFASTAMENTO": "AFASTAMENTO", "TOTAL": "TOTAL"})
-                    st.dataframe(resumo_sub_exib, use_container_width=True, hide_index=True, height=320)
+                    render_dataframe_safe(resumo_sub_exib, width="stretch", hide_index=True, height=320)
                 st.markdown("</div>", unsafe_allow_html=True)
 
         with tab_alertas:
@@ -15423,7 +15451,7 @@ def page_gestao_dashboard(ano: int, mes: int):
                         DPT = {0:"Seg", 1:"Ter", 2:"Qua", 3:"Qui", 4:"Sex", 5:"Sáb", 6:"Dom"}
                         piv["DIA_SEMANA"] = piv["dia"].apply(lambda d: DPT.get(dt.date(int(ano), int(mes), int(d)).weekday(), ""))
                         piv = piv[["dia", "DIA_SEMANA", "TRABALHO", "FOLGA", "FÉRIAS", "AFASTAMENTO"]]
-                        st.dataframe(piv.sort_values("dia"), use_container_width=True, hide_index=True)
+                        render_dataframe_safe(piv.sort_values("dia"), width="stretch", hide_index=True)
                     with tabL:
                         last_day = calendar.monthrange(int(ano), int(mes))[1]
                         dia_sel = st.selectbox("Dia para detalhar", list(range(1, last_day + 1)), index=max(0, min(ref_dia, last_day)-1), key="gest_dia_sel")
@@ -15441,9 +15469,9 @@ def page_gestao_dashboard(ano: int, mes: int):
                         if not resumo_day_subgrupo.empty:
                             resumo_day_subgrupo["TOTAL"] = resumo_day_subgrupo[["TRABALHO", "FOLGA", "FÉRIAS", "AFASTAMENTO"]].sum(axis=1)
                             st.markdown("##### Subgrupos do dia")
-                            st.dataframe(
+                            render_dataframe_safe(
                                 resumo_day_subgrupo.rename(columns={"subgrupo": "Subgrupo", "TRABALHO": "Trabalho", "FOLGA": "Folga", "FÉRIAS": "Férias", "AFASTAMENTO": "Afastamento", "TOTAL": "Total"}).sort_values(["Total", "Subgrupo"], ascending=[False, True]),
-                                use_container_width=True,
+                                width="stretch",
                                 hide_index=True,
                                 height=220,
                             )
@@ -15463,7 +15491,7 @@ def page_gestao_dashboard(ano: int, mes: int):
                             sub = sub[["nome", "chapa", "subgrupo", "entrada", "saida_prevista_calc", "status"]].rename(columns={"nome": "Nome", "chapa": "Chapa", "subgrupo": "Subgrupo", "entrada": "Entrada", "saida_prevista_calc": "Saída prevista", "status": "Status"})
                             st.markdown(f"#### {icon} {title} ({len(sub)})")
                             with st.expander(f"Abrir lista de {title.lower()}", expanded=(cat == "TRABALHO")):
-                                st.dataframe(sub.sort_values(["Subgrupo", "Entrada", "Nome", "Chapa"]), use_container_width=True, hide_index=True, height=250)
+                                render_dataframe_safe(sub.sort_values(["Subgrupo", "Entrada", "Nome", "Chapa"]), width="stretch", hide_index=True, height=250)
                         cA, cB = st.columns(2)
                         with cA:
                             _show_cat("Trabalhando", "TRABALHO", "🟩")
@@ -15478,7 +15506,7 @@ def page_gestao_dashboard(ano: int, mes: int):
                         if col_name not in piv.columns:
                             piv[col_name] = 0
                     piv["TOTAL"] = piv[["TRABALHO", "FOLGA", "FÉRIAS", "AFASTAMENTO"]].sum(axis=1)
-                    st.dataframe(piv.sort_values("TOTAL", ascending=False), use_container_width=True, hide_index=True)
+                    render_dataframe_safe(piv.sort_values("TOTAL", ascending=False), width="stretch", hide_index=True)
     
         st.caption("Painel executivo do modo gestão: visual profissional para leitura de diretoria, mantendo o detalhe operacional acessível somente quando necessário.")
         st.markdown("</div>", unsafe_allow_html=True)
@@ -16199,7 +16227,7 @@ def _render_pdf_download_from_path(path_pdf: str, nome_pdf: str, key: str):
             file_name=(nome_pdf or os.path.basename(path_pdf) or 'informativo.pdf'),
             mime='application/pdf',
             key=key,
-            use_container_width=False,
+            width="content",
         )
     except Exception as e:
         st.caption(f'Falha ao preparar PDF: {e}')
@@ -16237,7 +16265,7 @@ def render_portal_informativos(df_info: pd.DataFrame, key_prefix: str = 'portal_
             caminho_img = str(row.get('caminho_imagem') or '').strip()
             if caminho_img and os.path.exists(caminho_img):
                 try:
-                    st.image(caminho_img, use_container_width=True)
+                    st.image(caminho_img, width="stretch")
                 except Exception:
                     pass
             caminho_pdf = str(row.get('caminho_pdf') or '').strip()
@@ -16372,7 +16400,7 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
             keep_cols = [c for c in ['Dia', 'Campo', 'Valor anterior', 'Novo valor', 'Motivo', 'Alterado em'] if c in hist_view.columns]
             if not keep_cols:
                 keep_cols = list(hist_view.columns)
-            st.dataframe(hist_view[keep_cols], use_container_width=True, hide_index=True)
+            render_dataframe_safe(hist_view[keep_cols], width="stretch", hide_index=True)
             st.caption('A assinatura dessas mudanças fica concentrada na aba Assinaturas.')
 
     with tab5:
@@ -16412,7 +16440,7 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
                 keep_cols = [c for c in ['Dia', 'Campo', 'Valor anterior', 'Novo valor', 'Motivo', 'Status da assinatura'] if c in hist_ass.columns]
                 if not keep_cols:
                     keep_cols = list(hist_ass.columns)
-                st.dataframe(hist_ass[keep_cols], use_container_width=True, hide_index=True)
+                render_dataframe_safe(hist_ass[keep_cols], width="stretch", hide_index=True)
                 if ass_mud.get('status') == 'Assinado':
                     st.success('Mudanças do mês vigente já assinadas. Botão ocultado.')
                 else:
@@ -16458,7 +16486,7 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
             cfa, cfb = st.columns(2)
             cfa.metric('Períodos cadastrados', len(df_fer))
             cfb.metric('Situação atual', 'Em férias' if fer_ativa else 'Programadas / encerradas')
-            st.dataframe(df_fer, use_container_width=True, hide_index=True)
+            render_dataframe_safe(df_fer, width="stretch", hide_index=True)
             st.caption('As férias exibidas aqui são somente do colaborador logado.')
 
     with tab7:
@@ -16534,7 +16562,7 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
                                 )
                             else:
                                 rotulo_btn = f"✅ {dia_num:02d}" if selecionado else f"🟩 {dia_num:02d}"
-                                if cols_sem[dia_idx].button(rotulo_btn, key=f'folga_cal_btn_{setor}_{chapa}_{prox_ano_sol}_{prox_mes_sol}_{dia_num}', use_container_width=True):
+                                if cols_sem[dia_idx].button(rotulo_btn, key=f'folga_cal_btn_{setor}_{chapa}_{prox_ano_sol}_{prox_mes_sol}_{dia_num}', width="stretch"):
                                     st.session_state[sel_key] = dia_data.isoformat()
                                     st.rerun()
 
@@ -16574,7 +16602,7 @@ def page_portal_colaborador(auth: dict, ano_cfg: int, mes_cfg: int):
             if df_sol.empty:
                 st.info('Nenhuma sugestão enviada até agora.')
             else:
-                st.dataframe(df_sol, use_container_width=True, hide_index=True)
+                render_dataframe_safe(df_sol, width="stretch", hide_index=True)
 
 
 
@@ -16767,7 +16795,7 @@ def page_app():
             render_app_like_sidebar_nav(_is_admin_area_nav, auth_setor, _modo_gestao_somente_nav)
             st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
 
-        if st.button("🚪 Sair", use_container_width=True, key="logout_btn"):
+        if st.button("🚪 Sair", width="stretch", key="logout_btn"):
             st.session_state["auth"] = None
             st.rerun()
 
@@ -16991,7 +17019,7 @@ def page_app():
         df_risco = _risk_by_sector(setores_dashboard)
         if not df_risco.empty:
             st.markdown("#### 🧭 Indicador de risco por setor")
-            st.dataframe(df_risco.sort_values(['Risco', 'Setor'], ascending=[False, True]), use_container_width=True, hide_index=True)
+            render_dataframe_safe(df_risco.sort_values(['Risco', 'Setor'], ascending=[False, True]), width="stretch", hide_index=True)
             top_risk = df_risco.sort_values('Risco', ascending=False).head(3)
             for _, rr in top_risk.iterrows():
                 problemas_rank.append((float(rr.get('Risco', 0) or 0), f"{rr.get('Setor', '')}: risco {rr.get('Faixa', '')} ({float(rr.get('Risco', 0) or 0):.1f})"))
@@ -17000,7 +17028,7 @@ def page_app():
         if problemas_rank:
             df_prob = pd.DataFrame(sorted(problemas_rank, key=lambda x: x[0], reverse=True), columns=['Impacto', 'Problema'])
             df_prob = df_prob.drop_duplicates(subset=['Problema']).head(5)
-            st.dataframe(df_prob, use_container_width=True, hide_index=True)
+            render_dataframe_safe(df_prob, width="stretch", hide_index=True)
         else:
             st.success("Nenhum problema relevante detectado nesta competência.")
 
@@ -17054,7 +17082,7 @@ def page_app():
                 for col_btn in linha:
                     label_btn, destino_btn, key_btn = botoes_colab[idx_btn_colab]
                     with col_btn:
-                        if st.button(label_btn, key=key_btn, use_container_width=True):
+                        if st.button(label_btn, key=key_btn, width="stretch"):
                             st.session_state["app_like_sub"] = destino_btn
                             st.rerun()
                     idx_btn_colab += 1
@@ -17097,7 +17125,7 @@ def page_app():
                 ini = (int(pagina) - 1) * int(tam_pagina)
                 fim = ini + int(tam_pagina)
                 st.caption(f"Mostrando {min(total_regs, 0 if total_regs == 0 else ini + 1)}–{min(total_regs, fim)} de {total_regs} registro(s).")
-                st.dataframe(df_view.iloc[ini:fim], use_container_width=True, height=420)
+                render_dataframe_safe(df_view.iloc[ini:fim], width="stretch", height=420)
             else:
                 st.info("Sem colaboradores.")
 
@@ -17128,7 +17156,7 @@ def page_app():
                     key="col_dias_folga",
                 )
 
-                submitted = st.form_submit_button("Cadastrar colaborador", use_container_width=True)
+                submitted = st.form_submit_button("Cadastrar colaborador", width="stretch")
 
                 if submitted:
                     if not nome_n or not chapa_n:
@@ -17473,14 +17501,14 @@ def page_app():
                         df_meu = df_ax[df_ax["criado_por_chapa"].astype(str).str.strip() == str(auth.get("chapa") or "").strip()].copy()
                         if not df_meu.empty:
                             st.markdown("### Solicitações de atualização de funcionário")
-                            st.dataframe(df_meu, use_container_width=True, height=220)
+                            render_dataframe_safe(df_meu, width="stretch", height=220)
                     if not df_axg.empty:
                         df_meu_g = df_axg[df_axg["criado_por_chapa"].astype(str).str.strip() == str(auth.get("chapa") or "").strip()].copy()
                         if not df_meu_g.empty:
                             df_meu_g = df_meu_g.copy()
                             df_meu_g['resumo'] = df_meu_g['modulo'].astype(str) + ' / ' + df_meu_g['acao'].astype(str)
                             st.markdown("### Demais solicitações")
-                            st.dataframe(df_meu_g[['id','setor','resumo','status','observacao','criado_em','aprovado_por','aprovado_em']], use_container_width=True, height=260)
+                            render_dataframe_safe(df_meu_g[['id','setor','resumo','status','observacao','criado_em','aprovado_por','aprovado_em']], width="stretch", height=260)
                 else:
                     st.caption("O líder/admin aprova ou reprova as alterações propostas pelo AX do Líder.")
                     df_ax_view = df_ax.copy() if not df_ax.empty else pd.DataFrame()
@@ -17559,12 +17587,12 @@ def page_app():
                                         st.error(f"Falha ao reprovar pendência: {e}")
                     if not hist.empty:
                         st.markdown("### Histórico — atualização de funcionário")
-                        st.dataframe(hist, use_container_width=True, height=180)
+                        render_dataframe_safe(hist, width="stretch", height=180)
                     if not histg.empty:
                         st.markdown("### Histórico — demais módulos")
                         histg = histg.copy()
                         histg['resumo'] = histg['modulo'].astype(str) + ' / ' + histg['acao'].astype(str)
-                        st.dataframe(histg[['id','setor','resumo','status','observacao','criado_em','aprovado_por','aprovado_em']], use_container_width=True, height=220)
+                        render_dataframe_safe(histg[['id','setor','resumo','status','observacao','criado_em','aprovado_por','aprovado_em']], width="stretch", height=220)
 
         elif sec_col in ["🔄 Rodízio Caixa", "🔁 Transferência"]:
             ui_back_header("", "colaboradores", "👥 Colaboradores")
@@ -17598,7 +17626,7 @@ def page_app():
                     st.session_state[force_review_key] = False
 
                 _bcfg_hidden, bcfg2, bcfg3, _bcfg4 = st.columns([1, 1, 1.35, 3.65])
-                if bcfg2.button("🚨 Transferir TODOS do Caixa 02 para Caixa 01", key='rod_caixa_move_all_back', use_container_width=True):
+                if bcfg2.button("🚨 Transferir TODOS do Caixa 02 para Caixa 01", key='rod_caixa_move_all_back', width="stretch"):
                     try:
                         _status_click = get_status_competencia(setor, ano_r, mes_r)
                         if _status_click == 'FECHADA':
@@ -17617,7 +17645,7 @@ def page_app():
                     except Exception as e:
                         st.error(f'Falha ao transferir todos do Caixa 02 para o Caixa 01: {e}')
                 label_reset = "Recriar fila e sugestões do zero"
-                if bcfg3.button(label_reset, key='rod_caixa_reset_cfg', use_container_width=True):
+                if bcfg3.button(label_reset, key='rod_caixa_reset_cfg', width="stretch"):
                     try:
                         _status_click = get_status_competencia(setor, ano_r, mes_r)
                         if _status_click == 'FECHADA':
@@ -17674,10 +17702,10 @@ def page_app():
                     st.session_state[load_transfer_key] = False
 
                 act1, act2 = st.columns([1.2, 1])
-                if act1.button('⚡ Carregar análise completa da Transferência', key=load_transfer_key + '::btn', use_container_width=True):
+                if act1.button('⚡ Carregar análise completa da Transferência', key=load_transfer_key + '::btn', width="stretch"):
                     st.session_state[load_transfer_key] = True
                     st.rerun()
-                if act2.button('🧹 Ocultar análise pesada', key=load_transfer_key + '::hide', use_container_width=True):
+                if act2.button('🧹 Ocultar análise pesada', key=load_transfer_key + '::hide', width="stretch"):
                     st.session_state[load_transfer_key] = False
                     st.rerun()
 
@@ -17722,14 +17750,14 @@ def page_app():
                     st.markdown(f"#### {subgrupo_origem}")
                     df_origem_conf = painel_conf.get('df_origem')
                     if isinstance(df_origem_conf, pd.DataFrame) and not df_origem_conf.empty:
-                        st.dataframe(df_origem_conf, use_container_width=True, height=330)
+                        render_dataframe_safe(df_origem_conf, width="stretch", height=330)
                     else:
                         st.info(f"Nenhuma pessoa em {subgrupo_origem} nesta competência.")
                 with cc2:
                     st.markdown(f"#### {subgrupo_destino}")
                     df_destino_conf = painel_conf.get('df_destino')
                     if isinstance(df_destino_conf, pd.DataFrame) and not df_destino_conf.empty:
-                        st.dataframe(df_destino_conf, use_container_width=True, height=330)
+                        render_dataframe_safe(df_destino_conf, width="stretch", height=330)
                     else:
                         st.info(f"Nenhuma pessoa em {subgrupo_destino} nesta competência.")
 
@@ -17765,7 +17793,7 @@ def page_app():
                             'Aplicado em': p['criado_em'],
                         } for p in pares_aplicados])
                         st.markdown("### Transferências já aplicadas na competência")
-                        st.dataframe(df_pares_aplicados, use_container_width=True, height=380)
+                        render_dataframe_safe(df_pares_aplicados, width="stretch", height=380)
                     else:
                         st.warning('Foi encontrado histórico do rodízio nesta competência, mas sem pares completos para exibir.')
 
@@ -17791,7 +17819,7 @@ def page_app():
                         topb.metric('Sugestões complementares', len(slots))
                         topc.metric('Aprovadas agora', aprovados_validos)
                         if slots and int(aprovados_validos) >= int(len(slots)):
-                            if st.button('➕ Aplicar ajuste complementar agora', key='rod_caixa_apply_complementar', use_container_width=True, disabled=(_status_comp_rod == 'FECHADA')):
+                            if st.button('➕ Aplicar ajuste complementar agora', key='rod_caixa_apply_complementar', width="stretch", disabled=(_status_comp_rod == 'FECHADA')):
                                 res_comp = aplicar_ajuste_complementar_rodizio_caixa_mes(setor, ano_r, mes_r, slots, subgrupo_origem, subgrupo_destino)
                                 if res_comp.get('ok'):
                                     st.success(res_comp.get('msg', 'Ajuste complementar aplicado.'))
@@ -17830,7 +17858,7 @@ def page_app():
                         st.warning(f"Revisão manual ativa em {mes_r:02d}/{ano_r}: trocar a pessoa no seletor NÃO aplica nada sozinho. Só aplica quando você clicar em 'Aplicar mudança de subgrupos agora'.")
 
                     a1, a2 = st.columns([1, 1])
-                    if a1.button('Limpar aprovações e negativas da fila', key='rod_caixa_clear_aprov', use_container_width=True):
+                    if a1.button('Limpar aprovações e negativas da fila', key='rod_caixa_clear_aprov', width="stretch"):
                         aprov_tmp = dict(st.session_state.get(aprov_key, {}))
                         for s in slots:
                             slot_key_tmp = str(s.get('slot_key') or '')
@@ -17844,7 +17872,7 @@ def page_app():
                         st.session_state[freeze_slots_key] = {}
                         st.session_state.pop(state_base + "::aplicado", None)
                         st.rerun()
-                    if a2.button('Aprovar as 14 sugestões atuais', key='rod_caixa_aprov_all', use_container_width=True):
+                    if a2.button('Aprovar as 14 sugestões atuais', key='rod_caixa_aprov_all', width="stretch"):
                         aprov_all = {}
                         for s in slots:
                             slot_key_tmp = str(s.get('slot_key') or '')
@@ -17861,7 +17889,7 @@ def page_app():
 
                     if pronto_aplicar:
                         st.success(f"Todas as {qtd_obrigatoria} sugestões foram aprovadas. Agora falta aplicar o rodízio no mês {mes_r:02d}/{ano_r}.")
-                        if st.button('🔁 Aplicar transferências agora e jogar para Caixa 02', key='rod_caixa_apply_now', use_container_width=True, disabled=(_status_comp_rod == 'FECHADA')):
+                        if st.button('🔁 Aplicar transferências agora e jogar para Caixa 02', key='rod_caixa_apply_now', width="stretch", disabled=(_status_comp_rod == 'FECHADA')):
                             sim_apply = montar_simulacao_com_aprovacoes_rodizio_caixa(sim, st.session_state.get(aprov_key, {}))
                             res_apply = aplicar_rodizio_caixa_mes(setor, ano_r, mes_r, sim_apply)
                             if res_apply.get('ok'):
@@ -17973,7 +18001,7 @@ def page_app():
                     resumo_caixa02_df = pd.DataFrame(resumo_caixa02)
                     if not resumo_caixa02_df.empty:
                         resumo_caixa02_df = resumo_caixa02_df.sort_values(by=['Entrada', 'Nome'], kind='stable').reset_index(drop=True)
-                    st.dataframe(resumo_caixa02_df, use_container_width=True, height=340)
+                    render_dataframe_safe(resumo_caixa02_df, width="stretch", height=340)
 
                     caixa02_real_map = {}
                     for _c_real in (colabs_caixa02_resumo or []):
@@ -18117,7 +18145,7 @@ def page_app():
                                                 pcol1, pcol2, pcol3 = st.columns([2.2, 2.2, 1.2])
                                                 pcol1.text_input('Pessoa desta vaga:', value=f"{nome_perfil_slot} — {chapa_perfil_slot}", disabled=True, key=f'rod_caixa_nome_view_{slot_key}')
                                                 pcol2.selectbox('Subgrupo desta pessoa:', options=subgrupo_opts_slot, key=sg_slot_key)
-                                                salvar_manual_slot = pcol3.button('💾 Salvar perfil', key=f'rod_caixa_salvar_perfil_{slot_key}', use_container_width=True, disabled=(not chapa_perfil_slot))
+                                                salvar_manual_slot = pcol3.button('💾 Salvar perfil', key=f'rod_caixa_salvar_perfil_{slot_key}', width="stretch", disabled=(not chapa_perfil_slot))
 
                                                 if salvar_manual_slot:
                                                     novo_subgrupo_manual = str(st.session_state.get(sg_slot_key) or '').strip()
@@ -18164,7 +18192,7 @@ def page_app():
                                                     st.info(f"Vaga congelada manualmente nesta revisão. A sugestão continua visível mesmo após mudar o subgrupo. Subgrupo salvo: {subgrupo_congelado_txt or '-'}")
 
                                                 bcol1, bcol2 = st.columns([1, 4])
-                                                if bcol1.button('❌ Negar e chamar próximo', key=f'rod_caixa_no_{slot_key}', use_container_width=True):
+                                                if bcol1.button('❌ Negar e chamar próximo', key=f'rod_caixa_no_{slot_key}', width="stretch"):
                                                     negs = list(st.session_state.get(neg_key, []))
                                                     neg_logs = list(st.session_state.get(neg_log_key, []))
                                                     chapa_escolhida_agora = str(st.session_state.get(f'rod_caixa_pick_{slot_key}', str(s.get('origem_chapa') or '')) or '').strip()
@@ -18333,7 +18361,7 @@ def page_app():
                                     st.write(f"Chapa: {chapa_neg} | Horário: {entrada_neg} | Subgrupo: {subgrupo_neg} | Domingos: {domingos_neg}")
                                     st.write(f"Última vez que entrou no Caixa 02: {ultima_vez_neg}")
                                     if chapa_neg:
-                                        if st.button('↩️ Remover negado', key=f'rod_caixa_remove_negado_{slot_neg or chapa_neg}_{i}', use_container_width=False):
+                                        if st.button('↩️ Remover negado', key=f'rod_caixa_remove_negado_{slot_neg or chapa_neg}_{i}', width="content"):
                                             try:
                                                 negs_tmp = [str(x).strip() for x in list(st.session_state.get(neg_key, [])) if str(x).strip()]
                                                 negs_tmp = [x for x in negs_tmp if x != chapa_neg]
@@ -18375,7 +18403,7 @@ def page_app():
                                 'Observação': p['observacao'] or '-',
                             } for p in pares])
                             st.markdown("### Simulação consolidada do mês")
-                            st.dataframe(df_pares, use_container_width=True, height=380)
+                            render_dataframe_safe(df_pares, width="stretch", height=380)
                         else:
                             st.info('Sem simulação consolidada para esta competência.')
 
@@ -18388,7 +18416,7 @@ def page_app():
                             qtd_extra = cex2.number_input('Qtd extra manual', min_value=1, max_value=20, value=1, step=1, key=f'rod_extra_qtd::{setor}::{ano_r}::{mes_r}')
                             cex3.caption('A regra automática continua em 14 pessoas. O extra manual serve só para você autorizar pessoas acima da regra automática.')
                             a1, a2 = st.columns([1,2])
-                            if a1.button('Salvar exceção manual', key=f'rod_extra_save::{setor}::{ano_r}::{mes_r}', use_container_width=True):
+                            if a1.button('Salvar exceção manual', key=f'rod_extra_save::{setor}::{ano_r}::{mes_r}', width="stretch"):
                                 try:
                                     set_rodizio_caixa_regra_extra(setor, horario_extra, int(qtd_extra), subgrupo_destino)
                                     st.success(f'Exceção manual salva para {horario_extra}: +{int(qtd_extra)} pessoa(s).')
@@ -18402,7 +18430,7 @@ def page_app():
                                     ex1, ex2, ex3 = st.columns([1,1,1])
                                     ex1.write(f"Horário: {extra.get('Horário')}")
                                     ex2.write(f"Qtd extra: {extra.get('Qtd extra')}")
-                                    if ex3.button('Remover', key=f"rod_extra_del::{setor}::{subgrupo_destino}::{extra.get('Horário')}", use_container_width=True):
+                                    if ex3.button('Remover', key=f"rod_extra_del::{setor}::{subgrupo_destino}::{extra.get('Horário')}", width="stretch"):
                                         try:
                                             set_rodizio_caixa_regra_extra(setor, str(extra.get('Horário') or ''), 0, subgrupo_destino)
                                             st.success(f"Exceção removida do horário {extra.get('Horário')}.")
@@ -18411,7 +18439,7 @@ def page_app():
                                             st.error(str(e))
 
                         if cotas_horario:
-                            st.dataframe(pd.DataFrame(cotas_horario), use_container_width=True, height=240)
+                            render_dataframe_safe(pd.DataFrame(cotas_horario), width="stretch", height=240)
                             if any(int(r.get('Extra manual', 0) or 0) > 0 for r in cotas_horario):
                                 st.info('A coluna Extra manual mostra pessoas acima da regra automática. O automático segue 14; acima disso só entra por exceção manual.')
                         else:
@@ -18426,7 +18454,7 @@ def page_app():
                         proximos = sim.get('proximos') or []
                         if proximos:
                             st.markdown("### Próximos da fila para o próximo mês")
-                            st.dataframe(pd.DataFrame(proximos[:50]), use_container_width=True, height=260)
+                            render_dataframe_safe(pd.DataFrame(proximos[:50]), width="stretch", height=260)
                         else:
                             st.info('Sem fila projetada para o próximo mês nesta competência.')
                 else:
@@ -18463,7 +18491,7 @@ def page_app():
                     } for r in hist]
                     st.markdown("### Relatório de trocas já aplicadas")
                     st.caption(f"Exibindo somente a competência vigente: {int(mes_r):02d}/{int(ano_r)}")
-                    st.dataframe(pd.DataFrame(hist_view), use_container_width=True, height=320)
+                    render_dataframe_safe(pd.DataFrame(hist_view), width="stretch", height=320)
 
     # ------------------------------------------------------
     # ABA 2: Férias
@@ -18486,7 +18514,7 @@ def page_app():
             for col_btn in linha:
                 label_btn, destino_btn, key_btn = botoes_escala[idx_btn_esc]
                 with col_btn:
-                    if st.button(label_btn, key=key_btn, use_container_width=True):
+                    if st.button(label_btn, key=key_btn, width="stretch"):
                         st.session_state["app_like_sub"] = destino_btn
                         st.rerun()
                 idx_btn_esc += 1
@@ -18534,7 +18562,7 @@ def page_app():
                 for col_btn in linha:
                     label_btn, destino_btn, key_btn = botoes_gestao[idx_btn_ges]
                     with col_btn:
-                        if st.button(label_btn, key=key_btn, use_container_width=True):
+                        if st.button(label_btn, key=key_btn, width="stretch"):
                             st.session_state["app_like_sub"] = destino_btn
                             st.rerun()
                     idx_btn_ges += 1
@@ -18585,12 +18613,12 @@ def page_app():
 
         bx1, bx2, bx3 = st.columns([1.2, 1.2, 2.4])
         with bx1:
-            if st.button("⚡ Carregar operação da Caixa", key=f"cx_carregar_btn::{setor}::{ano_cx}::{mes_cx}", use_container_width=True):
+            if st.button("⚡ Carregar operação da Caixa", key=f"cx_carregar_btn::{setor}::{ano_cx}::{mes_cx}", width="stretch"):
                 st.session_state[_cx_loaded_key] = True
                 st.session_state[_cx_loaded_day_key] = dia_cx
                 st.rerun()
         with bx2:
-            if st.button("🧹 Ocultar operação", key=f"cx_ocultar_btn::{setor}::{ano_cx}::{mes_cx}", use_container_width=True):
+            if st.button("🧹 Ocultar operação", key=f"cx_ocultar_btn::{setor}::{ano_cx}::{mes_cx}", width="stretch"):
                 st.session_state[_cx_loaded_key] = False
                 st.rerun()
         with bx3:
@@ -18647,7 +18675,7 @@ def page_app():
         with tab_mapa_cx:
             fm1, fm2 = st.columns([1.2, 1.8])
             candidatos_cx = ["Clique em carregar colaboradores disponíveis"]
-            if st.button("👥 Carregar colaboradores disponíveis", key=f"cx_ops_load_btn::{setor}::{ano_cx}::{mes_cx}::{dia_cx}", use_container_width=True):
+            if st.button("👥 Carregar colaboradores disponíveis", key=f"cx_ops_load_btn::{setor}::{ano_cx}::{mes_cx}::{dia_cx}", width="stretch"):
                 st.session_state[_cx_ops_loaded_key] = True
                 st.session_state[_cx_ops_loaded_day_key] = int(dia_cx)
                 st.rerun()
@@ -18681,7 +18709,7 @@ def page_app():
                     almoco_fim_sel = ""
                 obs_sel_cx = st.text_input("Observação", key=f"cx_obs::{setor}", placeholder="Ex.: cobrir almoço do Caixa 03")
                 csave1, csave2 = st.columns(2)
-                if csave1.button("💾 Salvar posto", key=f"cx_salvar::{setor}", use_container_width=True):
+                if csave1.button("💾 Salvar posto", key=f"cx_salvar::{setor}", width="stretch"):
                     if not bool(st.session_state.get(_cx_ops_loaded_key, False)):
                         st.warning("Primeiro clique em 👥 Carregar colaboradores disponíveis.")
                     elif not base_operadores_cx.empty and candidato_sel_cx not in ["Nenhum colaborador disponível", "Clique em carregar colaboradores disponíveis"]:
@@ -18710,7 +18738,7 @@ def page_app():
                             st.success(f"{posto_sel_cx} atualizado com sucesso.")
                             st.rerun()
                     st.warning("Selecione um colaborador válido para salvar o posto.")
-                if csave2.button("🧹 Limpar posto", key=f"cx_limpar::{setor}", use_container_width=True):
+                if csave2.button("🧹 Limpar posto", key=f"cx_limpar::{setor}", width="stretch"):
                     caixa_limpar_posto_dia(setor, ano_cx, mes_cx, int(dia_cx), posto_sel_cx)
                     st.success(f"{posto_sel_cx} liberado.")
                     st.rerun()
@@ -18734,7 +18762,7 @@ def page_app():
                         'observacao': 'Observação',
                         'atualizado_em': 'Adicionado em',
                     })
-                    st.dataframe(df_view_cx[['Posto','Operador','Subgrupo','Entrada','Saída','Sai almoço','Volta almoço','Status','Adicionado em','Observação']], use_container_width=True, height=520)
+                    render_dataframe_safe(df_view_cx[['Posto','Operador','Subgrupo','Entrada','Saída','Sai almoço','Volta almoço','Status','Adicionado em','Observação']], width="stretch", height=520)
 
         with tab_status_cx:
             st.markdown("#### Atualização rápida de almoço e trocas")
@@ -18795,7 +18823,7 @@ def page_app():
                     st.success("Status operacional atualizado.")
                     st.rerun()
                 df_status_cx = df_mapa_cx.copy()
-                st.dataframe(df_status_cx.rename(columns={'posto':'Posto','nome':'Operador','status_operacao':'Status','entrada_prevista':'Entrada','saida_prevista':'Saída','almoco_inicio':'Sai almoço','almoco_fim':'Volta almoço','subgrupo':'Subgrupo','observacao':'Observação'})[['Posto','Operador','Subgrupo','Entrada','Saída','Sai almoço','Volta almoço','Status','Observação']], use_container_width=True, height=420)
+                render_dataframe_safe(df_status_cx.rename(columns={'posto':'Posto','nome':'Operador','status_operacao':'Status','entrada_prevista':'Entrada','saida_prevista':'Saída','almoco_inicio':'Sai almoço','almoco_fim':'Volta almoço','subgrupo':'Subgrupo','observacao':'Observação'})[['Posto','Operador','Subgrupo','Entrada','Saída','Sai almoço','Volta almoço','Status','Observação']], width="stretch", height=420)
 
         with tab_cobertura_cx:
             st.markdown("#### Cobertura e planejamento do dia")
@@ -18844,19 +18872,19 @@ def page_app():
                 if prox_saida_cx.empty:
                     st.info("Nenhuma saída prevista nos próximos 90 minutos.")
                 else:
-                    st.dataframe(prox_saida_cx.rename(columns={'posto':'Posto','nome':'Operador','saida_prevista':'Saída','status_operacao':'Status','subgrupo':'Subgrupo'})[['Posto','Operador','Subgrupo','Saída','Status']], use_container_width=True, height=260)
+                    render_dataframe_safe(prox_saida_cx.rename(columns={'posto':'Posto','nome':'Operador','saida_prevista':'Saída','status_operacao':'Status','subgrupo':'Subgrupo'})[['Posto','Operador','Subgrupo','Saída','Status']], width="stretch", height=260)
             with dc2:
                 st.markdown("##### Volta do almoço")
                 if prox_volta_almoco_cx.empty:
                     st.info("Nenhuma volta de almoço prevista nos próximos 90 minutos.")
                 else:
-                    st.dataframe(prox_volta_almoco_cx.rename(columns={'posto':'Posto','nome':'Operador','almoco_fim':'Volta almoço','status_operacao':'Status','subgrupo':'Subgrupo'})[['Posto','Operador','Subgrupo','Volta almoço','Status']], use_container_width=True, height=260)
+                    render_dataframe_safe(prox_volta_almoco_cx.rename(columns={'posto':'Posto','nome':'Operador','almoco_fim':'Volta almoço','status_operacao':'Status','subgrupo':'Subgrupo'})[['Posto','Operador','Subgrupo','Volta almoço','Status']], width="stretch", height=260)
             with dc3:
                 st.markdown("##### Colaboradores disponíveis para reposição")
                 if disponiveis_cx.empty:
                     st.info("Todos os colaboradores em trabalho já estão alocados ou não há equipe disponível para cobrir.")
                 else:
-                    st.dataframe(disponiveis_cx.rename(columns={'nome':'Operador','subgrupo':'Subgrupo','entrada_prevista':'Entrada','saida_prevista':'Saída','status_dia':'Status do dia'})[['Operador','Subgrupo','Entrada','Saída','Status do dia']], use_container_width=True, height=260)
+                    render_dataframe_safe(disponiveis_cx.rename(columns={'nome':'Operador','subgrupo':'Subgrupo','entrada_prevista':'Entrada','saida_prevista':'Saída','status_dia':'Status do dia'})[['Operador','Subgrupo','Entrada','Saída','Status do dia']], width="stretch", height=260)
 
 
     elif sec_main == "🚀 Gerar Escala":
@@ -18881,7 +18909,7 @@ def page_app():
             st.warning("Cadastre colaboradores.")
         else:
             b1, b2, b3, _ = st.columns([1, 1, 1, 5])
-            if b1.button("🚀 Gerar agora (respeita ajustes)", use_container_width=True, key="gen_btn", disabled=(_status_comp_ger == 'FECHADA')):
+            if b1.button("🚀 Gerar agora (respeita ajustes)", width="stretch", key="gen_btn", disabled=(_status_comp_ger == 'FECHADA')):
                 _clear_preview_cache(setor, int(ano), int(mes))
                 st.session_state["last_seed"] = int(seed)
                 ok = _regenerar_mes_inteiro(setor, int(ano), int(mes), seed=int(seed), respeitar_ajustes=True)
@@ -18891,19 +18919,19 @@ def page_app():
                     st.warning("Sem colaboradores.")
                 st.rerun()
 
-            if b2.button("🔄 Recarregar do banco", use_container_width=True, key="gen_reload_btn"):
+            if b2.button("🔄 Recarregar do banco", width="stretch", key="gen_reload_btn"):
                 _clear_preview_cache(setor, int(ano), int(mes))
                 st.rerun()
 
             # 🧹 Gerar do zero: ignora travas/ajustes (recalcula o mês totalmente)
             # -> pede confirmação antes de apagar os overrides do mês.
-            if b3.button("🧹 Gerar do zero (ignorar ajustes)", use_container_width=True, key="gen_zero_btn", disabled=(_status_comp_ger == 'FECHADA')):
+            if b3.button("🧹 Gerar do zero (ignorar ajustes)", width="stretch", key="gen_zero_btn", disabled=(_status_comp_ger == 'FECHADA')):
                 st.session_state["confirm_gen_zero"] = True
 
             if st.session_state.get("confirm_gen_zero", False):
                 st.warning(f"Tem certeza que deseja **zerar a escala {mes:02d}/{ano}**? Isso apaga ajustes/travas (overrides) desse mês.", icon="⚠️")
                 cy, cn, _sp = st.columns([1, 1, 5])
-                if cy.button("✅ Sim", use_container_width=True, key="gen_zero_yes"):
+                if cy.button("✅ Sim", width="stretch", key="gen_zero_yes"):
                     st.session_state["confirm_gen_zero"] = False
                     # Importante: se existirem overrides antigos no mês, eles podem "forçar" Folga/Trabalho e aparentar que o motor não funcionou.
                     # Ao gerar do zero, limpamos overrides do mês selecionado (não mexe em meses anteriores).
@@ -18917,7 +18945,7 @@ def page_app():
                         st.warning("Sem colaboradores.")
                     st.rerun()
 
-                if cn.button("❌ Não", use_container_width=True, key="gen_zero_no"):
+                if cn.button("❌ Não", width="stretch", key="gen_zero_no"):
                     st.session_state["confirm_gen_zero"] = False
                     st.info("Ação cancelada.")
                     st.rerun()
@@ -18928,10 +18956,10 @@ def page_app():
                 st.session_state[preview_key] = False
 
             cprev1, cprev2 = st.columns([1, 5])
-            if cprev1.button("📅 Carregar calendário", use_container_width=True, key=f"btn_load_preview_{setor}_{ano}_{mes}"):
+            if cprev1.button("📅 Carregar calendário", width="stretch", key=f"btn_load_preview_{setor}_{ano}_{mes}"):
                 st.session_state[preview_key] = True
                 st.rerun()
-            if cprev2.button("🧹 Ocultar visualização", use_container_width=True, key=f"btn_hide_preview_{setor}_{ano}_{mes}"):
+            if cprev2.button("🧹 Ocultar visualização", width="stretch", key=f"btn_hide_preview_{setor}_{ano}_{mes}"):
                 st.session_state[preview_key] = False
                 st.rerun()
 
@@ -18943,14 +18971,14 @@ def page_app():
                     st.markdown("### 📅 Calendário RH (visual por colaborador)")
                     show_color = st.checkbox("🎨 Mostrar cores no calendário (pode deixar lento)", value=False, key="cal_color")
                     if show_color:
-                        st.dataframe(style_calendario(cal, int(mes), int(ano)), use_container_width=True)
+                        render_dataframe_safe(style_calendario(cal, int(mes), int(ano)), width="stretch")
                     else:
-                        st.dataframe(cal, use_container_width=True)
+                        render_dataframe_safe(cal, width="stretch")
 
                     st.markdown("---")
                     st.markdown("### 👤 Visualizar colaborador (detalhado)")
                     ch_view = st.selectbox("Chapa:", list(hist_db.keys()), key="view_ch")
-                    st.dataframe(aplicar_rotulos_dias_semana_df(hist_db[ch_view], ano, mes), use_container_width=True, height=420)
+                    render_dataframe_safe(aplicar_rotulos_dias_semana_df(hist_db[ch_view], ano, mes), width="stretch", height=420)
                 else:
                     st.info("Sem escala no mês. Clique em **Gerar agora**.")
             else:
@@ -19081,7 +19109,7 @@ def page_app():
                     df_grid = pd.DataFrame(rows)
                     edited = st.data_editor(
                         df_grid,
-                        use_container_width=True,
+                        width="stretch",
                         hide_index=True,
                         num_rows="fixed",
                         column_config={str(d): st.column_config.CheckboxColumn(rotulos_dias.get(str(d), str(d)), width="small") for d in dias},
@@ -19207,7 +19235,7 @@ def page_app():
                     folga_fixa_df = list_folga_fixa(setor)
                     if not folga_fixa_df.empty:
                         st.markdown("#### Folgas fixas cadastradas")
-                        st.dataframe(folga_fixa_df[["Nome", "Chapa", "Dia", "Ativo", "CriadoEm"]], use_container_width=True, hide_index=True)
+                        render_dataframe_safe(folga_fixa_df[["Nome", "Chapa", "Dia", "Ativo", "CriadoEm"]], width="stretch", hide_index=True)
                     else:
                         st.info("Nenhuma folga fixa cadastrada ainda.")
 
@@ -19271,12 +19299,12 @@ def page_app():
                         })
                     df_inv_view = pd.DataFrame(rows_inv)
                     st.markdown("#### Inventário do mês")
-                    st.dataframe(df_inv_view, use_container_width=True, hide_index=True)
+                    render_dataframe_safe(df_inv_view, width="stretch", hide_index=True)
 
                     comp_inv = build_inventario_comparativo(setor, ano, mes, hist_db if hist_db else None)
                     if not comp_inv.empty:
                         st.markdown("#### Comparativo meta x escala atual")
-                        st.dataframe(comp_inv, use_container_width=True, hide_index=True)
+                        render_dataframe_safe(comp_inv, width="stretch", hide_index=True)
                     else:
                         st.info("Cadastre as metas do mês para acompanhar o comparativo depois.")
 
@@ -19310,7 +19338,7 @@ def page_app():
                         nova_saida = colrc.text_input("Nova saída", value=base_sai, key=f"ret_sai::{setor}::{ano}::{mes}")
                         novo_subgrupo = colrd.selectbox("Novo subgrupo", options=['', 'OPERADOR DE CAIXA 01', 'OPERADOR DE CAIXA 02'] + sorted({str(c.get('Subgrupo') or '').strip() for c in colaboradores_ret if str(c.get('Subgrupo') or '').strip()}), index=0, key=f"ret_sub::{setor}::{ano}::{mes}")
                         motivo_ret = st.text_area("Motivo da retificação", key=f"ret_motivo::{setor}::{ano}::{mes}")
-                        if st.button("💾 Salvar retificação", key=f"ret_save::{setor}::{ano}::{mes}", use_container_width=True):
+                        if st.button("💾 Salvar retificação", key=f"ret_save::{setor}::{ano}::{mes}", width="stretch"):
                             if not chapa_ret:
                                 st.warning('Selecione um funcionário válido.')
                             else:
@@ -19355,7 +19383,7 @@ def page_app():
                         df_ret_list = load_retificacoes_competencia(setor, ano, mes)
                         if df_ret_list is not None and not df_ret_list.empty:
                             st.markdown('#### Retificações já registradas nesta competência')
-                            st.dataframe(df_ret_list[[c for c in ['dia','nome','chapa','novo_status','nova_entrada','nova_saida','novo_subgrupo','motivo','usuario','criado_em'] if c in df_ret_list.columns]], use_container_width=True, hide_index=True)
+                            render_dataframe_safe(df_ret_list[[c for c in ['dia','nome','chapa','novo_status','nova_entrada','nova_saida','novo_subgrupo','motivo','usuario','criado_em'] if c in df_ret_list.columns]], width="stretch", hide_index=True)
                             render_excluir_retificacao_ui(setor, ano, mes, df_ret_list, key_sfx='ajustes_hist')
 
                 elif sec_aj == "📊 Contagens por dia":
@@ -19389,10 +19417,10 @@ def page_app():
 
                         df_cov_sub = build_cobertura_por_subgrupo_no_dia(setor, ano, mes, int(dia_cov), hist_view_inv)
                         st.markdown("#### Contagens por dia — visão Excel (geral)")
-                        st.dataframe(df_cov_geral, use_container_width=True, hide_index=True)
+                        render_dataframe_safe(df_cov_geral, width="stretch", hide_index=True)
                         if not df_cov_sub.empty:
                             st.markdown("#### Contagens por subgrupo no dia selecionado")
-                            st.dataframe(df_cov_sub, use_container_width=True, hide_index=True)
+                            render_dataframe_safe(df_cov_sub, width="stretch", hide_index=True)
                     else:
                         st.info("Gere a escala para visualizar as contagens por dia e por subgrupo.")
 
@@ -19404,7 +19432,7 @@ def page_app():
                         st.info("Gere a escala primeiro para visualizar o histórico.")
                     else:
                         df_hist_dia = build_historico_folgas_diario(setor, ano, mes, hist_view)
-                        st.dataframe(aplicar_rotulos_dias_semana_df(df_hist_dia, ano, mes), use_container_width=True, hide_index=True)
+                        render_dataframe_safe(aplicar_rotulos_dias_semana_df(df_hist_dia, ano, mes), width="stretch", hide_index=True)
                         dias_hist = df_hist_dia["Dia"].tolist()
                         dia_sel_hist = st.selectbox("Ver detalhes do dia:", options=dias_hist, key="hist_dia_sel")
                         row_hist = df_hist_dia[df_hist_dia["Dia"] == int(dia_sel_hist)].iloc[0]
@@ -19516,7 +19544,7 @@ def page_app():
 
                                 edited_th = st.data_editor(
                                     df_th,
-                                    use_container_width=True,
+                                    width="stretch",
                                     hide_index=True,
                                     num_rows="fixed",
                                     column_config={str(d): st.column_config.CheckboxColumn(rotulos_dias2.get(str(d), str(d)), width="small") for d in dias2},
@@ -19608,7 +19636,7 @@ def page_app():
                                         styler_preview = styler_preview.apply(_style_domingo_columns, subset=cols_preview_dias, axis=0)
                                         styler_preview = styler_preview.map(_style_preview_grade, subset=cols_preview_dias)
 
-                                    st.dataframe(styler_preview, use_container_width=True, height=260, hide_index=True)
+                                    render_dataframe_safe(styler_preview, width="stretch", height=260, hide_index=True)
 
                                 auto_readequar_th = st.checkbox("🔄 Readequar escala ao salvar", value=False, key="th_auto_regen")
 
@@ -19767,7 +19795,7 @@ def page_app():
                 motivo_ret = st.text_area("Motivo da retificação", value=valor_motivo, key=f"ret_motivo_live::{setor}::{ano}::{mes}::{chapa_ret}::{dia_ret}")
                 st.caption("Subgrupo é mensal na competência. O dia serve apenas para folga, horário e afastamento.")
 
-                if st.button("💾 Salvar retificação", key=f"ret_save_live::{setor}::{ano}::{mes}", use_container_width=True):
+                if st.button("💾 Salvar retificação", key=f"ret_save_live::{setor}::{ano}::{mes}", width="stretch"):
                     if not chapa_ret:
                         st.warning('Selecione um funcionário válido.')
                     else:
@@ -19815,7 +19843,7 @@ def page_app():
                 if df_ret_list is not None and not df_ret_list.empty:
                     st.markdown('#### Retificações já registradas nesta competência')
                     cols_view = [c for c in ['dia', 'nome', 'chapa', 'novo_status', 'nova_entrada', 'nova_saida', 'novo_subgrupo', 'motivo', 'usuario', 'criado_em'] if c in df_ret_list.columns]
-                    st.dataframe(df_ret_list[cols_view], use_container_width=True, hide_index=True)
+                    render_dataframe_safe(df_ret_list[cols_view], width="stretch", hide_index=True)
                     render_excluir_retificacao_ui(setor, ano, mes, df_ret_list, key_sfx='ajustes_live')
 
         if sec_aj == "✅ Preferência por subgrupo":
@@ -19921,7 +19949,7 @@ def page_app():
                     ce3.caption("Colaborador verá somente os comunicados ativos do próprio setor.")
                     imagem_info = st.file_uploader("Imagem do comunicado (opcional)", type=['png', 'jpg', 'jpeg', 'webp'], key=f"info_img::{setor}::{ano}::{mes}")
                     pdf_info = st.file_uploader("PDF anexo (opcional)", type=['pdf'], key=f"info_pdf::{setor}::{ano}::{mes}")
-                    salvar_info = st.form_submit_button("📢 Publicar informativo", use_container_width=True)
+                    salvar_info = st.form_submit_button("📢 Publicar informativo", width="stretch")
 
                 if salvar_info:
                     titulo_limpo = str(titulo_info or '').strip()
@@ -20000,7 +20028,7 @@ def page_app():
                                 st.caption(f"PDF: {str(info_row.get('nome_pdf') or '').strip()}")
                             a1, a2 = st.columns([1, 4])
                             label_btn = '🚫 Desativar' if ativo_row else '✅ Reativar'
-                            if a1.button(label_btn, key=f"info_toggle::{setor}::{info_id}", use_container_width=True):
+                            if a1.button(label_btn, key=f"info_toggle::{setor}::{info_id}", width="stretch"):
                                 atualizar_status_informativo(info_id, not ativo_row)
                                 st.rerun()
                             a2.caption('Desativado não aparece mais no portal, mas continua salvo no histórico do setor.')
@@ -20035,7 +20063,7 @@ def page_app():
                 for col_btn in linha:
                     label_btn, destino_btn, key_btn = botoes_ferias[idx_btn_fer]
                     with col_btn:
-                        if st.button(label_btn, key=key_btn, use_container_width=True):
+                        if st.button(label_btn, key=key_btn, width="stretch"):
                             st.session_state["app_like_sub"] = destino_btn
                             st.rerun()
                     idx_btn_fer += 1
@@ -20067,7 +20095,7 @@ def page_app():
                 show_chapa = st.checkbox("Mostrar coluna Chapa no mapa", value=False, key="fer_mapa_show_chapa")
                 df_mapa_show = df_mapa if show_chapa else df_mapa.drop(columns=["Chapa"])
                 st.caption("Legenda: FER = férias lançadas no mês. O mapa abaixo usa visual escuro para apresentação executiva.")
-                st.dataframe(style_ferias_mapa(df_mapa_show), use_container_width=True, height=420)
+                render_dataframe_safe(style_ferias_mapa(df_mapa_show), width="stretch", height=420)
 
             # ---------------------------
             # TAB 2 — LANÇAR
@@ -20166,7 +20194,7 @@ def page_app():
                         df_res = df_res[["Mês", "Mês (nome)", "Colaboradores em férias", "Dias de férias (soma)", "Períodos iniciados no mês"]]
                     except Exception:
                         pass
-                    st.dataframe(df_res, use_container_width=True, height=360)
+                    render_dataframe_safe(df_res, width="stretch", height=360)
                     with st.expander("🔎 Ver detalhes de um mês"):
                         mes_det = st.selectbox("Mês:", list(range(1, 13)), index=0, key="fer_hist_mes_det")
                         ini_mes = pd.Timestamp(year=int(ano_ref), month=int(mes_det), day=1).date()
@@ -20176,7 +20204,7 @@ def page_app():
                             st.info("Nenhuma férias nesse mês.")
                         else:
                             det = det[["Chapa", "Nome", "Início", "Fim"]].sort_values(["Nome","Chapa"])
-                            st.dataframe(det, use_container_width=True, height=360)
+                            render_dataframe_safe(det, width="stretch", height=360)
 
             # ---------------------------
             # TAB 4 — CADASTRADAS
@@ -20188,7 +20216,7 @@ def page_app():
                     df_f = pd.DataFrame(rows, columns=["Chapa", "Início", "Fim"])
                     nome_by = {str(c.get("Chapa","")): str(c.get("Nome","") or "") for c in (colaboradores or [])}
                     df_f.insert(1, "Nome", df_f["Chapa"].astype(str).map(nome_by).fillna(""))
-                    st.dataframe(df_f, use_container_width=True, height=420)
+                    render_dataframe_safe(df_f, width="stretch", height=420)
                 else:
                     st.info("Nenhuma férias cadastrada.")
 
@@ -20206,7 +20234,7 @@ def page_app():
                     df_f.insert(2, "Nome", df_f["Chapa"].astype(str).map(nome_by).fillna(""))
                     df_f = df_f.reset_index(drop=True)
                     df_f.insert(0, "Linha", df_f.index + 1)
-                    st.dataframe(df_f[["Linha", "Chapa", "Nome", "Início", "Fim"]], use_container_width=True, height=260)
+                    render_dataframe_safe(df_f[["Linha", "Chapa", "Nome", "Início", "Fim"]], width="stretch", height=260)
                     opcoes_rem = [
                         f"{int(row['Linha'])} - {str(row['Nome']).strip()} | {str(row['Chapa']).strip()} | {str(row['Início']).strip()} até {str(row['Fim']).strip()}"
                         for _, row in df_f.iterrows()
@@ -20593,7 +20621,7 @@ def page_app():
 
             payload_dia = dia_cache.get(dia_key, {"df": pd.DataFrame(columns=["Chapa","Nome","Subgrupo","Entrada","Saída"]), "hist": {}, "colaboradores": []})
             df_dia = payload_dia.get("df") if isinstance(payload_dia.get("df"), pd.DataFrame) else pd.DataFrame(columns=["Chapa","Nome","Subgrupo","Entrada","Saída"])
-            st.dataframe(df_dia, use_container_width=True, hide_index=True)
+            render_dataframe_safe(df_dia, width="stretch", hide_index=True)
 
             colp1, colp2 = st.columns([1, 2])
             pdf_day_key = f"pdf::{dia_key}"
@@ -20620,7 +20648,7 @@ def page_app():
             st.markdown("### 🏖️ Férias do mês (PDF)")
             cfx1, cfx2 = st.columns([1, 2])
             pdf_fer_busca = cfx2.text_input("Filtro (nome ou chapa) — opcional:", value="", key="pdf_fer_busca")
-            btn_fer_pdf = cfx1.button("📄 Gerar PDF — Férias do mês", use_container_width=True, key="pdf_fer_btn")
+            btn_fer_pdf = cfx1.button("📄 Gerar PDF — Férias do mês", width="stretch", key="pdf_fer_btn")
             cfx2.caption("Gera um relatório A4 com Nome, Chapa, Início, Fim e Dias. Considera quem tem férias que encostam no mês selecionado.")
             if btn_fer_pdf:
                 colabs_all = load_colaboradores_setor(setor) or []
@@ -20634,7 +20662,7 @@ def page_app():
                     data=pdf_bytes,
                     file_name=f"ferias_{setor}_{int(mes):02d}_{int(ano)}.pdf",
                     mime="application/pdf",
-                    use_container_width=True,
+                    width="stretch",
                     key="pdf_fer_dl"
                 )
         elif sec_imp == "🖨️ Imprimir escala parede":
@@ -20679,7 +20707,7 @@ def page_app():
             )
 
             cbtn1, cbtn2 = st.columns([1, 3])
-            gerar = cbtn1.button("🖨️ Imprimir (gerar PDF)", key="pdf_print_btn", use_container_width=True)
+            gerar = cbtn1.button("🖨️ Imprimir (gerar PDF)", key="pdf_print_btn", width="stretch")
             cbtn2.caption("Dica: selecione uma seção, depois marque os colaboradores. Se não marcar nenhum, imprime todos os filtrados.")
 
             pdf_parede_key = f"{setor}|{ano}|{mes}|{loja_txt.strip()}|{modo_pdf}|{data_ini}|{data_fim}|{','.join(sorted(chapas_sel)) if 'chapas_sel' in locals() else ''}|{','.join(sorted(secoes_sel))}|{busca_txt.strip()}"
@@ -20846,7 +20874,7 @@ def page_app():
                     df_view['Assinado_em'] = pd.to_datetime(df_view['Assinado_em'], errors='coerce').dt.strftime('%d/%m/%Y %H:%M')
                 except Exception:
                     pass
-            st.dataframe(df_view, use_container_width=True, hide_index=True)
+            render_dataframe_safe(df_view, width="stretch", hide_index=True)
 
             faltantes_vig = [
                 c for c in colaboradores_setor
@@ -20864,7 +20892,7 @@ def page_app():
                     st.markdown(f"**Competência selecionada ({mes:02d}/{ano})**")
                     st.write(f"Faltam assinar: **{faltam_sel}**")
                     if faltantes_sel:
-                        st.dataframe(
+                        render_dataframe_safe(
                             pd.DataFrame([
                                 {
                                     'Chapa': str((c or {}).get('Chapa', '')).strip(),
@@ -20873,7 +20901,7 @@ def page_app():
                                 }
                                 for c in faltantes_sel
                             ]),
-                            use_container_width=True,
+                            width="stretch",
                             hide_index=True,
                         )
                     else:
@@ -20882,7 +20910,7 @@ def page_app():
                     st.markdown(f"**Mês vigente ({mes_vig_ass:02d}/{ano_vig_ass})**")
                     st.write(f"Faltam assinar: **{faltam_vig}**")
                     if faltantes_vig:
-                        st.dataframe(
+                        render_dataframe_safe(
                             pd.DataFrame([
                                 {
                                     'Chapa': str((c or {}).get('Chapa', '')).strip(),
@@ -20891,7 +20919,7 @@ def page_app():
                                 }
                                 for c in faltantes_vig
                             ]),
-                            use_container_width=True,
+                            width="stretch",
                             hide_index=True,
                         )
                     else:
@@ -20927,7 +20955,7 @@ def page_app():
                     except Exception:
                         pass
 
-            st.dataframe(df_view, use_container_width=True, hide_index=True)
+            render_dataframe_safe(df_view, width="stretch", hide_index=True)
 
             pendentes = df_sol_setor[df_sol_setor['Status'].astype(str) == 'Em análise'].copy() if 'Status' in df_sol_setor.columns else pd.DataFrame()
             if pendentes.empty:
@@ -21060,7 +21088,7 @@ def page_app():
 
             st.markdown("---")
             dfu = admin_list_users()
-            st.dataframe(dfu, use_container_width=True, height=420)
+            render_dataframe_safe(dfu, width="stretch", height=420)
 
             st.markdown("### Resetar senha de um usuário")
             if not dfu.empty:
@@ -21237,7 +21265,7 @@ def page_app():
                                 df_view_perm['Criado em'] = pd.to_datetime(df_view_perm['Criado em'], errors='coerce').dt.strftime('%d/%m/%Y %H:%M')
                             except Exception:
                                 pass
-                        st.dataframe(df_view_perm, use_container_width=True, hide_index=True)
+                        render_dataframe_safe(df_view_perm, width="stretch", hide_index=True)
                     else:
                         st.info("Ainda não existem permissões específicas salvas para setores da Gestão.")
 
@@ -21258,7 +21286,7 @@ def page_app():
                         res = admin_rename_setor_global(str(setor_ren_atual), str(setor_ren_novo))
                         st.success(f"Setor renomeado de {res['setor_antigo']} para {res['setor_novo']}. Tabelas afetadas: {res['total_tabelas']} | Registros atualizados: {res['total_registros']}")
                         if res['tabelas_atualizadas']:
-                            st.dataframe(pd.DataFrame(res['tabelas_atualizadas'], columns=['Tabela', 'Registros atualizados']), use_container_width=True, hide_index=True)
+                            render_dataframe_safe(pd.DataFrame(res['tabelas_atualizadas'], columns=['Tabela', 'Registros atualizados']), width="stretch", hide_index=True)
                         st.rerun()
                     except Exception as e:
                         st.error(f"Falha ao renomear setor: {e}")
@@ -21283,7 +21311,7 @@ def page_app():
                             res = admin_delete_setor_global(setor_exc_final)
                             st.success(f"Setor {res['setor_excluido']} excluído com sucesso. Tabelas afetadas: {res['total_tabelas']} | Registros removidos: {res['total_registros']}")
                             if res['tabelas_afetadas']:
-                                st.dataframe(pd.DataFrame(res['tabelas_afetadas'], columns=['Tabela', 'Registros removidos']), use_container_width=True, hide_index=True)
+                                render_dataframe_safe(pd.DataFrame(res['tabelas_afetadas'], columns=['Tabela', 'Registros removidos']), width="stretch", hide_index=True)
                             st.rerun()
                     except Exception as e:
                         st.error(f"Falha ao excluir setor: {e}")
@@ -21404,7 +21432,7 @@ def page_app():
                     "detalhes": "Detalhes",
                     "status": "Status",
                 })
-                st.dataframe(df_logs_view, use_container_width=True, height=420, hide_index=True)
+                render_dataframe_safe(df_logs_view, width="stretch", height=420, hide_index=True)
                 try:
                     xls_logs = io.BytesIO()
                     with pd.ExcelWriter(xls_logs, engine="openpyxl") as writer:
@@ -21462,7 +21490,7 @@ def page_app():
                 {"Campo": "Status atual", "Valor": msg_conn},
                 {"Campo": "Último erro", "Valor": (_SUPABASE_LAST_ERROR or st.session_state.get("sb_diag_last_error", "")) or "—"},
             ])
-            st.dataframe(info_df, use_container_width=True, hide_index=True)
+            render_dataframe_safe(info_df, width="stretch", hide_index=True)
 
             db_runtime = _db_runtime_summary()
             st.caption(f"Banco local: {db_runtime.get('db_path','')} | Existe: {db_runtime.get('db_exists')} | Melhor candidato: {db_runtime.get('best_candidate','')}")
@@ -21502,7 +21530,7 @@ def page_app():
                     st.error(f"Falha no pull: {e}")
 
             with st.expander("Comparar tabelas local x Supabase", expanded=False):
-                st.dataframe(_supabase_compare_tables_snapshot(), use_container_width=True, hide_index=True, height=360)
+                render_dataframe_safe(_supabase_compare_tables_snapshot(), width="stretch", hide_index=True, height=360)
 
             st.markdown("---")
             st.subheader("🏷️ Setores (criar / listar)")
