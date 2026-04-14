@@ -985,7 +985,7 @@ def render_escala_espelho_colaborador(df_mes: pd.DataFrame, titulo: str = "") ->
                 pass
 
         if not all([col_dia, col_status]):
-            st.dataframe(df, use_container_width=True, hide_index=True)
+            st.dataframe(sanitize_for_streamlit(df), width="stretch", hide_index=True)
             return
 
         dias = []
