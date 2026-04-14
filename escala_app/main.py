@@ -1053,9 +1053,9 @@ def render_escala_espelho_colaborador(df_mes: pd.DataFrame, titulo: str = "") ->
             df_show.style
             .applymap(_cor_espelho)
         )
-        st.dataframe(styler, use_container_width=True, hide_index=True)
+        st.dataframe(styler, width="stretch", hide_index=True)
     except Exception:
-        st.dataframe(df_mes, use_container_width=True, hide_index=True)
+        st.dataframe(sanitize_for_streamlit(df_mes), width="stretch", hide_index=True)
 
 VERSAO_ACESSO_LIDER = "ACESSO_LIDER_FIX_2026_03_14_v2"
 
