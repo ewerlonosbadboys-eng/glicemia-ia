@@ -14601,10 +14601,23 @@ def _montar_colaboradores_base_geracao(setor: str, ano: int, mes: int) -> list[d
     ano_ant, mes_ant = _competencia_anterior(int(ano), int(mes))
 
     if competencia_fechada(setor, int(ano_ant), int(mes_ant)):
+        try:
+            # Garante que o snapshot oficial do mês anterior exista, mesmo para competências
+            # fechadas antes dessa blindagem.
+            rebuild_colaborador_competencia_snapshot(setor, int(ano_ant), int(mes_ant))
+        except Exception as e:
+            logger.exception(
+                f"Falha ao reconstruir snapshot da competência anterior {int(mes_ant):02d}/{int(ano_ant)}: {e}"
+            )
+
+        usados_snapshot = 0
         for ch, item in list(mapa.items()):
             try:
                 snap_ant = get_colaborador_competencia_snapshot(setor, ch, int(ano_ant), int(mes_ant))
-            except Exception:
+            except Exception as e:
+                logger.exception(
+                    f"Erro ao ler snapshot da chapa {ch} em {int(mes_ant):02d}/{int(ano_ant)}: {e}"
+                )
                 snap_ant = None
             if not snap_ant:
                 continue
@@ -14612,6 +14625,16 @@ def _montar_colaboradores_base_geracao(setor: str, ano: int, mes: int) -> list[d
             item['Subgrupo'] = str(snap_ant.get('Subgrupo') or item.get('Subgrupo') or '').strip() or 'SEM SUBGRUPO'
             item['Entrada'] = str(snap_ant.get('Entrada') or item.get('Entrada') or '').strip() or '06:00'
             item['Folga_Sab'] = bool(snap_ant.get('Folga_Sab', item.get('Folga_Sab', False)))
+            usados_snapshot += 1
+
+        logger.info(
+            f"Base de geração usando snapshot da competência anterior {int(mes_ant):02d}/{int(ano_ant)} "
+            f"para {usados_snapshot}/{len(mapa)} colaboradores."
+        )
+    else:
+        logger.info(
+            f"Base de geração SEM snapshot anterior: competência {int(mes_ant):02d}/{int(ano_ant)} não está fechada."
+        )
 
     for ch, item in list(mapa.items()):
         try:
@@ -14638,6 +14661,7 @@ def _build_df_ref_prev_competencia(setor: str, ano: int, mes: int):
     - tenta primeiro o cache oficial get_hist_mes_com_overrides_cached;
     - se vier vazio/inválido, faz fallback para load_escala_mes_db + apply_overrides_to_hist;
     - normaliza a saída para DataFrame com colunas: Data, Chapa, Status.
+    - a escala 5x2 respeita a semana real SEG->DOM, inclusive na virada do mês.
     """
     ano_prev = None
     mes_prev = None
@@ -14657,12 +14681,19 @@ def _build_df_ref_prev_competencia(setor: str, ano: int, mes: int):
             prev_obj = None
 
         if not isinstance(prev_obj, dict) or not prev_obj:
-            logger.warning(f"Base cache da referência anterior vazia/inválida ({ref_txt}); tentando fallback load_escala_mes_db + apply_overrides_to_hist")
+            logger.warning(
+                f"Base cache da referência anterior vazia/inválida ({ref_txt}); "
+                f"tentando fallback load_escala_mes_db + apply_overrides_to_hist"
+            )
             try:
                 hist_raw = load_escala_mes_db(setor, int(ano_prev), int(mes_prev))
             except Exception as e:
                 logger.exception(f"Erro em load_escala_mes_db para referência anterior {ref_txt}: {e}")
                 hist_raw = None
+
+            if not isinstance(hist_raw, dict) or not hist_raw:
+                logger.warning(f"Referência anterior NÃO usada: load_escala_mes_db vazio/inválido ({ref_txt})")
+                hist_raw = {}
 
             try:
                 prev_obj = apply_overrides_to_hist(setor, int(ano_prev), int(mes_prev), hist_raw)
@@ -14702,7 +14733,9 @@ def _build_df_ref_prev_competencia(setor: str, ano: int, mes: int):
                     break
 
             if data_col is None or status_col is None:
-                logger.warning(f"Referência anterior {ref_txt}: chapa {ch_prev} ignorada por falta de colunas Data/Status")
+                logger.warning(
+                    f"Referência anterior {ref_txt}: chapa {ch_prev} ignorada por falta de colunas Data/Status"
+                )
                 continue
 
             dfn = pd.DataFrame({
@@ -14726,6 +14759,11 @@ def _build_df_ref_prev_competencia(setor: str, ano: int, mes: int):
 
         if parts:
             df_ref = pd.concat(parts, ignore_index=True)
+            try:
+                df_ref['Data'] = pd.to_datetime(df_ref['Data'], errors='coerce')
+                df_ref = df_ref.dropna(subset=['Data']).sort_values(['Chapa', 'Data']).reset_index(drop=True)
+            except Exception as e:
+                logger.exception(f"Erro ao consolidar referência anterior {ref_txt}: {e}")
             logger.info(f"Referência anterior usada: {ref_txt}")
             return df_ref
 
