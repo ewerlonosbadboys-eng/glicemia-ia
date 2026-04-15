@@ -19319,7 +19319,7 @@ def page_app():
         if not colaboradores:
             st.warning("Cadastre colaboradores.")
         else:
-            b1, b2, b3, _ = st.columns([1, 1, 1, 5])
+            b1, b2, b3, b4, _ = st.columns([1, 1, 1, 1, 4])
             if b1.button("🚀 Gerar agora (respeita ajustes)", width="stretch", key="gen_btn", disabled=(_status_comp_ger == 'FECHADA')):
                 _clear_preview_cache(setor, int(ano), int(mes))
                 st.session_state["last_seed"] = int(seed)
@@ -19334,13 +19334,37 @@ def page_app():
                 _clear_preview_cache(setor, int(ano), int(mes))
                 st.rerun()
 
+            if b3.button("🗑️ Apagar tudo", width="stretch", key="gen_delete_btn", disabled=(_status_comp_ger == 'FECHADA')):
+                st.session_state["confirm_gen_delete_only"] = True
+
             # 🧹 Gerar do zero: ignora travas/ajustes (recalcula o mês totalmente)
-            # -> pede confirmação antes de apagar os overrides do mês.
-            if b3.button("🧹 Gerar do zero (ignorar ajustes)", width="stretch", key="gen_zero_btn", disabled=(_status_comp_ger == 'FECHADA')):
+            # -> pede confirmação antes de apagar a competência do mês atual e gerar novamente.
+            if b4.button("🧹 Gerar do zero (ignorar ajustes)", width="stretch", key="gen_zero_btn", disabled=(_status_comp_ger == 'FECHADA')):
                 st.session_state["confirm_gen_zero"] = True
 
+            if st.session_state.get("confirm_gen_delete_only", False):
+                st.warning(
+                    f"Tem certeza que deseja **apagar tudo da escala {mes:02d}/{ano}**? Isso deixa a competência vazia no banco para você gerar novamente depois.",
+                    icon="⚠️"
+                )
+                dy, dn, _sp = st.columns([1, 1, 5])
+                if dy.button("✅ Sim, apagar", width="stretch", key="gen_delete_yes"):
+                    st.session_state["confirm_gen_delete_only"] = False
+                    delete_competencia_mes_completo(setor, int(ano), int(mes))
+                    _clear_preview_cache(setor, int(ano), int(mes))
+                    st.session_state[f"gerar_preview_loaded_{setor}_{ano}_{mes}"] = False
+                    st.session_state["flash_msg_geracao"] = (
+                        f"Escala de {mes:02d}/{ano} apagada do banco com sucesso. Agora clique em **Gerar agora (respeita ajustes)** para gerar a escala novamente."
+                    )
+                    st.rerun()
+
+                if dn.button("❌ Não apagar", width="stretch", key="gen_delete_no"):
+                    st.session_state["confirm_gen_delete_only"] = False
+                    st.info("Ação cancelada.")
+                    st.rerun()
+
             if st.session_state.get("confirm_gen_zero", False):
-                st.warning(f"Tem certeza que deseja **zerar a escala {mes:02d}/{ano}**? Isso apaga TUDO do mês atual salvo no banco (escala, overrides, estado, retificações, subgrupo da competência e snapshot).", icon="⚠️")
+                st.warning(f"Tem certeza que deseja **zerar a escala {mes:02d}/{ano}**? Isso apaga TUDO do mês atual salvo no banco (escala, overrides, estado, retificações, subgrupo da competência e snapshot) e já gera uma nova escala do zero.", icon="⚠️")
                 cy, cn, _sp = st.columns([1, 1, 5])
                 if cy.button("✅ Sim", width="stretch", key="gen_zero_yes"):
                     st.session_state["confirm_gen_zero"] = False
@@ -19360,6 +19384,10 @@ def page_app():
                     st.session_state["confirm_gen_zero"] = False
                     st.info("Ação cancelada.")
                     st.rerun()
+
+            _flash_msg_ger = str(st.session_state.pop("flash_msg_geracao", "") or "").strip()
+            if _flash_msg_ger:
+                st.success(_flash_msg_ger)
 
 
             preview_key = f"gerar_preview_loaded_{setor}_{ano}_{mes}"
