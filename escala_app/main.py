@@ -1304,6 +1304,80 @@ def set_status_competencia(setor: str, ano: int, mes: int, status: str) -> None:
 def competencia_fechada(setor: str, ano: int, mes: int) -> bool:
     return get_status_competencia(setor, int(ano), int(mes)) == 'FECHADA'
 
+
+def apagar_competencia_completa(setor: str, ano: int, mes: int) -> bool:
+    """
+    Apaga somente a competência atual do setor informado, sem mexer em outros meses
+    nem em regras da geração.
+    """
+    setor = _norm_setor(setor)
+    ano = int(ano)
+    mes = int(mes)
+
+    con = db_conn()
+    cur = con.cursor()
+    try:
+        try:
+            cur.execute("PRAGMA busy_timeout = 5000")
+        except Exception:
+            pass
+
+        comandos = [
+            ("DELETE FROM escala_mes WHERE UPPER(TRIM(setor))=? AND ano=? AND mes=?", (setor, ano, mes)),
+            ("DELETE FROM overrides WHERE UPPER(TRIM(setor))=? AND ano=? AND mes=?", (setor, ano, mes)),
+            ("DELETE FROM estado_mes_anterior WHERE UPPER(TRIM(setor))=? AND ano=? AND mes=?", (setor, ano, mes)),
+            ("DELETE FROM retificacoes_competencia WHERE UPPER(TRIM(setor))=? AND ano=? AND mes=?", (setor, ano, mes)),
+            ("DELETE FROM subgrupo_competencia WHERE UPPER(TRIM(setor))=? AND ano=? AND mes=?", (setor, ano, mes)),
+            ("DELETE FROM colaborador_competencia_snapshot WHERE UPPER(TRIM(setor))=? AND ano=? AND mes=?", (setor, ano, mes)),
+            ("DELETE FROM assinaturas_retificacao WHERE UPPER(TRIM(setor))=? AND ano=? AND mes=?", (setor, ano, mes)),
+            ("DELETE FROM competencia_status WHERE UPPER(TRIM(setor))=? AND ano=? AND mes=?", (setor, ano, mes)),
+        ]
+
+        for sql, params in comandos:
+            try:
+                cur.execute(sql, params)
+            except Exception:
+                pass
+
+        commit_blindado(con)
+    finally:
+        con.close()
+
+    try:
+        clear_retificacao_related_caches()
+    except Exception:
+        pass
+    try:
+        _clear_preview_cache(setor, ano, mes)
+    except Exception:
+        pass
+    for fn_name in ['load_escala_mes_db', 'load_estado_mes', 'load_overrides', 'get_hist_mes_com_overrides_cached', 'get_status_competencia']:
+        try:
+            fn = globals().get(fn_name)
+            if fn is not None and hasattr(fn, 'clear'):
+                fn.clear()
+        except Exception:
+            pass
+
+    try:
+        registrar_log_admin(
+            acao="APAGAR_COMPETENCIA",
+            modulo="ESCALA/GERAR",
+            alvo_setor=setor,
+            competencia_ano=ano,
+            competencia_mes=mes,
+            detalhes="Competência apagada manualmente na aba Gerar",
+            status="SUCESSO",
+        )
+    except Exception:
+        pass
+
+    try:
+        logger.info(f"Competência apagada manualmente: {setor} {mes:02d}/{ano}")
+    except Exception:
+        pass
+    return True
+
 def _get_preview_hist_for_materializacao(setor: str, ano: int, mes: int) -> dict[str, pd.DataFrame]:
     """
     Tenta reaproveitar a escala já visível/carregada na tela para consolidar o congelamento.
@@ -19389,7 +19463,7 @@ def page_app():
         if not colaboradores:
             st.warning("Cadastre colaboradores.")
         else:
-            b1, b2, b3, _ = st.columns([1, 1, 1, 5])
+            b1, b2, b3, b4, _ = st.columns([1, 1, 1, 1, 4])
             if b1.button("🚀 Gerar agora (respeita ajustes)", width="stretch", key="gen_btn", disabled=(_status_comp_ger == 'FECHADA')):
                 _clear_preview_cache(setor, int(ano), int(mes))
                 st.session_state["last_seed"] = int(seed)
@@ -19404,10 +19478,30 @@ def page_app():
                 _clear_preview_cache(setor, int(ano), int(mes))
                 st.rerun()
 
+            if b3.button("🗑️ Apagar tudo", width="stretch", key="gen_wipe_btn", disabled=(_status_comp_ger == 'FECHADA')):
+                st.session_state["confirm_apagar_competencia"] = True
+
             # 🧹 Gerar do zero: ignora travas/ajustes (recalcula o mês totalmente)
             # -> pede confirmação antes de apagar os overrides do mês.
-            if b3.button("🧹 Gerar do zero (ignorar ajustes)", width="stretch", key="gen_zero_btn", disabled=(_status_comp_ger == 'FECHADA')):
+            if b4.button("🧹 Gerar do zero (ignorar ajustes)", width="stretch", key="gen_zero_btn", disabled=(_status_comp_ger == 'FECHADA')):
                 st.session_state["confirm_gen_zero"] = True
+
+            if st.session_state.get("confirm_apagar_competencia", False):
+                st.warning(f"Tem certeza que deseja **apagar tudo da competência {mes:02d}/{ano}**? Isso limpa a escala salva, estado do mês, retificações, snapshot e ajustes dessa competência.", icon="⚠️")
+                cay, can, _sp_ap = st.columns([1, 1, 5])
+                if cay.button("✅ Sim", width="stretch", key="gen_wipe_yes"):
+                    st.session_state["confirm_apagar_competencia"] = False
+                    ok_apagar = apagar_competencia_completa(setor, int(ano), int(mes))
+                    if ok_apagar:
+                        st.success("Competência apagada. Agora gere a escala novamente.")
+                    else:
+                        st.error("Não consegui apagar a competência.")
+                    st.rerun()
+
+                if can.button("❌ Não", width="stretch", key="gen_wipe_no"):
+                    st.session_state["confirm_apagar_competencia"] = False
+                    st.info("Ação cancelada.")
+                    st.rerun()
 
             if st.session_state.get("confirm_gen_zero", False):
                 st.warning(f"Tem certeza que deseja **zerar a escala {mes:02d}/{ano}**? Isso apaga ajustes/travas (overrides) desse mês.", icon="⚠️")
