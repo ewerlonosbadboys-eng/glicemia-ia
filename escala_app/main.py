@@ -14903,12 +14903,14 @@ def _montar_colaboradores_base_geracao(setor: str, ano: int, mes: int) -> list[d
 
     Regra preservada:
     1) parte do cadastro atual do setor
-    2) se a competência anterior estiver FECHADA, usa o snapshot congelado dela
-       como base de Subgrupo/Entrada/Folga_Sab
-    3) se já existir ajuste do mês alvo (subgrupo_competencia do próprio mês),
+    2) prioriza a competência anterior FECHADA/snapshot quando existir
+    3) se o snapshot não existir, tenta reaproveitar o histórico salvo do mês anterior
+       já com overrides/retificações aplicados
+    4) se já existir ajuste do mês alvo (subgrupo_competencia do próprio mês),
        ele sobrepõe a base anterior
 
-    Isso evita que o mês novo "nasça do zero" ignorando a escala congelada do mês anterior.
+    Isso evita que o mês novo "nasça do zero" ignorando a escala congelada
+    ou, na falta dela, a última base válida salva do mês anterior.
     """
     base_atual = [_clone_colaborador_base(c) for c in (load_colaboradores_setor(setor) or [])]
     if not base_atual:
@@ -14916,24 +14918,23 @@ def _montar_colaboradores_base_geracao(setor: str, ano: int, mes: int) -> list[d
 
     mapa = {str(c.get('Chapa') or '').strip(): c for c in base_atual if str(c.get('Chapa') or '').strip()}
     ano_ant, mes_ant = _competencia_anterior(int(ano), int(mes))
+    ref_txt = f"{int(mes_ant):02d}/{int(ano_ant)}"
+    usados_snapshot = 0
 
     if competencia_fechada(setor, int(ano_ant), int(mes_ant)):
         try:
-            # Garante que o snapshot oficial do mês anterior exista, mesmo para competências
-            # fechadas antes dessa blindagem.
             rebuild_colaborador_competencia_snapshot(setor, int(ano_ant), int(mes_ant))
         except Exception as e:
             logger.exception(
-                f"Falha ao reconstruir snapshot da competência anterior {int(mes_ant):02d}/{int(ano_ant)}: {e}"
+                f"Falha ao reconstruir snapshot da competência anterior {ref_txt}: {e}"
             )
 
-        usados_snapshot = 0
         for ch, item in list(mapa.items()):
             try:
                 snap_ant = get_colaborador_competencia_snapshot(setor, ch, int(ano_ant), int(mes_ant))
             except Exception as e:
                 logger.exception(
-                    f"Erro ao ler snapshot da chapa {ch} em {int(mes_ant):02d}/{int(ano_ant)}: {e}"
+                    f"Erro ao ler snapshot da chapa {ch} em {ref_txt}: {e}"
                 )
                 snap_ant = None
             if not snap_ant:
@@ -14945,12 +14946,66 @@ def _montar_colaboradores_base_geracao(setor: str, ano: int, mes: int) -> list[d
             usados_snapshot += 1
 
         logger.info(
-            f"Base de geração usando snapshot da competência anterior {int(mes_ant):02d}/{int(ano_ant)} "
+            f"Base de geração usando snapshot da competência anterior {ref_txt} "
             f"para {usados_snapshot}/{len(mapa)} colaboradores."
         )
     else:
+        logger.warning(
+            f"Competência anterior {ref_txt} não está FECHADA; tentando reaproveitar histórico salvo do mês anterior."
+        )
+
+    if usados_snapshot < len(mapa):
+        try:
+            hist_prev = get_hist_mes_com_overrides_cached(setor, int(ano_ant), int(mes_ant))
+        except Exception as e:
+            logger.exception(f"Erro ao ler histórico anterior com overrides em {ref_txt}: {e}")
+            hist_prev = None
+
+        if not isinstance(hist_prev, dict) or not hist_prev:
+            try:
+                hist_raw = load_escala_mes_db(setor, int(ano_ant), int(mes_ant))
+            except Exception as e:
+                logger.exception(f"Erro ao ler load_escala_mes_db da competência anterior {ref_txt}: {e}")
+                hist_raw = None
+            try:
+                hist_prev = apply_overrides_to_hist(setor, int(ano_ant), int(mes_ant), hist_raw or {})
+            except Exception as e:
+                logger.exception(f"Erro ao aplicar overrides no histórico anterior {ref_txt}: {e}")
+                hist_prev = hist_raw or {}
+
+        usados_hist = 0
+        if isinstance(hist_prev, dict) and hist_prev:
+            for ch, item in list(mapa.items()):
+                if not ch or (usados_snapshot and str(item.get('Subgrupo') or '').strip() and str(item.get('Entrada') or '').strip()):
+                    pass
+                df_hist = hist_prev.get(_norm_chapa(ch)) or hist_prev.get(str(ch).strip())
+                if df_hist is None:
+                    continue
+                try:
+                    dfx = df_hist.copy() if isinstance(df_hist, pd.DataFrame) else pd.DataFrame(df_hist)
+                except Exception:
+                    continue
+                if dfx.empty:
+                    continue
+                cols_map = {str(c).strip().lower(): c for c in dfx.columns}
+                ent_col = cols_map.get('h_entrada') or cols_map.get('entrada')
+                sub_col = cols_map.get('subgrupo')
+                if ent_col:
+                    vals_ent = [str(v or '').strip() for v in dfx[ent_col].tolist() if str(v or '').strip()]
+                    if vals_ent:
+                        item['Entrada'] = vals_ent[0]
+                if sub_col:
+                    vals_sub = [str(v or '').strip() for v in dfx[sub_col].tolist() if str(v or '').strip()]
+                    if vals_sub:
+                        item['Subgrupo'] = vals_sub[-1]
+                item['Nome'] = str(item.get('Nome') or '').strip()
+                item['Subgrupo'] = str(item.get('Subgrupo') or '').strip() or 'SEM SUBGRUPO'
+                item['Entrada'] = str(item.get('Entrada') or '').strip() or '06:00'
+                usados_hist += 1
+
         logger.info(
-            f"Base de geração SEM snapshot anterior: competência {int(mes_ant):02d}/{int(ano_ant)} não está fechada."
+            f"Base de geração usando fallback do histórico anterior {ref_txt} "
+            f"para {usados_hist}/{len(mapa)} colaboradores."
         )
 
     for ch, item in list(mapa.items()):
@@ -14974,7 +15029,9 @@ def _build_df_ref_prev_competencia(setor: str, ano: int, mes: int):
     já com overrides, retificações e subgrupo da competência aplicados.
 
     Regras:
-    - só usa a competência anterior se ela estiver FECHADA;
+    - prioriza a competência anterior FECHADA;
+    - se a competência anterior não estiver FECHADA, ainda tenta usar o histórico salvo
+      do mês anterior para não deixar o mês novo nascer do zero;
     - tenta primeiro o cache oficial get_hist_mes_com_overrides_cached;
     - se vier vazio/inválido, faz fallback para load_escala_mes_db + apply_overrides_to_hist;
     - normaliza a saída para DataFrame com colunas: Data, Chapa, Status.
@@ -14985,10 +15042,14 @@ def _build_df_ref_prev_competencia(setor: str, ano: int, mes: int):
     try:
         ano_prev, mes_prev = _competencia_anterior(int(ano), int(mes))
         ref_txt = f"{int(mes_prev):02d}/{int(ano_prev)}"
+        fechada = bool(competencia_fechada(setor, int(ano_prev), int(mes_prev)))
 
-        if not competencia_fechada(setor, int(ano_prev), int(mes_prev)):
-            logger.info(f"Referência anterior NÃO usada: competência anterior não fechada ({ref_txt})")
-            return None
+        if fechada:
+            logger.info(f"Referência anterior priorizando competência FECHADA: {ref_txt}")
+        else:
+            logger.warning(
+                f"Competência anterior {ref_txt} não está FECHADA; tentando usar histórico salvo com overrides/retificações."
+            )
 
         prev_obj = None
         try:
@@ -15081,7 +15142,7 @@ def _build_df_ref_prev_competencia(setor: str, ano: int, mes: int):
                 df_ref = df_ref.dropna(subset=['Data']).sort_values(['Chapa', 'Data']).reset_index(drop=True)
             except Exception as e:
                 logger.exception(f"Erro ao consolidar referência anterior {ref_txt}: {e}")
-            logger.info(f"Referência anterior usada: {ref_txt}")
+            logger.info(f"Referência anterior usada: {ref_txt} | fechada={fechada}")
             return df_ref
 
         logger.warning(f"Referência anterior NÃO usada: nenhuma linha válida encontrada em {ref_txt}")
