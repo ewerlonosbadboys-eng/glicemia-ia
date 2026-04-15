@@ -1322,6 +1322,168 @@ def _snapshot_primeira_entrada(df_hist: pd.DataFrame, entrada_base: str = '06:00
 
 
 
+def _load_prev_hist_oficial_fallback(setor: str, ano: int, mes: int) -> dict[str, pd.DataFrame]:
+    """
+    Lê o mês anterior de forma resiliente para manter a virada SEG->DOM.
+
+    Ordem de tentativa:
+    1) get_hist_mes_com_overrides_cached (fonte oficial já com overrides/retificações)
+    2) load_escala_mes_db + apply_overrides_to_hist
+
+    Importante:
+    - Não exige competência fechada para o fallback técnico.
+    - Isso evita que o mês novo "nasça do zero" quando o status ficou inconsistente,
+      mas a escala do mês anterior existe no banco.
+    """
+    try:
+        ano_prev, mes_prev = _competencia_anterior(int(ano), int(mes))
+    except Exception:
+        ano_prev, mes_prev = (int(ano), int(mes) - 1)
+        if mes_prev <= 0:
+            mes_prev = 12
+            ano_prev -= 1
+
+    hist_prev = {}
+    try:
+        hist_prev = get_hist_mes_com_overrides_cached(setor, int(ano_prev), int(mes_prev))
+    except Exception:
+        hist_prev = {}
+
+    if isinstance(hist_prev, dict) and hist_prev:
+        return hist_prev
+
+    try:
+        hist_prev = load_escala_mes_db(setor, int(ano_prev), int(mes_prev)) or {}
+    except Exception:
+        hist_prev = {}
+
+    if not isinstance(hist_prev, dict):
+        hist_prev = {}
+
+    try:
+        hist_prev = apply_overrides_to_hist(setor, int(ano_prev), int(mes_prev), hist_prev)
+    except Exception:
+        pass
+
+    return hist_prev if isinstance(hist_prev, dict) else {}
+
+
+def _infer_estado_from_hist_df(df_hist: pd.DataFrame) -> dict:
+    """Reconstrói o estado técnico final do mês a partir do histórico já salvo."""
+    out = {
+        'consec_trab_final': 0,
+        'ultima_saida': '',
+        'ultimo_domingo_status': None,
+    }
+    try:
+        if df_hist is None:
+            return out
+        df = df_hist.copy() if isinstance(df_hist, pd.DataFrame) else pd.DataFrame(df_hist)
+        if df.empty:
+            return out
+
+        cols = {str(c).strip().lower(): c for c in df.columns}
+        st_col = cols.get('status')
+        sai_col = cols.get('h_saida') or cols.get('saida')
+        dia_col = cols.get('dia') or cols.get('dia_sem') or cols.get('dia da semana')
+        data_col = cols.get('data')
+
+        if st_col is None:
+            return out
+
+        if data_col is not None:
+            try:
+                df[data_col] = pd.to_datetime(df[data_col], errors='coerce')
+                df = df.sort_values(data_col).reset_index(drop=True)
+            except Exception:
+                pass
+        else:
+            df = df.reset_index(drop=True)
+
+        consec = 0
+        for i in range(len(df) - 1, -1, -1):
+            stt = str(df.loc[i, st_col] or '').strip()
+            if stt in WORK_STATUSES:
+                consec += 1
+            else:
+                break
+        out['consec_trab_final'] = int(consec)
+
+        if sai_col is not None:
+            for i in range(len(df) - 1, -1, -1):
+                stt = str(df.loc[i, st_col] or '').strip()
+                sai = str(df.loc[i, sai_col] or '').strip()
+                if stt in WORK_STATUSES and sai:
+                    out['ultima_saida'] = sai
+                    break
+
+        if dia_col is not None:
+            for i in range(len(df) - 1, -1, -1):
+                dia_txt = str(df.loc[i, dia_col] or '').strip().lower()
+                if dia_txt in ('dom', 'domingo'):
+                    stt = str(df.loc[i, st_col] or '').strip()
+                    if stt == 'Folga':
+                        out['ultimo_domingo_status'] = 'Folga'
+                        break
+                    if stt in WORK_STATUSES:
+                        out['ultimo_domingo_status'] = 'Trabalho'
+                        break
+        elif data_col is not None:
+            for i in range(len(df) - 1, -1, -1):
+                try:
+                    d = pd.to_datetime(df.loc[i, data_col], errors='coerce')
+                except Exception:
+                    d = pd.NaT
+                if pd.isna(d):
+                    continue
+                if int(d.weekday()) == 6:
+                    stt = str(df.loc[i, st_col] or '').strip()
+                    if stt == 'Folga':
+                        out['ultimo_domingo_status'] = 'Folga'
+                        break
+                    if stt in WORK_STATUSES:
+                        out['ultimo_domingo_status'] = 'Trabalho'
+                        break
+    except Exception:
+        return out
+    return out
+
+
+def _infer_prev_base_from_hist(df_hist: pd.DataFrame, default_subgrupo: str = '', default_entrada: str = '06:00') -> dict:
+    """Extrai subgrupo/entrada do mês anterior já com retificações aplicadas."""
+    out = {
+        'Subgrupo': str(default_subgrupo or '').strip() or 'SEM SUBGRUPO',
+        'Entrada': str(default_entrada or '').strip() or '06:00',
+    }
+    try:
+        if df_hist is None:
+            return out
+        df = df_hist.copy() if isinstance(df_hist, pd.DataFrame) else pd.DataFrame(df_hist)
+        if df.empty:
+            return out
+
+        cols = {str(c).strip().lower(): c for c in df.columns}
+        sub_col = cols.get('subgrupo')
+        ent_col = cols.get('h_entrada') or cols.get('entrada')
+        st_col = cols.get('status')
+
+        if sub_col is not None:
+            vals = [str(v or '').strip() for v in df[sub_col].tolist() if str(v or '').strip()]
+            if vals:
+                out['Subgrupo'] = vals[-1]
+
+        if ent_col is not None:
+            if st_col is not None:
+                vals = [str(v or '').strip() for _, v in df.loc[df[st_col].isin(WORK_STATUSES), ent_col].items() if str(v or '').strip()]
+            else:
+                vals = [str(v or '').strip() for v in df[ent_col].tolist() if str(v or '').strip()]
+            if vals:
+                out['Entrada'] = vals[-1]
+    except Exception:
+        return out
+    return out
+
+
 def _lookup_subgrupo_competencia_or_base_no_snapshot(setor: str, chapa: str, ano: int, mes: int, base_subgrupo: str = "") -> str:
     setor = _norm_setor(setor)
     chapa = _norm_chapa(chapa)
@@ -11290,46 +11452,14 @@ def save_estado_mes(setor: str, ano: int, mes: int, estado: dict):
 @st.cache_data(show_spinner=False, ttl=30)
 def load_estado_prev(setor: str, ano: int, mes: int):
     """
-    Carrega estado do mês anterior (consecutivos, última saída e status do último domingo)
-    para manter continuidade entre competências.
+    Carrega o estado técnico do mês anterior para manter a continuidade entre competências.
 
-    ✅ Robustez extra:
-    - Se a tabela estado_mes_anterior não tiver o domingo (None) ou não tiver registro do colaborador,
-      tenta inferir o "ultimo_domingo_status" a partir da escala do mês anterior salva em escala_mes.
+    Blindagem adicional:
+    - se estado_mes_anterior estiver parcial/vazio, reconstrói a partir da escala do mês anterior
+      já com overrides, folgas manuais, retificações e subgrupo aplicado;
+    - isso evita a geração do mês novo como se fosse "do zero".
     """
-    prev_ano, prev_mes = ano, mes - 1
-    if prev_mes == 0:
-        prev_mes = 12
-        prev_ano -= 1
-
-    def _infer_ultimo_domingo_status_from_escala(chapa: str) -> str | None:
-        try:
-            con2 = db_conn()
-            dfp = pd.read_sql_query(
-                """
-                SELECT dia, status
-                FROM escala_mes
-                WHERE setor=? AND ano=? AND mes=? AND chapa=?
-                ORDER BY dia ASC
-                """,
-                con2,
-                params=(setor, int(prev_ano), int(prev_mes), str(chapa)),
-            )
-            con2.close()
-            if dfp is None or dfp.empty:
-                return None
-            # pega último domingo (dia == 'dom') do mês anterior
-            for i in range(len(dfp) - 1, -1, -1):
-                if str(dfp.loc[i, "dia"]).strip().lower() in ("dom", "domingo"):
-                    stt = str(dfp.loc[i, "status"] or "").strip()
-                    if stt == "Folga":
-                        return "Folga"
-                    if stt in WORK_STATUSES:
-                        return "Trabalho"
-                    # se for férias/blank, continua procurando domingo anterior
-            return None
-        except Exception:
-            return None
+    prev_ano, prev_mes = _competencia_anterior(int(ano), int(mes))
 
     con = db_conn()
     cur = con.cursor()
@@ -11347,15 +11477,24 @@ def load_estado_prev(setor: str, ano: int, mes: int):
     estado: dict[str, dict] = {}
     for chapa, consec, ultima_saida, ultimo_dom in rows:
         estado[str(chapa)] = {
-            "consec_trab_final": int(consec),
+            "consec_trab_final": int(consec or 0),
             "ultima_saida": ultima_saida or "",
             "ultimo_domingo_status": ultimo_dom,
         }
 
-    # fallback do domingo quando estiver ausente
-    for chapa in list(estado.keys()):
-        if not (estado[chapa].get("ultimo_domingo_status") in ("Trabalho", "Folga")):
-            estado[chapa]["ultimo_domingo_status"] = _infer_ultimo_domingo_status_from_escala(chapa)
+    hist_prev = _load_prev_hist_oficial_fallback(setor, int(ano), int(mes))
+    if isinstance(hist_prev, dict) and hist_prev:
+        for chapa, df_hist in hist_prev.items():
+            ch = str(chapa or '').strip()
+            if not ch:
+                continue
+            synth = _infer_estado_from_hist_df(df_hist)
+            atual = dict(estado.get(ch, {}) or {})
+            estado[ch] = {
+                'consec_trab_final': int(atual.get('consec_trab_final', synth.get('consec_trab_final', 0)) or synth.get('consec_trab_final', 0) or 0),
+                'ultima_saida': str(atual.get('ultima_saida') or synth.get('ultima_saida') or '').strip(),
+                'ultimo_domingo_status': atual.get('ultimo_domingo_status') if atual.get('ultimo_domingo_status') in ('Trabalho', 'Folga') else synth.get('ultimo_domingo_status'),
+            }
 
     return estado
 
@@ -14829,6 +14968,8 @@ def _montar_colaboradores_base_geracao(setor: str, ano: int, mes: int) -> list[d
     mapa = {str(c.get('Chapa') or '').strip(): c for c in base_atual if str(c.get('Chapa') or '').strip()}
     ano_ant, mes_ant = _competencia_anterior(int(ano), int(mes))
 
+    hist_prev_oficial = _load_prev_hist_oficial_fallback(setor, int(ano), int(mes))
+
     if competencia_fechada(setor, int(ano_ant), int(mes_ant)):
         try:
             # Garante que o snapshot oficial do mês anterior exista, mesmo para competências
@@ -14840,7 +14981,9 @@ def _montar_colaboradores_base_geracao(setor: str, ano: int, mes: int) -> list[d
             )
 
         usados_snapshot = 0
+        usados_hist_prev = 0
         for ch, item in list(mapa.items()):
+            snap_ant = None
             try:
                 snap_ant = get_colaborador_competencia_snapshot(setor, ch, int(ano_ant), int(mes_ant))
             except Exception as e:
@@ -14848,21 +14991,49 @@ def _montar_colaboradores_base_geracao(setor: str, ano: int, mes: int) -> list[d
                     f"Erro ao ler snapshot da chapa {ch} em {int(mes_ant):02d}/{int(ano_ant)}: {e}"
                 )
                 snap_ant = None
-            if not snap_ant:
+
+            if snap_ant:
+                item['Nome'] = str(snap_ant.get('Nome') or item.get('Nome') or '').strip()
+                item['Subgrupo'] = str(snap_ant.get('Subgrupo') or item.get('Subgrupo') or '').strip() or 'SEM SUBGRUPO'
+                item['Entrada'] = str(snap_ant.get('Entrada') or item.get('Entrada') or '').strip() or '06:00'
+                item['Folga_Sab'] = bool(snap_ant.get('Folga_Sab', item.get('Folga_Sab', False)))
+                usados_snapshot += 1
                 continue
-            item['Nome'] = str(snap_ant.get('Nome') or item.get('Nome') or '').strip()
-            item['Subgrupo'] = str(snap_ant.get('Subgrupo') or item.get('Subgrupo') or '').strip() or 'SEM SUBGRUPO'
-            item['Entrada'] = str(snap_ant.get('Entrada') or item.get('Entrada') or '').strip() or '06:00'
-            item['Folga_Sab'] = bool(snap_ant.get('Folga_Sab', item.get('Folga_Sab', False)))
-            usados_snapshot += 1
+
+            # fallback fino: se faltou snapshot para alguém, puxa a base oficial do histórico anterior
+            df_hist_ant = hist_prev_oficial.get(ch) if isinstance(hist_prev_oficial, dict) else None
+            if isinstance(df_hist_ant, pd.DataFrame) and not df_hist_ant.empty:
+                prev_info = _infer_prev_base_from_hist(
+                    df_hist_ant,
+                    default_subgrupo=item.get('Subgrupo', ''),
+                    default_entrada=item.get('Entrada', '06:00')
+                )
+                item['Subgrupo'] = str(prev_info.get('Subgrupo') or item.get('Subgrupo') or '').strip() or 'SEM SUBGRUPO'
+                item['Entrada'] = str(prev_info.get('Entrada') or item.get('Entrada') or '').strip() or '06:00'
+                usados_hist_prev += 1
 
         logger.info(
             f"Base de geração usando snapshot da competência anterior {int(mes_ant):02d}/{int(ano_ant)} "
-            f"para {usados_snapshot}/{len(mapa)} colaboradores."
+            f"para {usados_snapshot}/{len(mapa)} colaboradores; fallback do histórico anterior para {usados_hist_prev}."
         )
     else:
+        usados_hist_prev = 0
+        for ch, item in list(mapa.items()):
+            df_hist_ant = hist_prev_oficial.get(ch) if isinstance(hist_prev_oficial, dict) else None
+            if not isinstance(df_hist_ant, pd.DataFrame) or df_hist_ant.empty:
+                continue
+            prev_info = _infer_prev_base_from_hist(
+                df_hist_ant,
+                default_subgrupo=item.get('Subgrupo', ''),
+                default_entrada=item.get('Entrada', '06:00')
+            )
+            item['Subgrupo'] = str(prev_info.get('Subgrupo') or item.get('Subgrupo') or '').strip() or 'SEM SUBGRUPO'
+            item['Entrada'] = str(prev_info.get('Entrada') or item.get('Entrada') or '').strip() or '06:00'
+            usados_hist_prev += 1
+
         logger.info(
-            f"Base de geração SEM snapshot anterior: competência {int(mes_ant):02d}/{int(ano_ant)} não está fechada."
+            f"Base de geração SEM snapshot anterior: competência {int(mes_ant):02d}/{int(ano_ant)} não está fechada. "
+            f"Fallback com histórico oficial anterior aplicado para {usados_hist_prev}/{len(mapa)} colaboradores."
         )
 
     for ch, item in list(mapa.items()):
@@ -14899,36 +15070,17 @@ def _build_df_ref_prev_competencia(setor: str, ano: int, mes: int):
         ref_txt = f"{int(mes_prev):02d}/{int(ano_prev)}"
 
         if not competencia_fechada(setor, int(ano_prev), int(mes_prev)):
-            logger.info(f"Referência anterior NÃO usada: competência anterior não fechada ({ref_txt})")
-            return None
+            logger.warning(
+                f"Competência anterior {ref_txt} não está marcada como fechada; "
+                f"tentando mesmo assim usar o histórico salvo para não gerar o mês do zero."
+            )
 
         prev_obj = None
         try:
-            prev_obj = get_hist_mes_com_overrides_cached(setor, int(ano_prev), int(mes_prev))
+            prev_obj = _load_prev_hist_oficial_fallback(setor, int(ano), int(mes))
         except Exception as e:
-            logger.exception(f"Erro ao ler get_hist_mes_com_overrides_cached para referência anterior {ref_txt}: {e}")
+            logger.exception(f"Erro ao ler histórico oficial para referência anterior {ref_txt}: {e}")
             prev_obj = None
-
-        if not isinstance(prev_obj, dict) or not prev_obj:
-            logger.warning(
-                f"Base cache da referência anterior vazia/inválida ({ref_txt}); "
-                f"tentando fallback load_escala_mes_db + apply_overrides_to_hist"
-            )
-            try:
-                hist_raw = load_escala_mes_db(setor, int(ano_prev), int(mes_prev))
-            except Exception as e:
-                logger.exception(f"Erro em load_escala_mes_db para referência anterior {ref_txt}: {e}")
-                hist_raw = None
-
-            if not isinstance(hist_raw, dict) or not hist_raw:
-                logger.warning(f"Referência anterior NÃO usada: load_escala_mes_db vazio/inválido ({ref_txt})")
-                hist_raw = {}
-
-            try:
-                prev_obj = apply_overrides_to_hist(setor, int(ano_prev), int(mes_prev), hist_raw)
-            except Exception as e:
-                logger.exception(f"Erro em apply_overrides_to_hist para referência anterior {ref_txt}: {e}")
-                prev_obj = hist_raw
 
         if not isinstance(prev_obj, dict) or not prev_obj:
             logger.warning(f"Referência anterior NÃO usada: base vazia/inválida após fallback ({ref_txt})")
