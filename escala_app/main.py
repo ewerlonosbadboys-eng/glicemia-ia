@@ -176,14 +176,6 @@ def commit_blindado(con):
     except Exception:
         pass
     try:
-        sync_mes_para_supabase(setor, int(ano), int(mes))
-    except Exception as e:
-        logger.error(f"Supabase sync falhou: {e}")
-    try:
-        sync_mes_para_supabase(setor, int(ano), int(mes))
-    except Exception as e:
-        logger.error(f"Supabase sync falhou: {e}")
-    try:
         fn = globals().get('_maybe_save_latest_stable_snapshot_fast')
         if callable(fn):
             fn("commit")
@@ -3418,59 +3410,33 @@ ROTATING_BACKUP_PREFIX = "rolling"
 # SUPABASE SYNC (mantém a lógica do app em SQLite local,
 # mas faz persistência remota para sobreviver a reboot)
 # =========================================================
-def _secret_or_env(name: str, *fallbacks: str, default: str = "") -> str:
-    try:
-        if hasattr(st, "secrets"):
-            val = st.secrets.get(name)
-            if val is not None and str(val).strip():
-                return str(val).strip()
-    except Exception:
-        pass
-    for key in (name, *fallbacks):
-        try:
-            val = os.getenv(key)
-            if val is not None and str(val).strip():
-                return str(val).strip()
-        except Exception:
-            pass
-    return str(default or "").strip()
-
-def _bool_from_secret_or_env(name: str, default: str = "0") -> bool:
-    raw = _secret_or_env(name, default=default)
-    return str(raw or default).strip() in ("1", "true", "True", "yes", "on")
-
-SUPABASE_URL = _secret_or_env("SUPABASE_URL").rstrip("/")
-SUPABASE_KEY = _secret_or_env("SUPABASE_SERVICE_KEY", "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_KEY", "SUPABASE_ANON_KEY")
-SUPABASE_SCHEMA = (_secret_or_env("SUPABASE_SCHEMA", default="public") or "public").strip() or "public"
+SUPABASE_URL = (os.getenv("SUPABASE_URL") or "").strip().rstrip("/")
+SUPABASE_KEY = (
+    os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    or os.getenv("SUPABASE_KEY")
+    or os.getenv("SUPABASE_ANON_KEY")
+    or ""
+).strip()
+SUPABASE_SCHEMA = (os.getenv("SUPABASE_SCHEMA") or "public").strip() or "public"
 SUPABASE_SYNC_ENABLED = bool(SUPABASE_URL and SUPABASE_KEY)
-SUPABASE_SYNC_DEBOUNCE_SEC = int((_secret_or_env("SUPABASE_SYNC_DEBOUNCE_SEC", default="12") or "12").strip())
-SUPABASE_AUTO_PULL_ON_START = _bool_from_secret_or_env("SUPABASE_AUTO_PULL_ON_START", default="0")
-SUPABASE_AUTO_PUSH_ON_COMMIT = _bool_from_secret_or_env("SUPABASE_AUTO_PUSH_ON_COMMIT", default="0")
-SUPABASE_AUTO_PUSH_ON_CLOSE = _bool_from_secret_or_env("SUPABASE_AUTO_PUSH_ON_CLOSE", default="0")
-SUPABASE_ASYNC_PUSH_ENABLED = _bool_from_secret_or_env("SUPABASE_ASYNC_PUSH_ENABLED", default="1")
-SUPABASE_ASYNC_PUSH_DELAY_SEC = float((_secret_or_env("SUPABASE_ASYNC_PUSH_DELAY_SEC", default="2.0") or "2.0").strip())
-SUPABASE_AUTO_BOOTSTRAP_AFTER_SCHEMA = _bool_from_secret_or_env("SUPABASE_AUTO_BOOTSTRAP_AFTER_SCHEMA", default="0")
-SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY = _bool_from_secret_or_env("SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY", default="1")
-FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP = _bool_from_secret_or_env("FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP", default="1")
-QUICK_LOGIN_BOOT = _bool_from_secret_or_env("QUICK_LOGIN_BOOT", default="1")
-FAST_BACKUP_DISABLE_ROLLING_ON_COMMIT = _bool_from_secret_or_env("FAST_BACKUP_DISABLE_ROLLING_ON_COMMIT", default="1")
-FAST_SNAPSHOT_THROTTLE_SECONDS = int((_secret_or_env("FAST_SNAPSHOT_THROTTLE_SECONDS", default="300") or "300").strip())
-FAST_SNAPSHOT_SKIP_ON_CLOSE = _bool_from_secret_or_env("FAST_SNAPSHOT_SKIP_ON_CLOSE", default="1")
+SUPABASE_SYNC_DEBOUNCE_SEC = int(os.getenv("SUPABASE_SYNC_DEBOUNCE_SEC", "12") or 12)
+SUPABASE_AUTO_PULL_ON_START = (os.getenv("SUPABASE_AUTO_PULL_ON_START", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
+SUPABASE_AUTO_PUSH_ON_COMMIT = (os.getenv("SUPABASE_AUTO_PUSH_ON_COMMIT", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
+SUPABASE_AUTO_PUSH_ON_CLOSE = (os.getenv("SUPABASE_AUTO_PUSH_ON_CLOSE", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
+SUPABASE_ASYNC_PUSH_ENABLED = (os.getenv("SUPABASE_ASYNC_PUSH_ENABLED", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
+SUPABASE_ASYNC_PUSH_DELAY_SEC = float((os.getenv("SUPABASE_ASYNC_PUSH_DELAY_SEC", "2.0") or "2.0").strip())
+SUPABASE_AUTO_BOOTSTRAP_AFTER_SCHEMA = (os.getenv("SUPABASE_AUTO_BOOTSTRAP_AFTER_SCHEMA", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
+SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY = (os.getenv("SUPABASE_AUTO_RESTORE_IF_LOCAL_EMPTY", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
+FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP = (os.getenv("FAST_BOOT_SKIP_STARTUP_AUTO_BACKUP", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
+QUICK_LOGIN_BOOT = (os.getenv("QUICK_LOGIN_BOOT", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
+FAST_BACKUP_DISABLE_ROLLING_ON_COMMIT = (os.getenv("FAST_BACKUP_DISABLE_ROLLING_ON_COMMIT", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
+FAST_SNAPSHOT_THROTTLE_SECONDS = int((os.getenv("FAST_SNAPSHOT_THROTTLE_SECONDS", "300") or "300").strip())
+FAST_SNAPSHOT_SKIP_ON_CLOSE = (os.getenv("FAST_SNAPSHOT_SKIP_ON_CLOSE", "1") or "1").strip() in ("1", "true", "True", "yes", "on")
 _LAST_SNAPSHOT_TS = 0.0
 _LAST_SNAPSHOT_DB_MTIME = 0.0
-RESTORE_GUARD_ENABLED = _bool_from_secret_or_env("RESTORE_GUARD_ENABLED", default="0")
+RESTORE_GUARD_ENABLED = (os.getenv("RESTORE_GUARD_ENABLED", "0") or "0").strip() in ("1", "true", "True", "yes", "on")
 _RESTORE_GUARD_ACTIVE = False
 _RESTORE_GUARD_MESSAGE = ""
-
-def _supabase_warn_config_missing_once() -> None:
-    try:
-        if SUPABASE_SYNC_ENABLED:
-            return
-        if not st.session_state.get("_supabase_missing_config_warned", False):
-            st.session_state["_supabase_missing_config_warned"] = True
-            st.warning("Supabase não configurado em st.secrets (SUPABASE_URL / SUPABASE_SERVICE_KEY). O app continuará usando o banco local.")
-    except Exception:
-        pass
 
 _SUPABASE_LAST_PUSH_TS = 0.0
 _SUPABASE_LAST_PULL_TS = 0.0
@@ -4453,179 +4419,6 @@ def _fmt_ts_br(ts) -> str:
         return datetime.fromtimestamp(ts).strftime('%d/%m/%Y %H:%M:%S')
     except Exception:
         return '—'
-
-
-
-def _sqlite_count_rows_mes(table: str, setor: str, ano: int, mes: int) -> int:
-    try:
-        con = db_conn()
-        try:
-            cur = con.cursor()
-            if table == "estado_mes_anterior":
-                cur.execute(f"SELECT COUNT(1) FROM {table} WHERE setor=? AND ano=? AND mes=?", (str(setor), int(ano), int(mes)))
-            else:
-                cur.execute(f"SELECT COUNT(1) FROM {table} WHERE setor=? AND ano=? AND mes=?", (str(setor), int(ano), int(mes)))
-            row = cur.fetchone()
-            return int((row[0] if row else 0) or 0)
-        finally:
-            con.close()
-    except Exception:
-        return 0
-
-def _sqlite_read_rows_mes(table: str, setor: str, ano: int, mes: int) -> list[dict]:
-    whitelist = {
-        "escala_mes": ["setor","ano","mes","chapa","dia","data","dia_sem","status","h_entrada","h_saida"],
-        "overrides": ["setor","ano","mes","chapa","dia","campo","valor"],
-        "estado_mes_anterior": ["setor","chapa","consec_trab_final","ultima_saida","ultimo_domingo_status","ano","mes"],
-    }
-    cols = whitelist.get(str(table), [])
-    if not cols:
-        return []
-    con = db_conn()
-    try:
-        query = f"SELECT {', '.join(cols)} FROM {table} WHERE setor=? AND ano=? AND mes=?"
-        rows = pd.read_sql_query(query, con, params=(str(setor), int(ano), int(mes)))
-        if rows.empty:
-            return []
-        out = []
-        for rec in rows.to_dict(orient="records"):
-            item = {}
-            for k, v in rec.items():
-                if pd.isna(v):
-                    item[k] = None
-                elif isinstance(v, (pd.Timestamp, datetime, date)):
-                    item[k] = pd.to_datetime(v).strftime("%Y-%m-%d")
-                else:
-                    item[k] = v
-            out.append(item)
-        return out
-    finally:
-        con.close()
-
-def _supabase_fetch_rows_filtered(table: str, filters: dict[str, object], page_size: int = 1000) -> list[dict]:
-    if not SUPABASE_SYNC_ENABLED:
-        return []
-    remote_table = _supabase_resolve_remote_table(table)
-    results: list[dict] = []
-    start = 0
-    while True:
-        params = {"select": "*"}
-        for k, v in (filters or {}).items():
-            if v is None:
-                continue
-            params[str(k)] = f"eq.{v}"
-        headers = _supabase_headers(extra={"Range": f"{start}-{start + page_size - 1}"})
-        r = requests.get(_supabase_table_url(remote_table), params=params, headers=headers, timeout=30)
-        r.raise_for_status()
-        batch = r.json() or []
-        if not batch:
-            break
-        results.extend(batch)
-        if len(batch) < page_size:
-            break
-        start += page_size
-    return results
-
-def _restore_sqlite_table_from_rows_mes(table: str, setor: str, ano: int, mes: int, rows: list[dict]) -> int:
-    whitelist = {
-        "escala_mes": ["setor","ano","mes","chapa","dia","data","dia_sem","status","h_entrada","h_saida"],
-        "overrides": ["setor","ano","mes","chapa","dia","campo","valor"],
-        "estado_mes_anterior": ["setor","chapa","consec_trab_final","ultima_saida","ultimo_domingo_status","ano","mes"],
-    }
-    cols = whitelist.get(str(table), [])
-    if not cols:
-        return 0
-    con = db_conn()
-    cur = con.cursor()
-    try:
-        cur.execute(f"DELETE FROM {table} WHERE setor=? AND ano=? AND mes=?", (str(setor), int(ano), int(mes)))
-        inserted = 0
-        if rows:
-            placeholders = ",".join(["?"] * len(cols))
-            sql = f"INSERT OR REPLACE INTO {table} ({', '.join(cols)}) VALUES ({placeholders})"
-            for row in rows:
-                vals = [row.get(c) for c in cols]
-                cur.execute(sql, vals)
-                inserted += 1
-        commit_blindado(con)
-        return inserted
-    finally:
-        con.close()
-
-def sync_mes_para_supabase(setor: str, ano: int, mes: int) -> bool:
-    setor = str(setor or "").strip()
-    ano = int(ano)
-    mes = int(mes)
-    try:
-        if not SUPABASE_SYNC_ENABLED:
-            logger.warning("Supabase não configurado em st.secrets/env. Seguindo apenas com SQLite local.")
-            _supabase_warn_config_missing_once()
-            return False
-        total = 0
-        escala_rows = _sqlite_read_rows_mes("escala_mes", setor, ano, mes)
-        overrides_rows = _sqlite_read_rows_mes("overrides", setor, ano, mes)
-        estado_rows = _sqlite_read_rows_mes("estado_mes_anterior", setor, ano, mes)
-
-        if escala_rows:
-            _supabase_upsert_rows("escala_mes", escala_rows, ["setor","ano","mes","chapa","dia"])
-            total += len(escala_rows)
-        if overrides_rows:
-            _supabase_upsert_rows("overrides", overrides_rows, ["setor","ano","mes","chapa","dia","campo"])
-            total += len(overrides_rows)
-        if estado_rows:
-            _supabase_upsert_rows("estado_mes_anterior", estado_rows, ["setor","ano","mes","chapa"])
-            total += len(estado_rows)
-
-        logger.info(f"Supabase sync OK ({setor}/{ano}/{mes}, {total} registros)")
-        return True
-    except Exception as e:
-        logger.error(f"Supabase sync falhou: {e}")
-        _set_supabase_error(e)
-        return False
-
-def restore_mes_from_supabase_if_needed(setor: str, ano: int, mes: int) -> bool:
-    setor = str(setor or "").strip()
-    ano = int(ano)
-    mes = int(mes)
-    try:
-        if not SUPABASE_SYNC_ENABLED:
-            logger.warning("Supabase não configurado em st.secrets/env. Seguindo apenas com SQLite local.")
-            _supabase_warn_config_missing_once()
-            return False
-
-        local_total = (
-            _sqlite_count_rows_mes("escala_mes", setor, ano, mes)
-            + _sqlite_count_rows_mes("overrides", setor, ano, mes)
-            + _sqlite_count_rows_mes("estado_mes_anterior", setor, ano, mes)
-        )
-        if local_total > 0:
-            return False
-
-        filtros = {"setor": setor, "ano": ano, "mes": mes}
-        escala_rows = _supabase_fetch_rows_filtered("escala_mes", filtros)
-        overrides_rows = _supabase_fetch_rows_filtered("overrides", filtros)
-        estado_rows = _supabase_fetch_rows_filtered("estado_mes_anterior", filtros)
-
-        if not escala_rows and not overrides_rows and not estado_rows:
-            logger.warning(f"Sem dados no Supabase para {setor}/{ano}/{mes}")
-            return False
-
-        restored = 0
-        restored += _restore_sqlite_table_from_rows_mes("escala_mes", setor, ano, mes, escala_rows)
-        restored += _restore_sqlite_table_from_rows_mes("overrides", setor, ano, mes, overrides_rows)
-        restored += _restore_sqlite_table_from_rows_mes("estado_mes_anterior", setor, ano, mes, estado_rows)
-
-        try:
-            st.cache_data.clear()
-        except Exception:
-            pass
-
-        logger.info(f"Restore Supabase -> SQLite OK ({setor}/{ano}/{mes}, {restored} registros)")
-        return True
-    except Exception as e:
-        logger.error(f"Restore Supabase falhou: {e}")
-        _set_supabase_error(e)
-        return False
 
 
 def _supabase_test_connection_detail() -> tuple[bool, str]:
@@ -22342,15 +22135,6 @@ try:
         _sync_supabase_primary_on_start(force=False)
 except Exception:
     pass
-try:
-    _boot_auth = st.session_state.get("auth") or {}
-    _boot_setor = str((_boot_auth.get("setor") or "")).strip()
-    _boot_ano = int(st.session_state.get("ano") or date.today().year)
-    _boot_mes = int(st.session_state.get("mes") or date.today().month)
-    if _boot_setor:
-        restore_mes_from_supabase_if_needed(_boot_setor, _boot_ano, _boot_mes)
-except Exception as e:
-    logger.error(f"Restore Supabase falhou: {e}")
 validar_contrato_sistema()
 
 if st.session_state["auth"] is None and QUICK_LOGIN_BOOT:
@@ -22369,13 +22153,4 @@ else:
     if st.session_state["auth"] is None:
         page_login()
     else:
-        try:
-            _auth_now = st.session_state.get("auth") or {}
-            _setor_now = str((_auth_now.get("setor") or "")).strip()
-            _ano_now = int(st.session_state.get("ano") or date.today().year)
-            _mes_now = int(st.session_state.get("mes") or date.today().month)
-            if _setor_now:
-                restore_mes_from_supabase_if_needed(_setor_now, _ano_now, _mes_now)
-        except Exception as e:
-            logger.error(f"Restore Supabase falhou: {e}")
         page_app()
