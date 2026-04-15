@@ -1276,9 +1276,15 @@ def set_status_competencia(setor: str, ano: int, mes: int, status: str) -> None:
 
     if novo == 'FECHADA':
         try:
-            rebuild_colaborador_competencia_snapshot(setor, int(ano), int(mes))
-        except Exception:
-            pass
+            materializar_competencia_fechada(setor, int(ano), int(mes))
+        except Exception as e:
+            logger.exception(
+                f"Falha ao materializar competência no congelamento {setor} {int(mes):02d}/{int(ano)}: {e}"
+            )
+            try:
+                rebuild_colaborador_competencia_snapshot(setor, int(ano), int(mes))
+            except Exception:
+                pass
 
     try:
         registrar_log_admin(
@@ -1297,6 +1303,158 @@ def set_status_competencia(setor: str, ano: int, mes: int, status: str) -> None:
 
 def competencia_fechada(setor: str, ano: int, mes: int) -> bool:
     return get_status_competencia(setor, int(ano), int(mes)) == 'FECHADA'
+
+def _get_preview_hist_for_materializacao(setor: str, ano: int, mes: int) -> dict[str, pd.DataFrame]:
+    """
+    Tenta reaproveitar a escala já visível/carregada na tela para consolidar o congelamento.
+    Isso é importante quando o mês foi montado manualmente e ainda não foi materializado por completo em escala_mes.
+    """
+    try:
+        keys = _preview_cache_keys(setor, int(ano), int(mes))
+    except Exception:
+        return {}
+
+    try:
+        hist_prev = st.session_state.get(keys["hist"])
+    except Exception:
+        hist_prev = None
+
+    if not isinstance(hist_prev, dict) or not hist_prev:
+        return {}
+
+    hist_ok = {}
+    for ch, df in hist_prev.items():
+        try:
+            ch_norm = _norm_chapa(ch)
+            if not ch_norm:
+                continue
+            dfx = df.copy() if isinstance(df, pd.DataFrame) else pd.DataFrame(df)
+            if dfx is None or dfx.empty:
+                continue
+            cols = {str(c).strip().lower(): c for c in dfx.columns}
+            data_col = cols.get('data') or cols.get('dia')
+            status_col = cols.get('status')
+            if data_col is None or status_col is None:
+                continue
+            dfx[data_col] = pd.to_datetime(dfx[data_col], errors='coerce')
+            dfx = dfx.dropna(subset=[data_col]).copy()
+            if dfx.empty:
+                continue
+            if data_col != 'Data':
+                dfx = dfx.rename(columns={data_col: 'Data'})
+            if status_col != 'Status':
+                dfx = dfx.rename(columns={status_col: 'Status'})
+            if 'H_Entrada' not in dfx.columns:
+                col_ent = cols.get('h_entrada') or cols.get('entrada')
+                dfx['H_Entrada'] = dfx[col_ent] if col_ent in dfx.columns else ''
+            if 'H_Saida' not in dfx.columns:
+                col_sai = cols.get('h_saida') or cols.get('saida') or cols.get('saída')
+                dfx['H_Saida'] = dfx[col_sai] if col_sai in dfx.columns else ''
+            if 'Dia' not in dfx.columns:
+                dfx['Dia'] = dfx['Data'].dt.day_name()
+            hist_ok[ch_norm] = dfx[['Data', 'Dia', 'Status', 'H_Entrada', 'H_Saida']].copy()
+        except Exception:
+            continue
+    return hist_ok
+
+
+def materializar_competencia_fechada(setor: str, ano: int, mes: int) -> bool:
+    """
+    Consolida a competência no momento do congelamento sem alterar regras de geração.
+
+    Objetivo:
+    - pegar a escala final visível do mês (incluindo overrides, folgas manuais,
+      retificações e subgrupos da competência);
+    - gravar essa fotografia final em escala_mes;
+    - recalcular estado_mes_anterior;
+    - reconstruir o snapshot oficial da competência fechada.
+
+    Isso garante que um mês montado manualmente também sirva de base real para o mês seguinte.
+    """
+    setor = _norm_setor(setor)
+    ano = int(ano)
+    mes = int(mes)
+
+    hist_final = {}
+    try:
+        hist_final = get_hist_mes_com_overrides_cached(setor, ano, mes) or {}
+    except Exception as e:
+        logger.exception(
+            f"Erro ao ler histórico oficial para materializar competência {setor} {mes:02d}/{ano}: {e}"
+        )
+        hist_final = {}
+
+    if not isinstance(hist_final, dict) or not hist_final:
+        try:
+            hist_prev = _get_preview_hist_for_materializacao(setor, ano, mes) or {}
+        except Exception as e:
+            logger.exception(
+                f"Erro ao reaproveitar preview da tela ao materializar competência {setor} {mes:02d}/{ano}: {e}"
+            )
+            hist_prev = {}
+
+        if isinstance(hist_prev, dict) and hist_prev:
+            hist_final = hist_prev
+
+    if not isinstance(hist_final, dict) or not hist_final:
+        try:
+            hist_raw = load_escala_mes_db(setor, ano, mes) or {}
+        except Exception as e:
+            logger.exception(
+                f"Erro ao ler escala_mes ao materializar competência {setor} {mes:02d}/{ano}: {e}"
+            )
+            hist_raw = {}
+
+        try:
+            hist_final = apply_overrides_to_hist(setor, ano, mes, hist_raw) or hist_raw or {}
+        except Exception as e:
+            logger.exception(
+                f"Erro ao aplicar overrides ao materializar competência {setor} {mes:02d}/{ano}: {e}"
+            )
+            hist_final = hist_raw or {}
+
+    if not isinstance(hist_final, dict) or not hist_final:
+        logger.warning(
+            f"Materialização da competência sem histórico utilizável: {setor} {mes:02d}/{ano}"
+        )
+        return False
+
+    try:
+        save_escala_mes_db(setor, ano, mes, hist_final)
+    except Exception as e:
+        logger.exception(
+            f"Erro ao salvar escala materializada da competência {setor} {mes:02d}/{ano}: {e}"
+        )
+        return False
+
+    try:
+        estado_out = _rebuild_estado_out(hist_final)
+        save_estado_mes(setor, ano, mes, estado_out)
+    except Exception as e:
+        logger.exception(
+            f"Erro ao salvar estado materializado da competência {setor} {mes:02d}/{ano}: {e}"
+        )
+
+    try:
+        rebuild_colaborador_competencia_snapshot(setor, ano, mes)
+    except Exception as e:
+        logger.exception(
+            f"Erro ao reconstruir snapshot da competência materializada {setor} {mes:02d}/{ano}: {e}"
+        )
+
+    try:
+        _clear_preview_cache(setor, ano, mes)
+    except Exception:
+        pass
+    try:
+        clear_retificacao_related_caches()
+    except Exception:
+        pass
+
+    logger.info(
+        f"Competência materializada com sucesso no congelamento: {setor} {mes:02d}/{ano}"
+    )
+    return True
 
 
 def _snapshot_primeira_entrada(df_hist: pd.DataFrame, entrada_base: str = '06:00') -> str:
@@ -11601,94 +11759,6 @@ def delete_override(setor: str, ano: int, mes: int, chapa: str, dia: int, campo:
         pass
 
 
-def delete_competencia_mes_completo(setor: str, ano: int, mes: int,
-                                  limpar_overrides: bool = True,
-                                  limpar_escala: bool = True,
-                                  limpar_estado: bool = True,
-                                  limpar_retificacoes: bool = True,
-                                  limpar_subgrupo_competencia: bool = True,
-                                  limpar_snapshot: bool = True,
-                                  limpar_assinaturas: bool = True) -> None:
-    """
-    Limpa COMPLETAMENTE a competência do mês atual para o setor informado.
-
-    Uso principal:
-    - botão "Gerar do zero": apagar tudo o que foi salvo do mês atual e gerar uma escala nova.
-
-    Não mexe em meses anteriores.
-    """
-    setor_n = str(setor or '').strip().upper()
-    ano = int(ano)
-    mes = int(mes)
-    con = db_conn()
-    try:
-        cur = con.cursor()
-        try:
-            cur.execute("PRAGMA busy_timeout = 5000")
-        except Exception:
-            pass
-
-        if limpar_overrides:
-            cur.execute("DELETE FROM overrides WHERE UPPER(TRIM(setor))=? AND ano=? AND mes=?", (setor_n, ano, mes))
-        if limpar_escala:
-            cur.execute("DELETE FROM escala_mes WHERE UPPER(TRIM(setor))=? AND ano=? AND mes=?", (setor_n, ano, mes))
-        if limpar_estado:
-            cur.execute("DELETE FROM estado_mes_anterior WHERE UPPER(TRIM(setor))=? AND ano=? AND mes=?", (setor_n, ano, mes))
-        if limpar_retificacoes:
-            cur.execute("DELETE FROM retificacoes_competencia WHERE UPPER(TRIM(setor))=? AND ano=? AND mes=?", (setor_n, ano, mes))
-        if limpar_subgrupo_competencia:
-            cur.execute("DELETE FROM subgrupo_competencia WHERE UPPER(TRIM(setor))=? AND ano=? AND mes=?", (setor_n, ano, mes))
-        if limpar_snapshot:
-            cur.execute("DELETE FROM colaborador_competencia_snapshot WHERE UPPER(TRIM(setor))=? AND ano=? AND mes=?", (setor_n, ano, mes))
-        if limpar_assinaturas:
-            try:
-                cur.execute("DELETE FROM assinaturas_retificacao WHERE UPPER(TRIM(setor))=? AND ano=? AND mes=?", (setor_n, ano, mes))
-            except Exception:
-                pass
-
-        commit_blindado(con)
-    finally:
-        try:
-            con.close()
-        except Exception:
-            pass
-
-    for fn_name in (
-        'load_overrides',
-        'load_escala_mes_db',
-        'get_hist_mes_com_overrides_cached',
-        'load_estado_prev',
-        'load_retificacoes_competencia',
-        'get_colaborador_competencia_snapshot',
-        'get_status_competencia',
-        'listar_auditoria_admin_df',
-    ):
-        try:
-            fn = globals().get(fn_name)
-            if fn is not None and hasattr(fn, 'clear'):
-                fn.clear()
-        except Exception:
-            pass
-    try:
-        st.cache_data.clear()
-    except Exception:
-        pass
-
-    try:
-        registrar_log_admin(
-            acao='DELETE_COMPETENCIA_MES_COMPLETO',
-            modulo='GESTAO/GERACAO',
-            alvo_setor=setor_n,
-            competencia_ano=ano,
-            competencia_mes=mes,
-            valor_depois='COMPETENCIA_LIMPA',
-            detalhes='Limpeza completa do mês atual antes de nova geração',
-            status='SUCESSO',
-        )
-    except Exception:
-        pass
-
-
 def delete_overrides_mes(setor: str, ano: int, mes: int, keep_campos: set[str] | None = None):
     """
     Remove overrides do mês inteiro (útil para "Gerar do zero").
@@ -14903,14 +14973,12 @@ def _montar_colaboradores_base_geracao(setor: str, ano: int, mes: int) -> list[d
 
     Regra preservada:
     1) parte do cadastro atual do setor
-    2) prioriza a competência anterior FECHADA/snapshot quando existir
-    3) se o snapshot não existir, tenta reaproveitar o histórico salvo do mês anterior
-       já com overrides/retificações aplicados
-    4) se já existir ajuste do mês alvo (subgrupo_competencia do próprio mês),
+    2) se a competência anterior estiver FECHADA, usa o snapshot congelado dela
+       como base de Subgrupo/Entrada/Folga_Sab
+    3) se já existir ajuste do mês alvo (subgrupo_competencia do próprio mês),
        ele sobrepõe a base anterior
 
-    Isso evita que o mês novo "nasça do zero" ignorando a escala congelada
-    ou, na falta dela, a última base válida salva do mês anterior.
+    Isso evita que o mês novo "nasça do zero" ignorando a escala congelada do mês anterior.
     """
     base_atual = [_clone_colaborador_base(c) for c in (load_colaboradores_setor(setor) or [])]
     if not base_atual:
@@ -14918,23 +14986,24 @@ def _montar_colaboradores_base_geracao(setor: str, ano: int, mes: int) -> list[d
 
     mapa = {str(c.get('Chapa') or '').strip(): c for c in base_atual if str(c.get('Chapa') or '').strip()}
     ano_ant, mes_ant = _competencia_anterior(int(ano), int(mes))
-    ref_txt = f"{int(mes_ant):02d}/{int(ano_ant)}"
-    usados_snapshot = 0
 
     if competencia_fechada(setor, int(ano_ant), int(mes_ant)):
         try:
+            # Garante que o snapshot oficial do mês anterior exista, mesmo para competências
+            # fechadas antes dessa blindagem.
             rebuild_colaborador_competencia_snapshot(setor, int(ano_ant), int(mes_ant))
         except Exception as e:
             logger.exception(
-                f"Falha ao reconstruir snapshot da competência anterior {ref_txt}: {e}"
+                f"Falha ao reconstruir snapshot da competência anterior {int(mes_ant):02d}/{int(ano_ant)}: {e}"
             )
 
+        usados_snapshot = 0
         for ch, item in list(mapa.items()):
             try:
                 snap_ant = get_colaborador_competencia_snapshot(setor, ch, int(ano_ant), int(mes_ant))
             except Exception as e:
                 logger.exception(
-                    f"Erro ao ler snapshot da chapa {ch} em {ref_txt}: {e}"
+                    f"Erro ao ler snapshot da chapa {ch} em {int(mes_ant):02d}/{int(ano_ant)}: {e}"
                 )
                 snap_ant = None
             if not snap_ant:
@@ -14946,66 +15015,12 @@ def _montar_colaboradores_base_geracao(setor: str, ano: int, mes: int) -> list[d
             usados_snapshot += 1
 
         logger.info(
-            f"Base de geração usando snapshot da competência anterior {ref_txt} "
+            f"Base de geração usando snapshot da competência anterior {int(mes_ant):02d}/{int(ano_ant)} "
             f"para {usados_snapshot}/{len(mapa)} colaboradores."
         )
     else:
-        logger.warning(
-            f"Competência anterior {ref_txt} não está FECHADA; tentando reaproveitar histórico salvo do mês anterior."
-        )
-
-    if usados_snapshot < len(mapa):
-        try:
-            hist_prev = get_hist_mes_com_overrides_cached(setor, int(ano_ant), int(mes_ant))
-        except Exception as e:
-            logger.exception(f"Erro ao ler histórico anterior com overrides em {ref_txt}: {e}")
-            hist_prev = None
-
-        if not isinstance(hist_prev, dict) or not hist_prev:
-            try:
-                hist_raw = load_escala_mes_db(setor, int(ano_ant), int(mes_ant))
-            except Exception as e:
-                logger.exception(f"Erro ao ler load_escala_mes_db da competência anterior {ref_txt}: {e}")
-                hist_raw = None
-            try:
-                hist_prev = apply_overrides_to_hist(setor, int(ano_ant), int(mes_ant), hist_raw or {})
-            except Exception as e:
-                logger.exception(f"Erro ao aplicar overrides no histórico anterior {ref_txt}: {e}")
-                hist_prev = hist_raw or {}
-
-        usados_hist = 0
-        if isinstance(hist_prev, dict) and hist_prev:
-            for ch, item in list(mapa.items()):
-                if not ch or (usados_snapshot and str(item.get('Subgrupo') or '').strip() and str(item.get('Entrada') or '').strip()):
-                    pass
-                df_hist = hist_prev.get(_norm_chapa(ch)) or hist_prev.get(str(ch).strip())
-                if df_hist is None:
-                    continue
-                try:
-                    dfx = df_hist.copy() if isinstance(df_hist, pd.DataFrame) else pd.DataFrame(df_hist)
-                except Exception:
-                    continue
-                if dfx.empty:
-                    continue
-                cols_map = {str(c).strip().lower(): c for c in dfx.columns}
-                ent_col = cols_map.get('h_entrada') or cols_map.get('entrada')
-                sub_col = cols_map.get('subgrupo')
-                if ent_col:
-                    vals_ent = [str(v or '').strip() for v in dfx[ent_col].tolist() if str(v or '').strip()]
-                    if vals_ent:
-                        item['Entrada'] = vals_ent[0]
-                if sub_col:
-                    vals_sub = [str(v or '').strip() for v in dfx[sub_col].tolist() if str(v or '').strip()]
-                    if vals_sub:
-                        item['Subgrupo'] = vals_sub[-1]
-                item['Nome'] = str(item.get('Nome') or '').strip()
-                item['Subgrupo'] = str(item.get('Subgrupo') or '').strip() or 'SEM SUBGRUPO'
-                item['Entrada'] = str(item.get('Entrada') or '').strip() or '06:00'
-                usados_hist += 1
-
         logger.info(
-            f"Base de geração usando fallback do histórico anterior {ref_txt} "
-            f"para {usados_hist}/{len(mapa)} colaboradores."
+            f"Base de geração SEM snapshot anterior: competência {int(mes_ant):02d}/{int(ano_ant)} não está fechada."
         )
 
     for ch, item in list(mapa.items()):
@@ -15029,9 +15044,7 @@ def _build_df_ref_prev_competencia(setor: str, ano: int, mes: int):
     já com overrides, retificações e subgrupo da competência aplicados.
 
     Regras:
-    - prioriza a competência anterior FECHADA;
-    - se a competência anterior não estiver FECHADA, ainda tenta usar o histórico salvo
-      do mês anterior para não deixar o mês novo nascer do zero;
+    - só usa a competência anterior se ela estiver FECHADA;
     - tenta primeiro o cache oficial get_hist_mes_com_overrides_cached;
     - se vier vazio/inválido, faz fallback para load_escala_mes_db + apply_overrides_to_hist;
     - normaliza a saída para DataFrame com colunas: Data, Chapa, Status.
@@ -15042,14 +15055,10 @@ def _build_df_ref_prev_competencia(setor: str, ano: int, mes: int):
     try:
         ano_prev, mes_prev = _competencia_anterior(int(ano), int(mes))
         ref_txt = f"{int(mes_prev):02d}/{int(ano_prev)}"
-        fechada = bool(competencia_fechada(setor, int(ano_prev), int(mes_prev)))
 
-        if fechada:
-            logger.info(f"Referência anterior priorizando competência FECHADA: {ref_txt}")
-        else:
-            logger.warning(
-                f"Competência anterior {ref_txt} não está FECHADA; tentando usar histórico salvo com overrides/retificações."
-            )
+        if not competencia_fechada(setor, int(ano_prev), int(mes_prev)):
+            logger.info(f"Referência anterior NÃO usada: competência anterior não fechada ({ref_txt})")
+            return None
 
         prev_obj = None
         try:
@@ -15142,7 +15151,7 @@ def _build_df_ref_prev_competencia(setor: str, ano: int, mes: int):
                 df_ref = df_ref.dropna(subset=['Data']).sort_values(['Chapa', 'Data']).reset_index(drop=True)
             except Exception as e:
                 logger.exception(f"Erro ao consolidar referência anterior {ref_txt}: {e}")
-            logger.info(f"Referência anterior usada: {ref_txt} | fechada={fechada}")
+            logger.info(f"Referência anterior usada: {ref_txt}")
             return df_ref
 
         logger.warning(f"Referência anterior NÃO usada: nenhuma linha válida encontrada em {ref_txt}")
@@ -19380,13 +19389,13 @@ def page_app():
         if not colaboradores:
             st.warning("Cadastre colaboradores.")
         else:
-            b1, b2, b3, b4, _ = st.columns([1, 1, 1, 1, 4])
+            b1, b2, b3, _ = st.columns([1, 1, 1, 5])
             if b1.button("🚀 Gerar agora (respeita ajustes)", width="stretch", key="gen_btn", disabled=(_status_comp_ger == 'FECHADA')):
                 _clear_preview_cache(setor, int(ano), int(mes))
                 st.session_state["last_seed"] = int(seed)
                 ok = _regenerar_mes_inteiro(setor, int(ano), int(mes), seed=int(seed), respeitar_ajustes=True)
                 if ok:
-                    st.success("Escala gerada novamente, recriada no banco e salva certinho com os ajustes ativos do mês!")
+                    st.success("Escala gerada, salva no banco e pronta para voltar após reboot/sleep (ajustes/travas preservados)!")
                 else:
                     st.warning("Sem colaboradores.")
                 st.rerun()
@@ -19395,48 +19404,24 @@ def page_app():
                 _clear_preview_cache(setor, int(ano), int(mes))
                 st.rerun()
 
-            if b3.button("🗑️ Apagar tudo", width="stretch", key="gen_delete_btn", disabled=(_status_comp_ger == 'FECHADA')):
-                st.session_state["confirm_gen_delete_only"] = True
-
             # 🧹 Gerar do zero: ignora travas/ajustes (recalcula o mês totalmente)
-            # -> pede confirmação antes de apagar a competência do mês atual e gerar novamente.
-            if b4.button("🧹 Gerar do zero (ignorar ajustes)", width="stretch", key="gen_zero_btn", disabled=(_status_comp_ger == 'FECHADA')):
+            # -> pede confirmação antes de apagar os overrides do mês.
+            if b3.button("🧹 Gerar do zero (ignorar ajustes)", width="stretch", key="gen_zero_btn", disabled=(_status_comp_ger == 'FECHADA')):
                 st.session_state["confirm_gen_zero"] = True
 
-            if st.session_state.get("confirm_gen_delete_only", False):
-                st.warning(
-                    f"Tem certeza que deseja **apagar tudo da escala {mes:02d}/{ano}**? Isso deixa a competência vazia no banco para você gerar novamente depois.",
-                    icon="⚠️"
-                )
-                dy, dn, _sp = st.columns([1, 1, 5])
-                if dy.button("✅ Sim, apagar", width="stretch", key="gen_delete_yes"):
-                    st.session_state["confirm_gen_delete_only"] = False
-                    delete_competencia_mes_completo(setor, int(ano), int(mes))
-                    _clear_preview_cache(setor, int(ano), int(mes))
-                    st.session_state[f"gerar_preview_loaded_{setor}_{ano}_{mes}"] = False
-                    st.session_state["flash_msg_geracao"] = (
-                        f"Escala de {mes:02d}/{ano} apagada do banco com sucesso. Agora clique em **Gerar agora (respeita ajustes)** para gerar a escala novamente."
-                    )
-                    st.rerun()
-
-                if dn.button("❌ Não apagar", width="stretch", key="gen_delete_no"):
-                    st.session_state["confirm_gen_delete_only"] = False
-                    st.info("Ação cancelada.")
-                    st.rerun()
-
             if st.session_state.get("confirm_gen_zero", False):
-                st.warning(f"Tem certeza que deseja **zerar a escala {mes:02d}/{ano}**? Isso apaga TUDO do mês atual salvo no banco (escala, overrides, estado, retificações, subgrupo da competência e snapshot) e já gera uma nova escala do zero.", icon="⚠️")
+                st.warning(f"Tem certeza que deseja **zerar a escala {mes:02d}/{ano}**? Isso apaga ajustes/travas (overrides) desse mês.", icon="⚠️")
                 cy, cn, _sp = st.columns([1, 1, 5])
                 if cy.button("✅ Sim", width="stretch", key="gen_zero_yes"):
                     st.session_state["confirm_gen_zero"] = False
-                    # Ao gerar do zero, limpamos TUDO do mês selecionado e depois criamos uma competência nova do zero.
-                    # Não mexe em meses anteriores.
-                    delete_competencia_mes_completo(setor, int(ano), int(mes))
+                    # Importante: se existirem overrides antigos no mês, eles podem "forçar" Folga/Trabalho e aparentar que o motor não funcionou.
+                    # Ao gerar do zero, limpamos overrides do mês selecionado (não mexe em meses anteriores).
+                    delete_overrides_mes(setor, int(ano), int(mes))
                     _clear_preview_cache(setor, int(ano), int(mes))
                     st.session_state["last_seed"] = int(seed)
                     ok = _regenerar_mes_inteiro(setor, int(ano), int(mes), seed=int(seed), respeitar_ajustes=False)
                     if ok:
-                        st.success("Escala nova gerada do zero e salva no banco após limpeza completa do mês atual!")
+                        st.success("Escala gerada do zero, salva no banco e pronta para voltar após reboot/sleep (ajustes ignorados)!")
                     else:
                         st.warning("Sem colaboradores.")
                     st.rerun()
@@ -19445,10 +19430,6 @@ def page_app():
                     st.session_state["confirm_gen_zero"] = False
                     st.info("Ação cancelada.")
                     st.rerun()
-
-            _flash_msg_ger = str(st.session_state.pop("flash_msg_geracao", "") or "").strip()
-            if _flash_msg_ger:
-                st.success(_flash_msg_ger)
 
 
             preview_key = f"gerar_preview_loaded_{setor}_{ano}_{mes}"
