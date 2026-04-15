@@ -14663,6 +14663,7 @@ def _build_df_ref_prev_competencia(setor: str, ano: int, mes: int):
             except Exception as e:
                 logger.exception(f"Erro em load_escala_mes_db para referência anterior {ref_txt}: {e}")
                 hist_raw = None
+
             try:
                 prev_obj = apply_overrides_to_hist(setor, int(ano_prev), int(mes_prev), hist_raw)
             except Exception as e:
@@ -14678,10 +14679,7 @@ def _build_df_ref_prev_competencia(setor: str, ano: int, mes: int):
             if dfp is None:
                 continue
             try:
-                if not isinstance(dfp, pd.DataFrame):
-                    dfx = pd.DataFrame(dfp)
-                else:
-                    dfx = dfp.copy()
+                dfx = dfp.copy() if isinstance(dfp, pd.DataFrame) else pd.DataFrame(dfp)
             except Exception as e:
                 logger.exception(f"Erro ao normalizar histórico da chapa {ch_prev} em {ref_txt}: {e}")
                 continue
@@ -14696,6 +14694,7 @@ def _build_df_ref_prev_competencia(setor: str, ano: int, mes: int):
                 if key in cols_map:
                     data_col = cols_map[key]
                     break
+
             status_col = None
             for key in ('status',):
                 if key in cols_map:
@@ -14711,16 +14710,17 @@ def _build_df_ref_prev_competencia(setor: str, ano: int, mes: int):
                 'Chapa': str(ch_prev).strip(),
                 'Status': dfx[status_col],
             })
+
             try:
                 dfn['Data'] = pd.to_datetime(dfn['Data'], errors='coerce')
-            except Exception:
-                pass
-            try:
                 dfn = dfn.dropna(subset=['Data'])
-            except Exception:
-                pass
+            except Exception as e:
+                logger.exception(f"Erro ao converter datas da chapa {ch_prev} em {ref_txt}: {e}")
+                continue
+
             dfn['Chapa'] = dfn['Chapa'].astype(str).str.strip()
             dfn['Status'] = dfn['Status'].fillna('').astype(str).str.strip()
+
             if not dfn.empty:
                 parts.append(dfn[['Data', 'Chapa', 'Status']].copy())
 
