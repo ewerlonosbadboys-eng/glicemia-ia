@@ -14632,43 +14632,109 @@ def _build_df_ref_prev_competencia(setor: str, ano: int, mes: int):
     """
     Monta referência do mês anterior usando a leitura oficial do histórico,
     já com overrides, retificações e subgrupo da competência aplicados.
-    """
-    try:
-        ano_prev = int(ano)
-        mes_prev = int(mes) - 1
-        if mes_prev <= 0:
-            mes_prev = 12
-            ano_prev -= 1
 
-        prev_obj = get_hist_mes_com_overrides_cached(setor, int(ano_prev), int(mes_prev))
+    Regras:
+    - só usa a competência anterior se ela estiver FECHADA;
+    - tenta primeiro o cache oficial get_hist_mes_com_overrides_cached;
+    - se vier vazio/inválido, faz fallback para load_escala_mes_db + apply_overrides_to_hist;
+    - normaliza a saída para DataFrame com colunas: Data, Chapa, Status.
+    """
+    ano_prev = None
+    mes_prev = None
+    try:
+        ano_prev, mes_prev = _competencia_anterior(int(ano), int(mes))
+        ref_txt = f"{int(mes_prev):02d}/{int(ano_prev)}"
+
+        if not competencia_fechada(setor, int(ano_prev), int(mes_prev)):
+            logger.info(f"Referência anterior NÃO usada: competência anterior não fechada ({ref_txt})")
+            return None
+
+        prev_obj = None
+        try:
+            prev_obj = get_hist_mes_com_overrides_cached(setor, int(ano_prev), int(mes_prev))
+        except Exception as e:
+            logger.exception(f"Erro ao ler get_hist_mes_com_overrides_cached para referência anterior {ref_txt}: {e}")
+            prev_obj = None
+
         if not isinstance(prev_obj, dict) or not prev_obj:
+            logger.warning(f"Base cache da referência anterior vazia/inválida ({ref_txt}); tentando fallback load_escala_mes_db + apply_overrides_to_hist")
+            try:
+                hist_raw = load_escala_mes_db(setor, int(ano_prev), int(mes_prev))
+            except Exception as e:
+                logger.exception(f"Erro em load_escala_mes_db para referência anterior {ref_txt}: {e}")
+                hist_raw = None
+            try:
+                prev_obj = apply_overrides_to_hist(setor, int(ano_prev), int(mes_prev), hist_raw)
+            except Exception as e:
+                logger.exception(f"Erro em apply_overrides_to_hist para referência anterior {ref_txt}: {e}")
+                prev_obj = hist_raw
+
+        if not isinstance(prev_obj, dict) or not prev_obj:
+            logger.warning(f"Referência anterior NÃO usada: base vazia/inválida após fallback ({ref_txt})")
             return None
 
         parts = []
         for ch_prev, dfp in prev_obj.items():
-            if dfp is None or getattr(dfp, 'empty', True):
+            if dfp is None:
                 continue
-            dfx = dfp.copy()
-            if 'Data' not in dfx.columns:
-                for c in ('data', 'dia', 'DataDia'):
-                    if c in dfx.columns:
-                        dfx['Data'] = dfx[c]
-                        break
-            if 'Status' not in dfx.columns:
-                for c in ('status', 'STATUS'):
-                    if c in dfx.columns:
-                        dfx['Status'] = dfx[c]
-                        break
-            dfx['Chapa'] = str(ch_prev)
-            if {'Data', 'Chapa', 'Status'}.issubset(set(dfx.columns)):
-                parts.append(dfx[['Data', 'Chapa', 'Status']].copy())
+            try:
+                if not isinstance(dfp, pd.DataFrame):
+                    dfx = pd.DataFrame(dfp)
+                else:
+                    dfx = dfp.copy()
+            except Exception as e:
+                logger.exception(f"Erro ao normalizar histórico da chapa {ch_prev} em {ref_txt}: {e}")
+                continue
+
+            if dfx.empty:
+                continue
+
+            cols_map = {str(c).strip().lower(): c for c in dfx.columns}
+
+            data_col = None
+            for key in ('data', 'dia', 'datadia', 'data_dia'):
+                if key in cols_map:
+                    data_col = cols_map[key]
+                    break
+            status_col = None
+            for key in ('status',):
+                if key in cols_map:
+                    status_col = cols_map[key]
+                    break
+
+            if data_col is None or status_col is None:
+                logger.warning(f"Referência anterior {ref_txt}: chapa {ch_prev} ignorada por falta de colunas Data/Status")
+                continue
+
+            dfn = pd.DataFrame({
+                'Data': dfx[data_col],
+                'Chapa': str(ch_prev).strip(),
+                'Status': dfx[status_col],
+            })
+            try:
+                dfn['Data'] = pd.to_datetime(dfn['Data'], errors='coerce')
+            except Exception:
+                pass
+            try:
+                dfn = dfn.dropna(subset=['Data'])
+            except Exception:
+                pass
+            dfn['Chapa'] = dfn['Chapa'].astype(str).str.strip()
+            dfn['Status'] = dfn['Status'].fillna('').astype(str).str.strip()
+            if not dfn.empty:
+                parts.append(dfn[['Data', 'Chapa', 'Status']].copy())
 
         if parts:
-            return pd.concat(parts, ignore_index=True)
-    except Exception:
-        return None
-    return None
+            df_ref = pd.concat(parts, ignore_index=True)
+            logger.info(f"Referência anterior usada: {ref_txt}")
+            return df_ref
 
+        logger.warning(f"Referência anterior NÃO usada: nenhuma linha válida encontrada em {ref_txt}")
+        return None
+    except Exception as e:
+        ref_txt = f"{int(mes_prev):02d}/{int(ano_prev)}" if ano_prev and mes_prev else f"{int(mes):02d}/{int(ano)}"
+        logger.exception(f"Erro ao montar _build_df_ref_prev_competencia para referência {ref_txt}: {e}")
+        return None
 
 def _regenerar_mes_inteiro(setor: str, ano: int, mes: int, seed: int = 0, respeitar_ajustes: bool = True):
     """
