@@ -155,110 +155,7 @@ from reportlab.lib import colors
 
 
 # ===== V113 BLINDAGEM (COMMIT REAL + ANTI-PERDA) =====
-def commit_blindado(con):
-    try:
-        con.commit()
-    except Exception:
-        pass
-    try:
-        con.execute("PRAGMA wal_checkpoint(FULL);")
-    except Exception:
-        pass
-    try:
-        import os as _os
-        fd = con.cursor().connection
-        if hasattr(fd, "fileno"):
-            _os.fsync(fd.fileno())
-    except Exception:
-        pass
-    try:
-        st.cache_data.clear()
-    except Exception:
-        pass
-    try:
-        fn = globals().get('_maybe_save_latest_stable_snapshot_fast')
-        if callable(fn):
-            fn("commit")
-    except Exception:
-        pass
-    try:
-        if bool(globals().get('SUPABASE_SYNC_ENABLED', False)) and bool(globals().get('SUPABASE_AUTO_PUSH_ON_COMMIT', False)):
-            fn = globals().get('_supabase_request_push_async') or globals().get('_supabase_push_all_from_sqlite')
-            if callable(fn):
-                fn(force=False)
-    except Exception:
-        pass
-
-
-# ===== V121 AUDITORIA ADMIN DETALHADA =====
-def ensure_auditoria_admin_table() -> None:
-    con = db_conn()
-    cur = con.cursor()
-    try:
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS auditoria_admin (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                acao TEXT NOT NULL,
-                modulo TEXT,
-                usuario_nome TEXT,
-                usuario_chapa TEXT,
-                usuario_setor TEXT,
-                usuario_perfil TEXT,
-                alvo_nome TEXT,
-                alvo_chapa TEXT,
-                alvo_setor TEXT,
-                competencia_ano INTEGER,
-                competencia_mes INTEGER,
-                valor_antes TEXT,
-                valor_depois TEXT,
-                detalhes TEXT,
-                status TEXT,
-                criado_em TEXT NOT NULL
-            )
-        """)
-        commit_blindado(con)
-    finally:
-        con.close()
-
-def _perfil_auth_para_texto(auth: dict | None) -> str:
-    auth = auth or {}
-    if bool(auth.get("is_admin", False)):
-        return "ADMIN"
-    if bool(auth.get("is_lider", False)):
-        return "LIDER"
-    if bool(auth.get("is_ax_lider", False)):
-        return "AX_LIDER"
-    return "COLABORADOR"
-
-def _get_auth_actor() -> dict:
-    try:
-        auth = dict(st.session_state.get("auth") or {})
-    except Exception:
-        auth = {}
-    return {
-        "nome": str(auth.get("nome") or "").strip(),
-        "chapa": str(auth.get("chapa") or "").strip(),
-        "setor": str(auth.get("setor") or "").strip(),
-        "perfil": _perfil_auth_para_texto(auth),
-    }
-
-def registrar_log_admin(
-    acao: str,
-    modulo: str = "",
-    alvo_nome: str = "",
-    alvo_chapa: str = "",
-    alvo_setor: str = "",
-    competencia_ano = None,
-    competencia_mes = None,
-    valor_antes: str = "",
-    valor_depois: str = "",
-    detalhes: str = "",
-    status: str = "SUCESSO",
-    usuario_nome: str = "",
-    usuario_chapa: str = "",
-    usuario_setor: str = "",
-    usuario_perfil: str = "",
-) -> None:
+ -> None:
     try:
         ensure_auditoria_admin_table()
         actor = _get_auth_actor()
@@ -1745,7 +1642,7 @@ def get_colaborador_competencia_snapshot(setor: str, chapa: str, ano: int, mes: 
 def clear_retificacao_related_caches() -> None:
     """
     Limpa somente os caches realmente afetados pela retificação.
-    Evita st.cache_data.clear() global, que deixa a tela inteira pesada.
+    Evita  global, que deixa a tela inteira pesada.
     """
     for fn_name in [
         'load_retificacoes_competencia',
@@ -5018,7 +4915,8 @@ def _db_candidate_paths() -> list[Path]:
 
 def _sqlite_table_count(db_path: str, table: str) -> int:
     try:
-        conn = sqlite3.connect(str(db_path), check_same_thread=False)
+        conn = sqlite3.connect(str(db_path)
+    otimizar_sqlite(con), check_same_thread=False)
         try:
             row = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
             return int(row[0]) if row else 0
@@ -5079,8 +4977,10 @@ def _sqlite_backup_copy(src_path: str, dst_path: str) -> None:
     src_path = str(src_path)
     dst_path = str(dst_path)
     src_conn = sqlite3.connect(src_path, check_same_thread=False)
+    otimizar_sqlite(con)
     try:
         dst_conn = sqlite3.connect(dst_path, check_same_thread=False)
+    otimizar_sqlite(con)
         try:
             try:
                 src_conn.execute("PRAGMA wal_checkpoint(FULL)")
@@ -5099,7 +4999,8 @@ def _validate_sqlite_file(path: str) -> bool:
     if not p.exists() or p.stat().st_size == 0:
         return False
     try:
-        conn = sqlite3.connect(str(p), check_same_thread=False)
+        conn = sqlite3.connect(str(p)
+    otimizar_sqlite(con), check_same_thread=False)
         try:
             row = conn.execute("PRAGMA integrity_check").fetchone()
             return bool(row) and str(row[0]).lower() == "ok"
@@ -5146,7 +5047,8 @@ def _ensure_local_db_bootstrap_enterprise() -> bool:
 
     try:
         current.parent.mkdir(parents=True, exist_ok=True)
-        con = sqlite3.connect(str(current))
+        con = sqlite3.connect(str(current)
+    otimizar_sqlite(con))
         try:
             con.execute("PRAGMA journal_mode=WAL")
             con.execute("PRAGMA foreign_keys=ON")
@@ -5345,7 +5247,8 @@ def restore_backup_from_bytes(data: bytes) -> None:
     _remove_sqlite_sidecars(DB_PATH)
 
     try:
-        conn = sqlite3.connect(str(current), check_same_thread=False)
+        conn = sqlite3.connect(str(current)
+    otimizar_sqlite(con), check_same_thread=False)
         try:
             conn.execute("PRAGMA wal_checkpoint(FULL)")
             row = conn.execute("PRAGMA integrity_check").fetchone()
@@ -7460,7 +7363,7 @@ def decidir_pendencia_ax_generica(pendencia_id: int, aprovador_nome: str, aprova
         payload = json.loads(payload_json or '{}')
         _aplicar_pendencia_ax_generica(payload)
     try:
-        st.cache_data.clear()
+        
     except Exception:
         pass
 
@@ -7678,7 +7581,7 @@ def admin_update_funcionario(setor: str, chapa_atual: str, nome_novo: str, subgr
         pass
 
     try:
-        st.cache_data.clear()
+        
     except Exception:
         pass
 
@@ -7774,7 +7677,7 @@ def admin_rename_setor_global(setor_atual: str, setor_novo: str) -> dict:
         con.close()
 
     try:
-        st.cache_data.clear()
+        
     except Exception:
         pass
 
@@ -7848,7 +7751,7 @@ def admin_delete_setor_global(setor_nome: str) -> dict:
         con.close()
 
     try:
-        st.cache_data.clear()
+        
     except Exception:
         pass
 
@@ -7922,7 +7825,7 @@ def create_colaborador(nome: str, setor: str, chapa: str, subgrupo: str = "", en
         except Exception:
             pass
     try:
-        st.cache_data.clear()
+        
     except Exception:
         pass
 
@@ -7999,7 +7902,7 @@ def delete_colaborador_total(setor: str, chapa: str):
     commit_blindado(con)
     con.close()
     try:
-        st.cache_data.clear()
+        
     except Exception:
         pass
     try:
@@ -8146,7 +8049,7 @@ def update_colaborador_perfil(setor: str, chapa_antiga: str, chapa_nova: str, no
     commit_blindado(con)
     con.close()
     try:
-        st.cache_data.clear()
+        
     except Exception:
         pass
 
@@ -8745,7 +8648,7 @@ def set_rodizio_caixa_regra_extra(setor: str, horario_ref: str, qtd_extra: int, 
     finally:
         con.close()
     try:
-        st.cache_data.clear()
+        
     except Exception:
         pass
 
@@ -8837,7 +8740,7 @@ def set_rodizio_caixa_cfg(setor: str, subgrupo_origem: str, subgrupo_destino: st
     commit_blindado(con)
     con.close()
     try:
-        st.cache_data.clear()
+        
     except Exception:
         pass
 
@@ -10107,7 +10010,7 @@ def aplicar_rodizio_caixa_mes(setor: str, ano: int, mes: int, simulacao: dict):
         pass
 
     try:
-        st.cache_data.clear()
+        
     except Exception:
         pass
 
@@ -10167,7 +10070,7 @@ def aplicar_ajuste_complementar_rodizio_caixa_mes(setor: str, ano: int, mes: int
         con.close()
 
     try:
-        st.cache_data.clear()
+        
     except Exception:
         pass
 
@@ -10256,7 +10159,7 @@ def sincronizar_subgrupos_base_rodizio_caixa(setor: str, ano: int, mes: int, sub
         pass
 
     try:
-        st.cache_data.clear()
+        
     except Exception:
         pass
 
@@ -10404,7 +10307,7 @@ def transferencia_suprema_caixa_02_para_01(setor: str, ano: int, mes: int, subgr
         pass
 
     try:
-        st.cache_data.clear()
+        
     except Exception:
         pass
 
@@ -10567,7 +10470,7 @@ def resetar_rodizio_caixa_mes(setor: str, ano: int, mes: int, subgrupo_origem: s
         pass
 
     try:
-        st.cache_data.clear()
+        
     except Exception:
         pass
 
@@ -10757,7 +10660,7 @@ def aplicar_preview_aprovacao_rodizio_caixa(setor: str, ano: int, mes: int, slot
         _upsert_subgrupo_preview_competencia(setor, ano, mes, destino_chapa, subgrupo_origem, entrada_sel_atual)
 
     try:
-        st.cache_data.clear()
+        
     except Exception:
         pass
     return None
@@ -10787,7 +10690,7 @@ def resetar_preview_aprovacao_rodizio_caixa(setor: str, ano: int, mes: int, slot
         _restaurar_subgrupo_preview_competencia(setor, ano, mes, destino_chapa, subgrupo_destino, entrada_dest_original)
 
     try:
-        st.cache_data.clear()
+        
     except Exception:
         pass
     return None
@@ -11139,7 +11042,7 @@ def add_subgrupo(setor: str, nome: str):
     commit_blindado(con)
     con.close()
     try:
-        st.cache_data.clear()
+        
     except Exception:
         pass
 
@@ -11152,7 +11055,7 @@ def delete_subgrupo(setor: str, nome: str):
     commit_blindado(con)
     con.close()
     try:
-        st.cache_data.clear()
+        
     except Exception:
         pass
 
@@ -11190,7 +11093,7 @@ def set_subgrupo_regras(setor: str, subgrupo: str, regras: dict):
     commit_blindado(con)
     con.close()
     try:
-        st.cache_data.clear()
+        
     except Exception:
         pass
 
@@ -11205,7 +11108,7 @@ def add_ferias(setor: str, chapa: str, inicio: date, fim: date):
     commit_blindado(con)
     con.close()
     try:
-        st.cache_data.clear()
+        
     except Exception:
         pass
 
@@ -11218,7 +11121,7 @@ def _clear_ferias_caches():
         except Exception:
             pass
     try:
-        st.cache_data.clear()
+        
     except Exception:
         pass
     try:
@@ -11515,7 +11418,7 @@ def save_estado_mes(setor: str, ano: int, mes: int, estado: dict):
     commit_blindado(con)
     con.close()
     try:
-        st.cache_data.clear()
+        
     except Exception:
         pass
 
@@ -11733,7 +11636,7 @@ def set_override(setor: str, ano: int, mes: int, chapa: str, dia: int, campo: st
         except Exception:
             pass
     try:
-        st.cache_data.clear()
+        
     except Exception:
         pass
 
@@ -11809,7 +11712,7 @@ def delete_override(setor: str, ano: int, mes: int, chapa: str, dia: int, campo:
         except Exception:
             pass
     try:
-        st.cache_data.clear()
+        
     except Exception:
         pass
 
@@ -11903,7 +11806,7 @@ def delete_overrides_mes(setor: str, ano: int, mes: int, keep_campos: set[str] |
         except Exception:
             pass
     try:
-        st.cache_data.clear()
+        
     except Exception:
         pass
 
@@ -12604,7 +12507,7 @@ def save_escala_mes_db(setor: str, ano: int, mes: int, historico_df_por_chapa: d
     commit_blindado(con)
     con.close()
     try:
-        st.cache_data.clear()
+        
     except Exception:
         pass
 
@@ -19737,7 +19640,7 @@ def page_app():
                             except Exception:
                                 pass
                         try:
-                            st.cache_data.clear()
+                            
                         except Exception:
                             pass
                         st.session_state.pop("grid_editor", None)
@@ -20307,7 +20210,7 @@ def page_app():
                                         except Exception:
                                             pass
                                     try:
-                                        st.cache_data.clear()
+                                        
                                     except Exception:
                                         pass
                                     st.session_state.pop("th_grid_editor", None)
@@ -21704,7 +21607,7 @@ def page_app():
                         ok = recover_system_user_from_colaborador(setor_rec, chapa_rec, senha_rec)
                         if ok:
                             try:
-                                st.cache_data.clear()
+                                
                             except Exception:
                                 pass
                             st.success("Usuário recuperado com sucesso.")
@@ -21741,7 +21644,7 @@ def page_app():
                             create_colaborador(nome_final, setor_norm, chapa_norm, criar_login=False)
                         create_system_user(nome_final, setor_norm, chapa_norm, senha_final, is_lider=int(lider_man), is_admin=int(admin_man), is_ax_lider=0)
                         try:
-                            st.cache_data.clear()
+                            
                         except Exception:
                             pass
                         st.success(f"Usuário salvo com sucesso. Senha ativa: {senha_final}")
@@ -22290,7 +22193,8 @@ def _db_tem_dados_reais(path) -> bool:
         if not p.exists() or p.stat().st_size <= 0:
             return False
 
-        conn = sqlite3.connect(str(p), check_same_thread=False)
+        conn = sqlite3.connect(str(p)
+    otimizar_sqlite(con), check_same_thread=False)
         try:
             # checagem leve: confirma que é um SQLite utilizável
             row = conn.execute("SELECT name FROM sqlite_master WHERE type='table' LIMIT 1").fetchone()
@@ -22644,3 +22548,41 @@ else:
         except Exception as e:
             logger.error(f"Restore Supabase falhou: {e}")
         page_app()
+
+
+def commit_blindado(con):
+    try:
+        con.commit()
+    except Exception:
+        pass
+
+    for fn_name in [
+        'load_escala_mes_db',
+        'get_hist_mes_com_overrides_cached',
+        'load_overrides',
+        'get_status_competencia',
+        'listar_auditoria_admin_df'
+    ]:
+        try:
+            fn = globals().get(fn_name)
+            if fn and hasattr(fn, "clear"):
+                fn.clear()
+        except Exception:
+            pass
+
+    try:
+        fn = globals().get('_maybe_save_latest_stable_snapshot_fast')
+        if callable(fn):
+            fn("commit")
+    except Exception:
+        pass
+
+def otimizar_sqlite(con):
+    try:
+        con.execute("PRAGMA journal_mode=WAL;")
+        con.execute("PRAGMA synchronous=NORMAL;")
+        con.execute("PRAGMA temp_store=MEMORY;")
+        con.execute("PRAGMA cache_size=-10000;")
+        con.execute("PRAGMA busy_timeout=5000;")
+    except Exception:
+        pass
